@@ -466,8 +466,21 @@ function New-StyleGuideFullVersion {
             $arrOutputLines.Add('')
             $arrOutputLines.Add("## $strHeading")
 
-            # Trim leading blank lines from section body
+            # Apply the same filter/convert logic used for injected ### sections
+            # so that STYLE_GUIDE_FULL.md remains self-contained with no cross-file links.
             $arrBody = $objSection.Lines
+
+            # Filter out cross-reference blockquotes pointing back to main guide
+            $arrBody = @($arrBody | Where-Object {
+                -not ($_ -match '^> For .+\(STYLE_GUIDE\.md#')
+            })
+
+            # Convert relative links to main guide into internal anchors
+            $arrBody = @($arrBody | ForEach-Object {
+                $_ -replace 'STYLE_GUIDE\.md#', '#' -replace '\[([^\]]+)\]\(STYLE_GUIDE\.md\)', '[$1](#terraform-writing-style)'
+            })
+
+            # Trim leading blank lines from section body
             $intBodyStart = 0
             while ($intBodyStart -lt $arrBody.Count -and $arrBody[$intBodyStart].Trim() -eq '') {
                 $intBodyStart++
