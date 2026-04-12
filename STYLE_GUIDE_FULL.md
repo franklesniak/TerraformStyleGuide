@@ -261,8 +261,6 @@ The following guidelines apply to all code authors, including human developers a
 - **[All]** Authors **SHOULD** include `description` for all variables and outputs, and use `sensitive = true` as appropriate
 - **[All]** Authors **MUST NOT** modify lock files (`.terraform.lock.hcl`) or commit state unless explicitly required
 
----
-
 ## Executive Summary: Terraform Philosophy
 
 This repository approaches Terraform as **infrastructure as code** with the same rigor applied to application code. The following principles guide all Terraform development:

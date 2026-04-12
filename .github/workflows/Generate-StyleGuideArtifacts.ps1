@@ -381,6 +381,16 @@ function New-StyleGuideFullVersion {
                     }
                 }
                 if (-not $boolAlreadyEmitted) {
+                    # Remove any trailing horizontal rule and surrounding blank
+                    # lines that the slim guide placed before this heading. The
+                    # executive summary will supply its own trailing rule, so
+                    # keeping the pre-existing one would create a duplicate.
+                    while ($arrOutputLines.Count -gt 0 -and
+                            ($arrOutputLines[$arrOutputLines.Count - 1].Trim() -eq '' -or
+                             $arrOutputLines[$arrOutputLines.Count - 1].Trim() -eq '---')) {
+                        $arrOutputLines.RemoveAt($arrOutputLines.Count - 1)
+                    }
+                    $arrOutputLines.Add('')
                     $arrOutputLines.Add('## Executive Summary: Terraform Philosophy')
                     $arrOutputLines.Add('')
                     $arrRationaleBody = $hashtableCleanSections['executive-summary-terraform-philosophy']
