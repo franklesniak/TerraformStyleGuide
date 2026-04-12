@@ -349,6 +349,60 @@ function New-StyleGuideFullVersion {
                 continue
             }
 
+            # Insert the executive summary TOC entry before the Terraform Version
+            # Requirements TOC entry when the slim guide no longer contains it.
+            if ($strLine -match '^\- \[Terraform Version Requirements\]' -and
+                    $hashtableCleanSections.ContainsKey('executive-summary-terraform-philosophy')) {
+                $boolTocAlreadyPresent = $false
+                foreach ($strPrevLine in $arrOutputLines) {
+                    if ($strPrevLine -match 'Executive Summary: Terraform Philosophy') {
+                        $boolTocAlreadyPresent = $true
+                        break
+                    }
+                }
+                if (-not $boolTocAlreadyPresent) {
+                    $arrOutputLines.Add('- [Executive Summary: Terraform Philosophy](#executive-summary-terraform-philosophy)')
+                }
+            }
+
+            # Insert the executive summary section before Terraform Version
+            # Requirements when the slim guide no longer contains the placeholder.
+            # The heading and rationale body are injected so that STYLE_GUIDE_FULL.md
+            # still includes the executive summary for human readers.
+            if ($strLine -match '^## Terraform Version Requirements' -and
+                    $hashtableCleanSections.ContainsKey('executive-summary-terraform-philosophy')) {
+                # Only insert if the executive summary was not already emitted via a
+                # RATIONALE marker (i.e., the slim guide no longer has the placeholder).
+                $boolAlreadyEmitted = $false
+                foreach ($strPrevLine in $arrOutputLines) {
+                    if ($strPrevLine -match '^## Executive Summary: Terraform Philosophy') {
+                        $boolAlreadyEmitted = $true
+                        break
+                    }
+                }
+                if (-not $boolAlreadyEmitted) {
+                    # Remove any trailing horizontal rule and surrounding blank
+                    # lines that the slim guide placed before this heading. The
+                    # executive summary will supply its own trailing rule, so
+                    # keeping the pre-existing one would create a duplicate.
+                    while ($arrOutputLines.Count -gt 0 -and
+                            ($arrOutputLines[$arrOutputLines.Count - 1].Trim() -eq '' -or
+                             $arrOutputLines[$arrOutputLines.Count - 1].Trim() -eq '---')) {
+                        $arrOutputLines.RemoveAt($arrOutputLines.Count - 1)
+                    }
+                    $arrOutputLines.Add('')
+                    $arrOutputLines.Add('## Executive Summary: Terraform Philosophy')
+                    $arrOutputLines.Add('')
+                    $arrRationaleBody = $hashtableCleanSections['executive-summary-terraform-philosophy']
+                    foreach ($strRatLine in $arrRationaleBody) {
+                        $arrOutputLines.Add($strRatLine)
+                    }
+                    $arrOutputLines.Add('')
+                    $arrOutputLines.Add('---')
+                    $arrOutputLines.Add('')
+                }
+            }
+
             $arrOutputLines.Add($strLine)
         }
 

@@ -1,6 +1,6 @@
 # Terraform Writing Style
 
-**Version:** 2.1.20260412.0
+**Version:** 2.1.20260412.1
 
 ## Metadata
 

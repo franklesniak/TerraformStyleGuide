@@ -1,6 +1,6 @@
 # Terraform Writing Style
 
-**Version:** 2.1.20260412.0
+**Version:** 2.1.20260412.1
 
 ## Metadata
 
@@ -15,7 +15,6 @@
 - [About Examples in This Document](#about-examples-in-this-document)
 - [Quick Reference Checklist](#quick-reference-checklist)
   - [Code Authoring Guidelines (Quick Reference)](#code-authoring-guidelines-quick-reference)
-- [Executive Summary: Terraform Philosophy](#executive-summary-terraform-philosophy)
 - [Terraform Version Requirements](#terraform-version-requirements)
 - [Upgrading Terraform Versions](#upgrading-terraform-versions)
 - [Formatting and Style](#formatting-and-style)
@@ -260,10 +259,6 @@ The following guidelines apply to all code authors, including human developers a
 - **[All]** Authors **SHOULD NOT** assume a default cloud provider; when the provider is not specified, authors **SHOULD** use provider-agnostic examples and document that provider selection is required
 - **[All]** Authors **SHOULD** include `description` for all variables and outputs, and use `sensitive = true` as appropriate
 - **[All]** Authors **MUST NOT** modify lock files (`.terraform.lock.hcl`) or commit state unless explicitly required
-
-## Executive Summary: Terraform Philosophy
-
-<!-- RATIONALE: executive-summary-terraform-philosophy -->
 
 ---
 
