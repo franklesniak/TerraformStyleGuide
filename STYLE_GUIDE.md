@@ -530,7 +530,7 @@ terraform {
 }
 ```
 
-> **Note:** Azure uses `azurerm` backend with Storage Account and GCP uses `gcs` backend with Cloud Storage.
+> **Note:** Azure uses the `azurerm` backend with a Storage Account, and GCP uses the `gcs` backend with a Cloud Storage bucket.
 >
 > **Important:** Unlike resource blocks, backend blocks do not support variable interpolation. Example values in backend configuration (such as bucket names and regions) must be replaced with your organization's actual values before running `terraform init`. Alternatively, use [partial backend configuration](#partial-backend-configuration) to provide values at runtime.
 
