@@ -1790,7 +1790,7 @@ The following are common scenarios where deviations may be justified:
 <!--
 #### Example: Alternative Backend (Terraform Cloud)
 
-- **Standard Affected:** [Remote Backend Configuration](#remote-backend-configuration)
+- **Standard Affected:** Remote Backend Configuration
 - **Reason:** Organization uses Terraform Cloud for state management, which provides built-in state storage, locking, and encryption.
 - **Scope:** All root modules in this repository
 - **Approved By:** @platform-team
