@@ -1,6 +1,6 @@
 # Terraform Writing Style
 
-**Version:** 2.1.20260412.0
+**Version:** 2.1.20260412.1
 
 ## Metadata
 
@@ -260,6 +260,8 @@ The following guidelines apply to all code authors, including human developers a
 - **[All]** Authors **SHOULD NOT** assume a default cloud provider; when the provider is not specified, authors **SHOULD** use provider-agnostic examples and document that provider selection is required
 - **[All]** Authors **SHOULD** include `description` for all variables and outputs, and use `sensitive = true` as appropriate
 - **[All]** Authors **MUST NOT** modify lock files (`.terraform.lock.hcl`) or commit state unless explicitly required
+
+---
 
 ## Executive Summary: Terraform Philosophy
 
