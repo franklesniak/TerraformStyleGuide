@@ -484,7 +484,7 @@ resource "aws_s3_bucket" "main" {
 }
 ```
 
-> **Note:** Replace `hashicorp/aws` with your provider (e.g., `hashicorp/azurerm` `~> 4.0`, `hashicorp/google` `~> 7.0`).
+> **Note:** If you are not using AWS, replace `aws_s3_bucket` and the `bucket` argument with the equivalent resource type and naming attribute for your provider.
 
 ### Provider Configuration File
 

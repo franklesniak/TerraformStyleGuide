@@ -406,6 +406,85 @@ function New-StyleGuideFullVersion {
             $arrOutputLines.Add($strLine)
         }
 
+        # Append standalone ## sections from STYLE_GUIDE_RATIONALE.md that were
+        # relocated from STYLE_GUIDE.md for token efficiency. These sections are
+        # not injected via <!-- RATIONALE: ... --> markers because they are
+        # top-level content (not rationale/justification for existing rules).
+        # Skip: Table of Contents, Executive Summary (already injected above),
+        # and "...Rationale" grouping headers (whose ### children are injected
+        # via markers).
+        $arrStandaloneSections = [System.Collections.Generic.List[object]]::new()
+        $strCurrentHeading = $null
+        $arrSectionLines = [System.Collections.Generic.List[string]]::new()
+
+        foreach ($strLine in $arrRationaleLines) {
+            if ($strLine -match '^## (.+)$') {
+                # Save previous section if it was standalone
+                if ($null -ne $strCurrentHeading) {
+                    $arrStandaloneSections.Add(@{
+                        Heading = $strCurrentHeading
+                        Lines   = $arrSectionLines.ToArray()
+                    })
+                }
+                $strCurrentHeading = $Matches[1]
+                $arrSectionLines = [System.Collections.Generic.List[string]]::new()
+            } elseif ($null -ne $strCurrentHeading) {
+                $arrSectionLines.Add($strLine)
+            }
+        }
+        if ($null -ne $strCurrentHeading) {
+            $arrStandaloneSections.Add(@{
+                Heading = $strCurrentHeading
+                Lines   = $arrSectionLines.ToArray()
+            })
+        }
+
+        # Determine which ## headings already exist in the output
+        $arrExistingHeadings = @($arrOutputLines | Where-Object {
+            $_ -match '^## '
+        } | ForEach-Object {
+            ($_ -replace '^## ', '').Trim()
+        })
+
+        foreach ($objSection in $arrStandaloneSections) {
+            $strHeading = $objSection.Heading
+
+            # Skip Table of Contents (rationale-specific navigation)
+            if ($strHeading -eq 'Table of Contents') { continue }
+
+            # Skip Executive Summary (already injected above)
+            if ($strHeading -match '^Executive Summary') { continue }
+
+            # Skip rationale grouping headers (their ### children are
+            # injected via <!-- RATIONALE: ... --> markers)
+            if ($strHeading -match 'Rationale$') { continue }
+
+            # Skip if a ## heading with the same text already exists
+            if ($arrExistingHeadings -contains $strHeading) { continue }
+
+            # Append this standalone section
+            $arrOutputLines.Add('')
+            $arrOutputLines.Add("## $strHeading")
+
+            # Trim leading blank lines from section body
+            $arrBody = $objSection.Lines
+            $intBodyStart = 0
+            while ($intBodyStart -lt $arrBody.Count -and $arrBody[$intBodyStart].Trim() -eq '') {
+                $intBodyStart++
+            }
+            # Trim trailing blank lines and horizontal rules
+            $intBodyEnd = $arrBody.Count - 1
+            while ($intBodyEnd -ge 0 -and ($arrBody[$intBodyEnd].Trim() -eq '' -or $arrBody[$intBodyEnd].Trim() -eq '---')) {
+                $intBodyEnd--
+            }
+            if ($intBodyStart -le $intBodyEnd) {
+                $arrOutputLines.Add('')
+                for ($intJ = $intBodyStart; $intJ -le $intBodyEnd; $intJ++) {
+                    $arrOutputLines.Add($arrBody[$intJ])
+                }
+            }
+        }
+
         $strOutput = ($arrOutputLines -join "`n")
 
         # Collapse runs of two or more consecutive blank lines to exactly one blank line.
