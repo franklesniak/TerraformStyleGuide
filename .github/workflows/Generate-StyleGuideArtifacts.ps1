@@ -315,10 +315,15 @@ function New-StyleGuideFullVersion {
             }
         }
 
-        # Process the guide line by line, inserting rationale content after matching headings.
-        # Also remove placeholder lines that mark intentionally blank sections, since the
-        # full version will have the actual rationale content re-inserted by the merge.
+        # Process the guide line by line, replacing RATIONALE markers with content
+        # from the rationale document. Markers use the format:
+        #   <!-- RATIONALE: anchor-key -->
+        # where anchor-key matches the computed anchor of a ### heading in the
+        # rationale file. Also remove placeholder lines that mark intentionally
+        # blank sections, since the full version will have the actual rationale
+        # content re-inserted by the merge.
         $strPlaceholder = '*This section intentionally left blank.*'
+        $strMarkerPattern = '^\s*<!-- RATIONALE: (.+?) -->\s*$'
         $arrGuideLines = $strGuideContent -split '\r?\n'
         $arrOutputLines = [System.Collections.Generic.List[string]]::new()
 
@@ -330,22 +335,21 @@ function New-StyleGuideFullVersion {
                 continue
             }
 
-            $arrOutputLines.Add($strLine)
-
-            if ($strLine -match '^(#{2,3}) (.+)$') {
-                $strHeadingText = $Matches[2]
-                $strAnchor = $strHeadingText.ToLower() -replace '[^a-z0-9 -]', '' -replace ' ', '-'
-                $strAnchor = $strAnchor -replace '-+', '-' -replace '^-|-$', ''
-
-                if ($hashtableCleanSections.ContainsKey($strAnchor)) {
-                    $arrRationaleBody = $hashtableCleanSections[$strAnchor]
-                    # Add a blank line before the rationale content
-                    $arrOutputLines.Add('')
+            # Replace RATIONALE markers with corresponding rationale content
+            if ($strLine -match $strMarkerPattern) {
+                $strMarkerKey = $Matches[1]
+                if ($hashtableCleanSections.ContainsKey($strMarkerKey)) {
+                    $arrRationaleBody = $hashtableCleanSections[$strMarkerKey]
                     foreach ($strRatLine in $arrRationaleBody) {
                         $arrOutputLines.Add($strRatLine)
                     }
+                } else {
+                    Write-Warning "No rationale section found for marker: $strMarkerKey"
                 }
+                continue
             }
+
+            $arrOutputLines.Add($strLine)
         }
 
         $strOutput = ($arrOutputLines -join "`n")

@@ -1,6 +1,6 @@
 # Terraform Writing Style
 
-**Version:** 2.0.20260412.0
+**Version:** 2.1.20260412.0
 
 ## Metadata
 
@@ -2104,6 +2104,8 @@ When creating multiple instances of a resource, `for_each` **SHOULD** be preferr
 
 #### Why for_each is Preferred
 
+Removing an item from a `count`-based list causes all subsequent resources to be recreated due to index shifting. `for_each` uses map keys, so only the specific resource is affected.
+
 ```hcl
 # BAD: Using count with a list - removing any item shifts all subsequent indices
 resource "aws_instance" "servers" {
@@ -2249,6 +2251,12 @@ The `terraform_data` resource (Terraform 1.4+) is a built-in managed resource th
 - **Trigger-based replacement:** Force resource replacement when specific values change
 - **Data passing:** Store and pass values between resources or modules
 - **Provisioner execution:** Run local-exec or remote-exec provisioners (same as null_resource)
+
+The `terraform_data` resource is the preferred replacement for `null_resource` in modern Terraform configurations for the following reasons:
+
+- No provider dependency (built into Terraform core)
+- Clearer semantics with `input` and `output` attributes
+- Better integration with the dependency graph
 
 #### Basic Usage Pattern
 
@@ -3488,6 +3496,12 @@ terraform apply
 
 Organizations need a consistent strategy for managing multiple environments (dev, staging, prod). Two primary approaches exist: **workspaces** and **directory-based separation**. This section provides guidance on when to use each approach.
 
+| Approach | Use When | Advantages | Disadvantages |
+| --- | --- | --- | --- |
+| **Workspaces** | Identical infrastructure across environments; only variable values differ; small team with clear workflow | Single codebase; easy to switch between environments; built-in Terraform feature | Shared backend configuration; risk of applying to wrong workspace; no visible configuration differences in version control |
+| **Directory-based** | Different configurations per environment; team isolation needed; production requires explicit review; compliance requirements | Explicit, reviewable configuration per environment; no risk of workspace confusion; better audit trail; environment-specific customization | Some code duplication; requires discipline to keep shared modules updated |
+| **Hybrid** | Large organizations with both simple and complex environments; gradual migration between approaches | Flexibility; can use workspaces for non-production and directories for production | Increased complexity; requires clear documentation of which pattern applies where |
+
 #### Workspace-Based Approach
 
 Workspaces create isolated state files within a single configuration. Each workspace shares the same backend configuration but maintains separate state.
@@ -3543,6 +3557,14 @@ resource "aws_instance" "app" {
 - Small team with clear communication about which workspace is active
 - Non-production environments where accidental applies have limited impact
 - Rapid prototyping or development scenarios
+
+Workspaces have the following limitations that inform the recommendation for directory-based separation:
+
+- All environments share the same backend configuration
+- No visible difference in repository between environments
+- Risk of running `terraform apply` in the wrong workspace
+- Difficult to implement environment-specific features or configurations
+- Code review cannot distinguish between environment configurations
 
 #### Directory-Based Approach
 
@@ -3623,7 +3645,23 @@ module "application" {
 
 #### Recommendation
 
-For production use, directory-based separation is **RECOMMENDED** as the default approach.
+For production use, directory-based separation is **RECOMMENDED** as the default approach because:
+
+1. **Explicit configuration:** Each environment has its own visible, reviewable configuration in version control
+2. **Safety:** No risk of accidentally applying changes to the wrong environment
+3. **Flexibility:** Easy to implement environment-specific configurations or features
+4. **Audit trail:** Git history clearly shows what changed in each environment
+5. **Team isolation:** Different teams or approval processes can manage different environments
+6. **Compliance:** Easier to demonstrate separation of concerns for auditors
+
+Workspaces **MAY** be used for:
+
+- Development and testing environments where rapid iteration is prioritized
+- Scenarios where infrastructure is truly identical across environments
+- Small teams with established workspace discipline
+- Temporary or ephemeral environments
+
+Teams **SHOULD** document their chosen approach in the repository's README or contributing guide to ensure consistency.
 
 ### Resource Targeting
 
@@ -3842,6 +3880,14 @@ locals {
   subnet_ids = data.terraform_remote_state.network.outputs.private_subnet_ids
 }
 ```
+
+The `terraform_remote_state` data source has the following limitations that inform the preference for cloud-native parameter stores:
+
+- **Tight coupling:** Changes to the source stack's outputs can break consuming stacks.
+- **State file access:** Consumers need read access to the entire state file, not just specific outputs.
+- **Least Privilege violation:** Consumers gain access to **all** outputs in the source state file, potentially exposing sensitive data not intended for sharing. This over-fetching of permissions violates security best practices.
+- **No explicit contract:** No clear interface definition between producer and consumer.
+- **Harder to test:** Mocking remote state in tests is more complex than mocking parameter store lookups.
 
 ### What to Share (and What Not to Share)
 
@@ -4083,6 +4129,10 @@ module "vpc_west" {
 
 When a module needs to accept multiple provider configurations (e.g., for multi-region deployments), it **MUST** declare the expected provider configurations using `configuration_aliases` in the `required_providers` block.
 
+- Modules **SHOULD NOT** define provider configurations directly; provider configurations **MUST** be defined in root modules. Terraform **CAN** accept provider blocks in child modules only as a legacy pattern and imposes limitations on such modules.
+- Modules that use provider aliases internally must declare which aliases they expect
+- This creates an explicit contract between the module and its callers
+
 **Module declaration example:**
 
 ```hcl
@@ -4292,6 +4342,13 @@ provider "google" {
 
 The calling identity must have `roles/iam.serviceAccountTokenCreator` on the target service account, or the `iam.serviceAccounts.getAccessToken` permission.
 
+Service account impersonation (GCP) is preferred over static service account keys because:
+
+- No key rotation required—credentials are short-lived
+- Audit trail shows both the calling identity and impersonated account
+- Reduced risk of credential exposure
+- Easier to revoke access by removing IAM bindings
+
 **Multi-project pattern with impersonation:**
 
 ```hcl
@@ -4369,7 +4426,7 @@ variable "database_password" {
 
 ### Approved Secret Patterns
 
-**Pattern 1: Environment Variables**
+#### Pattern 1: Environment Variables
 
 ```hcl
 variable "db_password" {
@@ -4395,7 +4452,7 @@ export TF_VAR_db_password="$(gcloud secrets versions access latest --secret=data
 terraform apply
 ```
 
-**Pattern 2: Cloud Provider Secret Managers**
+#### Pattern 2: Cloud Provider Secret Managers
 
 **AWS Example - Secrets Manager:**
 
@@ -4442,7 +4499,7 @@ resource "google_sql_database_instance" "main" {
 }
 ```
 
-**Pattern 3: HashiCorp Vault (Provider-Agnostic)**
+#### Pattern 3: HashiCorp Vault (Provider-Agnostic)
 
 > **Note:** This example uses `vault_generic_secret` which works with both KV v1 and KV v2 secrets engines. For KV v2, include `/data/` in the path (e.g., `secret/data/database`). The data is accessed via `.data["key"]` regardless of KV version.
 
@@ -4473,7 +4530,7 @@ resource "google_sql_user" "main" {
 }
 ```
 
-### Sensitive Variable Marking
+### Sensitive Marking Requirements
 
 Variables containing sensitive data **MUST** be marked:
 
@@ -5826,6 +5883,8 @@ This section tracks significant changes to the Terraform instruction file.
 
 | Version | Date | Changes |
 | --- | --- | --- |
+| 2.1.20260412.0 | 2026-04-12 | Added extended rationale content to companion STYLE_GUIDE_RATIONALE.md: terraform_data advantages over null_resource, environment separation comparison table, workspace limitations, directory-based recommendation details, terraform_remote_state caveats, configuration_aliases rationale, and service account impersonation benefits |
+| 2.0.20260412.0 | 2026-04-12 | Restructured into main guide (STYLE_GUIDE.md) and companion rationale document (STYLE_GUIDE_RATIONALE.md) |
 | 1.17.20260202.0 | 2026-02-02 | Added Upgrading Terraform Versions section with version upgrade checklist, pre-upgrade preparation steps, patch/minor and major upgrade procedures, lock file update guidance, CI/CD considerations, rollback procedures, and version manager recommendations |
 | 1.16.20260202.0 | 2026-02-02 | Added Troubleshooting Common Issues section with guidance for 6 common Terraform errors: state lock acquisition, provider configuration not present, cycle detected, invalid for_each argument, unsupported Terraform version, and failed provider package queries |
 | 1.15.20260202.0 | 2026-02-02 | Added Cross-Account and Service Account Patterns section with AWS assume_role, Azure skip_provider_registration and multi-subscription patterns, GCP impersonate_service_account, summary comparison table, and security considerations |

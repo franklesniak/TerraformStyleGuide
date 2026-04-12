@@ -1,6 +1,6 @@
 # Terraform Writing Style
 
-**Version:** 2.0.20260412.0
+**Version:** 2.1.20260412.0
 
 ## Metadata
 
@@ -263,7 +263,7 @@ The following guidelines apply to all code authors, including human developers a
 
 ## Executive Summary: Terraform Philosophy
 
-*This section intentionally left blank.*
+<!-- RATIONALE: executive-summary-terraform-philosophy -->
 
 ---
 
@@ -2088,6 +2088,8 @@ When creating multiple instances of a resource, `for_each` **SHOULD** be preferr
 
 #### Why for_each is Preferred
 
+<!-- RATIONALE: why-foreach-is-preferred -->
+
 ```hcl
 # BAD: Using count with a list - removing any item shifts all subsequent indices
 resource "aws_instance" "servers" {
@@ -2233,6 +2235,8 @@ The `terraform_data` resource (Terraform 1.4+) is a built-in managed resource th
 - **Trigger-based replacement:** Force resource replacement when specific values change
 - **Data passing:** Store and pass values between resources or modules
 - **Provisioner execution:** Run local-exec or remote-exec provisioners (same as null_resource)
+
+<!-- RATIONALE: advantages-of-terraformdata-over-nullresource -->
 
 #### Basic Usage Pattern
 
@@ -3472,6 +3476,8 @@ terraform apply
 
 Organizations need a consistent strategy for managing multiple environments (dev, staging, prod). Two primary approaches exist: **workspaces** and **directory-based separation**. This section provides guidance on when to use each approach.
 
+<!-- RATIONALE: environment-separation-strategies-comparison-table -->
+
 #### Workspace-Based Approach
 
 Workspaces create isolated state files within a single configuration. Each workspace shares the same backend configuration but maintains separate state.
@@ -3527,6 +3533,8 @@ resource "aws_instance" "app" {
 - Small team with clear communication about which workspace is active
 - Non-production environments where accidental applies have limited impact
 - Rapid prototyping or development scenarios
+
+<!-- RATIONALE: workspace-limitations -->
 
 #### Directory-Based Approach
 
@@ -3607,7 +3615,9 @@ module "application" {
 
 #### Recommendation
 
-For production use, directory-based separation is **RECOMMENDED** as the default approach.
+For production use, directory-based separation is **RECOMMENDED** as the default approach because:
+
+<!-- RATIONALE: environment-separation-recommendation -->
 
 ### Resource Targeting
 
@@ -3656,7 +3666,7 @@ When infrastructure is split across multiple independent Terraform configuration
 
 ### Approaches Comparison
 
-*This section intentionally left blank.*
+<!-- RATIONALE: approaches-comparison -->
 
 ### Preferred: Cloud-Native Parameter Stores
 
@@ -3822,6 +3832,8 @@ locals {
   subnet_ids = data.terraform_remote_state.network.outputs.private_subnet_ids
 }
 ```
+
+<!-- RATIONALE: caveats-when-using-terraformremotestate -->
 
 ### What to Share (and What Not to Share)
 
@@ -4063,6 +4075,8 @@ module "vpc_west" {
 
 When a module needs to accept multiple provider configurations (e.g., for multi-region deployments), it **MUST** declare the expected provider configurations using `configuration_aliases` in the `required_providers` block.
 
+<!-- RATIONALE: why-configurationaliases-is-required -->
+
 **Module declaration example:**
 
 ```hcl
@@ -4272,6 +4286,8 @@ provider "google" {
 
 The calling identity must have `roles/iam.serviceAccountTokenCreator` on the target service account, or the `iam.serviceAccounts.getAccessToken` permission.
 
+<!-- RATIONALE: benefits-of-service-account-impersonation-over-keys -->
+
 **Multi-project pattern with impersonation:**
 
 ```hcl
@@ -4349,7 +4365,7 @@ variable "database_password" {
 
 ### Approved Secret Patterns
 
-**Pattern 1: Environment Variables**
+#### Pattern 1: Environment Variables
 
 ```hcl
 variable "db_password" {
@@ -4375,7 +4391,7 @@ export TF_VAR_db_password="$(gcloud secrets versions access latest --secret=data
 terraform apply
 ```
 
-**Pattern 2: Cloud Provider Secret Managers**
+#### Pattern 2: Cloud Provider Secret Managers
 
 **AWS Example - Secrets Manager:**
 
@@ -4422,7 +4438,7 @@ resource "google_sql_database_instance" "main" {
 }
 ```
 
-**Pattern 3: HashiCorp Vault (Provider-Agnostic)**
+#### Pattern 3: HashiCorp Vault (Provider-Agnostic)
 
 > **Note:** This example uses `vault_generic_secret` which works with both KV v1 and KV v2 secrets engines. For KV v2, include `/data/` in the path (e.g., `secret/data/database`). The data is accessed via `.data["key"]` regardless of KV version.
 
@@ -4453,7 +4469,7 @@ resource "google_sql_user" "main" {
 }
 ```
 
-### Sensitive Variable Marking
+### Sensitive Marking Requirements
 
 Variables containing sensitive data **MUST** be marked:
 
@@ -5806,6 +5822,8 @@ This section tracks significant changes to the Terraform instruction file.
 
 | Version | Date | Changes |
 | --- | --- | --- |
+| 2.1.20260412.0 | 2026-04-12 | Added extended rationale content to companion STYLE_GUIDE_RATIONALE.md: terraform_data advantages over null_resource, environment separation comparison table, workspace limitations, directory-based recommendation details, terraform_remote_state caveats, configuration_aliases rationale, and service account impersonation benefits |
+| 2.0.20260412.0 | 2026-04-12 | Restructured into main guide (STYLE_GUIDE.md) and companion rationale document (STYLE_GUIDE_RATIONALE.md) |
 | 1.17.20260202.0 | 2026-02-02 | Added Upgrading Terraform Versions section with version upgrade checklist, pre-upgrade preparation steps, patch/minor and major upgrade procedures, lock file update guidance, CI/CD considerations, rollback procedures, and version manager recommendations |
 | 1.16.20260202.0 | 2026-02-02 | Added Troubleshooting Common Issues section with guidance for 6 common Terraform errors: state lock acquisition, provider configuration not present, cycle detected, invalid for_each argument, unsupported Terraform version, and failed provider package queries |
 | 1.15.20260202.0 | 2026-02-02 | Added Cross-Account and Service Account Patterns section with AWS assume_role, Azure skip_provider_registration and multi-subscription patterns, GCP impersonate_service_account, summary comparison table, and security considerations |

@@ -93,8 +93,6 @@ Workspaces have the following limitations that inform the recommendation for dir
 
 ### Environment Separation Recommendation
 
-For production use, directory-based separation is **RECOMMENDED** as the default approach because:
-
 1. **Explicit configuration:** Each environment has its own visible, reviewable configuration in version control
 2. **Safety:** No risk of accidentally applying changes to the wrong environment
 3. **Flexibility:** Easy to implement environment-specific configurations or features
