@@ -2221,7 +2221,7 @@ terraform {
 }
 ```
 
-> **Note:** Azure Storage and GCS backends encrypt state by default. For additional security, configure Customer-Managed Encryption Keys (CMEK).
+> **Note:** Azure Storage and GCS backends encrypt state by default. For additional security, configure customer-managed keys.
 
 ### State Locking
 
