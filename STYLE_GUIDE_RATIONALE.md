@@ -6,18 +6,18 @@ This companion document preserves the extended rationale, design philosophy, and
 
 - [Executive Summary: Terraform Philosophy](#executive-summary-terraform-philosophy)
 - [Resource Configuration Rationale](#resource-configuration-rationale)
-  - [Why for_each is Preferred](#why-for_each-is-preferred)
-  - [Advantages of terraform_data over null_resource](#advantages-of-terraform_data-over-null_resource)
 - [State Management Rationale](#state-management-rationale)
-  - [Environment Separation Strategies: Comparison Table](#environment-separation-strategies-comparison-table)
-  - [Workspace Limitations](#workspace-limitations)
-  - [Environment Separation Recommendation](#environment-separation-recommendation)
 - [Cross-Stack Data Sharing Rationale](#cross-stack-data-sharing-rationale)
-  - [Approaches Comparison](#approaches-comparison)
-  - [Caveats when using terraform_remote_state](#caveats-when-using-terraform_remote_state)
 - [Provider Management Rationale](#provider-management-rationale)
-  - [Why configuration_aliases is Required](#why-configuration_aliases-is-required)
-  - [Benefits of Service Account Impersonation over Keys](#benefits-of-service-account-impersonation-over-keys)
+- [Upgrading Terraform Versions](#upgrading-terraform-versions)
+- [Provider-Specific Examples](#provider-specific-examples)
+- [JSON Configuration Files (.tf.json)](#json-configuration-files-tfjson)
+- [Template File Formatting (.tftpl)](#template-file-formatting-tftpl)
+- [Troubleshooting Common Issues](#troubleshooting-common-issues)
+- [Common State Problems and Recovery](#common-state-problems-and-recovery)
+- [Scope Exceptions & Deviations from Standards](#scope-exceptions--deviations-from-standards)
+- [Changelog](#changelog)
+- [Glossary](#glossary)
 
 ---
 
