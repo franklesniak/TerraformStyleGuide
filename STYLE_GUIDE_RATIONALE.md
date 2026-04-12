@@ -15,7 +15,7 @@ This companion document preserves the extended rationale, design philosophy, and
 - [Template File Formatting (.tftpl)](#template-file-formatting-tftpl)
 - [Troubleshooting Common Issues](#troubleshooting-common-issues)
 - [Common State Problems and Recovery](#common-state-problems-and-recovery)
-- [Scope Exceptions & Deviations from Standards](#scope-exceptions--deviations-from-standards)
+- [Scope Exceptions Template & Deviation Guidance](#scope-exceptions-template--deviation-guidance)
 - [Changelog](#changelog)
 - [Glossary](#glossary)
 
@@ -1651,7 +1651,7 @@ Error: Failed to load state: invalid character '<' looking for beginning of valu
 **Prevention:**
 
 - State files **MUST NOT** be manually edited
-- Enable versioning on state storage (see [State Versioning Requirements](STYLE_GUIDE.md#state-versioning-requirements))
+- Enable versioning on state storage (per the State Versioning Requirements standard)
 - Use reliable network connections for Terraform operations
 
 ### Error: "Resource exists in state but not in cloud"
@@ -1752,9 +1752,9 @@ After importing, review the state and update your configuration to match the imp
 
 ---
 
-## Scope Exceptions & Deviations from Standards
+## Scope Exceptions Template & Deviation Guidance
 
-This section documents justified deviations from the standards defined in this document. When adopting this template, use this section to record exceptions specific to your organization, project, or deployment environment.
+This section provides a template and guidance for documenting justified deviations from the standards. When adopting these standards, use this section to record exceptions specific to your organization, project, or deployment environment.
 
 ### How to Document Deviations
 
