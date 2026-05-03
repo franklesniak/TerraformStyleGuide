@@ -16,6 +16,7 @@ This companion document preserves the extended rationale, design philosophy, and
 - [Troubleshooting Common Issues](#troubleshooting-common-issues)
 - [Common State Problems and Recovery](#common-state-problems-and-recovery)
 - [Scope Exceptions Template & Deviation Guidance](#scope-exceptions-template--deviation-guidance)
+- [Documentation Rationale](#documentation-rationale)
 - [Changelog](#changelog)
 - [Glossary](#glossary)
 
@@ -1808,13 +1809,35 @@ The `cloud` block in `versions.tf` replaces the `backend` block for this reposit
 
 ---
 
+## Documentation Rationale
+
+### Pinned Registry URLs in Comments Go Stale
+
+> For the rule itself, see [Terraform Registry Documentation URLs in Comments](STYLE_GUIDE.md#terraform-registry-documentation-urls-in-comments) in the main guide.
+
+Pinned Terraform Registry URLs in comments go stale silently. Dependency automation such as Dependabot updates version constraints in `versions.tf` and refreshes `.terraform.lock.hcl`, but it does not rewrite arbitrary comment text. `terraform fmt`, `terraform validate`, and TFLint do not catch this drift either.
+
+The authoritative version of a provider or module is the constraint declared in `versions.tf` and the resolved version in `.terraform.lock.hcl`. Registry documentation URLs embedded in comments are navigation aids only — they help a reader jump to the relevant Registry page — and **SHOULD** therefore point to the current documentation rather than to a snapshot that was current when the comment was written.
+
+Concretely, a comment such as:
+
+```hcl
+# see https://registry.terraform.io/providers/hashicorp/azurerm/4.67.0/docs/resources/storage_account
+```
+
+will keep pointing at the `4.67.0` documentation forever, even after the provider constraint and lock file have moved to a newer version. Readers who follow the link can be misled by attribute behaviour or arguments that have since changed. Using `/latest/` keeps the navigation aid synchronized with whatever provider or module version the configuration actually resolves to, without adding any maintenance burden.
+
+This is intentionally limited to documentation/navigation comments. Provider constraints, module `source` versions, and `.terraform.lock.hcl` entries remain authoritative and **MUST** continue to be pinned according to the version-constraint rules in the main guide; nothing in this rule weakens those requirements.
+
+---
+
 ## Changelog
 
 This section tracks significant changes to the Terraform instruction file.
 
 | Version | Date | Changes |
 | --- | --- | --- |
-| 2.3.20260503.0 | 2026-05-03 | Added rule requiring Terraform Registry reference URLs in comments to use `/latest/` instead of pinned provider or module versions; added quick-reference entry, detailed subsection with rationale, and compliant/non-compliant examples |
+| 2.3.20260503.0 | 2026-05-03 | Added rule requiring Terraform Registry reference URLs in comments to use `/latest/` instead of pinned provider or module versions; added quick-reference entry, normative subsection in main guide, rationale section in companion document, and compliant/non-compliant examples |
 | 2.2.20260412.0 | 2026-04-12 | Reduced token footprint of STYLE_GUIDE.md for LLM/agent consumption: removed TOC, metadata, cross-reference links; condensed RFC 2119 keywords; consolidated multi-provider examples to single AWS representative with inline notes; relocated procedural/runbook content, troubleshooting, changelog, glossary, .tf.json/.tftpl sections, and provider-specific examples to STYLE_GUIDE_RATIONALE.md |
 | 2.1.20260412.0 | 2026-04-12 | Added extended rationale content to companion STYLE_GUIDE_RATIONALE.md: terraform_data advantages over null_resource, environment separation comparison table, workspace limitations, directory-based recommendation details, terraform_remote_state caveats, configuration_aliases rationale, and service account impersonation benefits |
 | 2.0.20260412.0 | 2026-04-12 | Restructured into main guide (STYLE_GUIDE.md) and companion rationale document (STYLE_GUIDE_RATIONALE.md) |

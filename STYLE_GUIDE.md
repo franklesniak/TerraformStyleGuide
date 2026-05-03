@@ -3865,9 +3865,9 @@ Terraform Registry reference URLs embedded in `.tf`, `.tftest.hcl`, and other Te
 - **[All]** Module documentation URLs in comments **MUST** use the pattern `https://registry.terraform.io/modules/<namespace>/<name>/<provider>/latest`
 - **[All]** Comments **MUST NOT** embed a specific provider or module version in Terraform Registry documentation URLs (for example, `/azurerm/4.67.0/` or `/random/3.8.1/`)
 
-**Scope:** This rule applies only to documentation/navigation URLs in comments. It **MUST NOT** be used to change provider constraints in `terraform.tf` / `versions.tf`, module `source` versions, entries in `.terraform.lock.hcl`, or any other intentionally pinned executable configuration. Those remain authoritative and **MUST** continue to be pinned according to the version-constraint rules elsewhere in this guide.
+**Scope:** This rule applies only to documentation/navigation URLs in comments. It **MUST NOT** be used to change provider constraints in `versions.tf`, module `source` versions, entries in `.terraform.lock.hcl`, or any other intentionally pinned executable configuration. Those remain authoritative and **MUST** continue to be pinned according to the version-constraint rules elsewhere in this guide.
 
-**Rationale:** Pinned Terraform Registry URLs in comments go stale silently. Dependency automation such as Dependabot updates version constraints in `terraform.tf` / `versions.tf` and refreshes `.terraform.lock.hcl`, but it does not rewrite arbitrary comment text. `terraform fmt`, `terraform validate`, and TFLint do not catch this drift. The authoritative version of a provider or module is the constraint declared in configuration and the resolved version in the lock file; Registry documentation URLs in comments are navigation aids only and **SHOULD** point to the current documentation.
+<!-- RATIONALE: pinned-registry-urls-in-comments-go-stale -->
 
 **Compliant example:**
 
