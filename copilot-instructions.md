@@ -3859,8 +3859,8 @@ Use standardized TODO format:
 
 Terraform Registry reference URLs embedded in comments in `.tf`, `.tftest.hcl`, `.tfvars`, `.tfbackend`, `.tftpl`, and other Terraform-related files that support comments **MUST** use the `latest` path segment, not a pinned provider or module version.
 
-- Provider documentation URLs **MUST** match: `https://registry.terraform.io/providers/<namespace>/<name>/latest/docs/...`
-- Module documentation URLs **MUST** match: `https://registry.terraform.io/modules/<namespace>/<name>/<provider>/latest`
+- Provider documentation URLs **MUST** use `latest` as the version segment immediately after `/providers/<namespace>/<name>/` (for example, `https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/storage_account`). Any path, query string, or fragment after the `latest` segment is permitted.
+- Module documentation URLs **MUST** use `latest` as the version segment immediately after `/modules/<namespace>/<name>/<provider>/` (for example, `https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws/latest`). Any path (such as `/submodules/...`), query string, or fragment after the `latest` segment is permitted.
 - Pinned Terraform Registry documentation URLs (for example, `/azurerm/4.67.0/` or `/random/3.8.1/`) **MUST NOT** appear in comments, except in clearly labeled non-compliant examples that document this rule.
 
 This rule applies **only** to documentation/navigation comments. It **MUST NOT** affect provider constraints, module `source` addresses, module `version` arguments, `.terraform.lock.hcl`, selected module `source` references, or any other intentionally pinned executable configuration.
