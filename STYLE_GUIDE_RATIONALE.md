@@ -9,6 +9,7 @@ This companion document preserves the extended rationale, design philosophy, and
 - [State Management Rationale](#state-management-rationale)
 - [Cross-Stack Data Sharing Rationale](#cross-stack-data-sharing-rationale)
 - [Provider Management Rationale](#provider-management-rationale)
+- [Documentation Rationale](#documentation-rationale)
 - [Upgrading Terraform Versions](#upgrading-terraform-versions)
 - [Provider-Specific Examples](#provider-specific-examples)
 - [JSON Configuration Files (.tf.json)](#json-configuration-files-tfjson)
@@ -157,6 +158,28 @@ Service account impersonation (GCP) is preferred over static service account key
 - Audit trail shows both the calling identity and impersonated account
 - Reduced risk of credential exposure
 - Easier to revoke access by removing IAM bindings
+
+---
+
+## Documentation Rationale
+
+> For the documentation rules themselves, see [Documentation Standards](STYLE_GUIDE.md#documentation-standards) in the main guide.
+
+### Terraform Registry Documentation URLs
+
+> For the rule itself, see [Terraform Registry Documentation URLs](STYLE_GUIDE.md#terraform-registry-documentation-urls) in the main guide.
+
+Terraform Registry reference URLs embedded in comments are navigation aids only. They are not part of the executable configuration and are not consulted by Terraform during `init`, `plan`, or `apply`. Authoritative version information lives elsewhere:
+
+- **Provider versions** are pinned by `required_providers` constraints and recorded in `.terraform.lock.hcl`.
+- **Registry module versions** are pinned by the `version` argument on the calling `module` block.
+- **Non-Registry module versions** are pinned by the selected `source` reference (for example, a Git tag or commit SHA).
+
+When a Registry URL in a comment hard-codes a provider or module version (for example, `/azurerm/4.67.0/` or `/random/3.8.1/`), that URL silently goes stale as soon as the underlying constraint moves forward. Dependabot and similar dependency-update automation refresh provider constraints, module `version` arguments, and lockfiles, but they do not rewrite arbitrary comment text. Standard Terraform tooling does not catch the drift either: `terraform fmt` reformats syntax, `terraform validate` checks configuration semantics, and TFLint focuses on configuration correctness — none of them inspect or update the textual content of URLs in comments. The result is that pinned URLs in comments quietly diverge from the actual code, often pointing at provider documentation for a version the configuration no longer uses.
+
+Requiring `/latest/` URLs in comments resolves this drift by construction. The `/latest/` segment on `registry.terraform.io` always redirects to the most recent published documentation for the provider or module, which is the version a reader is most likely interested in when navigating from a comment. Comments stay correct without any maintenance burden.
+
+The rule is intentionally scoped to documentation/navigation comments only. It **does not** alter executable configuration: provider constraints, module `source` addresses, module `version` arguments, `.terraform.lock.hcl`, and selected module `source` references must continue to express the exact, intentional version pinning required for deterministic, reproducible infrastructure. Pinning in those places is a feature; pinning in comments is a maintenance hazard.
 
 ---
 
@@ -1814,6 +1837,7 @@ This section tracks significant changes to the Terraform instruction file.
 
 | Version | Date | Changes |
 | --- | --- | --- |
+| 2.3.20260503.0 | 2026-05-03 | Added rule requiring Terraform Registry documentation URLs in comments to use the `/latest/` path segment instead of pinned provider or module versions, with corresponding rationale on Dependabot/comment drift, authoritative version sources, and the comment-only scope of the rule |
 | 2.2.20260412.0 | 2026-04-12 | Reduced token footprint of STYLE_GUIDE.md for LLM/agent consumption: removed TOC, metadata, cross-reference links; condensed RFC 2119 keywords; consolidated multi-provider examples to single AWS representative with inline notes; relocated procedural/runbook content, troubleshooting, changelog, glossary, .tf.json/.tftpl sections, and provider-specific examples to STYLE_GUIDE_RATIONALE.md |
 | 2.1.20260412.0 | 2026-04-12 | Added extended rationale content to companion STYLE_GUIDE_RATIONALE.md: terraform_data advantages over null_resource, environment separation comparison table, workspace limitations, directory-based recommendation details, terraform_remote_state caveats, configuration_aliases rationale, and service account impersonation benefits |
 | 2.0.20260412.0 | 2026-04-12 | Restructured into main guide (STYLE_GUIDE.md) and companion rationale document (STYLE_GUIDE_RATIONALE.md) |
