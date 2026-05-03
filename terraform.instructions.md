@@ -165,7 +165,7 @@ This checklist provides a quick reference for both human developers and LLMs (li
 - **[Module]** Modules **MUST** have a `README.md` with usage examples
 - **[All]** Inline comments **SHOULD** explain "why," not "what"
 - **[All]** TODO comments **SHOULD** include username and context
-- **[All]** Terraform Registry reference URLs in comments **MUST** use the `/latest/` path segment, not a pinned provider or module version
+- **[All]** Terraform Registry reference URLs in comments **MUST** use the `latest` path segment, not a pinned provider or module version
 - **[All]** Error messages in validation blocks **SHOULD** be actionable and reference valid options or acceptable ranges
 
 ### Code Authoring Guidelines (Quick Reference)
@@ -3862,7 +3862,7 @@ Use standardized TODO format:
 
 ### Terraform Registry Documentation URLs
 
-Terraform Registry reference URLs embedded in comments in `.tf`, `.tftest.hcl`, `.tfvars`, `.tfbackend`, `.tftpl`, and other Terraform-related files that support comments **MUST** use the `/latest/` path segment, not a pinned provider or module version.
+Terraform Registry reference URLs embedded in comments in `.tf`, `.tftest.hcl`, `.tfvars`, `.tfbackend`, `.tftpl`, and other Terraform-related files that support comments **MUST** use the `latest` path segment, not a pinned provider or module version.
 
 - Provider documentation URLs **MUST** match: `https://registry.terraform.io/providers/<namespace>/<name>/latest/docs/...`
 - Module documentation URLs **MUST** match: `https://registry.terraform.io/modules/<namespace>/<name>/<provider>/latest`
