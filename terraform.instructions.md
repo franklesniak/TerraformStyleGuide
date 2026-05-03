@@ -5,7 +5,7 @@ description: "Terraform coding standards: secure, modular, and well-documented i
 
 # Terraform Writing Style
 
-**Version:** 2.2.20260412.0
+**Version:** 2.3.20260503.0
 
 ## Keywords
 
@@ -165,6 +165,7 @@ This checklist provides a quick reference for both human developers and LLMs (li
 - **[Module]** Modules **MUST** have a `README.md` with usage examples
 - **[All]** Inline comments **SHOULD** explain "why," not "what"
 - **[All]** TODO comments **SHOULD** include username and context
+- **[All]** Terraform Registry reference URLs in comments **MUST** use the `/latest/` path segment, not a pinned provider or module version
 - **[All]** Error messages in validation blocks **SHOULD** be actionable and reference valid options or acceptable ranges
 
 ### Code Authoring Guidelines (Quick Reference)
@@ -3857,6 +3858,57 @@ Use standardized TODO format:
 ```hcl
 # TODO(username): Migrate to new VPC module after v2.0 release
 # TODO(team-name): Add support for IPv6 when available
+```
+
+### Terraform Registry Documentation URLs in Comments
+
+Terraform Registry reference URLs embedded in `.tf`, `.tftest.hcl`, and other Terraform-related comments **MUST** use the `/latest/` path segment instead of a pinned provider or module version.
+
+**Requirements:**
+
+- **[All]** Provider documentation URLs in comments **MUST** use the pattern `https://registry.terraform.io/providers/<namespace>/<name>/latest/docs/...`
+- **[All]** Module documentation URLs in comments **MUST** use the pattern `https://registry.terraform.io/modules/<namespace>/<name>/<provider>/latest`
+- **[All]** Comments **MUST NOT** embed a specific provider or module version in Terraform Registry documentation URLs (for example, `/azurerm/4.67.0/` or `/random/3.8.1/`)
+
+**Scope:** This rule applies only to documentation/navigation URLs in comments. It **MUST NOT** be used to change provider constraints in `terraform.tf` / `versions.tf`, module `source` versions, entries in `.terraform.lock.hcl`, or any other intentionally pinned executable configuration. Those remain authoritative and **MUST** continue to be pinned according to the version-constraint rules elsewhere in this guide.
+
+**Rationale:** Pinned Terraform Registry URLs in comments go stale silently. Dependency automation such as Dependabot updates version constraints in `terraform.tf` / `versions.tf` and refreshes `.terraform.lock.hcl`, but it does not rewrite arbitrary comment text. `terraform fmt`, `terraform validate`, and TFLint do not catch this drift. The authoritative version of a provider or module is the constraint declared in configuration and the resolved version in the lock file; Registry documentation URLs in comments are navigation aids only and **SHOULD** point to the current documentation.
+
+**Compliant example:**
+
+```hcl
+# Compliant: Registry URL uses /latest/ and tracks current docs automatically.
+# see https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/storage_account
+resource "azurerm_storage_account" "main" {
+  # ...
+}
+
+# Compliant: Module documentation URL uses /latest.
+# see https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws/latest
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "~> 5.0"
+  # ...
+}
+```
+
+**Non-compliant example:**
+
+```hcl
+# Non-compliant: URL pins a specific provider version that will go stale
+# when the provider constraint or lock file is updated.
+# see https://registry.terraform.io/providers/hashicorp/azurerm/4.67.0/docs/resources/storage_account
+resource "azurerm_storage_account" "main" {
+  # ...
+}
+
+# Non-compliant: Module documentation URL pins a specific module version.
+# see https://registry.terraform.io/modules/terraform-aws-modules/vpc/aws/5.1.2
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "~> 5.0"
+  # ...
+}
 ```
 
 ### Error Message Best Practices
