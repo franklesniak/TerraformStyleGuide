@@ -56,3 +56,25 @@ consumer-facing files are:
 human contributors navigate between rationale and the corresponding rule. The
 CI build script strips these cross-references when generating consumer-facing
 artifacts, so they never appear in consumer-facing output.
+
+## Operational metadata
+
+Consumer-facing guide files **may** include a concise top-of-document
+metadata block when the fields help humans, tooling, or LLM-based coding
+agents identify how to consume the document. For `STYLE_GUIDE.md`, the
+allowed metadata fields are:
+
+- `Status`
+- `Owner`
+- `Last Updated`
+- `Scope`
+
+The following constraints apply:
+
+- Metadata **MUST** remain concise and operational.
+- Extended explanation, history, tradeoffs, and rationale still belong in
+  `STYLE_GUIDE_RATIONALE.md` or other contributor-facing files.
+- Consumer-facing guide files still **MUST NOT** cross-reference other
+  repository files (see the no-cross-referencing norm above).
+- Do **not** add a `Related` field or any other cross-reference-oriented
+  metadata to consumer-facing guide files.
