@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 -->
+
 # Contributing to Terraform Style Guide
 
 Thank you for your interest in contributing to this project! This guide explains the conventions used in this repository so that contributions stay consistent.
