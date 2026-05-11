@@ -190,23 +190,13 @@ The rule is intentionally scoped to documentation/navigation comments only. It *
 
 ### Cross-platform Terraform Pre-commit Hooks
 
-Native Windows/PowerShell contributors can run `pre-commit` successfully, but shell-script hook startup depends on
-which `bash` executable appears first on `PATH`. On a workstation with WSL, Git Bash, and other Bash shims installed,
-that resolution can vary by terminal, user profile, or PATH ordering.
+Native Windows/PowerShell contributors can run `pre-commit` successfully, but shell-script hook startup depends on which `bash` executable appears first on `PATH`. On a workstation with WSL, Git Bash, and other Bash shims installed, that resolution can vary by terminal, user profile, or PATH ordering.
 
-The observed failure mode was a WSL `bash` process receiving a Windows path to a cached hook script. The path translation
-failed before Terraform started, so the error looked like a missing hook script with stripped backslashes rather than an
-actionable Terraform, TFLint, formatting, linting, or validation failure. Moving Git Bash earlier on `PATH` allowed the
-shell hook to start, but then exposed the separate and expected problem that Terraform itself was not installed.
+The observed failure mode was a WSL `bash` process receiving a Windows path to a cached hook script. The path translation failed before Terraform started, so the error looked like a missing hook script with stripped backslashes rather than an actionable Terraform, TFLint, formatting, linting, or validation failure. Moving Git Bash earlier on `PATH` allowed the shell hook to start, but then exposed the separate and expected problem that Terraform itself was not installed.
 
-Repo-local wrappers avoid this ambiguity when native Windows support matters. A wrapper written in a runtime already
-required by the repository's validation stack can locate executables with `shutil.which`, invoke commands with
-`subprocess.run(..., shell=False)`, and report direct installation guidance when `terraform` or `tflint` is missing.
-That keeps failures tied to the actual prerequisite or validation problem instead of to path translation between Windows
-and POSIX-like shells.
+Repo-local wrappers avoid this ambiguity when native Windows support matters. A wrapper written in a runtime already required by the repository's validation stack can locate executables with `shutil.which`, invoke commands with `subprocess.run(..., shell=False)`, and report direct installation guidance when `terraform` or `tflint` is missing. That keeps failures tied to the actual prerequisite or validation problem instead of to path translation between Windows and POSIX-like shells.
 
-This guidance is about hook execution mechanics and actionable error messages. It does not change the guide's Terraform
-toolchain expectations, and it does not require or prohibit OpenTofu support.
+This guidance is about hook execution mechanics and actionable error messages. It does not change the guide's Terraform toolchain expectations, and it does not require or prohibit OpenTofu support.
 
 ---
 
