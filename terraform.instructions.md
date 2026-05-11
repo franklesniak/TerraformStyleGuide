@@ -7,7 +7,7 @@ description: "Terraform coding standards: secure, modular, and well-documented i
 
 # Terraform Writing Style
 
-**Version:** 2.4.20260511.0
+**Version:** 2.4.20260511.1
 
 ## Metadata
 
@@ -3441,8 +3441,7 @@ Security scanning tools **SHOULD** be integrated into the development workflow.
 
 #### Pre-commit Integration Example (POSIX-compatible Shell)
 
-This example assumes the repository supports POSIX-compatible shell hook execution. Use cross-platform repo-local
-wrappers when native Windows/PowerShell contributors must run hooks without Git Bash or WSL assumptions.
+This example assumes the repository supports POSIX-compatible shell hook execution. Use cross-platform repo-local wrappers when native Windows/PowerShell contributors must run hooks without Git Bash or WSL assumptions.
 
 ```yaml
 - repo: https://github.com/antonbabenko/pre-commit-terraform
@@ -3994,17 +3993,11 @@ Pre-commit hooks for Terraform **SHOULD** include:
 
 ### Cross-platform Hook Execution
 
-Terraform pre-commit configuration **SHOULD** be cross-platform when the repository supports native Windows/PowerShell
-contributors. Do not assume POSIX shell hook execution unless the repository explicitly requires Git Bash,
-WSL, macOS, or Linux for local validation.
+Terraform pre-commit configuration **SHOULD** be cross-platform when the repository supports native Windows/PowerShell contributors. Do not assume POSIX shell hook execution unless the repository explicitly requires Git Bash, WSL, macOS, or Linux for local validation.
 
-For cross-platform Terraform pre-commit validation, prefer repo-local hooks or wrappers in a runtime already required by
-the repository's validation stack, such as Python when pre-commit is already in use. Wrappers **SHOULD** invoke Terraform
-and related tools with shell execution disabled, **SHOULD** resolve executables through `PATH`, and **SHOULD** fail with
-clear installation guidance when required tools such as `terraform` or `tflint` are missing.
+For cross-platform Terraform pre-commit validation, prefer repo-local hooks or wrappers in a runtime already required by the repository's validation stack, such as Python when pre-commit is already in use. Wrappers **SHOULD** invoke Terraform and related tools with shell execution disabled, **SHOULD** resolve executables through `PATH`, and **SHOULD** fail with clear installation guidance when required tools such as `terraform` or `tflint` are missing.
 
-When using third-party Terraform pre-commit hook collections that rely on shell scripts, document the supported Windows
-shell environment explicitly, including any Git Bash or WSL assumptions.
+When using third-party Terraform pre-commit hook collections that rely on shell scripts, document the supported Windows shell environment explicitly, including any Git Bash or WSL assumptions.
 
 <!-- RATIONALE: cross-platform-terraform-pre-commit-hooks -->
 
@@ -4021,8 +4014,7 @@ shell environment explicitly, including any Git Bash or WSL assumptions.
 
 ### Pre-commit Configuration
 
-This example uses `antonbabenko/pre-commit-terraform` and is suitable when a POSIX-compatible shell environment is
-supported for local validation.
+This example uses `antonbabenko/pre-commit-terraform` and is suitable when a POSIX-compatible shell environment is supported for local validation.
 
 ```yaml
 # .pre-commit-config.yaml (Terraform section)
