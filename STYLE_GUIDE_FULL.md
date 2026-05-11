@@ -260,7 +260,7 @@ terraform fmt -check -recursive
 terraform fmt -recursive
 ```
 
-**Pre-commit integration (for repositories with supported POSIX-compatible shell hook execution):**
+**Pre-commit integration (for repositories that support POSIX-compatible shell hook execution):**
 
 ```yaml
 - repo: https://github.com/antonbabenko/pre-commit-terraform
@@ -3497,7 +3497,7 @@ Security scanning tools **SHOULD** be integrated into the development workflow.
 #### Pre-commit Integration Example (POSIX-compatible Shell)
 
 This example assumes the repository supports POSIX-compatible shell hook execution. Use cross-platform repo-local
-wrappers when native Windows / PowerShell contributors must run hooks without Git Bash or WSL assumptions.
+wrappers when native Windows/PowerShell contributors must run hooks without Git Bash or WSL assumptions.
 
 ```yaml
 - repo: https://github.com/antonbabenko/pre-commit-terraform
@@ -4059,8 +4059,8 @@ Pre-commit hooks for Terraform **SHOULD** include:
 
 ### Cross-platform Hook Execution
 
-Terraform pre-commit configuration **SHOULD** be cross-platform when the repository supports native Windows /
-PowerShell contributors. Do not assume POSIX shell hook execution unless the repository explicitly requires Git Bash,
+Terraform pre-commit configuration **SHOULD** be cross-platform when the repository supports native Windows/PowerShell
+contributors. Do not assume POSIX shell hook execution unless the repository explicitly requires Git Bash,
 WSL, macOS, or Linux for local validation.
 
 For cross-platform Terraform pre-commit validation, prefer repo-local hooks or wrappers in a runtime already required by
@@ -4071,7 +4071,7 @@ clear installation guidance when required tools such as `terraform` or `tflint` 
 When using third-party Terraform pre-commit hook collections that rely on shell scripts, document the supported Windows
 shell environment explicitly, including any Git Bash or WSL assumptions.
 
-Native Windows / PowerShell contributors can run `pre-commit` successfully, but shell-script hook startup depends on
+Native Windows/PowerShell contributors can run `pre-commit` successfully, but shell-script hook startup depends on
 which `bash` executable appears first on `PATH`. On a workstation with WSL, Git Bash, and other Bash shims installed,
 that resolution can vary by terminal, user profile, or PATH ordering.
 
@@ -5835,7 +5835,7 @@ This section tracks significant changes to the Terraform instruction file.
 
 | Version | Date | Changes |
 | --- | --- | --- |
-| 2.4.20260511.0 | 2026-05-11 | Added cross-platform Terraform pre-commit guidance for native Windows / PowerShell contributors, including shell-execution assumptions, repo-local wrapper recommendations, missing-tool error expectations, and rationale for PATH-dependent Bash failures |
+| 2.4.20260511.0 | 2026-05-11 | Added cross-platform Terraform pre-commit guidance for native Windows/PowerShell contributors, including shell-execution assumptions, repo-local wrapper recommendations, missing-tool error expectations, and rationale for PATH-dependent Bash failures |
 | 2.3.20260503.0 | 2026-05-03 | Added rule requiring Terraform Registry documentation URLs in comments to use the `latest` path segment instead of pinned provider or module versions, with corresponding rationale on Dependabot/comment drift, authoritative version sources, and the comment-only scope of the rule |
 | 2.2.20260412.0 | 2026-04-12 | Reduced token footprint of STYLE_GUIDE.md for LLM/agent consumption: removed TOC, metadata, cross-reference links; condensed RFC 2119 keywords; consolidated multi-provider examples to single AWS representative with inline notes; relocated procedural/runbook content, troubleshooting, changelog, glossary, .tf.json/.tftpl sections, and provider-specific examples to STYLE_GUIDE_RATIONALE.md |
 | 2.1.20260412.0 | 2026-04-12 | Added extended rationale content to companion STYLE_GUIDE_RATIONALE.md: terraform_data advantages over null_resource, environment separation comparison table, workspace limitations, directory-based recommendation details, terraform_remote_state caveats, configuration_aliases rationale, and service account impersonation benefits |

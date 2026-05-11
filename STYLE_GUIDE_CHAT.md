@@ -243,7 +243,7 @@ terraform fmt -check -recursive
 terraform fmt -recursive
 ```
 
-**Pre-commit integration (for repositories with supported POSIX-compatible shell hook execution):**
+**Pre-commit integration (for repositories that support POSIX-compatible shell hook execution):**
 
 ```yaml
 - repo: https://github.com/antonbabenko/pre-commit-terraform
@@ -3440,7 +3440,7 @@ Security scanning tools **SHOULD** be integrated into the development workflow.
 #### Pre-commit Integration Example (POSIX-compatible Shell)
 
 This example assumes the repository supports POSIX-compatible shell hook execution. Use cross-platform repo-local
-wrappers when native Windows / PowerShell contributors must run hooks without Git Bash or WSL assumptions.
+wrappers when native Windows/PowerShell contributors must run hooks without Git Bash or WSL assumptions.
 
 ```yaml
 - repo: https://github.com/antonbabenko/pre-commit-terraform
@@ -3992,8 +3992,8 @@ Pre-commit hooks for Terraform **SHOULD** include:
 
 ### Cross-platform Hook Execution
 
-Terraform pre-commit configuration **SHOULD** be cross-platform when the repository supports native Windows /
-PowerShell contributors. Do not assume POSIX shell hook execution unless the repository explicitly requires Git Bash,
+Terraform pre-commit configuration **SHOULD** be cross-platform when the repository supports native Windows/PowerShell
+contributors. Do not assume POSIX shell hook execution unless the repository explicitly requires Git Bash,
 WSL, macOS, or Linux for local validation.
 
 For cross-platform Terraform pre-commit validation, prefer repo-local hooks or wrappers in a runtime already required by
