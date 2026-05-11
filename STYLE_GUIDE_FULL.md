@@ -2,13 +2,13 @@
 
 # Terraform Writing Style
 
-**Version:** 2.3.20260509.0
+**Version:** 2.4.20260511.0
 
 ## Metadata
 
 - **Status:** Active
 - **Owner:** Repository Maintainers
-- **Last Updated:** 2026-05-09
+- **Last Updated:** 2026-05-11
 - **Scope:** Terraform coding standards for all `.tf`, `.tfvars`, `.tftest.hcl`, `.tf.json`, `.tftpl`, and `.tfbackend` files in this repository — style, formatting, naming, file organization, variable and output design, resource configuration, module design, state management, cross-stack data sharing, provider management, security, testing, and documentation.
 
 ## Keywords
@@ -76,6 +76,7 @@ This checklist provides a quick reference for both human developers and LLMs (li
 ### Continuous Validation (Quick Reference)
 
 - **[All]** `check` blocks **MAY** be used for continuous validation
+- **[All]** Terraform pre-commit hooks **SHOULD** avoid shell assumptions for native Windows/PowerShell contributors
 
 ### Resource Configuration (Quick Reference)
 
@@ -259,7 +260,7 @@ terraform fmt -check -recursive
 terraform fmt -recursive
 ```
 
-**Pre-commit integration:**
+**Pre-commit integration (for repositories that support POSIX-compatible shell hook execution):**
 
 ```yaml
 - repo: https://github.com/antonbabenko/pre-commit-terraform
@@ -3493,7 +3494,10 @@ Security scanning tools **SHOULD** be integrated into the development workflow.
 
 > **Note:** `tfsec` has been absorbed into Aqua Security's `trivy` and is now in maintenance mode. New projects **SHOULD** use `trivy` for Terraform security scanning. Existing workflows using `tfsec` will continue to work but **SHOULD** plan migration to `trivy`.
 
-#### Pre-commit Integration Example
+#### Pre-commit Integration Example (POSIX-compatible Shell)
+
+This example assumes the repository supports POSIX-compatible shell hook execution. Use cross-platform repo-local
+wrappers when native Windows/PowerShell contributors must run hooks without Git Bash or WSL assumptions.
 
 ```yaml
 - repo: https://github.com/antonbabenko/pre-commit-terraform
@@ -4053,6 +4057,38 @@ Pre-commit hooks for Terraform **SHOULD** include:
 3. `tflint` — Linting
 4. Security scanning (optional but recommended)
 
+### Cross-platform Hook Execution
+
+Terraform pre-commit configuration **SHOULD** be cross-platform when the repository supports native Windows/PowerShell
+contributors. Do not assume POSIX shell hook execution unless the repository explicitly requires Git Bash,
+WSL, macOS, or Linux for local validation.
+
+For cross-platform Terraform pre-commit validation, prefer repo-local hooks or wrappers in a runtime already required by
+the repository's validation stack, such as Python when pre-commit is already in use. Wrappers **SHOULD** invoke Terraform
+and related tools with shell execution disabled, **SHOULD** resolve executables through `PATH`, and **SHOULD** fail with
+clear installation guidance when required tools such as `terraform` or `tflint` are missing.
+
+When using third-party Terraform pre-commit hook collections that rely on shell scripts, document the supported Windows
+shell environment explicitly, including any Git Bash or WSL assumptions.
+
+Native Windows/PowerShell contributors can run `pre-commit` successfully, but shell-script hook startup depends on
+which `bash` executable appears first on `PATH`. On a workstation with WSL, Git Bash, and other Bash shims installed,
+that resolution can vary by terminal, user profile, or PATH ordering.
+
+The observed failure mode was a WSL `bash` process receiving a Windows path to a cached hook script. The path translation
+failed before Terraform started, so the error looked like a missing hook script with stripped backslashes rather than an
+actionable Terraform, TFLint, formatting, linting, or validation failure. Moving Git Bash earlier on `PATH` allowed the
+shell hook to start, but then exposed the separate and expected problem that Terraform itself was not installed.
+
+Repo-local wrappers avoid this ambiguity when native Windows support matters. A wrapper written in a runtime already
+required by the repository's validation stack can locate executables with `shutil.which`, invoke commands with
+`subprocess.run(..., shell=False)`, and report direct installation guidance when `terraform` or `tflint` is missing.
+That keeps failures tied to the actual prerequisite or validation problem instead of to path translation between Windows
+and POSIX-like shells.
+
+This guidance is about hook execution mechanics and actionable error messages. It does not change the guide's Terraform
+toolchain expectations, and it does not require or prohibit OpenTofu support.
+
 ### Workflow
 
 1. Make Terraform changes
@@ -4065,6 +4101,9 @@ Pre-commit hooks for Terraform **SHOULD** include:
 **CI is a safety net, not a substitute for local checks.**
 
 ### Pre-commit Configuration
+
+This example uses `antonbabenko/pre-commit-terraform` and is suitable when a POSIX-compatible shell environment is
+supported for local validation.
 
 ```yaml
 # .pre-commit-config.yaml (Terraform section)
@@ -5796,6 +5835,7 @@ This section tracks significant changes to the Terraform instruction file.
 
 | Version | Date | Changes |
 | --- | --- | --- |
+| 2.4.20260511.0 | 2026-05-11 | Added cross-platform Terraform pre-commit guidance for native Windows/PowerShell contributors, including shell-execution assumptions, repo-local wrapper recommendations, missing-tool error expectations, and rationale for PATH-dependent Bash failures |
 | 2.3.20260503.0 | 2026-05-03 | Added rule requiring Terraform Registry documentation URLs in comments to use the `latest` path segment instead of pinned provider or module versions, with corresponding rationale on Dependabot/comment drift, authoritative version sources, and the comment-only scope of the rule |
 | 2.2.20260412.0 | 2026-04-12 | Reduced token footprint of STYLE_GUIDE.md for LLM/agent consumption: removed TOC, metadata, cross-reference links; condensed RFC 2119 keywords; consolidated multi-provider examples to single AWS representative with inline notes; relocated procedural/runbook content, troubleshooting, changelog, glossary, .tf.json/.tftpl sections, and provider-specific examples to STYLE_GUIDE_RATIONALE.md |
 | 2.1.20260412.0 | 2026-04-12 | Added extended rationale content to companion STYLE_GUIDE_RATIONALE.md: terraform_data advantages over null_resource, environment separation comparison table, workspace limitations, directory-based recommendation details, terraform_remote_state caveats, configuration_aliases rationale, and service account impersonation benefits |
