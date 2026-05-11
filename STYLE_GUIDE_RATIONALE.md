@@ -10,6 +10,7 @@ This companion document preserves the extended rationale, design philosophy, and
 - [Cross-Stack Data Sharing Rationale](#cross-stack-data-sharing-rationale)
 - [Provider Management Rationale](#provider-management-rationale)
 - [Documentation Rationale](#documentation-rationale)
+- [Pre-commit Rationale](#pre-commit-rationale)
 - [Upgrading Terraform Versions](#upgrading-terraform-versions)
 - [Provider-Specific Examples](#provider-specific-examples)
 - [JSON Configuration Files (.tf.json)](#json-configuration-files-tfjson)
@@ -180,6 +181,32 @@ When a Registry URL in a comment hard-codes a provider or module version (for ex
 Requiring `latest` in the URL path resolves this drift by construction. The `latest` segment on `registry.terraform.io` always redirects to the most recent published documentation for the provider or module, which is the version a reader is most likely interested in when navigating from a comment. Comments stay correct without any maintenance burden.
 
 The rule is intentionally scoped to documentation/navigation comments only. It **does not** alter executable configuration: provider constraints, module `source` addresses, module `version` arguments, `.terraform.lock.hcl`, and selected module `source` references must continue to express the exact, intentional version pinning required for deterministic, reproducible infrastructure. Pinning in those places is a feature; pinning in comments is a maintenance hazard.
+
+---
+
+## Pre-commit Rationale
+
+> For the pre-commit rules themselves, see [Pre-commit Discipline for Terraform](STYLE_GUIDE.md#pre-commit-discipline-for-terraform) in the main guide.
+
+### Cross-platform Terraform Pre-commit Hooks
+
+Native Windows / PowerShell contributors can run `pre-commit` successfully, but shell-script hook startup depends on
+which `bash` executable appears first on `PATH`. On a workstation with WSL, Git Bash, and other Bash shims installed,
+that resolution can vary by terminal, user profile, or PATH ordering.
+
+The observed failure mode was a WSL `bash` process receiving a Windows path to a cached hook script. The path translation
+failed before Terraform started, so the error looked like a missing hook script with stripped backslashes rather than an
+actionable Terraform, TFLint, formatting, linting, or validation failure. Moving Git Bash earlier on `PATH` allowed the
+shell hook to start, but then exposed the separate and expected problem that Terraform itself was not installed.
+
+Repo-local wrappers avoid this ambiguity when native Windows support matters. A wrapper written in a runtime already
+required by the repository's validation stack can locate executables with `shutil.which`, invoke commands with
+`subprocess.run(..., shell=False)`, and report direct installation guidance when `terraform` or `tflint` is missing.
+That keeps failures tied to the actual prerequisite or validation problem instead of to path translation between Windows
+and POSIX-like shells.
+
+This guidance is about hook execution mechanics and actionable error messages. It does not change the guide's Terraform
+toolchain expectations, and it does not require or prohibit OpenTofu support.
 
 ---
 
@@ -1837,6 +1864,7 @@ This section tracks significant changes to the Terraform instruction file.
 
 | Version | Date | Changes |
 | --- | --- | --- |
+| 2.4.20260511.0 | 2026-05-11 | Added cross-platform Terraform pre-commit guidance for native Windows / PowerShell contributors, including shell-execution assumptions, repo-local wrapper recommendations, missing-tool error expectations, and rationale for PATH-dependent Bash failures |
 | 2.3.20260503.0 | 2026-05-03 | Added rule requiring Terraform Registry documentation URLs in comments to use the `latest` path segment instead of pinned provider or module versions, with corresponding rationale on Dependabot/comment drift, authoritative version sources, and the comment-only scope of the rule |
 | 2.2.20260412.0 | 2026-04-12 | Reduced token footprint of STYLE_GUIDE.md for LLM/agent consumption: removed TOC, metadata, cross-reference links; condensed RFC 2119 keywords; consolidated multi-provider examples to single AWS representative with inline notes; relocated procedural/runbook content, troubleshooting, changelog, glossary, .tf.json/.tftpl sections, and provider-specific examples to STYLE_GUIDE_RATIONALE.md |
 | 2.1.20260412.0 | 2026-04-12 | Added extended rationale content to companion STYLE_GUIDE_RATIONALE.md: terraform_data advantages over null_resource, environment separation comparison table, workspace limitations, directory-based recommendation details, terraform_remote_state caveats, configuration_aliases rationale, and service account impersonation benefits |

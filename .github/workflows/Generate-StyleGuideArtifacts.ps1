@@ -81,15 +81,16 @@ function New-StyleGuideTerraformInstructionsVersion {
     try {
         $strContent = Get-Content -Path $SourcePath -Raw -Encoding UTF8
         
-        # Define the YAML frontmatter with blank line after closing delimiter
-        $strFrontmatter = @"
----
-applyTo: "**/*.tf,**/*.tfvars,**/*.tftest.hcl,**/*.tf.json,**/*.tftpl,**/*.tfbackend"
-description: "Terraform coding standards: secure, modular, and well-documented infrastructure as code."
----
-
-
-"@
+        # Define the YAML frontmatter with LF newlines so regenerated files stay
+        # stable across Windows and POSIX runners.
+        $strFrontmatter = @(
+            '---'
+            'applyTo: "**/*.tf,**/*.tfvars,**/*.tftest.hcl,**/*.tf.json,**/*.tftpl,**/*.tfbackend"'
+            'description: "Terraform coding standards: secure, modular, and well-documented infrastructure as code."'
+            '---'
+            ''
+            ''
+        ) -join "`n"
         
         # Prepend frontmatter to content
         $strFullContent = $strFrontmatter + $strContent
