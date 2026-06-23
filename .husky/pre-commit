@@ -33,7 +33,6 @@ fi
 
 case "$status" in
   0)
-    exit 0
     ;;
   1)
     echo ""
@@ -54,6 +53,36 @@ case "$status" in
     echo "Exit status: $status"
     echo "Review the output above, then run:"
     echo "npm --prefix .github/workflows run lint:md"
+    exit 1
+    ;;
+esac
+
+echo "Running nested Markdown lint (code fences) with the repository configuration..."
+
+# Mirror the outer lint so the hook checks the same things CI does. Keep the
+# command in an if test to preserve its non-zero status for classification.
+if npm --prefix .github/workflows run lint:md:nested; then
+  nested_status=0
+else
+  nested_status=$?
+fi
+
+case "$nested_status" in
+  0)
+    exit 0
+    ;;
+  1)
+    echo ""
+    echo "Nested Markdown lint reported errors. To see them all, run:"
+    echo "npm --prefix .github/workflows run lint:md:nested"
+    exit 1
+    ;;
+  *)
+    echo ""
+    echo "Nested Markdown lint could not complete because npm or the hook failed unexpectedly."
+    echo "Exit status: $nested_status"
+    echo "Review the output above, then run:"
+    echo "npm --prefix .github/workflows run lint:md:nested"
     exit 1
     ;;
 esac
