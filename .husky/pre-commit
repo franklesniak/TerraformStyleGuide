@@ -73,7 +73,9 @@ case "$nested_status" in
     ;;
   1)
     echo ""
-    echo "Nested Markdown lint reported errors. To see them all, run:"
+    echo "Nested Markdown lint did not pass: it reported errors or could not complete"
+    echo "(a lint, tooling, or configuration problem)."
+    echo "Review the output above, then run:"
     echo "npm --prefix .github/workflows run lint:md:nested"
     exit 1
     ;;
