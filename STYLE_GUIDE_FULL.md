@@ -2,13 +2,13 @@
 
 # Terraform Writing Style
 
-**Version:** 2.4.20260511.1
+**Version:** 2.5.20260623.0
 
 ## Metadata
 
 - **Status:** Active
 - **Owner:** Repository Maintainers
-- **Last Updated:** 2026-05-11
+- **Last Updated:** 2026-06-23
 - **Scope:** Terraform coding standards for all `.tf`, `.tfvars`, `.tftest.hcl`, `.tf.json`, `.tftpl`, and `.tfbackend` files in this repository — style, formatting, naming, file organization, variable and output design, resource configuration, module design, state management, cross-stack data sharing, provider management, security, testing, and documentation.
 
 ## Keywords
@@ -3806,7 +3806,9 @@ terraform test -filter=tests/basic.tftest.hcl
 #### CI Integration
 
 ```yaml
-# .github/workflows/terraform-ci.yml (test job)
+# GitHub Actions example: Terraform CI test job.
+# Other CI hosts use their own command/script syntax; for example,
+# Azure Pipelines uses script steps and GitLab CI uses job-level script.
 - name: Terraform Init
   run: terraform init
 
@@ -4079,7 +4081,7 @@ This guidance is about hook execution mechanics and actionable error messages. I
 3. Run `terraform validate`
 4. Run pre-commit hooks: `pre-commit run --all-files`
 5. Review and commit ALL auto-fixes as part of your change
-6. Push to GitHub
+6. Push to the configured Git remote
 
 **CI is a safety net, not a substitute for local checks.**
 
@@ -4116,16 +4118,16 @@ When adopting this template, review and customize `.tflint.hcl` for your project
 
 ### CI Workflow Integration
 
-This repository includes a comprehensive Terraform CI workflow at `.github/workflows/terraform-ci.yml` that enforces these standards automatically:
+A Terraform CI workflow **SHOULD** enforce these standards automatically. On GitHub Actions, this can be implemented in a workflow file such as `.github/workflows/terraform-ci.yml`; use the equivalent pipeline definition and file location for Azure Pipelines, GitLab CI, or another selected CI host:
 
 - **Format Check:** Runs `terraform fmt -check -recursive`
 - **Validate:** Runs `terraform init` and `terraform validate` for all Terraform directories
 - **Lint:** Runs TFLint with the repository's `.tflint.hcl` configuration
 - **Test:** Runs `terraform test` for directories containing `.tftest.hcl` files
 
-The CI workflow uses job dependencies to fail fast: format issues block validation, and validation issues block linting and testing.
+The CI workflow **SHOULD** use job dependencies, or the selected host's equivalent ordering controls, to fail fast: format issues block validation, and validation issues block linting and testing.
 
-For workflow customization options (such as enabling security scanning), see the comments in `.github/workflows/terraform-ci.yml`.
+For CI customization options (such as enabling security scanning), see the comments in the selected CI workflow definition.
 
 ---
 
@@ -5817,6 +5819,7 @@ This section tracks significant changes to the Terraform instruction file.
 
 | Version | Date | Changes |
 | --- | --- | --- |
+| 2.5.20260623.0 | 2026-06-23 | Made Terraform CI guidance host-neutral: relabeled the Terraform test CI example as a GitHub Actions example with other-host command/script equivalents noted, changed the local workflow push step to the configured Git remote, and reworded the CI Workflow Integration section so GitHub Actions is one illustrative host rather than the assumed CI surface |
 | 2.4.20260511.0 | 2026-05-11 | Added cross-platform Terraform pre-commit guidance for native Windows/PowerShell contributors, including shell-execution assumptions, repo-local wrapper recommendations, missing-tool error expectations, and rationale for PATH-dependent Bash failures |
 | 2.3.20260503.0 | 2026-05-03 | Added rule requiring Terraform Registry documentation URLs in comments to use the `latest` path segment instead of pinned provider or module versions, with corresponding rationale on Dependabot/comment drift, authoritative version sources, and the comment-only scope of the rule |
 | 2.2.20260412.0 | 2026-04-12 | Reduced token footprint of STYLE_GUIDE.md for LLM/agent consumption: removed TOC, metadata, cross-reference links; condensed RFC 2119 keywords; consolidated multi-provider examples to single AWS representative with inline notes; relocated procedural/runbook content, troubleshooting, changelog, glossary, .tf.json/.tftpl sections, and provider-specific examples to STYLE_GUIDE_RATIONALE.md |
