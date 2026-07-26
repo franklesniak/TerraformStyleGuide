@@ -4110,7 +4110,7 @@ A Terraform change is considered complete when:
 
 ## Scope Exceptions & Deviations from Standards
 
-Deviations recorded in this section **MAY** apply only to requirements defined by this guide. A deviation **MUST NOT** waive or weaken an applicable repository-wide requirement. A proposal that would affect a repository-wide requirement **MUST** follow the adopting repository's own governance and authorization process.
+Deviations recorded in this section **MUST** apply only to requirements defined by this guide. A deviation **MUST NOT** waive or weaken an applicable repository-wide requirement. A proposal that would affect a repository-wide requirement **MUST** follow the adopting repository's own governance and authorization process.
 
 Each deviation **MUST** record:
 
