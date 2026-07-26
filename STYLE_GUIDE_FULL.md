@@ -2,18 +2,22 @@
 
 # Terraform Writing Style
 
-**Version:** 2.5.20260623.0
+**Version:** 2.6.20260726.0
 
 ## Metadata
 
 - **Status:** Active
 - **Owner:** Repository Maintainers
-- **Last Updated:** 2026-06-23
+- **Last Updated:** 2026-07-26
 - **Scope:** Terraform coding standards for all `.tf`, `.tfvars`, `.tftest.hcl`, `.tf.json`, `.tftpl`, and `.tfbackend` files in this repository — style, formatting, naming, file organization, variable and output design, resource configuration, module design, state management, cross-stack data sharing, provider management, security, testing, and documentation.
 
 ## Keywords
 
 The key words **MUST**, **MUST NOT**, **REQUIRED**, **SHALL**, **SHALL NOT**, **SHOULD**, **SHOULD NOT**, **RECOMMENDED**, **MAY**, and **OPTIONAL** are defined in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119). Requirements apply when their scope is present (e.g., module rules apply only when modules exist).
+
+## Applicability and Precedence
+
+This guide is self-contained and applies within its stated Terraform scope whether or not an adopting repository defines broader repository-wide requirements. When broader repository-wide requirements are defined and applicable, they remain in force; nothing in this guide, including a recorded deviation, authorizes an exception to them.
 
 ## Quick Reference Checklist
 
@@ -4177,7 +4181,17 @@ A Terraform change is considered complete when:
 
 ## Scope Exceptions & Deviations from Standards
 
-Document justified deviations from these standards. No deviations are currently recorded.
+Deviations recorded in this section **MAY** apply only to requirements defined by this guide. A deviation **MUST NOT** waive or weaken an applicable repository-wide requirement. A proposal that would affect a repository-wide requirement **MUST** follow the adopting repository's own governance and authorization process.
+
+Each deviation **MUST** record:
+
+- **Guide Requirement Affected:** The specific requirement defined by this guide
+- **Justification:** The business, technical, or organizational reason
+- **Affected Scope:** The files, modules, configurations, or environments covered
+- **Approver and Approval Date:** The approving person or team and the date in `YYYY-MM-DD` format
+- **Repository-wide Requirements Confirmation:** Confirmation that no applicable repository-wide requirement is waived or weakened, or `N/A` when no such requirement is defined or applicable
+
+No deviations are currently recorded.
 
 ## Upgrading Terraform Versions
 
@@ -5761,32 +5775,44 @@ After importing, review the state and update your configuration to match the imp
 
 ## Scope Exceptions Template & Deviation Guidance
 
-This section provides a template and guidance for documenting justified deviations from the standards. When adopting these standards, use this section to record exceptions specific to your organization, project, or deployment environment.
+The main guide is designed to remain accurate as a standalone instruction artifact and when copied into another repository. It therefore cannot assume that an adopting repository has a particular governance file, instruction hierarchy, or even broader repository-wide requirements. Its own scope and requirements remain complete in every adoption context.
+
+When an adopting repository does define broader repository-wide requirements, those requirements come from an authority outside this guide. A guide-level deviation can change only how a requirement defined by this guide applies; it cannot grant an exception to that outside authority. Treating it otherwise could let a local Terraform exception silently weaken requirements that apply across the repository, such as security, compliance, testing, or approval controls.
+
+Before approving a guide-level deviation, perform the repository-wide-requirements check:
+
+1. Identify any broader repository-wide requirements that apply to the proposed deviation's affected scope.
+2. Compare the proposed deviation with those requirements and determine whether it would waive, weaken, or conflict with any of them.
+3. If it would affect a repository-wide requirement, stop the guide-level deviation process and route the proposal through the adopting repository's own governance and authorization process.
+4. In the deviation record, confirm that no applicable repository-wide requirement is waived or weakened. Record `N/A` only when the adopting repository defines no such requirement or none applies to the affected scope.
+
+For example, a repository-wide rule might require encryption for all persisted data. A guide-level deviation may use a different state backend only if that backend still satisfies the encryption rule; the record should state that conclusion. If the repository has no broader requirement applicable to backend selection, the confirmation may be `N/A`.
 
 ### How to Document Deviations
 
-When a deviation from these standards is necessary, document it using the following format:
+When a deviation from a requirement defined by this guide is necessary, document it using the following format:
 
 ```markdown
 #### [Short Description of Deviation]
 
-- **Standard Affected:** [Link to or name of the standard being modified]
-- **Reason:** [Business, technical, or organizational justification]
-- **Scope:** [Which files, modules, or configurations are affected]
-- **Approved By:** [Person or team who approved the deviation]
-- **Date:** [YYYY-MM-DD]
+- **Guide Requirement Affected:** [Link to or name of the guide requirement]
+- **Justification:** [Business, technical, or organizational reason]
+- **Affected Scope:** [Files, modules, configurations, or environments covered]
+- **Approver and Approval Date:** [Person or team; YYYY-MM-DD]
+- **Repository-wide Requirements Confirmation:** [How you confirmed that no applicable
+  repository-wide requirement is waived or weakened, or N/A when none is defined or applicable]
 - **Review Date:** [Optional: When this deviation should be reconsidered]
 ```
 
 ### Common Deviation Scenarios
 
-The following are common scenarios where deviations may be justified:
+The following are common scenarios where deviations from this guide may be justified after the repository-wide-requirements check:
 
 - **Alternative Backend Workflows:** Using Terraform Cloud, Terraform Enterprise, Spacelift, or other orchestration tools instead of `backend.tf`. Document which backend sections do not apply.
 - **Provider-Specific Requirements:** Organization policies that mandate specific provider configurations (e.g., required regions, mandatory tags beyond those listed).
 - **Legacy Compatibility:** Maintaining compatibility with older Terraform versions or modules that cannot be immediately updated.
 - **Organizational Naming Conventions:** Pre-existing naming conventions that conflict with this template but are required for consistency with other systems.
-- **Security Policy Overrides:** Stricter security requirements that go beyond or differ from those specified here.
+- **Stricter Security Requirements:** Implementations that differ from this guide in order to satisfy a stricter requirement, provided the deviation does not waive or weaken any applicable repository-wide requirement.
 
 ### Recorded Deviations
 
@@ -5797,11 +5823,11 @@ The following are common scenarios where deviations may be justified:
 <!--
 #### Example: Alternative Backend (Terraform Cloud)
 
-- **Standard Affected:** Remote Backend Configuration
-- **Reason:** Organization uses Terraform Cloud for state management, which provides built-in state storage, locking, and encryption.
-- **Scope:** All root modules in this repository
-- **Approved By:** @platform-team
-- **Date:** 2026-01-15
+- **Guide Requirement Affected:** Remote Backend Configuration
+- **Justification:** Organization uses Terraform Cloud for state management, which provides built-in state storage, locking, and encryption.
+- **Affected Scope:** All root modules in this repository
+- **Approver and Approval Date:** @platform-team; 2026-01-15
+- **Repository-wide Requirements Confirmation:** Confirmed with the repository's applicable requirements that Terraform Cloud's encryption and locking controls satisfy all repository-wide state-management requirements; none are waived or weakened.
 - **Review Date:** 2027-01-15
 
 The following Remote Backend Configuration requirements are handled by Terraform Cloud and do not require explicit configuration:
@@ -5819,6 +5845,7 @@ This section tracks significant changes to the Terraform instruction file.
 
 | Version | Date | Changes |
 | --- | --- | --- |
+| 2.6.20260726.0 | 2026-07-26 | Clarified that the guide is self-contained in every adoption context, limited guide-level deviations to requirements defined by this guide, required confirmation that repository-wide requirements remain intact, and documented the repository-wide-requirements check |
 | 2.5.20260623.0 | 2026-06-23 | Made Terraform CI guidance host-neutral: relabeled the Terraform test CI example as a GitHub Actions example with other-host command/script equivalents noted, changed the local workflow push step to the configured Git remote, and reworded the CI Workflow Integration section so GitHub Actions is one illustrative host rather than the assumed CI surface |
 | 2.4.20260511.0 | 2026-05-11 | Added cross-platform Terraform pre-commit guidance for native Windows/PowerShell contributors, including shell-execution assumptions, repo-local wrapper recommendations, missing-tool error expectations, and rationale for PATH-dependent Bash failures |
 | 2.3.20260503.0 | 2026-05-03 | Added rule requiring Terraform Registry documentation URLs in comments to use the `latest` path segment instead of pinned provider or module versions, with corresponding rationale on Dependabot/comment drift, authoritative version sources, and the comment-only scope of the rule |
