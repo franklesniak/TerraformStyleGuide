@@ -1,110 +1,209 @@
 # Prompt 02 primary-source research
 
-Research date: 2026-07-29.
+Research date: 2026-07-29 UTC.
 
-## GitHub Actions reuse mechanisms
+## Finding T1/T2-2 — Node runtime policy
 
-Primary sources:
+### Current TerraformStyleGuide state
 
-- [GitHub Docs: Reusing workflow configurations](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations)
-- [GitHub Docs: Reuse workflows](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)
-- [GitHub Docs: Metadata syntax for composite actions](https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax)
+The current repository was inspected directly:
 
-Durable findings:
+- `.github/workflows/markdownlint.yml` selects Node 20.
+- `.github/workflows/package.json` has no `engines.node` or `devEngines`
+  declaration.
+- `.husky/pre-commit` requires `npm` and the installed
+  `markdownlint-cli2` binary but does not query or constrain Node.
+- the lockfile currently installs `markdownlint-cli2@0.20.0` and
+  `markdownlint@0.40.0`, whose recorded engine floors are Node `>=20`.
 
-- GitHub Actions supports YAML anchors and aliases, including reuse of mappings
-  and complete job configurations.
-- A reusable workflow is called at the job level, not as a step within an
-  existing job. The calling job can use only the documented restricted keyword
-  set, so it cannot simply insert a reusable workflow between preparation and
-  production steps in the same job.
-- A same-repository reusable workflow referenced with
-  `./.github/workflows/<file>` comes from the same commit as the caller.
-- A composite action groups steps and is invoked as one step, but requires
-  action metadata and explicit shells for `run` steps. Its internal steps are
-  less visible in the caller log than ordinary workflow steps.
-- These mechanisms can reduce workflow duplication, but none is a better
-  executable unit for a cross-platform, directly locally runnable PowerShell
-  fixture suite than a tracked `.ps1` harness invoked by each required shell.
-
-## GitHub Actions immutability and maintenance
+### Candidate package-engine change
 
 Primary sources:
 
-- [GitHub Docs: Secure use reference](https://docs.github.com/en/actions/reference/security/secure-use)
-- [GitHub Docs: Keeping actions up to date with Dependabot](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/auto-update-actions)
-- [GitHub Docs: Dependabot-supported GitHub Actions references](https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories#github-actions)
-- [`actions/checkout` v6.1.0 release](https://github.com/actions/checkout/releases/tag/v6.1.0)
-- [`actions/setup-node` v6.5.0 release](https://github.com/actions/setup-node/releases/tag/v6.5.0)
-- [`actions/upload-artifact` v7.0.1 release](https://github.com/actions/upload-artifact/releases/tag/v7.0.1)
-- [`actions/download-artifact` v8.0.1 release](https://github.com/actions/download-artifact/releases/tag/v8.0.1)
+- [`markdownlint-cli2` v0.23.2 `package.json`](https://github.com/DavidAnson/markdownlint-cli2/blob/v0.23.2/package.json)
+- [`markdownlint` v0.41.1 `package.json`](https://github.com/DavidAnson/markdownlint/blob/v0.41.1/package.json)
+- [`markdownlint-cli2` v0.23.2 changelog](https://github.com/DavidAnson/markdownlint-cli2/blob/v0.23.2/CHANGELOG.md)
 
-Durable findings:
+Durable retrieved facts:
 
-- GitHub says a full-length commit SHA is the only immutable way to consume an
-  action and recommends verifying that the SHA belongs to the upstream action
-  repository.
-- Current exact action-distribution refs verified with `git ls-remote` on
-  2026-07-29:
-  - `actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803`
-    (`v6.1.0`);
-  - `actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38`
-    (`v6.5.0`);
-  - `actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a`
-    (`v7.0.1`); and
-  - `actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c`
-    (`v8.0.1`).
-- Checkout v6 uses Node 24 and stores persisted credentials under
-  `RUNNER_TEMP`; ordinary authenticated Git commands continue to work, subject
-  to the documented runner compatibility requirement.
-- Setup-node v6 uses Node 24. Its current README recommends an explicit Node
-  version and documents automatic npm caching; the repository's markdown lint
-  job should preserve its existing Node/config behavior unless a separately
-  validated change is required.
-- Dependabot version updates support GitHub Actions referenced by full commit
-  SHA. An adjacent same-line version comment is updated with the reference.
-  The minimum configuration uses `package-ecosystem: github-actions`,
-  `directory: "/"`, and a schedule.
-- Dependabot version updates create reviewable pull requests; they do not make
-  mutable tags safe at execution time. SHA pinning remains the execution-time
-  control.
-- GitHub separately notes that vulnerability alerts for actions pinned only by
-  SHA have limitations. Version-update pull requests plus human review of
-  upstream release notes remain useful maintenance controls.
+- `markdownlint-cli2@0.23.2` declares `"engines": { "node": ">=22" }`.
+- Its package metadata selects `markdownlint@0.41.1`.
+- `markdownlint@0.41.1` also declares Node `>=22`.
+- The upstream 0.23.0 changelog explicitly says Node 20 support was removed.
+- Therefore, installing that line while CI or the hook admits Node 20 is a
+  known contradiction, not a compatibility risk that can be deferred as
+  hypothetical.
 
-## Filesystem path and link handling
+The final remediation issue must re-query the selected versions and lockfile;
+these facts establish the current decision baseline, not an immutable future
+version mandate.
+
+### Supported Node releases on the research date
+
+Primary source:
+
+- [Node.js release status](https://nodejs.org/en/about/previous-releases)
+
+Retrieved status on 2026-07-29:
+
+- Node 20 is end-of-life; its last listed update is 2026-03-24.
+- Node 22 is LTS.
+- Node 24 is LTS and is identified by the page as the latest LTS line.
+- Node 26 is Current, not LTS.
+- The Node project recommends production applications use Active LTS or
+  Maintenance LTS releases.
+
+This makes continued Node 20 admission indefensible for a newly upgraded
+toolchain. Both Node 22 and Node 24 are supportable choices. Testing the package
+minimum (22) and the preferred/latest LTS line (24) provides broader evidence
+than silently choosing one.
+
+### What package metadata can and cannot enforce
+
+Primary source:
+
+- [npm `package.json` documentation: `engines` and `devEngines`](https://docs.npmjs.com/cli/v11/configuring-npm/package-json#engines)
+
+Durable retrieved facts:
+
+- `engines.node` records the Node versions on which a package/project works.
+- Without npm's `engine-strict` setting, `engines` is advisory and ordinarily
+  warns rather than enforcing when the package is installed as a dependency.
+- npm documents `devEngines` as a source-tree contributor control that runs
+  before `install`, `ci`, and `run`; it is structurally and behaviorally
+  different from `engines`.
+- Because repository contributors can arrive through a Git hook or an npm
+  version with different enforcement behavior, metadata alone is not sufficient
+  evidence. The hook and workflow need explicit, consistent runtime checks.
+
+### Husky and contributor environments
+
+Primary source:
+
+- [Husky “How To”: Node version managers and GUIs](https://typicode.github.io/husky/how-to.html#node-version-managers-and-guis)
+
+Durable retrieved facts:
+
+- GUI Git clients may not inherit version-manager initialization and can resolve
+  no Node/npm or a different Node than an interactive shell.
+- Husky documents `~/.config/husky/init.sh` as the initialization point for
+  version-manager setup.
+- The repository already gives this troubleshooting guidance. A runtime-policy
+  change should preserve it and add an early actual-version diagnostic rather
+  than allowing an opaque later package failure.
+
+### Planning consequence
+
+The separate npm-remediation issue must own the Node decision and all affected
+files. The strongest current policy is:
+
+1. declare a minimum compatible Node line in package metadata;
+2. reject an older runtime early in the hook with a stable message;
+3. validate the selected minimum and the preferred LTS line in CI/evidence; and
+4. recompute the exact file set after the final dependency choice.
+
+This is separate from the Node runtime embedded inside pinned GitHub Actions;
+an action's internal runtime does not itself establish the repository's npm
+tooling policy.
+
+## Finding T1/T2-3 — Executable evidence and governance
+
+### The actual Terraform hook is the integration target
 
 Primary sources:
 
-- [Microsoft Learn: `Resolve-Path`](https://learn.microsoft.com/powershell/module/microsoft.powershell.management/resolve-path)
-- [Microsoft Learn: `Path.GetFullPath`](https://learn.microsoft.com/dotnet/api/system.io.path.getfullpath)
-- [Microsoft Learn: `FileAttributes`](https://learn.microsoft.com/dotnet/api/system.io.fileattributes)
-- [Microsoft Learn: `FileSystemInfo.ResolveLinkTarget`](https://learn.microsoft.com/dotnet/api/system.io.filesysteminfo.resolvelinktarget)
-- [GitHub Actions variables reference](https://docs.github.com/en/actions/reference/workflows-and-actions/variables)
+- [Git `githooks` documentation](https://git-scm.com/docs/githooks)
+- [`markdownlint-cli2` v0.20.0 README exit-code contract](https://github.com/DavidAnson/markdownlint-cli2/blob/v0.20.0/README.md#exit-codes)
 
-Durable findings:
+Durable retrieved facts:
 
-- `Resolve-Path` resolves PowerShell/provider paths and wildcards to existing
-  path entries; its documented contract is not a physical canonicalization
-  guarantee for every symbolic-link or reparse-point ancestor.
-- `Path.GetFullPath` returns an absolute lexical path. The target does not need
-  to exist, and the method's contract does not say it removes filesystem link
-  indirection.
-- `FileAttributes.ReparsePoint` is supported on Windows, Linux, and macOS.
-  `File.GetAttributes` is available in .NET Framework versions used by Windows
-  PowerShell 5.1, making component rejection portable across the required
-  editions.
-- Newer .NET exposes `ResolveLinkTarget`, including final-target traversal and
-  junction/symlink support, but that API is not a safe common-denominator
-  contract for Windows PowerShell 5.1.
-- `RUNNER_TEMP` is a runner-provided temporary directory emptied at the
-  beginning and end of each job, subject to permissions. The workflow should
-  create a unique child for each helper/harness use rather than treating the
-  ambient value alone as an already validated helper boundary.
-- Rejecting every reparse/symbolic-link component in an absolute existing path
-  makes separator-aware lexical containment meaningful for the supported
-  runner model. Repeating the component checks narrows but cannot eliminate
-  time-of-check/time-of-use races.
-- The remaining race model must therefore be explicit: checkout and the unique
-  trusted temporary root are job-owned, their parents are runner-controlled,
-  and no competing process may replace entries during validation/extraction.
+- Git invokes `pre-commit` before creating the commit; a nonzero hook result
+  aborts the commit, although the user can deliberately bypass it with
+  `--no-verify`.
+- `markdownlint-cli2` documents exit 0 as successful lint with no errors, exit
+  1 as successful lint that found Markdown errors, and exit 2 as a tooling or
+  execution failure.
+- TerraformStyleGuide's hook uses these distinctions for the outer lint, then
+  invokes its separate nested-lint script. It does not use PSStyleGuide's
+  programmatic `main`/`nonFileContents` integration.
+- Therefore, ordinary lint commands alone are insufficient. Validation must
+  invoke the exact Terraform hook in an isolated index/repository state and
+  prove its skip, pass, lint-rejection, and tooling-failure outcomes.
+
+### Negative fixtures
+
+Current repository inspection found only:
+
+- `samples/test-nested-markdown-linting.md`; and
+- `samples/test-recursive-nested-markdown.md`.
+
+Both are positive samples. `samples/test-violations-recursive.md` does not
+exist. A claim about “existing negative fixtures” would therefore be false.
+Tracked negative fixtures would also make the repository-wide ordinary lint
+fail unless excluded or encoded specially. Deterministic temporary fixtures in
+an isolated clone/worktree are the safer default:
+
+1. stage the test-owned fixture so the hook activates;
+2. require the exact expected rule/file/depth diagnostic;
+3. distinguish lint exit 1 from startup/configuration failure;
+4. clean only the test-owned repository/fixture; and
+5. leave the implementation index untouched.
+
+### Audit semantics and residual approvals
+
+Primary source:
+
+- [npm `audit` documentation](https://docs.npmjs.com/cli/v11/commands/npm-audit/)
+
+Durable retrieved facts:
+
+- `npm audit` sends the configured dependency tree to the registry for known
+  vulnerability analysis and remediation calculation.
+- It exits zero when no vulnerabilities are found and ordinarily nonzero when
+  findings meet the configured failure threshold.
+- `--audit-level` changes the failure threshold but does not filter the report.
+- `--package-lock-only` uses the lockfile while ignoring `node_modules`.
+- `--json` returns detailed machine-readable evidence.
+- `--force` can install outside declared dependency ranges and bypass engine
+  protections; npm explicitly advises against using it without understanding
+  the consequences.
+
+The current seven-node/five-high/two-moderate result is a dated baseline.
+Package nodes are not a sufficient approval key because a node can have
+multiple advisories and dependency paths. The implementation must enumerate
+the complete current URL/path set. Any residual exception must be structured
+with URL, dependency path, owner, UTC expiration, and a real follow-up issue,
+then validated for completeness, uniqueness, and nonexpiration.
+
+### Dependabot final-state evidence
+
+Primary source:
+
+- [GitHub Dependabot options reference](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)
+
+Durable retrieved facts:
+
+- Dependabot configuration version is `2`.
+- Every update entry requires a package ecosystem, manifest directory, and
+  schedule interval.
+- The Terraform npm manifest is in `/.github/workflows`; the existing T1
+  GitHub Actions entry is for `/`.
+- A final two-entry file can be validated structurally and by normalized exact
+  content. That validation should reject duplicate/extra entries and
+  auto-approval/auto-merge additions in the changed scope.
+
+### Supersession consequence
+
+T1's implementation-time gate requires exactly one GitHub Actions Dependabot
+entry. A later npm entry necessarily makes that assertion false. T1 and T2 also
+have issue-specific changed-path/staged-set gates that are not enduring
+repository invariants.
+
+The remediation issue must distinguish:
+
+- enduring behavior that remains green (generator, helper, permissions,
+  immutable action pins, artifact behavior, and lint semantics);
+- final-state assertions that replace an intermediate assertion (two
+  Dependabot entries instead of one); and
+- one-time implementation scope gates that are superseded by the new issue's
+  own affected-file contract.
