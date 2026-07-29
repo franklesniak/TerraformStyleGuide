@@ -2,840 +2,1165 @@
 
 ## Scope and process
 
-This evaluation covers only the open TerraformStyleGuide findings recorded in
-`docs/planning/artifacts/current-findings.md`. Findings already resolved in T1
-or T2, and the P2-only comment-based-help observation, are not reopened.
+This evaluation covers only the nine open TerraformStyleGuide findings recorded
+under `## Independent T1/T2 review` in
+`docs/planning/artifacts/current-findings.md`. The supplied P1/P2 criticism is
+context only; P1 and P2 are not revision targets.
 
-The open findings will be evaluated sequentially:
+The findings will be evaluated sequentially in this order:
 
-1. reconcile or narrow the false P1/T1 helper-alignment claim;
-2. give the permanent fixture suite one tracked, versioned owner;
-3. pin checkout in the security-sensitive modified workflow;
-4. define an explicit diagnostic-context interface; and
-5. make the temporary-path trust envelope and ancestor-link handling explicit.
+1. T1-1 — bind digest verification and ZIP processing to the same file identity.
+2. T1-2 — replace the contradictory global rejection oracle with truthful
+   per-case outcomes.
+3. T2-1 — recheck the alleged AWS KMS documentation conflict against the
+   operation- and bucket-class-specific source text.
+4. T2-2 — prevent inherited Bash xtrace from exposing the HCP token.
+5. T1/T2-1 — track the current Markdown-tooling advisories without silently
+   expanding either issue.
+6. T1-3 — correct or justify the dated GitHub Actions pins.
+7. T2-3 — state the actual S3 Versioning prerequisite for historical recovery.
+8. T1-4 — verify the claimed local PowerShell edition in the same child process.
+9. T2-4 — make the prerequisite-file non-goal complete.
 
-For each finding, this file will contain the complete option set, a
-finding-specific weighted rubric, the scoring table, and the selected
-implementation before evaluation proceeds to the next finding.
+For each finding, this file will contain a comprehensive option set, a unique
+weighted rubric, the applied scoring table, and an implementation-ready
+selection before evaluation proceeds to the next finding.
 
-## Finding 1 — Reconcile the P1/T1 helper-alignment claim
+## Finding T1-1 — Bind digest verification and ZIP processing to one file identity
 
 ### Options
 
-The options below treat “alignment” as a contract-design decision, not merely
-an editorial choice.
+The design must work in both Windows PowerShell 5.1 and PowerShell 7, preserve
+the current fail-closed path envelope, and ensure that the bytes inspected as a
+ZIP are the bytes whose SHA-256 matched the upload action's digest.
 
-#### Option 1A — Narrow the claim and retain the current T1 architecture
+1. **Retain path hashing and path reopening, with more path checks.** Continue
+   using `Get-FileHash -LiteralPath`, repeat component and containment checks
+   before opening the ZIP, and rely on the job-owned/no-competing-writer model.
+   This is operationally simple but never establishes object identity across
+   the two opens.
+2. **Retain two opens but compare filesystem identity metadata.** Record
+   length, timestamps, and a native file identifier around both operations and
+   reject any difference. Strong variants would use a Windows file ID and a
+   POSIX device/inode pair; weaker variants would use only portable metadata.
+   This can be layered on option 1 but adds platform-specific interop and still
+   leaves ambiguity on filesystems with weak or synthetic identifiers.
+3. **Read the whole archive into a `MemoryStream`.** Open the retained file,
+   copy all bytes to memory, close the source, then hash, rewind, and construct
+   `ZipArchive` over the same `MemoryStream`. This gives exact byte identity and
+   excellent test isolation, but archive size becomes process-memory pressure
+   and duplicates the complete payload.
+4. **Stream into a second protected staging file while hashing.** Create a new
+   ordinary file below the trusted root, copy source bytes while calculating
+   SHA-256, keep the destination handle open, rewind it, and process that same
+   handle as the ZIP. This creates a stable verified copy without unbounded
+   memory, but adds a second sensitive lifecycle, more cleanup cases, and
+   another disk write. Closing and reopening the staging path would recreate
+   the original problem and is therefore not an acceptable permutation.
+5. **Open the retained archive once with `FileShare.None`.** Use
+   `FileMode.Open`, `FileAccess.Read`, and `FileShare.None`; hash the stream,
+   require one matching result, rewind it, and build the read-only `ZipArchive`
+   over that same stream. This maximizes ordinary sharing exclusion but can
+   cause avoidable failures when security scanners, indexers, or other readers
+   already hold compatible handles.
+6. **Open the retained archive once with `FileShare.Read`.** Use
+   `FileMode.Open`, `FileAccess.Read`, and `FileShare.Read`; hash, rewind, and
+   process the same continuously held stream. Other readers remain possible,
+   but a later ordinary open for writing or deletion is denied by the selected
+   sharing contract on platforms that enforce it. Preserve repeated path
+   checks before the one open and keep the no-competing-writer residual model.
+7. **Open once while permitting delete sharing.** Use a sharing permutation
+   such as `FileShare.Read -bor FileShare.Delete` to reduce interference with
+   cleanup software. The held handle still identifies bytes on many systems,
+   but permitting rename/deletion makes the security story harder to state and
+   differs across filesystems and runtimes.
+8. **Replace `Get-FileHash` with an incremental hashing wrapper over ZIP reads.**
+   Allow `ZipArchive` to consume a stream through a hashing decorator and
+   validate the digest after ZIP processing. This binds bytes but validates
+   trust too late: malformed or attacker-controlled ZIP structure is processed
+   before authenticity is established.
 
-Change T1 to say that the repositories share only the helper's high-level
-purpose and selected validation behavior. Enumerate the different public
-interfaces, checkout-root models, temporary-root models, diagnostics, harness
-ownership, and pull-request coverage as intentional.
-
-This is factually honest and immediately implementable, but it leaves T1's
-separate security and maintainability gaps for Findings 2, 4, and 5 to solve.
-Those later solutions could make the two designs converge again, so the
-wording may need another pass.
-
-#### Option 1B — Make T1 adopt P1's stronger complete helper/harness contract
-
-Revise T1 to match P1 on:
-
-- five mandatory helper parameters: `CheckoutRoot`, `TrustedTemporaryRoot`,
-  `DownloadDirectory`, `CandidateDirectory`, and `ExpectedDigest`;
-- optional `ArtifactId`, `RunId`, and `RunAttempt` diagnostic parameters;
-- caller-supplied but helper-validated checkout and temporary trust roots;
-- strict descendant and path-component validation;
-- validation order and repeat checks;
-- explicit diagnostic-label semantics; and
-- a separate, tracked, versioned
-  `Test-Expand-StyleGuideCandidateArtifact.ps1` as the sole fixture-suite
-  definition.
-
-Keep the repositories self-contained. Keep the four Terraform manifest names,
-artifact names, and domain-specific generator behavior as repository-specific.
-Document the Windows pull-request execution difference explicitly if P1
-continues to run the harness only in its two LF cells while T1 runs it in all
-four cells.
-
-This option resolves the factual inconsistency by moving T1 to the stronger
-current design rather than weakening P1.
-
-#### Option 1C — Create a T1-specific hybrid and claim only behavioral parity
-
-Keep T1's fixed-location checkout-root derivation, but add P1-like trusted
-temporary-root validation, optional diagnostic labels, and a separate harness.
-Say that validation outcomes are aligned while interfaces and trust-root
-origins intentionally differ.
-
-This can be secure, but it preserves two public APIs and two trust models. A
-maintainer porting a fix must continue translating between implementations.
-
-#### Option 1D — Coordinate a future P1 change to T1's current three-input model
-
-Leave T1 materially unchanged and require the P1 drafter to remove the explicit
-checkout/trusted-root inputs, optional diagnostics, and possibly separate
-harness so P1 matches T1.
-
-This could eventually make the statement true, but the Terraform-only revision
-cannot deliver it. It also discards stronger explicit trust-boundary and
-diagnostic contracts without a compensating technical benefit.
-
-#### Option 1E — Remove all cross-repository alignment language
-
-Delete the alignment statement and specify T1 independently. The generator
-serialization contract can still converge without any stated helper parity.
-
-This avoids false claims but loses a useful maintenance objective and makes
-future security-fix drift between two nearly identical helpers more likely.
-
-#### Option 1F — Introduce a shared runtime helper dependency
-
-Move the helper or test suite into a common repository, package, reusable
-workflow, submodule, or downloaded versioned asset consumed by both
-repositories.
-
-Permutations include centralizing only the harness, only archive validation, or
-the complete helper/harness pair. This provides the strongest single-source
-parity in theory, but adds cross-repository availability, versioning,
-supply-chain, bootstrap, and incident-response dependencies. It conflicts with
-the established self-contained-repository objective.
+Options 5 and 6 can both be strengthened without changing their identity model:
+require a seekable regular-file stream, require exactly one `Get-FileHash`
+result, assert the stream remains open, rewind explicitly to zero, use one
+read-mode `ZipArchive` with deliberate `leaveOpen` behavior, dispose the
+archive before the stream, and add cross-edition harness evidence. Those are
+implementation requirements rather than separate architectural alternatives.
 
 ### Evaluation rubric
 
-Score each criterion from 1 (poor) to 5 (excellent). The weighted total is:
+Each option is scored from 1 (unacceptable) to 5 (excellent). The weighted
+score is the sum of `weight × score ÷ 5`, producing a maximum of 100.
 
-`sum(weight × score / 5)`, with a maximum of 100.
-
-This rubric is specific to cross-repository contract alignment:
-
-| Criterion | Weight | Detailed meaning |
+| Criterion | Weight | What a high score requires |
 | --- | ---: | --- |
-| Factual truth and internal coherence | 20 | The final T1 wording must be literally true, free of contradictory “only difference” claims, and understandable without comparing hidden implementation assumptions. |
-| Security and trust-boundary quality | 25 | The choice should preserve explicit, fail-closed checkout, temporary-root, archive, destination, and diagnostic contracts. Security is weighted above convenience and issue churn. |
-| Maintainable cross-repository parity | 20 | A security or correctness fix should be portable between repositories with minimal semantic translation, and future drift should be easy to detect in review. |
-| Repository autonomy | 10 | Each repository should build, test, recover, and respond to incidents without another repository or external package being available. |
-| Deliverability from the Terraform issue | 10 | A cold implementer must be able to complete the selected change through T1/T2 without waiting for an unspecified P1 rewrite or external project. |
-| Clarity and reviewability | 10 | Public parameters, intentional differences, and evidence should be obvious to new developers, reviewers, operations staff, and auditors. |
-| Churn and scope cost | 5 | Lower code/file churn and narrower issue expansion score better, but this is deliberately the least important criterion. |
+| Verified-byte identity and security correctness | 30 | ZIP parsing and extraction are provably bound to the bytes whose digest matched, without a path-replacement gap. |
+| Cross-edition and cross-platform reliability | 15 | The contract is implementable with supported APIs in Windows PowerShell 5.1 and PowerShell 7 and has predictable filesystem semantics. |
+| Fail-closed lifecycle and disposal | 12 | Hash, rewind, archive lifetime, exception handling, disposal order, and cleanup remain deterministic under every failure. |
+| Harness observability and falsifiability | 12 | The permanent suite can prove the important identity and failure properties rather than merely infer them. |
+| Runner usability and environmental tolerance | 10 | Normal scanners/readers and realistic archive sizes do not create avoidable failures or resource exhaustion. |
+| Honest residual-race model | 8 | The issue can clearly state what the design prevents and what still depends on the protected job-owned environment. |
+| Maintainability and P1/T1 convergence | 8 | The design is easy to review, minimizes security-sensitive custom code, and supports deliberate shared helper invariants. |
+| Implementation churn and issue-scope fit | 5 | The change remains practical inside T1 without disproportionate new lifecycle machinery. |
+
+The weighting reflects a security boundary: byte identity dominates. Developer
+ergonomics, CI reliability, testability, and maintainability are meaningful,
+but ease and churn cannot compensate for extracting unauthenticated bytes.
 
 ### Scoring
 
-| Option | Truth (20) | Security (25) | Parity (20) | Autonomy (10) | Deliverability (10) | Clarity (10) | Churn (5) | Total / 100 |
+Abbreviations follow the rubric order: identity (ID), cross-edition/platform
+(XP), lifecycle (LC), harness (HT), usability (US), residual-race clarity
+(RR), maintainability/convergence (MC), and churn/scope (CS).
+
+| Option | ID 30 | XP 15 | LC 12 | HT 12 | US 10 | RR 8 | MC 8 | CS 5 | Weighted total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1. Path hash plus rechecks | 1 | 5 | 4 | 2 | 5 | 2 | 3 | 5 | 58.4 |
+| 2. Two opens plus identity metadata | 3 | 1 | 3 | 3 | 3 | 3 | 1 | 1 | 48.8 |
+| 3. Whole archive in memory | 5 | 5 | 4 | 5 | 2 | 5 | 3 | 3 | 86.4 |
+| 4. Stream to held staging file | 5 | 4 | 3 | 4 | 4 | 4 | 2 | 1 | 77.4 |
+| 5. One stream, `FileShare.None` | 5 | 5 | 5 | 4 | 2 | 5 | 4 | 4 | 89.0 |
+| 6. One stream, `FileShare.Read` | 5 | 5 | 5 | 5 | 4 | 5 | 5 | 4 | **97.0** |
+| 7. One stream with delete sharing | 4 | 3 | 4 | 3 | 5 | 2 | 2 | 3 | 69.2 |
+| 8. Validate through a hashing ZIP wrapper | 3 | 3 | 3 | 2 | 3 | 2 | 1 | 1 | 50.8 |
+
+Option 6 wins because it closes the identity gap with standard cross-edition
+APIs while avoiding option 5's unnecessary exclusion of benign concurrent
+readers. Options 3 and 4 are defensible fallbacks when streams cannot be held,
+but introduce resource or lifecycle costs without improving the core property.
+
+### Selected option and implementation contract
+
+Select **option 6: one continuously held read-only stream with
+`FileShare.Read`**.
+
+Revise T1 so an implementer coming in cold must do exactly this:
+
+1. Finish the existing parameter, root, containment, component,
+   download-directory, candidate-parent, and ordinary-file checks without
+   opening the archive.
+2. Repeat the applicable envelope checks immediately before the security
+   boundary.
+3. Open the one retained ordinary file exactly once with
+   `[System.IO.File]::Open($path, [FileMode]::Open, [FileAccess]::Read,
+   [FileShare]::Read)`.
+4. Require the resulting stream to be readable and seekable.
+5. Call `Get-FileHash -InputStream $stream -Algorithm SHA256`, collect its
+   output, and require exactly one non-null result with one valid 64-hex hash.
+6. Compare that hash to `ExpectedDigest` with ordinal,
+   case-insensitive equality. A mismatch must fail before `ZipArchive` is
+   constructed and before candidate creation.
+7. Set `$stream.Position = 0`; do not close or replace the stream.
+8. Construct exactly one read-mode `ZipArchive` over that same object. Choose
+   `leaveOpen` deliberately so disposal order is archive first, stream second.
+9. Keep both objects continuously alive through complete central-directory
+   inspection, manifest validation, candidate creation, extraction, and any
+   post-extraction byte validation that still reads archive entries.
+10. In `finally`, dispose the archive, then the stream, before candidate
+    cleanup. Preserve the primary error and append disposal/cleanup errors
+    without masking it.
+11. Prohibit `Get-FileHash -Path`/`-LiteralPath`, a second archive-path open,
+    a memory copy, or a staging copy in this implementation.
+12. State that the held handle binds hash and ZIP bytes under ordinary runtime
+    sharing semantics, while full-component validation and the protected
+    job-owned/no-competing-writer model remain necessary. Do not claim a
+    universal OS-native sandbox or protection from privileged/kernel-level
+    mutation.
+13. Extend the tracked harness in both PowerShell editions to prove digest
+    mismatch occurs before ZIP construction, the stream is rewound, the same
+    stream feeds ZIP processing, invalid ZIPs fail without candidate creation,
+    and disposal completes before cleanup.
+
+This selection deliberately converges T1 on P1's stronger byte-identity
+invariant while leaving repository-specific manifests and workflow coverage
+independent.
+
+## Finding T1-2 — Make rejection outcomes and cleanup tests truthful
+
+### Options
+
+The design must distinguish state the helper owns from state it merely
+encounters. A rejection test cannot demand absence when the fixture began with
+an entry that must not be deleted, and cleanup must never traverse a
+substituted link/reparse point.
+
+1. **Keep the global “candidate absent” oracle.** Interpret every rejection as
+   requiring deletion of any candidate leaf. This is simple but contradicts
+   the preexisting-leaf tests and violates ownership-safe cleanup.
+2. **Remove all preexisting-leaf fixtures.** Preserve the global absence oracle
+   by testing only initially absent destinations. This avoids the literal
+   contradiction but drops essential protection against overwrite, reuse, and
+   dangling-link attacks.
+3. **Run fixture teardown before asserting absence.** Let the test harness
+   remove its own preexisting fixture after helper execution, then assert that
+   the leaf is absent. This conflates harness teardown with helper behavior and
+   can hide a helper that modified, followed, or deleted the original entry.
+4. **Use one generic “safe terminal state” oracle.** Replace absence with broad
+   language such as “no unsafe write occurred.” This is truthful but too vague
+   to make deterministic tests or diagnose regressions.
+5. **Define per-class postconditions only.** Specify distinct outcomes for
+   initially absent pre-creation failures, preexisting leaves, controlled
+   helper-created failures, and fail-closed cleanup failures. Keep the existing
+   combined BOM-or-CR fixture and infer cleanup safety from implementation
+   review.
+6. **Define per-class postconditions and split content fixtures.** Add separate
+   BOM and CR fixtures so each byte rule is independently falsifiable, but do
+   not deliberately exercise an unsafe cleanup substitution.
+7. **Define per-class postconditions, split BOM/CR, and add a cleanup-safety
+   fixture.** After controlled candidate creation, introduce or substitute an
+   unexpected/link/reparse/unreadable entry at a deterministic test hook,
+   require cleanup to stop without following or recursively deleting it, and
+   require the retained path plus primary and cleanup diagnostics. This
+   directly tests both normal rollback and fail-closed retention.
+8. **Never clean a helper-created candidate after any failure.** Always retain
+   partial results for forensics. This avoids dangerous deletion but leaves
+   sensitive artifacts and makes routine controlled failures operationally
+   messy.
+9. **Quarantine or recursively delete any rejected candidate.** Rename the
+   candidate or use recursive removal so the expected path becomes absent.
+   Rename can cross trust/identity boundaries, and recursive removal can follow
+   or erase entries the helper did not create. Neither is compatible with the
+   ownership model.
+
+For options 5–7, normal cleanup should use an ownership journal or the exact
+four known manifest names, revalidate the complete envelope, inspect every leaf
+without following links, delete only ordinary helper-created files
+non-recursively, and remove only the now-empty helper-created directory. A
+cleanup problem must augment—not replace—the primary error.
+
+### Evaluation rubric
+
+Scores run from 1 (unacceptable) to 5 (excellent); weighted totals are out of
+100.
+
+| Criterion | Weight | What a high score requires |
+| --- | ---: | --- |
+| Ownership-safe cleanup and non-traversal | 26 | The helper deletes only entries it created, never follows unexpected links/reparse points, and fails closed on uncertainty. |
+| Oracle truthfulness and determinism | 22 | Every asserted terminal state is logically compatible with its initial state and can be tested without harness teardown masking behavior. |
+| Adversarial coverage quality | 16 | Tests independently exercise preexisting leaves, normal post-creation rollback, BOM, CR, and unsafe cleanup mutation. |
+| Primary/cleanup diagnostic integrity | 10 | The original failure remains primary while cleanup failure and retained paths are explicit and stable. |
+| Cross-filesystem robustness | 9 | The contract accounts for Windows reparse semantics, POSIX links, dangling entries, case behavior, and enumeration failures. |
+| Operator safety and forensic usability | 8 | Routine failures do not leak partial state, while unsafe states are retained with actionable handling information. |
+| Reviewability and maintainability | 6 | A new contributor can map each fixture to one unambiguous expected state and preserve it over time. |
+| Churn and implementation effort | 3 | The option avoids disproportionate machinery; effort is deliberately a minor factor. |
+
+Security ownership and truthful tests dominate this rubric. A smaller patch
+that produces an impossible oracle or unsafe deletion cannot outrank a more
+complete, falsifiable cleanup contract.
+
+### Scoring
+
+Abbreviations: ownership cleanup (OC), truthful oracle (TO), adversarial
+coverage (AC), diagnostics (DG), cross-filesystem behavior (XF), operator
+safety (OS), maintainability (MT), and churn (CH).
+
+| Option | OC 26 | TO 22 | AC 16 | DG 10 | XF 9 | OS 8 | MT 6 | CH 3 | Weighted total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1. Keep global absence | 1 | 1 | 2 | 2 | 1 | 1 | 2 | 5 | 28.8 |
+| 2. Remove preexisting-leaf tests | 4 | 4 | 1 | 3 | 3 | 3 | 3 | 4 | 63.8 |
+| 3. Assert after fixture teardown | 1 | 1 | 3 | 2 | 2 | 1 | 1 | 3 | 31.4 |
+| 4. Generic safe-state oracle | 4 | 3 | 2 | 3 | 3 | 3 | 2 | 5 | 62.0 |
+| 5. Per-class outcomes only | 5 | 5 | 3 | 5 | 4 | 4 | 4 | 4 | 88.4 |
+| 6. Per-class outcomes plus split BOM/CR | 5 | 5 | 4 | 5 | 4 | 4 | 5 | 4 | 92.8 |
+| 7. Outcomes, split fixtures, cleanup attack | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 3 | **98.8** |
+| 8. Always retain partial candidate | 5 | 4 | 2 | 4 | 5 | 2 | 4 | 5 | 78.0 |
+| 9. Quarantine/recursive deletion | 1 | 4 | 1 | 1 | 1 | 1 | 2 | 3 | 35.6 |
+
+Option 7 is the only design that makes every terminal state truthful and
+directly proves the dangerous cleanup branch. Option 6 is close but leaves the
+most security-sensitive cleanup behavior supported only by code inspection.
+
+### Selected option and implementation contract
+
+Select **option 7: per-class outcomes, separate BOM and CR fixtures, and a
+deterministic cleanup-safety fixture**.
+
+Revise T1 as follows:
+
+1. Delete the fixture-wide statement that every rejection leaves the candidate
+   nonexistent. Replace it everywhere, including acceptance criteria, with the
+   following four classes:
+   - initially absent plus failure before helper creation → remains absent;
+   - preexisting leaf → remains byte/type/target-identical and is never
+     followed;
+   - controlled post-creation failure with only known ordinary helper-owned
+     entries → those files are removed non-recursively and the now-empty
+     helper-owned leaf is removed; and
+   - unsafe/unreadable/changed cleanup state → nothing uncertain is followed or
+     recursively deleted, the path is retained, and primary plus cleanup
+     diagnostics identify it.
+2. Give every rejection row its own expected phase and one of those terminal
+   state classes. The harness must capture initial state before invocation and
+   compare final state before its own `finally` teardown.
+3. Split “BOM or CR” into two archives and two stable case IDs. Each must pass
+   manifest validation, create the candidate, fail post-extraction byte
+   validation for only its targeted condition, and demonstrate safe normal
+   rollback.
+4. Keep an exact ownership journal containing only the candidate directory and
+   ordinary files created by the current invocation. Cleanup may act only on
+   that journal after revalidating the root, parent, candidate, and each
+   immediate child.
+5. Before each deletion, enumerate without following links and require the
+   expected entry type. Delete known files individually and non-recursively;
+   delete the candidate directory only when enumeration proves it empty and
+   ordinary.
+6. If an entry is missing, replaced, extra, unreadable, a link, a reparse
+   point, or otherwise uncertain, stop cleanup. Never use recursive deletion,
+   wildcard deletion, or traversal through the entry.
+7. Preserve the primary phase/error. Add a distinct cleanup phase, the exact
+   retained path, the offending entry when safely available, and any cleanup
+   exception. Return nonzero.
+8. Make the cleanup algorithm a named function in the exact tracked production
+   helper. Give the tracked harness a documented definition-only way to load
+   that function without executing the helper's main entry point; do not
+   duplicate cleanup logic in the harness.
+9. In the cleanup-safety fixture, construct a helper-owned candidate and
+   ownership journal below the fixture root, replace one journaled ordinary
+   file with a symlink/reparse point or add an unexpected entry, call the exact
+   production cleanup function, and assert:
+   - the external target is unchanged;
+   - the unsafe entry was not followed or deleted;
+   - the candidate remains;
+   - diagnostics contain the primary failure, cleanup failure, and retained
+     path; and
+   - the result is nonzero.
+10. Exercise the link/reparse variant on at least one platform where creation
+    is supported and never allow a platform-wide skip. Use an ordinary
+    unexpected-entry or type-change variant on environments where link creation
+    is unavailable.
+11. Only after all assertions may the harness's own `finally` remove the
+    complete isolated fixture root.
+
+The definition-only loading mechanism is test infrastructure, not a second
+public artifact-expansion interface. Production workflow calls must continue to
+use the five mandatory and three optional helper parameters already specified
+by T1.
+
+## Finding T2-1 — Alleged AWS KMS documentation conflict
+
+### Validity recheck
+
+This recorded finding is **not valid** after inspecting the current AWS pages'
+document structure. The `GetObject` API statement requiring both
+`kms:GenerateDataKey` and `kms:Decrypt` is inside the **Directory bucket
+permissions** list item. It is not a conflicting general-purpose-bucket rule.
+The general SSE-KMS guide and S3 policy-action table both identify
+`kms:Decrypt` for general-purpose retrieval and `kms:GenerateDataKey` for
+upload/destination operations. T2 already distinguishes those cases and keeps
+directory buckets outside historical version recovery.
+
+### Options
+
+1. **Keep T2's current reconciliation unchanged.** Preserve the dated
+   seven-point explanation, the general-purpose `kms:Decrypt` rule, the
+   directory-bucket both-actions rule, the effective-authorization caveat, and
+   the immediate-preimplementation source recheck.
+2. **Keep the substance but clarify the `GetObject` page's list nesting.** Add
+   that the both-actions sentence belongs to the directory-bucket permissions
+   bullet. This can prevent the same misreading but adds implementation detail
+   to an already precise rationale.
+3. **Remove the reconciliation and cite only the general SSE-KMS guide.** This
+   shortens the issue but leaves reviewers vulnerable to misreading the
+   adjacent directory-bucket API text and loses the reason directory buckets
+   are excluded.
+4. **Describe an unresolved official conflict.** State that the `GetObject` API
+   requires both actions for general-purpose retrieval. This repeats the
+   invalid finding and misrepresents the source hierarchy.
+5. **Recommend both KMS actions for every KMS-encrypted download.** This may
+   avoid some authorization failures but violates least privilege for the
+   documented general-purpose path and grants an upload-related cryptographic
+   capability without evidence.
+6. **Avoid all permission statements and defer to an administrator.** This
+   eliminates the risk of stale detail but substantially reduces the example's
+   diagnostic usefulness for operators and security reviewers.
+7. **Add a live AWS permission probe to the example.** Attempt retrieval and
+   infer missing policy actions from failure. Service errors cannot reliably
+   distinguish identity policy, key policy, grants, SCPs, account topology, or
+   encryption mode, and the issue intentionally documents rather than
+   automates authorization.
+
+Option 2 is a compatible editorial permutation of option 1. It should be chosen
+only if the extra clause materially prevents reviewer confusion; it must not
+recast the directory-bucket rule as relevant to the actual recovery command.
+
+### Evaluation rubric
+
+Scores run from 1 to 5 and produce a weighted total out of 100.
+
+| Criterion | Weight | What a high score requires |
+| --- | ---: | --- |
+| Fidelity to current AWS primary sources | 30 | Every permission statement matches the source's bucket class, operation, and structural context. |
+| Least-privilege security guidance | 22 | The issue requests no cryptographic action that current evidence does not require for the documented path. |
+| Operator diagnostic usefulness | 15 | A reader can identify the likely S3/KMS permission class and understand that policy, key, grant, and account topology still matter. |
+| Bucket/operation scope clarity | 12 | General-purpose historical retrieval cannot be confused with directory-bucket or upload behavior. |
+| Resilience to provider change | 10 | The plan requires a timely source recheck and avoids pretending documentation is immutable. |
+| Reviewer auditability | 7 | A security reviewer can trace each conclusion to a named primary source. |
+| Editorial churn and scope | 4 | Unnecessary prose and unrelated authorization machinery are avoided. |
+
+Correct attribution and least privilege dominate. More permissive guidance does
+not score as “safer” when the additional action is unsupported for the scoped
+operation.
+
+### Scoring
+
+Abbreviations: source fidelity (SF), least privilege (LP), operator diagnostics
+(OD), bucket scope (BS), future resilience (FR), reviewer auditability (RA),
+and editorial churn (EC).
+
+| Option | SF 30 | LP 22 | OD 15 | BS 12 | FR 10 | RA 7 | EC 4 | Weighted total |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1A — Narrow claim, retain T1 design | 5 | 3 | 3 | 5 | 5 | 5 | 5 | 82 |
-| 1B — T1 adopts P1's complete contract | 5 | 5 | 5 | 5 | 4 | 5 | 2 | **95** |
-| 1C — T1-specific hybrid | 5 | 5 | 3 | 5 | 4 | 4 | 3 | 86 |
-| 1D — Wait for P1 to adopt current T1 | 5 | 2 | 5 | 5 | 1 | 4 | 3 | 73 |
-| 1E — Remove alignment objective | 5 | 4 | 2 | 5 | 5 | 3 | 5 | 79 |
-| 1F — Shared runtime dependency | 5 | 4 | 5 | 1 | 2 | 4 | 1 | 75 |
+| 1. Keep current reconciliation | 5 | 5 | 5 | 5 | 5 | 5 | 5 | **100.0** |
+| 2. Add list-nesting clarification | 5 | 5 | 5 | 5 | 5 | 5 | 4 | 99.2 |
+| 3. Cite only general SSE-KMS guide | 4 | 5 | 2 | 2 | 4 | 2 | 5 | 71.6 |
+| 4. Describe a conflict | 1 | 2 | 2 | 1 | 3 | 1 | 2 | 32.2 |
+| 5. Recommend both actions everywhere | 2 | 1 | 3 | 2 | 3 | 2 | 3 | 41.4 |
+| 6. Remove permission guidance | 3 | 5 | 1 | 1 | 5 | 1 | 4 | 60.0 |
+| 7. Add a live permission probe | 2 | 3 | 2 | 2 | 2 | 2 | 1 | 43.6 |
 
-### Selected option
+Option 1 scores perfectly because T2 already contains the precise distinction
+that option 2 would add in different words. Options 4 and 5 would convert a
+misreading into either inaccurate or overprivileged guidance.
 
-**Select Option 1B: make T1 adopt P1's stronger complete helper/harness
-contract.**
+### Selected option and implementation contract
 
-Implementation instructions:
+Select **option 1: keep T2's current AWS reconciliation unchanged**.
 
-1. Add the five mandatory and three optional parameters to T1's helper
-   contract, using the same names and scalar semantics as P1.
-2. Require the helper—not the caller—to validate both supplied trust roots,
-   every strict-descendant relationship, and every relevant existing path
-   component.
-3. Copy P1's omitted-versus-explicitly-empty diagnostic-label semantics.
-4. Add the separately tracked, versioned test harness and make it the sole
-   fixture-suite definition.
-5. Align validation order, repeat checks, archive manifest/lifecycle rules,
-   and diagnostic phases with P1.
-6. Preserve TerraformStyleGuide's four exact manifest names and independent
-   files; do not add a runtime cross-repository dependency.
-7. Replace the false “only difference” sentence with precise wording:
-   the helper/harness contract is aligned; manifest names, workflow artifact
-   names, and any explicitly documented invocation-topology differences are
-   repository-specific.
-8. Propagate the final parameter, trust-root, harness, and topology contract
-   into T2's prerequisite verification.
+No corrective T2 edit is warranted for this recorded finding. When revising
+the slate:
 
-This selection establishes the architectural direction used by Findings 2, 4,
-and 5; those findings will still be evaluated independently so their detailed
-implementation choices and evidence are defensible on their own.
+1. Retain the general-purpose statement that SSE-KMS/DSSE-KMS retrieval
+   requires applicable `kms:Decrypt` authorization.
+2. Retain the statement that `kms:GenerateDataKey` appears on
+   general-purpose upload/destination paths, not this historical download path.
+3. Retain the separate directory-bucket statement that ordinary SSE-KMS access
+   there requires both actions.
+4. Retain the explanation that these are different bucket classes and
+   operations.
+5. Retain the identity-policy, key-policy, grant, encryption-mode, and account
+   topology caveat.
+6. Retain the immediate-preimplementation AWS source recheck.
+7. Retain the directory-bucket exclusion from version recovery.
+8. Do not add a claim of unresolved conflict and do not grant
+   `kms:GenerateDataKey` merely as speculative troubleshooting.
 
-## Finding 2 — Give the permanent suite one tracked, versioned owner
+The earlier T2-1 entry in `current-findings.md` is superseded by this
+source-structure recheck for purposes of the issue revisions.
 
-### Options
-
-#### Option 2A — Add one standalone PowerShell harness
-
-Create
-`.github/workflows/Test-Expand-StyleGuideCandidateArtifact.ps1` as the sole
-definition of the deterministic fixture suite. It accepts the exact tracked
-helper path, builds fixtures, invokes the helper only through its public
-interface, verifies phase/postcondition oracles, and cleans up.
-
-Every required workflow cell invokes this same file under its assigned
-PowerShell edition. Developers can run the same harness locally without
-simulating GitHub Actions.
-
-#### Option 2B — Add a self-test mode to the production helper
-
-Put the fixtures and test runner in
-`Expand-StyleGuideCandidateArtifact.ps1`, selected by a `-SelfTest` switch or
-parameter set. This creates one physical file but expands the production
-interface, interleaves test-only and production control flow, and risks tests
-sharing private implementation details instead of exercising only the public
-contract.
-
-Permutations include a hidden environment-variable switch, a dot-sourced
-private function, or a documented parameter set. Hidden switches are
-unacceptable; all variants make the production artifact larger and harder to
-audit.
-
-#### Option 2C — Repeat inline PowerShell suites in workflow steps
-
-Embed fixture creation and assertions directly in every Ubuntu, Windows
-pull-request, Windows push, and writer step.
-
-This requires no added file but creates several independently editable copies.
-The copies can silently drift in case coverage, shell behavior, diagnostics,
-and cleanup. Local execution also requires extracting workflow text manually.
-
-#### Option 2D — Define one inline suite through YAML anchors and aliases
-
-Place a large `run:` block in `build.yml`, anchor it, and alias it into the
-required steps or jobs. GitHub now documents support for YAML anchors and
-aliases.
-
-This reduces textual duplication inside one workflow, but the suite remains
-embedded in orchestration YAML, is awkward to invoke locally, and still needs
-edition-specific shell and surrounding-step variations. Anchoring a complete
-job would also couple unrelated job behavior to the test definition.
-
-#### Option 2E — Implement a local composite action
-
-Create a local action directory with `action.yml` and one or more test scripts.
-Invoke the composite action from each job.
-
-This is reusable at the step level, but it adds metadata and shell-indirection
-without improving on direct script execution. Composite-action internals are
-also grouped differently in logs, which can make a large fixture suite less
-transparent during incident diagnosis.
-
-#### Option 2F — Implement a same-repository reusable workflow
-
-Create another `.github/workflows/*.yml` file with `workflow_call` and call it
-for the suite.
-
-GitHub documents that reusable workflows are called as whole jobs, not as steps
-inside an existing job. The suite must run immediately before production helper
-use in each consumer and under each matrix cell's assigned edition, so a
-separate called job cannot prove same-process or same-cell behavior. It is also
-not directly locally executable.
-
-#### Option 2G — Add a Pester-based harness
-
-Create a tracked Pester test file plus a thin launcher. This provides rich test
-structure and reporting, but introduces a framework/version/bootstrap
-dependency that must work under Windows PowerShell 5.1 and PowerShell 7 on
-Windows and Ubuntu. The fixture suite needs no mocking framework and is
-security-sensitive enough that implicit module discovery is undesirable.
-
-#### Option 2H — Add a test module plus a thin executable harness
-
-Separate fixture builders/assertions into a `.psm1` module and keep a small
-`Test-*.ps1` entry point. This offers internal organization for a very large
-suite, but creates another versioned file and module-loading boundary. It is
-useful only if a single script proves unmaintainable during implementation.
-
-### Evaluation rubric
-
-Score 1 (poor) through 5 (excellent), using
-`sum(weight × score / 5)` for a maximum of 100.
-
-This rubric is specific to ownership of a security-sensitive executable test
-oracle:
-
-| Criterion | Weight | Detailed meaning |
-| --- | ---: | --- |
-| Oracle fidelity and regression detection | 30 | Tests must exercise the exact public production helper, distinguish expected phases/postconditions, and make bypasses or implementation-coupled false positives difficult. |
-| Single-source drift resistance | 25 | There must be one obvious, versioned definition used by every required consumer, with code review able to detect case additions/removals. |
-| Cross-edition and local executability | 20 | The same suite must run under Desktop 5.1 and Core 7, on required operating systems, and from a developer shell without reproducing CI orchestration. |
-| Auditability and failure diagnostics | 10 | Reviewers and responders should see stable case IDs, exact failures, and cleanup behavior with little indirection. |
-| Dependency and supply-chain simplicity | 10 | Prefer built-in PowerShell/.NET behavior and avoid an extra framework, action runtime, module-resolution assumption, or remote dependency. |
-| Churn and implementation cost | 5 | Fewer files and less wiring score better, but only after correctness and maintainability. |
-
-### Scoring
-
-| Option | Oracle (30) | Drift resistance (25) | Cross-edition/local (20) | Auditability (10) | Dependency simplicity (10) | Churn (5) | Total / 100 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 2A — Standalone PowerShell harness | 5 | 5 | 5 | 5 | 5 | 3 | **98** |
-| 2B — Production-helper self-test mode | 4 | 5 | 5 | 3 | 5 | 4 | 89 |
-| 2C — Repeated inline workflow suites | 4 | 1 | 3 | 3 | 5 | 5 | 62 |
-| 2D — YAML-anchored inline suite | 4 | 4 | 2 | 3 | 4 | 4 | 70 |
-| 2E — Local composite action | 4 | 5 | 4 | 3 | 4 | 2 | 81 |
-| 2F — Reusable workflow job | 3 | 5 | 1 | 4 | 4 | 2 | 65 |
-| 2G — Pester-based harness | 5 | 5 | 5 | 5 | 2 | 1 | 90 |
-| 2H — Module plus thin harness | 5 | 5 | 5 | 5 | 4 | 1 | 94 |
-
-### Selected option
-
-**Select Option 2A: add one standalone, tracked PowerShell harness.**
-
-Implementation instructions:
-
-1. Add
-   `.github/workflows/Test-Expand-StyleGuideCandidateArtifact.ps1` to T1's
-   affected files and exact staged/working-tree sets.
-2. Require `#Requires -Version 5.1`, top-level comment-based-help version
-   metadata, strict failure behavior, and a mandatory scalar `HelperPath`.
-3. Resolve `HelperPath` exactly once to the existing tracked regular,
-   non-reparse-point helper file before changing location; invoke that absolute
-   path for every case.
-4. Build every deterministic fixture under one unique runner-temporary root.
-5. Invoke the helper only as a child script through its documented public
-   parameters. Do not copy or dot-source the helper's digest, path, archive, or
-   extraction implementation.
-6. Use the T1 outcome table as the normative case inventory and assert the
-   required phase, candidate-leaf state, sentinel state, extracted type/count,
-   and bytes for every case.
-7. Change working directory during at least one valid case to prove that
-   neither harness nor helper depends on ambient location.
-8. Return nonzero for an unexpected outcome, diagnostic, filesystem state, or
-   cleanup failure. Clean the complete fixture root in `finally`.
-9. Invoke this exact harness in Ubuntu pull-request verification, all four
-   Windows pull-request cells, all four Windows push cells, and the writer when
-   it executes. Keep each Windows invocation in the same explicit-shell process
-   as its edition assertion.
-10. Update T2 to require this named harness and include the harness in the final
-    T1 implementation set. Finding 3 may add further files, so use the
-    consolidated final count rather than freezing this finding's interim
-    five-file count.
-
-The GitHub reuse alternatives remain documented in
-`docs/planning/artifacts/prompt-02-primary-source-research.md`; they are not a
-better fit for a directly executable cross-edition test program.
-
-## Finding 3 — Pin checkout in the security-sensitive modified workflow
+## Finding T2-2 — Prevent inherited Bash xtrace from exposing the HCP token
 
 ### Options
 
-#### Option 3A — Retain movable major tags
+1. **Keep only the prose warning not to use `set -x`.** This depends on the
+   operator noticing the warning before pasting the block and does not defend
+   against xtrace inherited from the current shell or a wrapper.
+2. **Put `set +x` first inside the existing subshell.** Because the block
+   already runs in parentheses, disabling xtrace there does not alter the
+   interactive parent after the block ends. No token expansion occurs before
+   the command.
+3. **Detect xtrace and refuse to run.** Inspect `$-` for `x` as the first
+   operation and exit with a nonsensitive message if tracing is active. This
+   prevents leakage but makes the copy-safe example fail in an otherwise
+   recoverable environment and still requires care that the detection command
+   itself contains no secret.
+4. **Disable xtrace, then restore it before leaving the block.** Save the prior
+   flag, run `set +x`, perform recovery, and re-enable tracing at the end.
+   Restoration is unnecessary in a subshell and risks tracing later
+   token-adjacent cleanup or error handling.
+5. **Launch a fresh `bash +x` process for the sensitive portion.** This can
+   isolate options but complicates quoting, environment inheritance, file
+   descriptors, exit status, and copy/paste behavior.
+6. **Move the token to curl's command line.** Use `--header
+   "Authorization: Bearer $TFC_TOKEN"` directly. Xtrace and the process list can
+   expose it, so this regresses two boundaries.
+7. **Write a temporary curl configuration or netrc file.** Disable tracing
+   while creating a mode-restricted credential file, point curl to it, and
+   delete or retain it under policy. This keeps the token off argv but creates a
+   new secret-at-rest lifecycle and cleanup problem.
+8. **Use curl's variable/environment expansion features.** Import the token
+   from the environment and expand it into a header inside curl. Version
+   availability varies, and shell commands that prepare the expansion can
+   still be traced. It is not a substitute for disabling inherited xtrace.
+9. **Require operators to start a clean shell.** Document `bash --noprofile
+   --norc` and paste the block there. This is cumbersome, profile behavior is
+   not the only source of tracing, and the example still lacks a local defense.
 
-Keep `actions/checkout@v4`, `actions/setup-node@v4`, and any other existing
-major tags, relying on GitHub's ownership of the `actions` organization and
-ordinary release management.
-
-This is convenient but does not address the finding. GitHub's secure-use
-reference says that only a full commit SHA makes the selected action revision
-immutable.
-
-#### Option 3B — Pin checkout only in `build.yml`
-
-Pin every checkout step in the modified build/push workflow to the current
-approved full SHA. Keep T1's artifact-action pins, and leave
-`markdownlint.yml` unchanged.
-
-This closes the identified credential-bearing writer path with minimal churn,
-but leaves another checkout reference and setup-node on mutable tags and
-establishes no repository-wide policy.
-
-#### Option 3C — Pin every checkout reference, but no other existing action
-
-Pin checkout in both `build.yml` and `markdownlint.yml`, mirroring P1's
-action-class scope. Leave `actions/setup-node` on its major tag while pinning
-the artifact actions introduced or changed by T1.
-
-This is more consistent for checkout and updates both workflows to the Node 24
-action runtime. It still requires reviewers to explain why one executable
-third-party action in `markdownlint.yml` remains mutable.
-
-#### Option 3D — Pin every external action in both workflows
-
-Pin checkout, setup-node, upload-artifact, and download-artifact to verified
-full SHAs with adjacent release comments. Add `markdownlint.yml` to T1's
-affected files and validation sets.
-
-This gives the repository one simple execution-time policy. Its weakness is
-maintenance: without a reminder or updater, immutable references can silently
-age.
-
-#### Option 3E — Pin only the build workflow and add Dependabot
-
-Combine Option 3B with a new `.github/dependabot.yml` entry for GitHub Actions.
-Dependabot can propose updates for both SHA- and tag-based references.
-
-This maintains the critical pins, but Dependabot's presence does not make the
-remaining tags immutable between update reviews. The policy remains mixed.
-
-#### Option 3F — Pin all external actions and add Dependabot version updates
-
-Combine Option 3D with a minimal weekly GitHub Actions Dependabot
-configuration. Dependabot opens reviewable pull requests that update the SHA
-and adjacent version comment; no update is auto-merged.
-
-Permutations include daily, weekly, or monthly schedules; grouped or separate
-pull requests; and major-version ignores. A weekly schedule with separate
-default pull requests gives timely visibility and isolated release review
-without daily noise. The issue must still require human verification of the
-upstream repository, release notes, Node runtime, inputs, and compatibility.
-
-#### Option 3G — Depend on an organization/repository SHA-enforcement policy
-
-Configure or assume a GitHub Actions policy that rejects non-SHA references,
-without explicitly revising every workflow reference in this issue.
-
-Enforcement is valuable defense in depth but is external state and cannot make
-the committed workflow runnable until the references are converted. It also
-does not select or validate the intended releases.
-
-#### Option 3H — Vendor or replace the actions
-
-Check action code into the repository, use a local composite action, or replace
-checkout/setup with handwritten Git and tool-install commands.
-
-This removes movable remote references but shifts patching, credential
-handling, platform behavior, and supply-chain review onto this repository.
-Vendoring the large JavaScript distributions would be disproportionate and
-handwritten checkout would weaken a mature security boundary.
+Options 2 and 3 can be combined: disable tracing first, then optionally assert
+that `x` is no longer present. The security property comes from option 2; a
+post-disable assertion is diagnostic defense in depth, not a separate secret
+transport.
 
 ### Evaluation rubric
 
-Score 1 through 5. Weighted total:
-`sum(weight × score / 5)`, maximum 100.
+Scores run from 1 to 5 and produce a weighted total out of 100.
 
-This rubric is specific to executable workflow dependency governance:
-
-| Criterion | Weight | Detailed meaning |
+| Criterion | Weight | What a high score requires |
 | --- | ---: | --- |
-| Execution-time supply-chain protection | 35 | Every action capable of reading the checkout, token, generated artifacts, or workflow environment should execute immutable, upstream-verified code. |
-| Policy consistency and auditability | 15 | A reviewer should be able to state and mechanically inspect one repository-wide rule without action-class exceptions. |
-| Runtime currency and compatibility | 15 | Selected releases must use supported runtimes, retain required inputs/credential behavior, and work on the targeted GitHub-hosted runners. |
-| Sustainable update lifecycle | 15 | The design should surface new releases and keep SHA comments synchronized without silently reverting to mutable tags. |
-| Operational control and review burden | 10 | Updates must remain human-reviewable, avoid unbounded alert/PR noise, and permit release-specific risk assessment. |
-| Verification and rollback simplicity | 5 | Each update should have a clear upstream identity, focused diff, test path, and reversible commit. |
-| Churn and issue expansion | 5 | Fewer affected files and new automation surfaces score better, with intentionally low weight. |
+| Token non-disclosure | 32 | The bearer token is not exposed through shell trace, argv, ordinary curl configuration discovery, or new persistent files. |
+| Earliest-boundary protection | 18 | Protection takes effect before the first guarded expansion, assignment, here-document expansion, or command containing the token. |
+| Copy/paste functional reliability | 14 | The example works predictably in an interactive Bash session without a preparatory shell ritual. |
+| Parent-shell side-effect containment | 10 | Security option changes do not unexpectedly alter the user's parent shell after the recovery block. |
+| Preservation of existing curl protections | 9 | `-q`, stdin configuration, pre-opened exact output descriptor, status capture, and pagination behavior remain intact. |
+| Negative-test quality | 8 | A synthetic sentinel test can prove inherited tracing does not emit the token. |
+| Bash/curl version portability | 7 | The solution uses long-established shell behavior and does not depend on a new curl feature. |
+| Churn and explanatory cost | 2 | The issue remains understandable and concise; this is intentionally the lowest weight. |
+
+Secret containment and protection timing dominate. An option that usually
+works in a clean shell cannot score well if inherited state can disclose the
+token before its guard runs.
 
 ### Scoring
 
-| Option | Protection (35) | Consistency (15) | Compatibility (15) | Updates (15) | Operations (10) | Verification (5) | Churn (5) | Total / 100 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 3A — Retain major tags | 1 | 1 | 3 | 5 | 5 | 5 | 5 | 54 |
-| 3B — Pin build checkout only | 4 | 3 | 5 | 2 | 5 | 5 | 5 | 78 |
-| 3C — Pin all checkout references | 4 | 4 | 5 | 2 | 5 | 5 | 4 | 80 |
-| 3D — Pin every external action | 5 | 5 | 5 | 2 | 5 | 5 | 2 | 88 |
-| 3E — Build pins plus Dependabot | 4 | 3 | 5 | 5 | 3 | 4 | 3 | 80 |
-| 3F — All pins plus Dependabot | 5 | 5 | 5 | 5 | 3 | 4 | 1 | **91** |
-| 3G — Enforcement policy only | 2 | 5 | 2 | 3 | 2 | 2 | 4 | 54 |
-| 3H — Vendor or replace actions | 4 | 4 | 2 | 1 | 2 | 2 | 1 | 56 |
+Abbreviations: token nondisclosure (TN), earliest protection (EP), copy/paste
+reliability (CP), parent-shell containment (PS), curl protections (CU),
+negative testing (NT), Bash portability (BP), and churn (CH).
 
-### Selected option
+| Option | TN 32 | EP 18 | CP 14 | PS 10 | CU 9 | NT 8 | BP 7 | CH 2 | Weighted total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1. Prose warning only | 1 | 1 | 4 | 5 | 5 | 1 | 5 | 5 | 50.8 |
+| 2. First-command `set +x` | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | **100.0** |
+| 3. Refuse when xtrace is active | 5 | 5 | 2 | 5 | 5 | 4 | 5 | 4 | 89.6 |
+| 4. Disable and later restore | 4 | 5 | 4 | 3 | 4 | 3 | 5 | 3 | 81.0 |
+| 5. Launch a fresh Bash | 4 | 4 | 2 | 5 | 3 | 3 | 3 | 1 | 70.4 |
+| 6. Put token on curl argv | 1 | 1 | 5 | 5 | 1 | 1 | 5 | 5 | 46.4 |
+| 7. Temporary credential file | 4 | 4 | 2 | 5 | 3 | 3 | 5 | 1 | 73.2 |
+| 8. Curl variable expansion | 3 | 3 | 3 | 5 | 4 | 3 | 1 | 2 | 62.6 |
+| 9. Require a clean shell | 2 | 1 | 1 | 5 | 4 | 1 | 4 | 2 | 44.4 |
 
-**Select Option 3F: pin every external action in both workflows and add
-review-only Dependabot version updates.**
+Option 2 is both the strongest and simplest because the existing parentheses
+already provide the exact scope needed: xtrace is disabled before token use and
+the parent shell's tracing preference returns automatically when the subshell
+ends.
 
-Implementation instructions:
+### Selected option and implementation contract
 
-1. Add `.github/workflows/markdownlint.yml` and
-   `.github/dependabot.yml` to T1's affected files and all exact path-set
+Select **option 2: make `set +x` the first command in the HCP subshell**.
+
+Revise T2 so:
+
+1. The HCP code fence begins:
+
+   ```bash
+   (
+     set +x
+     umask 077
+   ```
+
+2. No variable expansion, assignment, command substitution, function call, or
+   other token-adjacent operation appears between `(` and `set +x`.
+3. The block does not re-enable xtrace. The subshell boundary automatically
+   preserves the parent's prior state after the block exits.
+4. The existing guarded `TFC_TOKEN` assignment, curl `-q` first option,
+   `--config -`, unquoted intentional here-document, pre-opened descriptor 3,
+   exact-path noclobber behavior, status capture, and retained partial-file
+   handling remain unchanged.
+5. The explanation says that `set +x` suppresses inherited Bash xtrace before
+   the token is expanded, while stdin curl configuration keeps the token out of
+   curl's ordinary argv. These are complementary controls.
+6. The warning also says the block cannot protect against an external wrapper,
+   terminal recorder, debugger, environment dumper, or modified shell that
+   records secret input independently.
+7. Validation runs the HCP block's variable-initialization/configuration path
+   with xtrace enabled in the parent and a synthetic sentinel token, captures
+   stdout and stderr, and fails if the sentinel appears. It must also confirm
+   that tracing remains enabled in the parent after the subshell returns.
+8. Validation never uses a real HCP token or makes the synthetic test depend on
+   a successful network request.
+
+The first traced line may be the nonsensitive `+ set +x`; that is acceptable.
+The acceptance property is that no secret value or token-bearing header appears
+after inherited xtrace was enabled.
+
+## Finding T1/T2-1 — Track current Markdown-tooling advisories without destabilizing the slate
+
+### Options
+
+1. **Take no action.** Leave dependency changes outside T1/T2 and rely on
+   maintainers to remember the audit result. This preserves scope but does not
+   create ownership, priority, or a closure condition.
+2. **Expand T1 to remediate npm dependencies.** Update direct/transitive
+   packages, lockfile, npm Dependabot, audit policy, and lint baselines alongside
+   the generator/artifact security work. This creates one comprehensive
+   security issue but materially increases T1's already large failure surface.
+3. **Expand T2 to remediate npm dependencies.** Perform the package changes
+   while editing documentation. This mixes unrelated provider guidance and
+   toolchain risk, and changes T2's prerequisite baseline after T1.
+4. **Create a new T0 prerequisite before T1.** Remediate advisories and
+   rebaseline lint first. This is appropriate if repository policy prohibits
+   proceeding with high-severity findings, but otherwise invalidates many
+   carefully dated T1/T2 assumptions before implementation.
+5. **Create a new T3 follow-up after T2.** Draft and add a third slate issue for
+   npm dependency remediation and Dependabot. This cleanly owns the work but
+   exceeds the prompt's named T1/T2 revision artifacts.
+6. **Require a separately filed and linked follow-up, ordered after T2 by
+   default.** Add a T1 planning/acceptance requirement that a dedicated npm
+   remediation issue is filed and linked before T1 closes; carry that tracking
+   relationship into T2. If policy blocks known high advisories, explicitly
+   invert the order and rebaseline T1/T2 before work starts. Do not draft or
+   implement the third issue inside this two-file slate.
+7. **Add npm Dependabot in T1 but defer current remediation.** Extend
+   `.github/dependabot.yml` with the npm ecosystem while leaving the known
+   lockfile findings for future pull requests. This improves maintenance but
+   does not disposition current vulnerabilities and produces PRs against a
+   moving lint baseline.
+8. **Add an audit-only CI gate.** Run `npm audit` in pull requests with a chosen
+   threshold while preserving package versions. With five current high
+   findings, the gate either fails immediately or must baseline/ignore known
+   findings, neither of which replaces remediation ownership.
+9. **Update only the two direct dev dependencies opportunistically.** Upgrade
+   `markdown-it` and `markdownlint-cli2` without a separately tracked audit
+   objective. This may resolve transitive nodes but hides the decision,
+   validation, and future maintenance policy in unrelated work.
+
+Options 4 and 6 have an explicit ordering permutation controlled by repository
+policy. The order must be decided before implementation; “after T2 unless
+policy requires otherwise” is not permission to leave the issue unfiled.
+
+### Evaluation rubric
+
+Scores run from 1 to 5 and produce a weighted total out of 100.
+
+| Criterion | Weight | What a high score requires |
+| --- | ---: | --- |
+| Accountable security-risk ownership | 24 | A named issue, ownerable scope, and closure path exist for the known audit findings. |
+| Disposition of the current findings | 18 | The plan addresses the seven current vulnerable nodes rather than only future updates or a failing signal. |
+| T1/T2 baseline stability | 16 | Generator, workflow, and provider-documentation acceptance criteria are not invalidated midstream without deliberate rebaselining. |
+| Sustainable dependency maintenance | 12 | npm Dependabot and a review policy are included in the owned work. |
+| Validation completeness | 11 | Lockfile install/audit plus outer and nested Markdown lint behavior are covered. |
+| Priority and ordering governance | 9 | Policy can promote the work ahead of T1, otherwise the default order is explicit and non-forgetful. |
+| Stakeholder/reviewer clarity | 7 | Security, project, and business stakeholders can see why work is split and when it completes. |
+| Churn and issue-scope fit | 3 | The current two issues avoid disproportionate expansion; this remains a minor criterion. |
+
+The rubric rewards actual ownership and current remediation. Merely adding a
+scanner or future updater cannot compensate for leaving known high-severity
+findings undispositioned.
+
+### Scoring
+
+Abbreviations: ownership (OW), current disposition (CD), baseline stability
+(BS), maintenance (DM), validation (VL), ordering (OR), clarity (CL), and
+scope/churn (SC).
+
+| Option | OW 24 | CD 18 | BS 16 | DM 12 | VL 11 | OR 9 | CL 7 | SC 3 | Weighted total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1. No action | 1 | 1 | 5 | 1 | 1 | 1 | 1 | 5 | 35.2 |
+| 2. Expand T1 | 5 | 5 | 1 | 5 | 5 | 2 | 2 | 1 | 75.2 |
+| 3. Expand T2 | 5 | 5 | 1 | 5 | 5 | 1 | 1 | 1 | 72.0 |
+| 4. Add a T0 prerequisite | 5 | 5 | 2 | 5 | 5 | 5 | 5 | 2 | 88.6 |
+| 5. Draft a T3 follow-up in this slate | 5 | 5 | 5 | 5 | 5 | 4 | 5 | 3 | 97.0 |
+| 6. Require separately filed linked follow-up | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | **100.0** |
+| 7. Dependabot now, remediation later | 4 | 1 | 3 | 5 | 3 | 2 | 3 | 3 | 60.6 |
+| 8. Audit-only CI gate | 3 | 2 | 2 | 1 | 3 | 2 | 3 | 3 | 46.6 |
+| 9. Opportunistic direct upgrades | 2 | 3 | 2 | 1 | 4 | 1 | 1 | 2 | 42.4 |
+
+Option 6 edges out a drafted T3 because it provides the same ownership and
+ordering without silently expanding the prompt's two named issue artifacts.
+Its success depends on making the filing/link a real T1 gate, not a vague
+future-work sentence.
+
+### Selected option and implementation contract
+
+Select **option 6: require a separately filed, linked npm-remediation issue,
+ordered after T2 by default**.
+
+Revise the two-file slate as follows:
+
+1. Add a short T1 tracking subsection that records the 2026-07-29
+   lockfile-only audit baseline: seven vulnerable package nodes, five high and
+   two moderate, involving `brace-expansion`, `js-yaml`, `linkify-it`,
+   `markdown-it`, `markdownlint-cli2`, `minimatch`, and `picomatch`.
+2. Require a separate TerraformStyleGuide dependency-remediation issue to be
+   filed and linked from T1 before T1 is closed. The link must be a real issue
+   URL/number in the filed issue or implementation PR; a local placeholder is
+   not closure evidence.
+3. State that the dedicated issue—not T1 or T2—owns:
+   - `.github/workflows/package.json` and `package-lock.json` upgrades;
+   - npm Dependabot for `/.github/workflows`;
+   - direct and transitive advisory disposition;
+   - lockfile regeneration without an unreviewed `--force` major jump;
+   - `npm ci`, the outer Markdown lint suite, the nested-fence suite, and a
+     lockfile-only audit at the repository's selected threshold; and
+   - documented risk acceptance or upstream constraints for any finding that
+     cannot be remediated immediately.
+4. Default the dependency issue to execute after T2 so T1/T2 retain one stable
+   lint/toolchain baseline.
+5. If repository policy forbids proceeding with current high findings, require
+   the dependency issue to move before T1. After it lands, the author must
+   re-read and rebaseline both T1 and T2 rather than assuming their package,
+   action, Node, or lint statements remain accurate.
+6. Keep npm dependency and lockfile changes outside T1's seven implementation
+   files and outside T2's six affected files.
+7. In T2's prerequisite/baseline language, acknowledge the linked dependency
+   issue and say it is non-blocking only under the default after-T2 order. T2
+   must not claim that known advisories were remediated.
+8. Add the npm and GitHub Dependabot primary references to T1.
+
+This selection creates visible accountable work without turning either current
+issue into a dependency-upgrade project or inventing an unrequested third local
+issue description.
+
+## Finding T1-3 — Correct or justify the dated GitHub Actions pins
+
+### Options
+
+1. **Keep the four current literals and the “as of 2026-07-29” claim.** The
+   preimplementation recheck may catch drift later, but checkout v7.0.1 and
+   setup-node v7.0.0 already existed on the stated date, making the claim false.
+2. **Update checkout and setup-node to the current v7 releases.** Pin their
+   exact full SHAs, retain upload-artifact v7.0.1 and download-artifact v8.0.1,
+   and keep immediate metadata/runtime/input/output verification.
+3. **Keep checkout/setup-node v6 as an explicit approved ceiling.** Replace
+   “current” with “approved,” document a concrete runner/runtime/caching/ESM
+   compatibility reason for declining v7, and set a review trigger. This is
+   valid only if implementation research finds an actual incompatibility.
+4. **Remove literal SHAs from the issue.** Require the implementer to select
+   current full SHAs at execution time. This avoids stale prose but makes the
+   issue less reproducible and moves a security-sensitive decision out of
+   review.
+5. **Use mutable major tags such as `@v7`.** This follows current majors with
+   minimal maintenance but gives upstream tag movement control over executed
+   code and violates T1's immutable-pin requirement.
+6. **Pin the newest upstream default-branch commit.** This maximizes currency
+   but bypasses release boundaries, versioned compatibility expectations, and
+   release-note review.
+7. **Update every action even when already current.** Re-resolve all four SHAs
+   and change literals whether or not their release identity changed. This can
+   create meaningless churn and increases transcription risk.
+8. **Keep stale pins and rely only on Dependabot after merge.** Dependabot
+   improves future visibility but does not make the initial dated assertion
+   accurate or review the v7 transition before T1 lands.
+9. **Use a centralized variable or reusable wrapper for action references.**
+   GitHub Actions does not support arbitrary expressions in `uses`, and a
+   wrapper adds indirection without eliminating the need to pin its own
+   executable identity.
+
+Option 2 can be combined with a deliberate option-3 fallback: attempt v7
+validation first; retain v6 only if a specific incompatibility is recorded.
+That is the selected decision procedure, not permission to choose v6 for lower
+churn.
+
+### Evaluation rubric
+
+Scores run from 1 to 5 and produce a weighted total out of 100.
+
+| Criterion | Weight | What a high score requires |
+| --- | ---: | --- |
+| Immutable supply-chain identity | 25 | Every external action executes by a verified full commit SHA belonging to the intended upstream release. |
+| Dated factual currency | 20 | The issue's stated “as of” versions existed and were current on the stated date, or an older approved ceiling is honestly labeled and justified. |
+| Runner/runtime compatibility | 16 | Node runtime, minimum runner, action inputs/outputs, checkout credentials, artifact digest/ID behavior, and repository workflow semantics are checked. |
+| Security-review reproducibility | 12 | Reviewers see exact version/SHA pairs and the decision evidence before implementation. |
+| Ongoing update visibility | 10 | Dependabot produces review-only update proposals and no auto-merge bypasses human review. |
+| Existing workflow behavior preservation | 9 | Node/lint/cache, artifact transport, permissions, and writer behavior do not change unintentionally. |
+| Deliberate P1/T1 alignment | 5 | Shared pins converge where compatible without downgrading either repository merely for symmetry. |
+| Churn and implementation effort | 3 | Unnecessary edits are avoided; this cannot outweigh accuracy or immutability. |
+
+Currency alone is insufficient: a mutable or unvalidated latest reference
+cannot beat a fully reviewed release SHA. Conversely, immutability does not
+make a false dated-current claim acceptable.
+
+### Scoring
+
+Abbreviations: immutable identity (II), factual currency (FC), runtime
+compatibility (RC), reproducibility (SR), update visibility (UV), behavior
+preservation (BP), cross-repo alignment (CA), and churn (CH).
+
+| Option | II 25 | FC 20 | RC 16 | SR 12 | UV 10 | BP 9 | CA 5 | CH 3 | Weighted total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1. Keep stale dated literals | 5 | 1 | 3 | 3 | 5 | 4 | 2 | 5 | 68.0 |
+| 2. Update checkout/setup-node to v7 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | **100.0** |
+| 3. Document an approved v6 ceiling | 5 | 5 | 5 | 5 | 5 | 5 | 2 | 5 | 97.0 |
+| 4. Choose SHAs only at implementation | 4 | 5 | 3 | 1 | 5 | 3 | 3 | 5 | 73.4 |
+| 5. Use mutable major tags | 1 | 5 | 4 | 2 | 5 | 2 | 5 | 5 | 64.2 |
+| 6. Pin unreleased default-branch commits | 5 | 5 | 1 | 2 | 2 | 1 | 1 | 2 | 61.0 |
+| 7. Rewrite all four references | 5 | 5 | 5 | 4 | 5 | 3 | 4 | 2 | 91.2 |
+| 8. Dependabot later, stale pins now | 5 | 1 | 3 | 2 | 5 | 4 | 2 | 5 | 65.6 |
+| 9. Add an action-reference wrapper | 3 | 4 | 2 | 2 | 3 | 2 | 3 | 1 | 55.4 |
+
+Option 2 wins. Option 3 is a valid contingency only if an actual v7
+incompatibility is found and documented; without one it is unjustified
+divergence, not a lower-churn tie.
+
+### Selected option and implementation contract
+
+Select **option 2: update checkout and setup-node to the current v7 full
+SHAs**, with option 3 available only for a documented incompatibility.
+
+Revise T1's dated pin block to:
+
+```yaml
+uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+```
+
+```yaml
+uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+```
+
+Retain:
+
+```yaml
+uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+```
+
+```yaml
+uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+```
+
+Implementation requirements:
+
+1. Verify all four full SHAs in their official repositories immediately before
+   implementation and check for later required security releases.
+2. Review checkout v7's fork-checkout protection, ESM/dependency changes,
+   inherited v6 credential storage under `RUNNER_TEMP`, Node 24/minimum-runner
+   requirements, persisted-credential behavior, and post-job cleanup.
+3. Review setup-node v7's ESM/dependency changes, Node runtime, inputs, outputs,
+   caching defaults, and minimum runner. Preserve the explicit Node 20 lint
+   setup and existing cache behavior; set the documented cache-control input
+   explicitly if needed to prevent automatic behavior from changing.
+4. Prove every writer checkout still supports authenticated push and cleans
+   credentials in post-job processing.
+5. Revalidate upload/download immutable artifact ID, digest,
+   `skip-decompress`, `artifact-ids`, and digest-mismatch behavior.
+6. If any v7 incompatibility is found, record it in T1, label the retained v6
+   release as the approved ceiling rather than current, and add a dated review
+   trigger. Do not silently fall back.
+7. Keep weekly review-only GitHub Actions Dependabot and prohibit auto-merge.
+8. Keep P1/T1 action pins aligned only where each repository's compatibility
+   review approves the same release.
+
+This fixes the false dated-current claim while preserving T1's
+preimplementation defense against future staleness.
+
+## Finding T2-3 — State the actual S3 Versioning prerequisite
+
+### Options
+
+1. **Keep “versioning-capable general-purpose bucket.”** This is technically
+   broad but does not say versioning is disabled by default or that history must
+   have existed and survived retention.
+2. **Require the bucket to be currently `Enabled`.** This is easy to explain but
+   incorrectly excludes a currently `Suspended` bucket that still retains
+   older version IDs.
+3. **State the historical and retention prerequisites in prose.** Require that
+   S3 Versioning was enabled before the desired version was written and that
+   the selected version still exists. Explain that current status may be
+   `Enabled` or `Suspended`, while a never-enabled bucket lacks that history.
+4. **Add `get-bucket-versioning` as a mandatory preflight and accept `Enabled`
+   or `Suspended`.** This makes status visible, but AWS documents that retrieving
+   bucket versioning state requires the bucket owner. A delegated recovery
+   principal with `s3:ListBucketVersions`/`s3:GetObjectVersion` may not be able
+   to run it.
+5. **Add `get-bucket-versioning` as an optional diagnostic.** Keep option 3's
+   prose and show the command only for an authorized bucket owner. This is
+   accurate but lengthens a procedure whose exact-version listing already
+   proves whether a retained candidate is available.
+6. **Treat a nonempty `list-object-versions` result as the only prerequisite.**
+   Let discovery speak for itself and omit versioning-state explanation. This
+   is operationally sufficient for a found version but does not teach why no
+   history may appear.
+7. **Enable versioning automatically before recovery.** This affects future
+   writes only, changes backend governance, and cannot manufacture past
+   versions; it is outside a read-only recovery example.
+8. **Document every lifecycle, Object Lock, replication, and delete-marker
+   permutation.** This is comprehensive but obscures the core retained-version
+   prerequisite and expands the issue far beyond copy-safe retrieval.
+
+Options 3 and 5 are compatible. The optional status command should be added
+only if its owner-only authorization constraint provides more value than the
+additional complexity.
+
+### Evaluation rubric
+
+Scores run from 1 to 5 and produce a weighted total out of 100.
+
+| Criterion | Weight | What a high score requires |
+| --- | ---: | --- |
+| Historical-version correctness | 27 | The guidance accurately states when version IDs are created and whether suspended buckets can retain them. |
+| Delegated-operator usability | 18 | A principal with the documented list/get permissions can follow the procedure without an unnecessary owner-only command. |
+| Recovery-expectation clarity | 16 | Operators understand why history may be absent and that a desired version must still be retained. |
+| Read-only/non-mutating safety | 13 | The procedure does not enable versioning or change bucket governance during recovery. |
+| Authorization accuracy | 10 | Any added status check states its distinct authorization requirement and is not confused with object-version permissions. |
+| Primary-source alignment | 8 | Enabled, Suspended, never-enabled, and lifecycle/retention statements match current AWS documentation. |
+| New-operator comprehensibility | 5 | A reader coming in cold can distinguish capability, prior enablement, current state, and retained history. |
+| Scope and prose churn | 3 | The issue remains focused; low churn cannot compensate for inaccurate recovery assumptions. |
+
+The rubric prioritizes historical truth and delegated usability. A seemingly
+helpful preflight loses value if it requires a more privileged principal than
+the recovery itself.
+
+### Scoring
+
+Abbreviations: historical correctness (HC), delegated operation (DO), expected
+results (ER), non-mutating safety (NS), authorization (AA), primary sources
+(PS), newcomer clarity (NC), and scope/churn (SC).
+
+| Option | HC 27 | DO 18 | ER 16 | NS 13 | AA 10 | PS 8 | NC 5 | SC 3 | Weighted total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1. Keep “versioning-capable” | 2 | 5 | 2 | 5 | 5 | 2 | 1 | 5 | 65.4 |
+| 2. Require currently Enabled | 2 | 4 | 3 | 5 | 4 | 3 | 3 | 5 | 66.6 |
+| 3. State prior enablement and retention | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | **100.0** |
+| 4. Mandatory status preflight | 4 | 1 | 5 | 5 | 3 | 5 | 4 | 2 | 73.4 |
+| 5. Optional owner status diagnostic | 5 | 4 | 5 | 5 | 5 | 5 | 4 | 3 | 94.2 |
+| 6. Infer everything from list results | 4 | 5 | 2 | 5 | 5 | 4 | 2 | 5 | 80.4 |
+| 7. Enable versioning during recovery | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 2 | 20.6 |
+| 8. Document every S3 lifecycle permutation | 5 | 2 | 5 | 5 | 3 | 5 | 1 | 1 | 78.8 |
+
+Option 3 communicates every fact needed for safe expectations without adding an
+owner-only command. Option 5 is accurate but unnecessary because exact-key
+version listing already provides the recovery-relevant evidence.
+
+### Selected option and implementation contract
+
+Select **option 3: state prior enablement and retained-history prerequisites in
+prose without adding an owner-only status command**.
+
+Revise T2's S3 applicability language so a new operator is told:
+
+1. The example applies only to a general-purpose S3 bucket.
+2. S3 Versioning is disabled by default.
+3. Versioning must have been enabled before the desired historical state
+   version was created or overwritten. Enabling it now cannot create earlier
+   history.
+4. A bucket that was once enabled can currently report `Enabled` or
+   `Suspended`; suspension does not erase already retained versions.
+5. The exact desired version must still exist. Lifecycle expiration, explicit
+   version deletion, or other retention policy may have removed it.
+6. Objects that predate first enablement can have the `null` version ID; the
+   operator must inspect the exact-key listing rather than infer age or identity
+   from status alone.
+7. An empty exact-key `Versions` result means this procedure has no retained
+   version to retrieve; it is not a reason to enable versioning or guess an ID.
+8. Directory buckets remain excluded because they do not support S3 Versioning
+   or `ListObjectVersions`.
+9. Do not make `get-bucket-versioning` mandatory. AWS documents it as an
+   owner-only operation, while the recovery example deliberately states the
+   narrower list/get object-version permissions.
+
+Add the S3 Versioning user-guide reference. Preserve exact-key discovery,
+manual selection, the quoted `VERSION_ID` guard, fresh destination, and
+read-only copy semantics.
+
+## Finding T1-4 — Verify local PowerShell identity in the executing child process
+
+### Options
+
+1. **Keep executable-name labels only.** Treat `pwsh` as Core 7 and
+   `powershell` as Desktop 5.1. This is normally true on supported Windows
+   hosts but can be falsified by PATH shims, unexpected versions, or a future
+   `pwsh` major.
+2. **Check the version once in the parent process.** Assert the shell running
+   the local validation block, then launch both applications. This proves
+   nothing about either child executable.
+3. **Launch a separate child version probe before each script.** Run
+   `$PSVersionTable` through the resolved executable, then launch the harness or
+   generator in a new process. This checks the binary path but does not prove
+   the actual script invocation's process identity.
+4. **Wrap each child script invocation in a same-process `-Command` prelude.**
+   The child first asserts expected `PSEdition` and version, then invokes the
+   harness or generator in that exact process and propagates its failure/exit
+   code.
+5. **Add expected-edition parameters to the harness and generator.** Each
+   script checks its own runtime when the parameter is supplied. This is strong
+   evidence but exposes validation-only parameters on production scripts and
+   requires interface changes in two files.
+6. **Add an eighth tracked local-validation driver.** A new `.ps1` asserts the
+   runtime and invokes the target scripts. This is clean and reusable but
+   expands T1's exact seven-file scope for a low-severity local-only concern.
+7. **Parse `--version` output from each executable.** This is simple but does
+   not prove `PSEdition`, localization/format can vary, and the actual script
+   still runs in a later process.
+8. **Rely exclusively on CI.** Remove or weaken local edition claims and state
+   that the four-cell workflow provides authoritative evidence. This is honest
+   but gives local contributors slower feedback and leaves the provided local
+   validation snippet incomplete.
+9. **Run the whole local validation block once under each child shell.** Restart
+   the complete block via `powershell` and `pwsh`, assert at its top, and avoid
+   nested child launches. This provides strong evidence but requires
+   restructuring the copy/paste script to prevent recursion and duplicate Git
    checks.
-2. As of 2026-07-29, prescribe these verified full action-distribution SHAs:
 
-   ```yaml
-   actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-   actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-   actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-   actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-   ```
-
-3. Require immediate preimplementation revalidation of every SHA, adjacent
-   comment, upstream repository, latest required security release, action
-   metadata/runtime, and every relied-on input/output. Update references and
-   evidence atomically if a release changes.
-4. Preserve markdown lint's current Node/package behavior; pinning and runtime
-   currency do not authorize changing lint semantics or dependency versions.
-5. Configure:
-
-   ```yaml
-   version: 2
-   updates:
-     - package-ecosystem: github-actions
-       directory: /
-       schedule:
-         interval: weekly
-   ```
-
-   Keep update pull requests separate by default and require human review; do
-   not add auto-merge.
-6. Validate the checkout v6 credential model and runner compatibility. Prove
-   the controlled writer can push and post-job cleanup completes.
-7. Require a static scan that every nonlocal `uses:` in both workflow files is
-   a 40-hex full SHA with an adjacent version comment.
-8. Update T2's prerequisite and affected-path expectations to the resulting
-   seven-file T1 implementation set.
-
-The upstream facts and exact refs are preserved in
-`docs/planning/artifacts/prompt-02-primary-source-research.md`.
-
-## Finding 4 — Define an explicit diagnostic-context interface
-
-### Options
-
-#### Option 4A — Add three optional scalar diagnostic parameters
-
-Add optional `ArtifactId`, `RunId`, and `RunAttempt` parameters beside the five
-mandatory functional parameters selected in Finding 1. Use
-`$PSBoundParameters` to distinguish an omitted label from an explicitly bound
-empty value.
-
-Callers that possess the labels pass them explicitly. Local validation and
-fixtures may omit them and receive an unambiguous “unavailable” representation.
-The helper owns a stable phase/context diagnostic format.
-
-#### Option 4B — Make all three diagnostic parameters mandatory
-
-Require every helper call to provide artifact ID, run ID, and attempt.
-Production CI always has or can propagate these values.
-
-This maximizes production consistency but forces local use and most fixtures to
-invent labels. Invented IDs undermine provenance and make logs look more
-authoritative than they are.
-
-#### Option 4C — Keep the helper silent about workflow context and enrich in callers
-
-The helper reports only phase, paths, entry names, and digests. Each workflow
-step catches its failure and adds artifact/run context.
-
-This can work, but multiple wrappers can format context differently or lose the
-original phase/exception. A helper contract requiring the labels “when
-available” remains untestable unless every caller wrapper is separately
-specified.
-
-#### Option 4D — Read context from environment variables
-
-Have the helper inspect standard GitHub variables and custom environment
-variables such as `CANDIDATE_ARTIFACT_ID`.
-
-This avoids parameters, but couples behavior to mutable ambient process state,
-makes local behavior implicit, and risks stale variables leaking between cases.
-It is particularly unsuitable for a helper whose trust boundaries are intended
-to be explicit.
-
-#### Option 4E — Return or throw a structured diagnostic object
-
-Define a custom PowerShell class, error-record schema, JSON payload, or result
-object containing phase, paths, digest data, and optional labels. Callers render
-it.
-
-This provides strong machine readability, but custom-class serialization and
-error propagation across Windows PowerShell 5.1, PowerShell 7, child scripts,
-and workflow logs add considerable complexity. A failed child script also needs
-a reliable exit code and human-readable message.
-
-#### Option 4F — Accept one extensible `DiagnosticContext` dictionary
-
-Take a hashtable/dictionary with keys such as `ArtifactId`, `RunId`, and
-`RunAttempt`. Future callers can add fields without changing the parameter
-list.
-
-This is flexible, but key spelling, value type, omission, emptiness, and unknown
-keys require another schema. It is less discoverable through PowerShell help
-and tab completion than three stable scalar parameters.
-
-#### Option 4G — Accept a logger callback or diagnostic sink
-
-Pass a script block, delegate, or interface that receives structured events.
-Workflows can format or route diagnostics independently.
-
-This is appropriate for a library but disproportionate for a child script. It
-creates executable caller input, complicates process boundaries, and reduces
-P1/T1 parity.
-
-#### Option 4H — Split a diagnostic-aware wrapper from a private extraction module
-
-Add a workflow-facing wrapper that accepts context and calls a separate private
-module containing validation/extraction.
-
-This isolates concerns, but creates another production file and risks the
-harness testing the wrapper while callers or future code bypass it. The
-selected single production helper already has a manageable public interface.
+Option 4 can use a fixed inline command string or a UTF-16LE
+`-EncodedCommand`; both PowerShell targets support the underlying `-Command`
+execution model. No untrusted values should be interpolated into executable
+code.
 
 ### Evaluation rubric
 
-Score 1 through 5, with
-`sum(weight × score / 5)` and a maximum of 100.
+Scores run from 1 to 5 and produce a weighted total out of 100.
 
-This rubric is specific to provenance-quality failure diagnostics:
-
-| Criterion | Weight | Detailed meaning |
+| Criterion | Weight | What a high score requires |
 | --- | ---: | --- |
-| Diagnostic accuracy and provenance | 25 | Logs must never invent identity, confuse omitted with empty, or associate a failure with stale ambient context. |
-| Interface explicitness and testability | 25 | Inputs and semantics must be visible in help/parameter binding and directly exercisable by the permanent harness. |
-| Local and fixture usability | 15 | Developers and deterministic tests without real GitHub artifact metadata must be able to invoke the same production path honestly. |
-| Failure-path completeness | 15 | Digest, archive, manifest, containment, lifecycle, extraction, and cleanup failures must retain phase plus all context known at that point. |
-| P1/T1 parity and maintenance | 15 | The solution should match the corresponding PSStyleGuide contract so diagnostic fixes port cleanly. |
-| Churn and complexity | 5 | Simpler interfaces score better after provenance and completeness. |
+| Same-process evidence strength | 30 | Edition/version are asserted inside the exact process that invokes the harness or generator. |
+| Coverage of both scripts and editions | 18 | Harness and generator each run under Desktop 5.1 and Core major 7 when locally available. |
+| Resistance to false labels/shims | 15 | A renamed executable, PATH shim, future major, or unexpected edition fails before the target script. |
+| Cross-edition command compatibility | 12 | The mechanism uses CLI and language behavior supported by both Windows PowerShell 5.1 and PowerShell 7. |
+| Exit/error propagation | 10 | Child exceptions and native/script exit codes reliably make the parent validation fail. |
+| Contributor usability | 7 | The repository-root command remains understandable, gives clear skip/failure messages, and needs no new setup. |
+| Maintenance clarity | 5 | Expected edition/major data have one reviewable owner without test-only production interfaces. |
+| Scope/churn | 3 | The exact implementation-file scope is preserved when practical; low churn is subordinate to evidence. |
+
+The rubric deliberately treats a separate probe as weaker than a same-process
+assertion even when both resolve to the same executable path. The requirement
+is evidence about execution, not a likely inference.
 
 ### Scoring
 
-| Option | Provenance (25) | Explicit/testable (25) | Local use (15) | Failure completeness (15) | Parity (15) | Churn (5) | Total / 100 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 4A — Optional scalar parameters | 5 | 5 | 5 | 5 | 5 | 4 | **99** |
-| 4B — Mandatory diagnostic parameters | 5 | 5 | 2 | 5 | 4 | 3 | 86 |
-| 4C — Caller-only enrichment | 4 | 3 | 5 | 3 | 2 | 4 | 69 |
-| 4D — Ambient environment variables | 2 | 1 | 5 | 2 | 2 | 5 | 47 |
-| 4E — Structured result/error object | 5 | 4 | 4 | 5 | 3 | 2 | 83 |
-| 4F — Diagnostic-context dictionary | 4 | 4 | 5 | 4 | 3 | 4 | 80 |
-| 4G — Logger callback/sink | 5 | 3 | 3 | 4 | 2 | 1 | 68 |
-| 4H — Wrapper plus private module | 4 | 4 | 4 | 4 | 2 | 1 | 71 |
+Abbreviations: same-process evidence (SE), coverage (CV), shim resistance (SR),
+command compatibility (CC), error propagation (EP), contributor usability
+(CU), maintenance clarity (MC), and scope/churn (SC).
 
-### Selected option
+| Option | SE 30 | CV 18 | SR 15 | CC 12 | EP 10 | CU 7 | MC 5 | SC 3 | Weighted total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1. Trust executable names | 1 | 5 | 1 | 5 | 4 | 5 | 4 | 5 | 61.0 |
+| 2. Check only parent process | 1 | 2 | 1 | 5 | 3 | 4 | 2 | 5 | 44.8 |
+| 3. Separate child probe | 3 | 5 | 3 | 5 | 4 | 3 | 3 | 5 | 75.2 |
+| 4. Same-process command prelude | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | **100.0** |
+| 5. Add validation parameters | 5 | 5 | 5 | 5 | 5 | 4 | 2 | 3 | 94.4 |
+| 6. Add a tracked driver file | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 1 | 98.2 |
+| 7. Parse `--version` | 2 | 4 | 3 | 4 | 3 | 4 | 3 | 5 | 62.6 |
+| 8. CI only | 1 | 1 | 5 | 5 | 5 | 2 | 4 | 5 | 56.4 |
+| 9. Relaunch the complete validation block | 5 | 5 | 5 | 5 | 5 | 2 | 3 | 2 | 92.0 |
 
-**Select Option 4A: add explicit optional scalar diagnostic parameters.**
+Option 4 provides exact evidence without modifying production interfaces or
+adding an eighth file. Option 6 is nearly as strong but is disproportionate for
+a local-only evidence correction.
 
-Implementation instructions:
+### Selected option and implementation contract
 
-1. Add optional `ArtifactId`, `RunId`, and `RunAttempt` string parameters to
-   the helper after the five mandatory functional parameters.
-2. Reject null or empty values when a label is explicitly bound. Use
-   `$PSBoundParameters.ContainsKey(<name>)` to distinguish omission from an
-   invalid supplied value.
-3. Treat the values only as caller-supplied diagnostic labels. Do not use them
-   for selection, authorization, path construction, or digest trust, and never
-   derive or invent a missing value.
-4. Represent each omitted label consistently as `unavailable`.
-5. Require production callers to pass the validated artifact ID and the
-   workflow's run ID/attempt. Local callers may omit the labels.
-6. Define stable validation-phase identifiers and require diagnostics to
-   include:
-   - every supplied or unavailable label;
-   - normalized checkout and trusted-temporary roots;
-   - normalized download/candidate paths;
-   - archive path once selected;
-   - expected digest and actual digest once computed;
-   - offending entry or destination when applicable; and
-   - the failing phase.
-7. Preserve the original exception and a nonzero child-process result while
-   adding context; do not replace a precise helper failure with a generic
-   wrapper message.
-8. Add harness cases for omitted labels, all supplied labels, and each
-   explicitly empty label. Prove supplied labels appear, omitted labels are
-   marked unavailable, and empty labels fail before archive or destination
-   processing.
-9. Keep event, edition, version, fixture EOL, and workflow artifact-path
-   context in the workflow layer; those describe the consumer, while the three
-   optional labels travel through the shared helper interface.
-10. Propagate the exact interface into T2's prerequisite verification.
+Select **option 4: run a same-process runtime-assertion prelude for every local
+harness and generator invocation**.
 
-## Finding 5 — Define the complete temporary-path trust envelope
+Revise T1's local validation block as follows:
+
+1. Extend each edition descriptor with the expected `PSEdition` and version:
+   - `powershell` → `Desktop`, major 5, minor 1; and
+   - `pwsh` → `Core`, major 7.
+2. Continue resolving each executable with `Get-Command -CommandType
+   Application` and warning/skipping when it is unavailable locally. CI remains
+   mandatory coverage.
+3. For each available executable, invoke the harness through a child
+   `-NoLogo -NoProfile -Command` prelude that:
+   - sets `$ErrorActionPreference = 'Stop'`;
+   - asserts `$PSVersionTable.PSEdition` with ordinal equality;
+   - asserts Desktop exactly 5.1 or Core major exactly 7;
+   - invokes the exact tracked harness and helper in that same process;
+   - catches and reports failures without losing the expected/actual runtime;
+     and
+   - exits nonzero for an assertion, exception, or harness failure.
+4. Invoke the generator through the same prelude pattern in a separate child
+   process and repeat the edition/version assertion there. A successful harness
+   process does not prove the generator process.
+5. Pass expected values as fixed data—such as temporarily scoped inherited
+   environment values saved/restored in `finally`—rather than interpolating
+   arbitrary text into executable command source.
+6. Capture and check each child `$LASTEXITCODE` immediately. Do not let a later
+   Git command overwrite it.
+7. Only after the checked generator returns zero may the parent perform its
+   byte, Git-object, BOM, CR, and cross-edition comparisons.
+8. Increment the validated-edition count only after both the harness and
+   generator succeed under the asserted runtime.
+9. Keep the CI requirement that edition assertions and helper invocation occur
+   in the same explicit-shell step process.
+
+No new tracked file and no validation-only parameter on either production
+script is needed.
+
+## Finding T2-4 — Make the prerequisite-file non-goal complete
 
 ### Options
 
-#### Option 5A — Keep immediate-parent checks and narrow the guarantee
+1. **Keep the four-file partial list.** T2's exact six-file positive scope
+   still prevents implementation drift, but the phrase “the prerequisite
+   issue's files” remains factually incomplete.
+2. **List all seven T1 implementation files explicitly.** Add
+   `.github/dependabot.yml`, the tracked test harness, and
+   `.github/workflows/markdownlint.yml` to the existing four and retain T2's
+   six-file changed/cached path oracles.
+3. **Replace the list with “do not modify any T1 file.”** This is concise but
+   forces a cold reader to search another long issue and can be read as
+   including planning artifacts rather than affected implementation files.
+4. **Reference T1's affected-files section by heading only.** This reduces
+   duplication but GitHub headings can change and the issue description is less
+   self-contained when copied or handed off.
+5. **Use a complete table mapping T1's seven files and T2's six files.** This is
+   maximally explicit and useful for automation review, but duplicates the
+   already complete positive scope table and adds more prose than the defect
+   needs.
+6. **Delete the prerequisite-file non-goal.** Rely only on T2's positive
+   six-file scope and changed-path assertions. This is behaviorally sufficient
+   but loses useful handoff context about the stable prerequisite boundary.
+7. **Use broad path globs.** Prohibit `.github/workflows/**` and
+   `.gitattributes`. This accidentally forbids T2's required generator change
+   and is less exact than named paths.
+8. **Derive the list dynamically during implementation.** Compare the T1 commit
+   and use its changed paths as the exclusion set. This adds Git-history
+   dependency and can include incidental changes not part of T1's normative
+   scope.
+9. **List only the three omitted files as an addendum.** This repairs the facts
+   but leaves the reader to merge two lists mentally and makes future review
+   harder.
 
-Retain T1's current checks for the download directory, candidate leaf, and
-their immediate parents. Explicitly call all checkout comparisons lexical and
-state that callers alone guarantee link-free ancestors beneath a protected
-runner-temporary directory.
-
-This is honest and inexpensive, but the security-sensitive helper cannot
-verify the central assumption. A caller mistake can silently make an
-apparently outside path traverse into the checkout or another location.
-
-#### Option 5B — Adopt P1's declared-root-to-working-path envelope
-
-Accept explicit `CheckoutRoot` and `TrustedTemporaryRoot` parameters. Require
-both roots to exist, be separate, and be ordinary non-reparse directories.
-Require download and candidate paths to be strict descendants of the trusted
-root. Walk and reject links/reparse points from each declared root through each
-working path.
-
-This is substantially stronger and matches P1. It does not inspect ancestors
-above the two declared roots, so two lexically separate roots could theoretically
-arrive through earlier indirection.
-
-#### Option 5C — Reject indirection in every absolute existing component
-
-Use the explicit roots from Option 5B, but inspect every existing component
-from each filesystem volume/share root through:
-
-- `CheckoutRoot`;
-- `TrustedTemporaryRoot`;
-- `DownloadDirectory` and the retained archive;
-- the existing parent of `CandidateDirectory`; and
-- every created candidate path.
-
-Reject any component with `FileAttributes.ReparsePoint` or any attribute/read
-failure. After establishing an indirection-free absolute envelope, apply
-separator-aware lexical strict-descendant tests. Repeat relevant component and
-containment checks immediately before archive open, immediately before
-candidate creation, and after extraction.
-
-State the residual model: runner-controlled ancestors, job-owned roots, and no
-competing writer. This is the strongest common-denominator design available
-without OS-specific handle APIs.
-
-#### Option 5D — Resolve physical targets with modern .NET or external `realpath`
-
-Canonicalize each root and working path using
-`FileSystemInfo.ResolveLinkTarget`, `realpath`, or platform-specific
-equivalents, then compare final targets.
-
-This can follow rather than reject links, which complicates dangling links and
-root-overlap rules. More importantly, the modern .NET API is not a reliable
-Windows PowerShell 5.1 common denominator, while external tools differ by
-runner and platform.
-
-#### Option 5E — Use OS-native no-follow handles for race resistance
-
-Implement Unix `openat`/`O_NOFOLLOW`-style traversal and Windows handle/reparse
-APIs so every component is opened relative to a trusted directory handle.
-
-This offers stronger time-of-check/time-of-use protection but requires native
-interop, separate operating-system implementations, careful resource
-management, and extensive review. It is disproportionate for four files on
-ephemeral GitHub-hosted runners and conflicts with the portable PowerShell 5.1
-contract.
-
-#### Option 5F — Let the helper create and own all temporary paths
-
-Pass only an approved runner-temporary root or derive it from ambient state.
-The helper creates unique download/candidate children and returns paths.
-
-This reduces caller mistakes but does not fit the download action, which must
-receive a destination before the helper runs. Deriving `RUNNER_TEMP` from the
-environment also reintroduces hidden trust input; accepting it explicitly
-becomes a variant of Option 5B or 5C.
-
-#### Option 5G — Rely on directory permissions or ACLs
-
-Require a private temporary parent and assume permissions prevent link
-replacement, without exhaustively checking path components.
-
-Permissions help the no-competing-writer model but do not prove that the path
-used to reach the protected directory is itself free of indirection. They are
-defense in depth, not a replacement for validation.
-
-#### Option 5H — Isolate extraction in a container or sandbox
-
-Perform download validation/extraction inside a container, restricted user
-namespace, or dedicated sandbox and copy the four outputs out afterward.
-
-This adds image/runtime trust, cross-platform asymmetry, another transfer
-boundary, and weak Windows PowerShell 5.1 parity. It does not remove the need
-to validate host paths used for ingress and egress.
+Options 2 and 5 provide the same boundary. Option 2 is preferable unless a
+single consolidated scope matrix replaces—not duplicates—the existing
+affected-files sections.
 
 ### Evaluation rubric
 
-Score 1 through 5. Weighted total:
-`sum(weight × score / 5)`, maximum 100.
+Scores run from 1 to 5 and produce a weighted total out of 100.
 
-This rubric is specific to filesystem containment under a portable
-GitHub-hosted-runner threat model:
-
-| Criterion | Weight | Detailed meaning |
+| Criterion | Weight | What a high score requires |
 | --- | ---: | --- |
-| Containment and indirection correctness | 30 | Lexical sibling prefixes, root overlap, ancestor links, final links, dangling links, and reparse points must fail closed before an unsafe read/write. |
-| Windows PowerShell 5.1 and cross-platform compatibility | 20 | The same normative algorithm must work with built-in APIs under Desktop 5.1 and Core 7 on Windows and Ubuntu. |
-| Race resistance within the stated threat model | 20 | Relevant checks must be repeated near use, roots must be job-owned/protected, and residual no-competing-writer assumptions must be explicit. |
-| Caller and maintainer clarity | 10 | Trust inputs, strict-descendant rules, ownership, and unsupported topologies must be obvious to a cold implementer. |
-| Deterministic testability | 10 | The harness must be able to build positive and negative roots, sibling prefixes, component links, final links, and overlap cases with stable oracles. |
-| P1/T1 portability | 5 | The contract should minimize semantic divergence between the two self-contained helpers. |
-| Churn and implementation difficulty | 5 | Simpler algorithms score better only after containment and portability. |
+| Scope-boundary correctness | 26 | Every T1 implementation file is protected and no T2-required file is accidentally forbidden. |
+| Cold-reader review clarity | 20 | The non-goal is understandable without cross-document reconstruction or Git history. |
+| Resistance to interpretation drift | 15 | “T1 files,” implementation paths, and planning artifacts cannot be confused. |
+| Handoff usability | 13 | An implementer or project manager can copy the issue and know the exact prohibited paths. |
+| Changed-path oracle compatibility | 11 | The negative boundary agrees with T2's exact six-file working-tree and cached-path assertions. |
+| Internal issue consistency | 9 | Affected files, prerequisites, non-goals, and acceptance criteria tell one story. |
+| Maintenance/readability | 4 | The list is easy to update and does not duplicate large tables unnecessarily. |
+| Editorial churn | 2 | The correction is proportionate; this is intentionally least important. |
+
+Exact authorization boundaries outweigh deduplication. A self-contained
+seven-path list is worth a few repeated lines in a handoff-ready issue.
 
 ### Scoring
 
-| Option | Containment (30) | Compatibility (20) | Race model (20) | Clarity (10) | Testability (10) | Parity (5) | Churn (5) | Total / 100 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 5A — Immediate parent plus narrow claim | 2 | 5 | 2 | 5 | 4 | 2 | 5 | 65 |
-| 5B — Declared-root envelope | 4 | 5 | 4 | 5 | 5 | 5 | 3 | 88 |
-| 5C — Full existing-component rejection | 5 | 5 | 4 | 4 | 5 | 4 | 2 | **90** |
-| 5D — Physical target-resolution APIs | 5 | 2 | 4 | 3 | 4 | 2 | 2 | 72 |
-| 5E — OS-native no-follow handles | 5 | 1 | 5 | 1 | 3 | 1 | 1 | 64 |
-| 5F — Helper-owned temporary paths | 4 | 5 | 4 | 5 | 4 | 2 | 4 | 84 |
-| 5G — Permissions/ACLs only | 2 | 4 | 3 | 3 | 2 | 2 | 4 | 56 |
-| 5H — Container or sandbox | 4 | 3 | 4 | 2 | 3 | 1 | 1 | 64 |
+Abbreviations: scope boundary (SB), cold-reader clarity (CR), interpretation
+drift (ID), handoff usability (HU), changed-path compatibility (CO), internal
+consistency (IC), maintainability (MT), and editorial churn (EC).
 
-### Selected option
+| Option | SB 26 | CR 20 | ID 15 | HU 13 | CO 11 | IC 9 | MT 4 | EC 2 | Weighted total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1. Keep four-file partial list | 2 | 3 | 2 | 3 | 5 | 2 | 4 | 5 | 56.0 |
+| 2. List all seven files | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | **100.0** |
+| 3. Say only “any T1 file” | 4 | 2 | 2 | 2 | 4 | 3 | 5 | 5 | 60.2 |
+| 4. Heading-only cross-reference | 4 | 2 | 3 | 2 | 4 | 3 | 4 | 4 | 62.0 |
+| 5. Consolidated T1/T2 scope table | 5 | 5 | 5 | 5 | 5 | 5 | 3 | 2 | 97.2 |
+| 6. Delete the non-goal | 4 | 3 | 3 | 2 | 5 | 3 | 5 | 5 | 69.4 |
+| 7. Use broad globs | 1 | 3 | 2 | 2 | 1 | 1 | 2 | 3 | 35.2 |
+| 8. Derive from Git history | 3 | 1 | 2 | 1 | 3 | 2 | 1 | 1 | 39.6 |
+| 9. Add only the omitted paths separately | 5 | 3 | 3 | 3 | 5 | 4 | 2 | 4 | 76.2 |
 
-**Select Option 5C: explicit roots plus rejection of indirection in every
-absolute existing component.**
+Option 2 is complete, self-contained, and smallest. A consolidated table is
+nearly equivalent but would duplicate T2's existing positive scope without
+materially improving the seven-path prohibition.
 
-Implementation instructions:
+### Selected option and implementation contract
 
-1. Require the five mandatory helper parameters selected in Finding 1.
-2. Resolve `CheckoutRoot` and `TrustedTemporaryRoot` through the filesystem
-   provider to exactly one existing directory each. Reject relative paths,
-   wildcards, non-filesystem providers, files, and missing roots.
-3. Convert all accepted paths to deterministic absolute filesystem paths before
-   using .NET.
-4. Build a component sequence from the filesystem volume/share root through
-   every existing root and working-path component. For each component:
-   - require exactly one existing filesystem entry of the expected kind;
-   - obtain attributes with APIs available under Windows PowerShell 5.1;
-   - reject `FileAttributes.ReparsePoint`;
-   - reject a symbolic link, junction, Windows volume-mount/reparse entry,
-     dangling entry, or attribute/read failure; and
-   - never follow a component merely to classify it as safe.
-5. Require the two declared roots to be mutually non-overlapping: neither may
-   equal or contain the other. Require download and candidate paths to be strict
-   descendants of the trusted root and outside checkout. Use separator-aware
-   ordinal-ignore-case comparison on Windows and ordinal comparison elsewhere.
-6. For the initially nonexistent candidate leaf, validate every existing
-   component through its parent and enumerate that parent exhaustively to
-   reject every same-name leaf entry, including a dangling link.
-7. Repeat the applicable full component, containment, parent, leaf, and
-   ordinary-file/directory checks:
-   - immediately before opening the retained archive;
-   - after complete archive/manifest validation and immediately before creating
-     the candidate directory; and
-   - after extraction before returning paths.
-8. Use `FileMode.CreateNew` and no sharing for extracted files, as already
-   required. Do not delete/recreate or follow an existing candidate leaf.
-9. State the residual race model explicitly: supported jobs use GitHub-hosted
-   runners; ancestors are runner-controlled; checkout and the unique trusted
-   temporary root are job-owned; and no competing writer may replace entries
-   during the helper call. The repeated checks narrow but do not claim to
-   eliminate all same-user races.
-10. Extend the harness with root-overlap, ancestor-link, component-link,
-    dangling-final-link, sibling-prefix, case-variant, and
-    filesystem-provider-qualified path cases. If a link cannot be created on a
-    runner, emit a narrowly justified skip and require the same case on another
-    mandatory runner.
-11. Align P1 in a coordinated pass if exact helper parity remains the declared
-    objective. Until then, T1 must describe the stronger full-component walk
-    as an intentional contract improvement rather than claiming a nonexistent
-    line-for-line implementation identity.
-12. Propagate the complete root/component/recheck contract into T2's
-    prerequisite verification.
+Select **option 2: list all seven T1 implementation files explicitly**.
 
-The API portability and runner facts supporting this choice are preserved in
-`docs/planning/artifacts/prompt-02-primary-source-research.md`.
+Replace T2's partial prerequisite-file non-goal with:
 
-## Consolidated selected design
+- Do not modify any of T1's seven affected implementation files:
+  - `.gitattributes`
+  - `.github/dependabot.yml`
+  - `.github/workflows/Generate-StyleGuideArtifacts.ps1`
+  - `.github/workflows/Expand-StyleGuideCandidateArtifact.ps1`
+  - `.github/workflows/Test-Expand-StyleGuideCandidateArtifact.ps1`
+  - `.github/workflows/build.yml`
+  - `.github/workflows/markdownlint.yml`
 
-The five selected options combine into one coherent T1 implementation:
+Keep the existing separate prohibition on
+`.github/copilot-instructions.md`, the generated-artifact no-hand-edit rule,
+and T2's exact six-file affected/working-tree/cached-path assertions.
 
-1. T1 adopts P1's explicit five mandatory helper inputs, three optional
-   diagnostic labels, and separate harness architecture.
-2. The tracked harness is the sole fixture-suite definition and runs under
-   every required edition/cell.
-3. Every external action in both workflows is pinned to a verified full SHA,
-   with weekly review-only Dependabot updates.
-4. Diagnostic provenance is explicit and testable; ambient environment state
-   is not part of the helper interface.
-5. Both declared roots and every existing absolute path component are
-   indirection-free, with repeat checks and an explicit protected/no-competing-
-   writer model.
-
-These selections expand T1's implementation set to seven files:
-
-1. `.gitattributes`;
-2. `.github/dependabot.yml`;
-3. `.github/workflows/Expand-StyleGuideCandidateArtifact.ps1`;
-4. `.github/workflows/Generate-StyleGuideArtifacts.ps1`;
-5. `.github/workflows/Test-Expand-StyleGuideCandidateArtifact.ps1`;
-6. `.github/workflows/build.yml`; and
-7. `.github/workflows/markdownlint.yml`.
-
-T2 remains the second issue. It does not reimplement T1, but its prerequisite
-verification, exact prerequisite path set, evidence, and acceptance language
-must reflect this final seven-file contract.
+During final slate validation, compare this list mechanically to T1's affected
+files and require exact set equality. The order should match T1 to make visual
+review easy.

@@ -1,353 +1,586 @@
 # Current findings
 
-## Review scope and method
+## Overall assessment
 
-This review covers the proposed TerraformStyleGuide issues T1 and T2 in
-execution order. P1 and P2 are cross-repository context only; they are not
-independently critiqued here. Each recommendation in
-`docs/planning/PSStyleGuide/slate-criticism.md` will be assessed explicitly
-before independent T1/T2 findings are finalized.
+The T1-then-T2 ordering, H1 titles, and T1/T2 nomenclature are sound. The slate
+is materially stronger than the earlier drafts: it is repository-local,
+downstream-neutral, explicit about the limits of cross-repository convergence,
+and unusually precise about workflow identity, path containment, validation
+evidence, and copy-safe recovery commands.
 
-Authoritative evidence being checked:
+I would nevertheless return both issues for targeted corrections before
+implementation:
 
-- the current TerraformStyleGuide and PSStyleGuide repository states;
-- `docs/planning/TerraformStyleGuide/03TerraformStyleGuideT1.md`;
-- `docs/planning/TerraformStyleGuide/04TerraformStyleGuideT2.md`;
-- `docs/planning/PSStyleGuide/01PSStyleGuideP1.md`;
-- `docs/planning/PSStyleGuide/02PSStyleGuideP2.md`; and
-- `docs/planning/PSStyleGuide/slate-criticism.md`.
+- T1 has two release-blocking contradictions in its downloaded-artifact trust
+  boundary: it does not bind extraction to the exact bytes that passed the
+  digest check, and its global rejection postcondition cannot be true for
+  preexisting candidate leaves or fail-closed cleanup failures.
+- T2 overstates a conclusion that current AWS primary sources contradict and
+  can expose the HCP Terraform token when the caller has already enabled Bash
+  xtrace.
 
-## Supplied recommendation assessments
+The remaining findings are lower-severity precision, maintenance, and test
+quality improvements. They do not justify changing the issue order or
+combining T1 and T2.
 
-### Recommendation 1 — Reconcile the claimed P1/T1 helper alignment
+## Scope
 
-**Disposition: confirmed defect; proposed resolution only partially confirmed.**
+- Review targets:
+  - `docs/planning/TerraformStyleGuide/03TerraformStyleGuideT1.md`
+  - `docs/planning/TerraformStyleGuide/04TerraformStyleGuideT2.md`
+- Comparison context only:
+  - `docs/planning/PSStyleGuide/01PSStyleGuideP1.md`
+  - `docs/planning/PSStyleGuide/02PSStyleGuideP2.md`
+- Supplied recommendations to adjudicate one by one:
+  - `docs/planning/PSStyleGuide/slate-criticism.md`
 
-The factual criticism is correct. T1 says that the helper's “filename, parameter
-interface, validation order, and diagnostics” are aligned with P1 and that the
-four manifest names are the intentional difference. They are not:
+T1 is assumed to execute before T2. P1/P2 are not independent review targets;
+they are used only to evaluate deliberate generator unification and the
+cross-repository claims made by T1/T2.
 
-- T1 has three public inputs and derives the checkout root from the helper's
-  fixed tracked location.
-- P1 has five mandatory path/digest inputs, three optional diagnostic inputs, a
-  caller-supplied checkout boundary, a caller-supplied trusted temporary root,
-  and a separate tracked harness.
-- T1 runs the suite in all four Windows pull-request cells; P1 runs it in two LF
-  cells.
+## Current-state anchors
 
-This is a remaining **high-priority T1 finding** because T1 itself makes the
-false cross-repository claim.
+- TerraformStyleGuide branch: `planning-CRT-PR-852`
+- TerraformStyleGuide inspected commit:
+  `194e27cf75140a6d922a7ca629d589030999967a`
+- Current T1 SHA-256:
+  `35E601B692DA48E8604E917164342F0ECEC4CEBAF0083C20073D76DC596F35A54`
+- Current T2 SHA-256:
+  `CDFE23458CFEBB64017CDE0898BDCE0BFA2187F0B5A54694D562D275E85BB334`
 
-The criticism's preferred architecture—changing P1 to T1's
-fixed-root/three-input design—is reasonable but is not logically forced by the
-inconsistency, and this review is not a P1/P2 critique. The required T1 action
-is to do one of the following before filing:
+## Supplied-recommendation ledger
 
-1. coordinate a genuinely shared helper contract and update both slates; or
-2. narrow T1's claim to the actual common elements and document the interface,
-   trust-boundary, harness, and PR-coverage differences as intentional.
+The current criticism contains nine numbered P1 recommendations plus a P2
+assessment and recommended disposition. The dispositions below concern their
+validity and any consequence for T1/T2; they do not turn this into a separate
+P1/P2 critique.
 
-Do not claim that only manifest names differ while the published interfaces and
-trust models remain incompatible. Generator unification does not require
-pretending that helper designs are identical.
+### 1. Replace the claimed near-total P1/T1 identity with a convergence matrix
 
-### Recommendation 2 — Use one writer ref identity
+**Disposition: the underlying concern is confirmed; the current T1 wording has
+already corrected the false-parity claim, but one substantive convergence gap
+remains.**
 
-**Disposition: confirmed as technically valid; already addressed in T1.**
+The criticism correctly identifies material differences between P1 and T1. T1
+now avoids saying that manifest names are the only difference. Lines 199–211
+instead name the intended common public surface, state that the Terraform
+requirements remain normative, require a preimplementation side-by-side
+comparison, and prohibit the “only manifest names differ” claim unless the
+contracts really match. A literal matrix would improve reviewability but is not
+required for correctness.
 
-The recommendation correctly identifies the risk of validating `GITHUB_REF` and
-pushing a separately named `TARGET_REF`. Current T1 now:
+The remaining live T1 consequence is archive identity: P1 hashes and extracts
+through one continuously held stream, whereas T1 hashes by path and later
+reopens the path as a ZIP. T1 should adopt the stronger same-held-stream
+contract. Other differences—frontmatter work, repository-specific filenames,
+Node/package decisions, and deliberately different matrix coverage—may remain
+when named honestly.
 
-- defines `TARGET_REF` and `EXPECTED_SHA` through workflow `env`;
-- copies them to local variables;
-- cross-checks `TARGET_REF` against `GITHUB_REF`;
-- resolves and verifies the complete `HEAD^{commit}` object ID;
-- queries the remote with the validated local ref; and
-- reuses the same local ref/SHA for the exact lease and explicit destination
-  refspec.
+### 2. Adopt T1's complete path-envelope validation in P1
 
-No further T1/T2 finding remains for this recommendation.
+**Disposition: technically valid; already present in T1.**
 
-### Recommendation 3 — Bind helper calls to explicit edition-specific processes
+Current T1:
 
-**Disposition: confirmed as technically valid; already addressed in T1 and
-inherited accurately by T2.**
+- resolves explicit checkout and trusted-temporary roots;
+- requires them to be mutually non-overlapping;
+- requires download and candidate paths to be strict descendants of the
+  trusted root and outside checkout;
+- walks every existing component from the volume/share root;
+- rejects symlink, junction, volume-mount/reparse, dangling, type, attribute,
+  resolution, and enumeration failures;
+- rechecks at archive-open, candidate-creation, and post-extraction
+  boundaries; and
+- states the GitHub-hosted, job-owned, no-competing-writer residual race model.
 
-Current T1 requires:
+It also requires root/ancestor-link fixtures and prevents a platform-wide skip.
+No additional T1/T2 correction is needed for this recommendation.
 
-- Ubuntu execution under explicit `pwsh` with a same-process Core 7 assertion;
-- mutually exclusive Desktop and Core Windows steps;
-- explicit `powershell` for Desktop 5.1 and `pwsh` for Core 7;
-- same-process edition assertions and helper invocation; and
-- no helper call from an edition-neutral fixture step.
+### 3. Keep the held-stream design and select the sharing mode
 
-It also runs the permanent suite in all four Windows pull-request cells. T2's
-prerequisite verification accurately inherits this topology. No additional T1/T2
-change is needed.
+**Disposition: confirmed; this reveals a high-priority T1 defect.**
 
-### Recommendation 4 — Specify exhaustive enumeration and final-leaf detection
+P1's single-open, `Get-FileHash -InputStream`, rewind, and same-stream
+`ZipArchive` design binds extraction to the bytes that were hashed. T1 instead
+requires `Get-FileHash -Algorithm SHA256` by path and later ZIP opening. A path
+replacement between those operations can change the extraction identity even
+though the earlier digest matched.
 
-**Disposition: confirmed as technically valid; already addressed in T1.**
+T1 should open the retained archive exactly once with `FileMode.Open`,
+`FileAccess.Read`, and an explicitly chosen sharing mode such as
+`FileShare.Read`; hash that stream; require exactly one valid digest result;
+rewind it; construct one read-mode `ZipArchive` over that same stream; and keep
+the stream/archive lifetime continuous through manifest validation and
+extraction. Hash-by-path followed by reopen must be prohibited. T1's stated
+no-competing-writer model remains important because this is not a universal
+OS-native sandbox.
 
-Current T1 prescribes absolute filesystem-provider paths, OS-appropriate
-separator-aware comparison, `Directory.EnumerateFileSystemEntries` for every
-exact entry assertion, `Get-ChildItem -LiteralPath -Force` only for supporting
-diagnostics, parent enumeration for existing/dangling candidate leaves,
-immediate re-enumeration, and exhaustive post-extraction inspection. Its
-fixtures include hidden extras and existing, reparse, symlink, and dangling
-candidate leaves.
+### 4. Make rejection postconditions truthful and add fail-closed cleanup
 
-No further T1/T2 finding remains for this recommendation.
+**Disposition: confirmed; T1 has the cleanup implementation concept but repeats
+the same impossible global oracle.**
 
-### Recommendation 5 — Replace ambiguous fixture prose with an outcome table
+T1's table includes preexisting candidate files, directories, links, and
+reparse points that must be rejected without reuse or traversal. Its cleanup
+contract also permits retaining a path when cleanup encounters an unsafe or
+unreadable entry. Nevertheless:
 
-**Disposition: confirmed as technically valid; already addressed in T1.**
+- lines 519–523 require the destination directory to remain nonexistent for
+  *every* rejection fixture; and
+- acceptance line 1457 says every rejection leaves the candidate leaf absent.
 
-Current T1 has a normative fixture table with explicit success/rejection
-classifications and required failure phases/postconditions. It distinguishes:
+Those statements contradict the preexisting-leaf cases and the documented
+fail-closed retained-path outcome.
 
-- the normal valid archive;
-- the valid archive whose external attributes must be ignored;
-- negative digest/archive/manifest/download/destination cases; and
-- the successful sibling-prefix path-classification case.
+Replace them with per-case postconditions:
 
-It also requires stable case identifiers and explicit oracles rather than
-treating any thrown exception as sufficient. No additional T1/T2 change is
-needed.
+| Rejection class | Required candidate result |
+| --- | --- |
+| Initially absent; failure before creation | Remains absent |
+| Preexisting file/directory/link/reparse leaf | Remains unchanged and is never followed |
+| Controlled post-creation BOM or CR failure with only known ordinary helper-created entries | Safely cleaned; leaf absent |
+| Cleanup revalidation finds an unexpected, changed, unreadable, link, or reparse entry | No recursive/following deletion; retained path plus primary and cleanup diagnostics |
 
-### Recommendation 6 — Make consumer wording match the conditional graph
+T1 should also make BOM and CR independent fixtures and add a cleanup-safety
+fixture that proves an unsafe substituted/extra entry is not followed or
+deleted. Its current implementation rules for disposal, revalidation,
+non-recursive deletion, and error preservation should remain.
 
-**Disposition: confirmed as technically valid; already addressed in T1 and T2.**
+### 5. Make the trusted temporary-path example satisfy its contract
 
-Current T1 distinguishes the always-running four Windows push cells from the
-writer that runs only when `has_changes=true`. Its no-drift evidence requires
-the writer to skip and allocates writer-path evidence to the controlled
-synchronization drill and static inspection.
+**Disposition: valid for P1; no current T1 defect.**
 
-Current T2 likewise requires four successful Windows cells and a `skipped`
-writer whose steps did not execute. The prior “every push consumer on every run”
-contradiction is gone. No additional T1/T2 change is needed.
+T1 does not use P1's contradictory fixed
+`${{ runner.temp }}/style-guide-candidate-download` example. It repeatedly
+requires one unique job-owned trusted root outside checkout, a download
+directory beneath it, and a separate initially nonexistent candidate path
+beneath it. The implementation should still use one path-initialization step
+and pass the exact resulting values to the download action, harness, and
+helper, but T1's current normative text already requires the right
+relationships.
 
-### Recommendation 7 — Preserve a deliberate generator-unification boundary
+### 6. Add an end-to-end malformed-transport drill
 
-**Disposition: confirmed as a sound design principle; current T1 observes it.**
+**Disposition: technically valid; already present in T1.**
 
-T1 and P1 intentionally share the serialization boundary:
+T1 includes both an invalid/truncated ZIP in the permanent harness and a
+controlled temporary-branch malformed-transport drill using the pinned upload
+and download actions, `archive: false`, immutable ID/digest propagation,
+production helper rejection, and downstream approval/writer skip. No further
+T1/T2 correction is needed.
 
-- `#Requires -Version 5.1`;
-- final-payload CR canonicalization;
-- resolved filesystem destinations;
-- BOM-less `UTF8Encoding($false)`; and
-- `WriteAllText` without an implicit newline.
+### 7. Add review-only GitHub Actions update governance
 
-T1 correctly preserves TerraformStyleGuide's already-correct LF-joined
-frontmatter rather than changing it merely to mimic P1's implementation work.
-The instruction artifact names, chat branding, executive-summary/rationale
-model, and full-guide merge logic are legitimate repository-specific
-differences. The repositories should remain self-contained.
+**Disposition: governance is already present in T1; the dated pin literals need
+one current-state correction.**
 
-This recommendation does not reveal a further T1/T2 defect beyond the separate
-false helper-alignment statement in Recommendation 1.
+T1 already requires full-SHA pins for every external action in both workflows,
+same-line version comments, preimplementation metadata/runtime/input/output
+verification, and weekly review-only GitHub Actions Dependabot without
+auto-merge.
 
-### Recommendation 8 — Make P2's validation helper conform to the guide
+However, its “as of 2026-07-29” checkout and setup-node literals are already
+behind the official releases used by P1: checkout v7.0.1 and setup-node v7.0.0
+were available before that date. T1's preimplementation revalidation prevents
+blind implementation of stale values, but the issue should not retain a false
+dated-current claim. Update the literals and release references to the current
+approved full SHAs after compatibility review, or explicitly document why v6
+is the approved ceiling. Do not downgrade P1 merely for cosmetic equality.
 
-**Disposition: partially confirmed, low priority, and outside the T1/T2 review
-scope.**
+### 8. Track the current npm advisories as actual work
 
-P2 declares `Get-OrdinalOccurrenceCount` without full comment-based help, while
-the PSStyleGuide says functions in covered PowerShell files require such help.
-The concern is valid if the block is intended to be saved as canonical `.ps1`
-implementation or reusable code.
+**Disposition: confirmed as a cross-repository maintenance concern and a
+current T1/T2 planning gap.**
 
-The issue presents the block as ad hoc commands to run from the repository root,
-not as a committed `.ps1` file. The guide's stated file scope therefore does not
-conclusively make this a violation. Avoiding a named function would remove the
-ambiguity, but this is a P2-only editorial concern and creates no T1/T2 finding.
+The TerraformStyleGuide lockfile produces the same current audit summary as
+PSStyleGuide: seven vulnerable package nodes, five high and two moderate, in
+the Markdown tooling dependency graph. T1 explicitly prohibits dependency
+changes and Dependabot ecosystems other than GitHub Actions. Keeping those
+changes out of an already large workflow/security issue is defensible, but
+leaving them untracked is not.
+
+Create and link a separately scoped dependency-remediation issue with an
+explicit ordering decision. Ordinarily it can follow T2 to keep T1/T2's lint
+baseline stable; if repository policy blocks known high-severity advisories,
+make it a prerequisite and rebaseline the issues. Include npm Dependabot for
+`/.github/workflows`, audit disposition, and the existing outer/nested lint
+suite. T1's read-only pull-request permissions limit impact but do not fix
+vulnerable parsers processing pull-request Markdown.
+
+### 9. Keep CI evidence wording exact
+
+**Disposition: technically valid; already addressed in T1 and inherited
+accurately by T2.**
+
+T1 deliberately runs the tracked harness in all four Windows pull-request
+cells, all four Windows push cells, Ubuntu pull-request verification, and the
+writer only when `has_changes=true`. It distinguishes no-drift writer skip
+evidence from controlled change-producing writer evidence. T2 accurately
+requires four successful push cells and a skipped writer whose steps did not
+run. No further correction is needed.
+
+### Supplied P2 assessment and recommended disposition
+
+**Disposition: reasonable as P1/P2 context; it does not create a T2 content
+requirement.**
+
+The criticism's P2 conclusion is consistent with the supplied P2 text: P2 uses
+the script-block validator, explicit four-middle-dot visualization, drift-only
+metadata snapshot, and precise no-drift writer semantics. Its recommendation
+not to import Terraform recovery content into P2 is correct. T2 should inherit
+the final T1 prerequisite accurately, but its provider-specific recovery
+guidance remains unrelated to P2.
 
 ## Independent T1/T2 review
 
-### Verified baseline
+### T1-1 — The digest check and ZIP read do not have the same file identity
 
-- T1 and T2 are in the correct execution order. T1 establishes the
-  serialization, line-ending, helper, workflow, transport, and writer contracts
-  on which T2 relies.
-- TerraformStyleGuide's current `main` baseline has no root `.gitattributes`;
-  its generator already declares PowerShell 5.1 but still writes the four
-  generated artifacts with edition-sensitive
-  `Set-Content -Encoding UTF8 -NoNewline`; and its workflows still use movable
-  action tags.
-- PSStyleGuide's current `main` baseline already has exactly
-  `* text=auto eol=lf`. The two repositories therefore need the same resulting
-  text policy but different implementation work.
-- T1 correctly preserves TerraformStyleGuide's existing LF-joined Terraform
-  frontmatter while adopting the same final serialization algorithm proposed by
-  P1.
-- The exact proposed artifact-action SHAs are valid current upstream pins:
-  - `actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` is v7.0.1
-    and exposes `artifact-id` and `artifact-digest`;
-  - `actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c` is
-    v8.0.1 and exposes `artifact-ids`, `skip-decompress`, and `digest-mismatch`;
-    and
-  - the pinned download implementation passes GitHub's artifact digest as the
-    expected hash and throws for a mismatch when the selected behavior is
-    `error`.
-- Independent review did not find another defect in T2's provider commands,
-  no-overwrite examples, HCP response handling, conditional writer evidence, or
-  T1 prerequisite inheritance. T2 must, however, inherit any T1 file-set or
-  contract corrections selected below.
+**Severity:** high
 
-### High — T1 gives the permanent suite no single, versioned owner
+**Evidence.** T1 requires component checks, then a path-based
+`Get-FileHash -Algorithm SHA256`, then a later ZIP open. Its no-competing-writer
+model reduces ordinary risk but does not make those two path resolutions the
+same object. P1's proposed continuously held stream avoids this particular
+identity gap. PowerShell 5.1 and current PowerShell both expose
+`Get-FileHash -InputStream`, and .NET permits an explicit
+`FileMode`/`FileAccess`/`FileShare` choice.
 
-T1 requires the same substantial deterministic fixture suite in the Ubuntu
-pull-request job, all four Windows pull-request cells, all four Windows push
-cells, and the conditional writer. Its affected-file set contains only
-`.gitattributes`, the generator, the production helper, and `build.yml`. It
-neither adds a tracked test harness nor names another sole definition of the
-suite.
+**Impact.** A retained archive path replaced after the digest read but before
+the ZIP open can cause unverified bytes to reach manifest inspection and
+extraction. That violates T1's core claim that the downloaded artifact is bound
+to the upload action's propagated digest.
 
-An implementer could therefore duplicate a large inline PowerShell suite across
-jobs, create subtly different suites, or place test-only behavior inside the
-production helper. The phrase “the deterministic fixture self-test suite” does
-not by itself establish one maintainable implementation. This is especially
-risky because the suite is the executable oracle for security-sensitive archive
-and filesystem behavior.
+**Required correction.**
 
-Preferred correction:
+1. Complete the existing path and ordinary-file checks.
+2. Open the retained archive once using `FileMode.Open`, `FileAccess.Read`, and
+   a consciously selected sharing mode. `FileShare.Read` is a reasonable
+   cross-edition choice because it permits other readers while denying a new
+   writer or deleter through ordinary sharing semantics; document the residual
+   platform and privileged-writer limits.
+3. Pass that `FileStream` to `Get-FileHash -InputStream -Algorithm SHA256`.
+4. Require exactly one digest result and compare it to the expected digest.
+5. If it matches, rewind the same stream to position zero.
+6. Construct one read-mode `ZipArchive` over that exact stream.
+7. Keep the stream and archive continuously alive through full manifest
+   validation and extraction, then dispose them before any cleanup.
+8. Explicitly prohibit hash-by-path followed by reopen.
+9. Add a harness assertion or reviewed implementation check proving the same
+   stream instance is used for hashing and ZIP processing under both supported
+   PowerShell editions.
 
-1. Add `.github/workflows/Test-Expand-StyleGuideCandidateArtifact.ps1` as the
-   sole tracked definition of the deterministic suite.
-2. Give it the same PowerShell 5.1/cross-platform and script-version contracts
-   as the helper.
-3. Have every required job/cell invoke that exact harness, passing the exact
-   tracked production-helper path.
-4. Keep edition assertions and the harness invocation in the same explicit
-   `powershell` or `pwsh` process.
-5. Add the harness to T1's affected-file list, all exact
-   working-tree/staged-path sets and counts, validation, acceptance criteria,
-   and T2's prerequisite verification.
+This is also the unresolved consequence of supplied recommendation 3.
 
-A single nonduplicated alternative could work, but T1 must name it and prove
-that all consumers use it. A separate harness is the clearest design and already
-matches P1's maintainability model without creating a cross-repository runtime
-dependency.
+### T1-2 — The rejection oracle contradicts valid preexisting and fail-closed states
 
-### High — T1 leaves the checkout action mutable in the write-capable workflow
+**Severity:** high
 
-T1 adopts full-SHA pinning for both artifact actions, but the current
-`build.yml` also uses `actions/checkout@v4`. T1 does not prescribe a checkout
-pin and explicitly says not to migrate unrelated actions. Checkout is not
-unrelated here: it obtains the exact source tree, persists the credential used
-for authenticated Git operations, and participates directly in the sole
-write-capable job.
+**Evidence.** T1 correctly requires preexisting candidate files, directories,
+links, reparse points, and dangling links to be rejected without reuse or
+traversal. It also correctly says an unsafe or unreadable cleanup entry must be
+retained and reported rather than followed or recursively deleted. But the
+fixture-wide rule requires the destination to remain nonexistent for every
+rejection, and the acceptance criteria repeat that every rejection leaves the
+candidate leaf absent.
 
-GitHub's secure-use reference says that a full-length commit SHA is the only
-immutable way to consume an action. Leaving checkout on a movable major tag
-creates an avoidable supply-chain exception in the very workflow T1 is
-hardening.
+**Impact.** An implementation cannot satisfy both requirements. A test author
+must either delete an entry T1 says to preserve, weaken the test, or report a
+false failure. More seriously, a cleanup implementation could be encouraged to
+delete through an unsafe substituted entry merely to satisfy the global
+absence oracle.
 
-Preferred correction:
+**Required correction.** Replace the global absence rule with explicit
+case-specific outcomes:
 
-1. Treat every `actions/checkout` use in the modified `build.yml` as in scope.
-2. Immediately before implementation, select and verify the current approved
-   checkout release and its action-distribution commit, adjacent version
-   comment, Node runtime, and runner compatibility.
-3. Pin each `build.yml` checkout use to that full SHA.
-4. Prove the controlled writer can still perform its authenticated push and that
-   credentials are cleaned up.
-5. Update T1's validation and acceptance wording accordingly.
+| Rejection class | Required candidate result |
+| --- | --- |
+| Candidate initially absent; failure occurs before helper creation | Remains absent |
+| Candidate file, directory, link, reparse point, or dangling link already exists | Original entry remains unchanged and is never followed |
+| Controlled post-creation content failure containing only known ordinary helper-created entries | Files are safely deleted non-recursively and the helper-created leaf is removed |
+| Cleanup revalidation finds an unexpected, changed, unreadable, link, or reparse entry | Entry is not followed or recursively deleted; retained path and both primary and cleanup diagnostics are reported |
 
-As of this review, `actions/checkout` v6.1.0 is newer than the v6.0.2 pin shown
-in P1. Do not copy P1's older literal without rerunning the required
-upstream-release check. Repository-wide pinning of `markdownlint.yml` and
-`actions/setup-node` can be a separately stated decision; the security-sensitive
-`build.yml` checkout should not be deferred as “unrelated.”
+Also:
 
-### Medium — T1 requires diagnostic context that its helper interface cannot receive
+- split the combined BOM-or-CR fixture into one BOM fixture and one CR fixture,
+  so either branch cannot accidentally satisfy both requirements; and
+- add a cleanup-safety fixture that substitutes or introduces an unsafe entry
+  after controlled creation and proves the helper neither follows nor deletes
+  it.
 
-The helper accepts only the download directory, candidate directory, and
-expected digest. The helper contract nevertheless requires diagnostics to record
-artifact ID, run ID, and run attempt “when available,” and later requires
-failures to include those values when available. T1 does not say whether the
-helper reads ambient environment variables, receives caller enrichment, or
-returns structured failure data for a wrapper.
+Retain T1's existing disposal order, envelope revalidation, non-recursive
+deletion, original-error preservation, and nonzero return requirements. This
+is also the unresolved consequence of supplied recommendation 4.
 
-That ambiguity prevents a cold implementer from satisfying and testing one
-stable diagnostics contract. It also undermines the claim that T1 and P1
-diagnostics are aligned, because P1 has explicit optional diagnostic parameters.
+### T2-1 — The AWS KMS reconciliation is not supported consistently by current AWS documentation
 
-Preferred correction:
+**Severity:** high
 
-1. Add optional scalar `ArtifactId`, `RunId`, and `RunAttempt` parameters to the
-   helper.
-2. Define omitted values as unavailable, reject an explicitly supplied empty
-   value, and never invent a label.
-3. Require callers with the values to pass them explicitly.
-4. Require every diagnostic and failure record to distinguish supplied labels
-   from unavailable labels.
-5. Add positive, omitted-label, and explicitly-empty-label harness cases.
+**Evidence.** T2 says general-purpose SSE-KMS and DSSE-KMS retrieval needs
+`kms:Decrypt`, that `kms:GenerateDataKey` belongs to upload/destination paths
+rather than this download path, and that the sources differ because they cover
+different bucket classes or operations. Current AWS sources do not divide that
+cleanly:
 
-Alternatively, T1 may explicitly assign helper-local diagnostics to the helper
-and caller context to a wrapper, but then it must define how exceptions are
-enriched and tested. Hidden ambient-environment coupling should not be the
-unstated interface.
+- the SSE-KMS user guide describes `GenerateDataKey` for `PutObject` and a
+  `Decrypt` request during download;
+- the S3 policy-action table conditionally associates `kms:Decrypt` with
+  `GetObject`/`GetObjectVersion`; but
+- the current `GetObject` API reference says an SSE-KMS retrieval requires both
+  `kms:GenerateDataKey` and `kms:Decrypt` in IAM and KMS key policies.
 
-### Medium — T1's physical path-boundary guarantee stops at the immediate parent
+The last statement appears in the general `GetObject` authorization material,
+not only in a directory-bucket subsection. T2's bucket-class explanation
+therefore does not reconcile all three primary sources.
 
-T1 rejects a reparse-point download directory, its immediate parent, and the
-candidate leaf/immediate parent. It does not require walking every existing
-component from a trusted root. A lexically outside path can still traverse an
-ancestor symbolic link or reparse point and resolve physically into the checkout
-or another untrusted location.
+**Impact.** A copy-safe recovery example can still fail for an operator who
+grants only the categorically described permission, while a security reviewer
+cannot tell whether the issue intentionally resolved or accidentally ignored
+an official documentation conflict.
 
-The normal GitHub-hosted-runner design—one fresh directory directly beneath a
-protected runner-temporary root with no competing writer—can make that residual
-risk acceptable. T1 currently describes only a caller-created “protected
-temporary parent,” however, without defining the full ancestor envelope that
-makes the assumption true.
+**Required correction.**
 
-Preferred correction:
+1. Preserve the statements that SSE-S3 needs no KMS authorization, SSE-C is out
+   of scope, and effective authorization depends on identity policy, key
+   policy, grants, encryption mode, and account topology.
+2. Say that `kms:Decrypt` is consistently documented for KMS-encrypted
+   retrieval.
+3. Explicitly disclose that the current `GetObject` API reference additionally
+   lists `kms:GenerateDataKey`, while the general SSE-KMS guide and
+   policy-action table describe retrieval with `kms:Decrypt`.
+4. Do not infer that `kms:GenerateDataKey` is categorically absent from this
+   path until AWS resolves or the implementation revalidates the discrepancy.
+5. Direct the implementer/operator to verify the current documentation and the
+   actual bucket/encryption/key-policy/account configuration, then grant the
+   least privilege that succeeds. If desired, open an AWS documentation issue
+   separately; this GitHub issue need not resolve AWS's inconsistency.
+6. Keep directory buckets out of the historical-version recovery procedure.
 
-1. Choose and state one trust model:
-   - accept a caller-supplied trusted temporary root, require both working
-     directories to be strict descendants, and reject reparse/symbolic-link
-     components throughout every existing path component; or
-   - retain the three-path design but precisely require a freshly created,
-     job-owned immediate child of the runner's trusted temporary root, validate
-     the relevant ancestor chain, and state the no-competing-writer assumption.
-2. Repeat the applicable containment and indirection checks immediately before
-   opening the archive and immediately before candidate-directory creation.
-3. Add an ancestor-link fixture on capable runners.
-4. Describe any remaining containment guarantee accurately as lexical or
-   physical; do not conflate the two.
+### T2-2 — Inherited Bash xtrace can print the HCP token before the warning applies
 
-P1's explicit `TrustedTemporaryRoot` envelope is stronger on this surface. The
-cross-repository alignment decision should preserve the stronger boundary or
-document why the narrower T1 model is sufficient.
+**Severity:** medium
 
-## Overall disposition
+**Evidence.** The HCP section says not to use `set -x`, but the example assigns
+the guarded `TFC_TOKEN` inside a subshell without first disabling an inherited
+xtrace setting. Bash traces expanded commands and arguments. A local
+synthetic-token test confirmed that an inherited `set -x` prints
+`TFC_TOKEN=SYNTHETIC-TRACE-MARKER`; placing `set +x` first in the subshell
+prevents that value from being traced.
 
-T2 is ready after its prerequisite wording is updated for the final T1 contract.
-T1 is close but should not be filed unchanged.
+**Impact.** A token can enter terminal output, CI logs, shell capture, or support
+transcripts even though T2 correctly keeps it out of curl's ordinary argument
+list. The curl protection and the shell-trace protection are different
+boundaries.
 
-Before filing T1:
+**Required correction.**
 
-1. resolve or narrow the false P1/T1 helper-alignment claim;
-2. give the permanent fixture suite one tracked, versioned owner;
-3. pin checkout in the security-sensitive modified workflow;
-4. define an explicit diagnostic-context interface; and
-5. make the temporary-path trust envelope and ancestor-link handling explicit.
+1. Make `set +x` the first command inside the HCP subshell, before any guarded
+   expansion or assignment of `TFC_TOKEN`.
+2. Retain the prose prohibition against tracing and explain that `set +x`
+   protects against inherited xtrace, while the operator must still avoid
+   external wrappers that log input or environment data.
+3. Add a validation case that enters the block with xtrace enabled and uses
+   only a synthetic sentinel token; fail if the sentinel appears in captured
+   standard output or standard error.
 
-The remaining recommendations from the supplied criticism are either already
-incorporated or do not create a T1/T2 defect. The embedded H1 issue titles,
-T1/T2 naming, sequential ordering, repository-generic T2 guidance, and
-deliberate generator-unification boundary should remain unchanged.
+### T1/T2-1 — Current Markdown-tooling advisories are deliberately excluded but untracked
+
+**Severity:** medium
+
+**Evidence.** On 2026-07-29,
+`npm audit --package-lock-only --json` in `.github/workflows` exited 1 and
+reported seven vulnerable package nodes: five high and two moderate. The nodes
+were `brace-expansion`, `js-yaml`, `linkify-it`, `markdown-it`,
+`markdownlint-cli2`, `minimatch`, and `picomatch`. T1 prohibits dependency
+changes and any Dependabot ecosystem other than GitHub Actions; T2 preserves
+that prerequisite baseline.
+
+**Impact.** Scope control is reasonable, but the current slate leaves known
+high-severity parser/tooling findings without an owner or ordering decision.
+Pull-request Markdown is untrusted repository content even when workflow
+permissions are read-only.
+
+**Required correction.** Create a separate, linked dependency-remediation
+issue. Include:
+
+- npm Dependabot coverage for the manifest location
+  `/.github/workflows`;
+- an explicit disposition for direct and transitive audit findings;
+- lockfile regeneration;
+- the existing outer and nested Markdown lint suites; and
+- a stated order relative to T1/T2.
+
+Default to after T2 to preserve the carefully specified lint baseline. Move it
+before T1 only if repository policy blocks work while high-severity advisories
+remain. Do not silently expand T1 with package upgrades. This is also the live
+consequence of supplied recommendation 8.
+
+### T1-3 — Two action pins are stale despite a dated current-state claim
+
+**Severity:** medium
+
+**Evidence.** T1 says “As of 2026-07-29, use” checkout v6.1.0 and setup-node
+v6.5.0. Official releases available before that date include:
+
+- checkout v7.0.1 at
+  `3d3c42e5aac5ba805825da76410c181273ba90b1`, released July 20; and
+- setup-node v7.0.0 at
+  `820762786026740c76f36085b0efc47a31fe5020`, released July 14.
+
+T1 separately requires immediate preimplementation verification, which limits
+implementation risk but does not make the dated literals accurate.
+
+**Impact.** Reviewers may approve pins based on a false currency claim, and the
+intended cross-repository convergence can diverge unnecessarily.
+
+**Required correction.** Revalidate the v7 actions' runtime, runner
+compatibility, inputs, outputs, and changelogs. If approved, replace the two
+pins and comments with the current full SHAs and release labels. If a v6
+ceiling is deliberate, retain v6 only with an explicit compatibility or risk
+rationale and change “current” wording to “approved.” Keep full-SHA pinning,
+review-only weekly GitHub Actions Dependabot, and the no-auto-merge rule.
+
+### T2-3 — “Versioning-capable” does not state the prerequisite for historical S3 recovery
+
+**Severity:** low
+
+**Evidence.** T2 calls the target a “versioning-capable general-purpose
+bucket.” S3 Versioning is disabled by default. Historical versions exist only
+if versioning was enabled before the relevant writes and retention/lifecycle
+rules have not removed the selected version. A bucket may currently be
+versioning-enabled or versioning-suspended and still retain earlier versions.
+
+**Impact.** A new operator may read “capable” as sufficient and expect
+`list-object-versions` to recover history that was never created or has already
+expired.
+
+**Required correction.** State that the example targets a general-purpose
+bucket on which S3 Versioning was enabled before the desired historical version
+was created, and that the version must still be retained. Explain that the
+bucket can now be `Enabled` or `Suspended`; default-never-enabled buckets do not
+have the required history. Do not add version selection automation.
+
+### T1-4 — Local validation labels editions without verifying them in the child process
+
+**Severity:** low
+
+**Evidence.** The local validation block labels any resolved `pwsh` application
+as “PowerShell 7” and any resolved `powershell` application as “Windows
+PowerShell 5.1,” then launches the harness and generator. Unlike the CI
+contract, it does not assert `$PSVersionTable.PSEdition` and major/version
+identity in that exact child process.
+
+**Impact.** A PATH shim or a future unsupported `pwsh` major can produce
+apparently valid local evidence for the wrong runtime. CI still supplies the
+authoritative coverage, so this is not a release blocker.
+
+**Required correction.** Invoke a small checked script block or tracked entry
+point in each child process that first asserts Desktop 5.1 or Core major 7 and
+then runs the harness/generator in that same process. Avoid a parent-process
+assertion or an edition-neutral dispatcher, because neither proves the helper's
+actual runtime.
+
+### T2-4 — The prerequisite-file non-goal is incomplete
+
+**Severity:** low
+
+**Evidence.** T2 says not to modify the prerequisite issue's files but names
+only four of T1's seven affected implementation files. It omits:
+
+- `.github/dependabot.yml`;
+- `.github/workflows/Test-Expand-StyleGuideCandidateArtifact.ps1`; and
+- `.github/workflows/markdownlint.yml`.
+
+T2's exact six-file positive scope elsewhere prevents accidental expansion, so
+this is a documentation inconsistency rather than an authorization gap.
+
+**Required correction.** List all seven T1 files or replace the partial list
+with an unambiguous statement that none of T1's seven affected implementation
+files may change, followed by the complete list. Keep T2's six-file changed-path
+and cached-path oracles.
+
+## Confirmed strengths to preserve
+
+- Keep the issue titles as H1 headings and retain T1/T2 nomenclature and
+  execution order.
+- Keep `* text=auto eol=lf` as the repository-wide checkout policy and keep the
+  generator's explicit byte serialization as the common artifact boundary.
+  `.gitattributes` checkout normalization is not a replacement for explicit
+  UTF-8-without-BOM/LF serialization.
+- Keep T1 repository-local and self-contained. Cross-repository convergence
+  should share public helper parameters, security invariants, fixture concepts,
+  diagnostics, and maintenance policy without making one repository depend on
+  the other at build time.
+- Keep T1's full component walk, mutually non-overlapping checkout/trusted
+  roots, repeated boundary checks, tracked permanent harness, four-cell Windows
+  coverage, Ubuntu coverage, exact writer-ref identity, immutable
+  artifact-ID/digest propagation, and malformed-transport drill.
+- Keep T1's distinction between no-drift writer-skip evidence and controlled
+  change-producing writer evidence.
+- Keep T2's exact-key/provider-identifier discovery, guarded quoted
+  identifiers, destination preflights, provider-native no-clobber controls,
+  explicit non-atomicity model, manual selection, and retrieval-copy rather
+  than rollback posture.
+- Keep the Azure non-HNS, GCS Object Versioning versus soft-delete, and HCP
+  manual-pagination boundaries. They are appropriately narrow and
+  provider-neutral with respect to downstream adopters.
+- Keep the six-file T2 scope, generated-artifact workflow, version/date
+  consistency checks, and exact four-cell push evidence.
+
+## Recommended disposition and execution order
+
+1. **Amend T1 before implementation.** Resolve T1-1 and T1-2 as blockers.
+   Correct or justify the action versions, strengthen local edition assertions,
+   and link the separately ordered npm-remediation work.
+2. **Amend T2 after T1 is final.** Update its prerequisite summary if T1's
+   contract changes. Resolve the AWS KMS documentation conflict and inherited
+   xtrace exposure, then make the S3 applicability and non-goal wording exact.
+3. **Keep T1 before T2.** T2 depends on T1's generator, clean-worktree, and
+   workflow baseline; the findings do not support merging or reordering them.
+4. **Track npm maintenance separately.** Place it before T1 only if policy
+   requires remediation of current high advisories first; otherwise place it
+   after T2 to avoid moving the lint baseline during both issues.
+
+With these corrections, the slate is suitable to hand to implementers. P1/P2
+remain comparison context, not additional critique targets or prerequisites
+for the TerraformStyleGuide repository.
+
+## Validation performed
+
+- Read T1 and T2 in full and reviewed them in execution order.
+- Adjudicated all nine numbered recommendations and the P2 assessment in
+  `slate-criticism.md`.
+- Used P1/P2 only as comparison context for convergence and stated prerequisite
+  behavior.
+- Compared the planning branch with the current TerraformStyleGuide and
+  PSStyleGuide repository baselines.
+- Parsed all seven T2 Bash fences with `bash -n`; all returned zero.
+- Reproduced the inherited-xtrace exposure with a synthetic token and confirmed
+  that a first-command `set +x` suppresses the assignment trace.
+- Ran the lockfile-only npm audit and recorded only package names and aggregate
+  severity counts.
+- Rechecked unstable action and provider claims against current primary
+  sources on 2026-07-29.
 
 ## Primary references
 
-- [GitHub secure-use reference](https://docs.github.com/en/actions/reference/security/secure-use)
-- [`actions/checkout` v6.1.0 release](https://github.com/actions/checkout/releases/tag/v6.1.0)
-- [`actions/upload-artifact` v7.0.1 exact metadata](https://raw.githubusercontent.com/actions/upload-artifact/043fb46d1a93c77aae656e7c1c64a875d1fc6a0a/action.yml)
-- [`actions/upload-artifact` v7.0.1 release](https://github.com/actions/upload-artifact/releases/tag/v7.0.1)
-- [`actions/download-artifact` v8.0.1 exact metadata](https://raw.githubusercontent.com/actions/download-artifact/3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c/action.yml)
-- [`actions/download-artifact` v8.0.1 exact implementation](https://raw.githubusercontent.com/actions/download-artifact/3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c/src/download-artifact.ts)
-- [`actions/download-artifact` v8.0.1 release](https://github.com/actions/download-artifact/releases/tag/v8.0.1)
+### T1 and repository maintenance
+
+- [Microsoft Learn: `Get-FileHash`, including the PowerShell 5.1 stream parameter set](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.utility/get-filehash?view=powershell-5.1)
+- [Microsoft Learn: `File.Open` with explicit mode, access, and sharing](https://learn.microsoft.com/en-us/dotnet/api/system.io.file.open)
+- [GitHub: checkout v7.0.1 release](https://github.com/actions/checkout/releases/tag/v7.0.1)
+- [GitHub: checkout v7.0.1 full-SHA commit](https://github.com/actions/checkout/commit/3d3c42e5aac5ba805825da76410c181273ba90b1)
+- [GitHub: setup-node v7.0.0 release](https://github.com/actions/setup-node/releases/tag/v7.0.0)
+- [GitHub: setup-node v7.0.0 full-SHA commit](https://github.com/actions/setup-node/commit/820762786026740c76f36085b0efc47a31fe5020)
+- [GitHub Docs: keeping actions up to date with Dependabot](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/auto-update-actions)
+- [GitHub Docs: configuring Dependabot version updates](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/configuring-dependabot-version-updates)
+- [npm Docs: `npm audit`](https://docs.npmjs.com/cli/v11/commands/npm-audit/)
+
+### T2
+
+- [AWS: `GetObject` API authorization and SSE-KMS statement](https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html)
+- [AWS: using SSE-KMS in general-purpose S3 buckets](https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingKMSEncryption.html)
+- [AWS: required permissions for S3 API operations](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-with-s3-policy-actions.html)
+- [AWS: retaining multiple versions with S3 Versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/Versioning.html)
+- [GNU Bash manual: `set`, including xtrace and noclobber](https://www.gnu.org/software/bash/manual/html_node/The-Set-Builtin.html)
+- [Curl manual: command-line and configuration-file behavior](https://curl.se/docs/manpage.html)
+- [HashiCorp: HCP Terraform state-versions API](https://developer.hashicorp.com/terraform/cloud-docs/api-docs/state-versions)
