@@ -1,597 +1,841 @@
-# TerraformStyleGuide findings evaluation
+# Current findings evaluation
 
-## Scope and method
+## Scope and process
 
-This document evaluates only the eight open TerraformStyleGuide findings recorded under “Findings affecting T1” and “Findings affecting T2” in `current-findings.md`. Each finding is completed in sequence: options, a finding-specific weighted rubric, scored results, and an implementation-ready selection.
+This evaluation covers only the open TerraformStyleGuide findings recorded in
+`docs/planning/artifacts/current-findings.md`. Findings already resolved in T1
+or T2, and the P2-only comment-based-help observation, are not reopened.
 
-## T1.1 — Writer remote preflight references the wrong PowerShell variable
+The open findings will be evaluated sequentially:
 
-### Options
+1. reconcile or narrow the false P1/T1 helper-alignment claim;
+2. give the permanent fixture suite one tracked, versioned owner;
+3. pin checkout in the security-sensitive modified workflow;
+4. define an explicit diagnostic-context interface; and
+5. make the temporary-path trust envelope and ancestor-link handling explicit.
 
-1. **Leave `"$GITHUB_REF"` unchanged.** This preserves the draft but treats a GitHub environment variable as an ordinary PowerShell variable. Unless separately initialized, it is empty and makes the remote guard incorrect.
-2. **Make the minimal syntax correction to `$env:GITHUB_REF`.** This makes the command executable and uses GitHub's immutable default environment variable, but the later lease and refspec still use the separately introduced `TARGET_REF`. The writer would have two names for one security-critical value.
-3. **Use only `$env:TARGET_REF` in the preflight.** Define `TARGET_REF: ${{ github.ref }}` at job or step scope, validate it as a complete branch ref, and use it for `ls-remote`, the lease, and the refspec. This creates one operational value but does not cross-check it against GitHub's default `GITHUB_REF`.
-4. **Hard-code `refs/heads/main`.** This is simple for the production event but prevents the production-form controlled temporary-branch evidence required by the issue and makes future default-branch changes more error-prone.
-5. **Use one canonical `TARGET_REF`, cross-check it, and use it everywhere.** Define `TARGET_REF: ${{ github.ref }}` and `EXPECTED_SHA: ${{ github.sha }}` through `env`; in PowerShell require nonempty `$env:TARGET_REF`, require it to equal `$env:GITHUB_REF` using ordinal comparison, require the `refs/heads/` shape, and assign it to a local `$strTargetRef`. Use that exact local value for the parsed `ls-remote` preflight, exact lease, and full destination refspec.
-6. **Move the complete writer into a new parameterized script.** Pass target ref and expected SHA as mandatory parameters, compare them to GitHub defaults, and centralize all remote operations there. This can be correct but adds another tracked implementation unit and a larger review surface than the finding requires.
-7. **Derive the destination from local Git state.** Infer it from `HEAD`, `git symbolic-ref`, or the checkout's upstream. A detached Actions checkout and mutable local configuration make this less authoritative than the event payload.
+For each finding, this file will contain the complete option set, a
+finding-specific weighted rubric, the scoring table, and the selected
+implementation before evaluation proceeds to the next finding.
 
-Permutations considered:
-
-- Options 2, 3, 5, and 6 can validate only a prefix or can validate prefix, equality, exact remote output shape, and expected SHA. The strict form is materially safer.
-- The remote query can consume the environment variable inline or a validated local variable. A validated local variable avoids repeatedly reading security-critical process state.
-- Either `GITHUB_REF` or `TARGET_REF` can be canonical. `TARGET_REF` is preferable because the existing issue already uses it for the lease/refspec and it supports controlled branch evidence without editing the command form.
-
-### Evaluation rubric
-
-Score each criterion from 1 (unacceptable) to 5 (excellent), then multiply by the weight and divide by 5. The maximum is 100.
-
-| Criterion | Weight | Why it matters |
-| --- | ---: | --- |
-| Remote-mutation safety | 27 | The writer has the only write permission; targeting the wrong ref is the highest-impact failure. |
-| PowerShell semantic correctness | 18 | The prescribed syntax must actually read the intended value under both supported PowerShell editions. |
-| Single ref identity across preflight, lease, and refspec | 16 | A split source of truth can validate one ref and push another. |
-| Rejection of missing, malformed, or contradictory state | 12 | Fail-closed validation protects against workflow drift and implementation mistakes. |
-| Diagnostic precision | 8 | Operators must be able to distinguish missing ref, stale SHA, malformed output, and configuration mismatch. |
-| Controlled-branch evidence compatibility | 7 | The same production command form must be testable without synthetic `main` commits. |
-| Implementer clarity | 6 | A developer coming in cold should have one obvious value to validate and reuse. |
-| Churn and implementation difficulty | 3 | Lower priority than correctness; small changes are useful only if they retain the safety contract. |
-| Adherence to issue scope | 3 | Avoid unnecessary architecture while still fixing the full finding. |
-
-This weighting represents repository security, DevOps reliability, maintainer diagnostics, and contributor comprehension. Churn and scope together account for only 6%.
-
-### Scoring
-
-| Option | Safety | PS correctness | One identity | Fail closed | Diagnostics | Branch evidence | Clarity | Churn | Scope | Total / 100 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1. Leave unchanged | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 5 | 5 | 24.8 |
-| 2. `$env:GITHUB_REF` only | 4 | 5 | 2 | 3 | 3 | 5 | 4 | 5 | 5 | 75.8 |
-| 3. `$env:TARGET_REF` only | 4 | 5 | 5 | 4 | 3 | 5 | 5 | 4 | 5 | 88.4 |
-| 4. Hard-code `main` | 5 | 4 | 4 | 4 | 3 | 1 | 3 | 4 | 3 | 77.8 |
-| 5. Canonical, cross-checked `TARGET_REF` | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 4 | 5 | **99.4** |
-| 6. New parameterized writer script | 5 | 5 | 5 | 5 | 5 | 5 | 4 | 2 | 2 | 95.2 |
-| 7. Derive from local Git state | 2 | 2 | 2 | 2 | 2 | 2 | 2 | 3 | 3 | 41.2 |
-
-### Selected option
-
-Select **Option 5: one canonical, cross-checked `TARGET_REF` used everywhere**.
-
-Implementation requirements:
-
-1. Set `TARGET_REF: ${{ github.ref }}` and `EXPECTED_SHA: ${{ github.sha }}` through workflow `env`, not by interpolating expressions directly into executable PowerShell source.
-2. In the writer, copy `$env:TARGET_REF` to `$strTargetRef` and `$env:EXPECTED_SHA` to `$strExpectedSha`.
-3. Require both values to be nonempty; require `$strTargetRef` to start with `refs/heads/`; and require it to equal `$env:GITHUB_REF` with ordinal comparison.
-4. Resolve the checkout with `git rev-parse --verify "HEAD^{commit}"`; immediately capture `$LASTEXITCODE`, require zero and exactly one complete hexadecimal object ID, and require that full repository-native object ID to equal both `$strExpectedSha` and `$env:GITHUB_SHA`. This rejects abbreviation without hard-coding SHA-1 or SHA-256 length.
-5. Run `git ls-remote --exit-code --refs origin $strTargetRef`; immediately capture `$LASTEXITCODE` and require zero.
-6. Parse exactly one `<oid><TAB><ref>` result. Require the returned ref to equal `$strTargetRef` and the returned object ID to equal `$strExpectedSha`.
-7. Reuse `$strTargetRef` and `$strExpectedSha` unchanged in `--force-with-lease=$strTargetRef:$strExpectedSha` and `HEAD:$strTargetRef`.
-8. Preserve the existing no-fetch/no-rebase/no-retry behavior and the post-failure `ls-remote` proof.
-
-This fixes the PowerShell error, prevents preflight/push split-brain, retains temporary-branch evidence, and does not require a new production script.
-
-## T1.2 — The new archive helper is not explicitly exercised before merge
+## Finding 1 — Reconcile the P1/T1 helper-alignment claim
 
 ### Options
 
-1. **Keep helper tests push-only.** A defective helper cannot authorize a writer because push validation blocks it, but the defect reaches `main` and breaks the post-merge pipeline before it is discovered.
-2. **Use only syntax/static inspection on pull requests.** Parse the helper and inspect required strings without executing its production behavior. This catches gross syntax problems but not archive, filesystem, edition, or lifecycle defects.
-3. **Run the permanent suite only in the Ubuntu pull-request job.** This proves the exact helper on PowerShell 7/Linux but leaves its declared Windows PowerShell 5.1 and Windows PowerShell 7 behavior untested before merge.
-4. **Run it once under each Windows edition but not Ubuntu.** This covers the most divergent PowerShell runtime and Windows behavior, but a Linux path/filesystem regression can still merge.
-5. **Run it in Ubuntu and in one designated Windows cell per edition.** For example, run it in the two LF cells and skip it in the CRLF cells because archive fixtures are independent of source EOL. This covers all supported runtime families with less repetition, but introduces conditional coverage inside an otherwise uniform matrix.
-6. **Run it in the existing Ubuntu PR job and all four existing Windows PR cells.** Every PR cell invokes the exact tracked helper before generator validation. This repeats the suite twice per Windows edition but has no conditional gaps and exactly mirrors each normative cell's runtime.
-7. **Add a separate three-cell cross-platform helper matrix.** Use Ubuntu/PowerShell 7, Windows/PowerShell 7, and Windows PowerShell 5.1 cells. This is cleanly separated and nonredundant, but adds a new job topology and weakens the direct claim that each existing normative cell exercised the helper.
-8. **Run Ubuntu once and both Windows editions sequentially in one Windows job.** This reduces jobs but needs manual process orchestration and makes failures less naturally attributable to a matrix cell.
+The options below treat “alignment” as a contract-design decision, not merely
+an editorial choice.
 
-Permutations considered:
+#### Option 1A — Narrow the claim and retain the current T1 architecture
 
-- The suite can run before or after source EOL fixture conversion. It should run before conversion because it validates the tracked helper and its own archive fixtures, not source-document EOL behavior.
-- Pre-merge execution can replace push-time execution or complement it. Replacement is rejected: pre-merge testing detects defects, while push-time testing protects the exact production consumer and runner state.
-- The PR suite can use a copied test implementation or the production helper. Only the exact tracked helper satisfies the finding.
+Change T1 to say that the repositories share only the helper's high-level
+purpose and selected validation behavior. Enumerate the different public
+interfaces, checkout-root models, temporary-root models, diagnostics, harness
+ownership, and pull-request coverage as intentional.
+
+This is factually honest and immediately implementable, but it leaves T1's
+separate security and maintainability gaps for Findings 2, 4, and 5 to solve.
+Those later solutions could make the two designs converge again, so the
+wording may need another pass.
+
+#### Option 1B — Make T1 adopt P1's stronger complete helper/harness contract
+
+Revise T1 to match P1 on:
+
+- five mandatory helper parameters: `CheckoutRoot`, `TrustedTemporaryRoot`,
+  `DownloadDirectory`, `CandidateDirectory`, and `ExpectedDigest`;
+- optional `ArtifactId`, `RunId`, and `RunAttempt` diagnostic parameters;
+- caller-supplied but helper-validated checkout and temporary trust roots;
+- strict descendant and path-component validation;
+- validation order and repeat checks;
+- explicit diagnostic-label semantics; and
+- a separate, tracked, versioned
+  `Test-Expand-StyleGuideCandidateArtifact.ps1` as the sole fixture-suite
+  definition.
+
+Keep the repositories self-contained. Keep the four Terraform manifest names,
+artifact names, and domain-specific generator behavior as repository-specific.
+Document the Windows pull-request execution difference explicitly if P1
+continues to run the harness only in its two LF cells while T1 runs it in all
+four cells.
+
+This option resolves the factual inconsistency by moving T1 to the stronger
+current design rather than weakening P1.
+
+#### Option 1C — Create a T1-specific hybrid and claim only behavioral parity
+
+Keep T1's fixed-location checkout-root derivation, but add P1-like trusted
+temporary-root validation, optional diagnostic labels, and a separate harness.
+Say that validation outcomes are aligned while interfaces and trust-root
+origins intentionally differ.
+
+This can be secure, but it preserves two public APIs and two trust models. A
+maintainer porting a fix must continue translating between implementations.
+
+#### Option 1D — Coordinate a future P1 change to T1's current three-input model
+
+Leave T1 materially unchanged and require the P1 drafter to remove the explicit
+checkout/trusted-root inputs, optional diagnostics, and possibly separate
+harness so P1 matches T1.
+
+This could eventually make the statement true, but the Terraform-only revision
+cannot deliver it. It also discards stronger explicit trust-boundary and
+diagnostic contracts without a compensating technical benefit.
+
+#### Option 1E — Remove all cross-repository alignment language
+
+Delete the alignment statement and specify T1 independently. The generator
+serialization contract can still converge without any stated helper parity.
+
+This avoids false claims but loses a useful maintenance objective and makes
+future security-fix drift between two nearly identical helpers more likely.
+
+#### Option 1F — Introduce a shared runtime helper dependency
+
+Move the helper or test suite into a common repository, package, reusable
+workflow, submodule, or downloaded versioned asset consumed by both
+repositories.
+
+Permutations include centralizing only the harness, only archive validation, or
+the complete helper/harness pair. This provides the strongest single-source
+parity in theory, but adds cross-repository availability, versioning,
+supply-chain, bootstrap, and incident-response dependencies. It conflicts with
+the established self-contained-repository objective.
 
 ### Evaluation rubric
 
-Score 1–5 and normalize the weighted result to 100.
+Score each criterion from 1 (poor) to 5 (excellent). The weighted total is:
 
-| Criterion | Weight | Why it matters |
+`sum(weight × score / 5)`, with a maximum of 100.
+
+This rubric is specific to cross-repository contract alignment:
+
+| Criterion | Weight | Detailed meaning |
 | --- | ---: | --- |
-| Ability to prevent a defective helper from merging | 25 | The principal usability and reliability objective is feedback before `main` is broken. |
-| Coverage of all declared OS/PowerShell runtime families | 22 | The helper promises Desktop 5.1, Core on Windows, and Core on Ubuntu. |
-| Fidelity to the exact production helper and fixtures | 16 | A parallel test implementation would not prove the production trust boundary. |
-| Direct proof of shell/edition execution | 12 | The CI result must establish the interpreter actually used for the helper call. |
-| Failure localization for contributors | 8 | A new developer should see the failing runtime/cell immediately. |
-| Parity with the push consumer topology | 6 | Similar paths reduce pre-merge/post-merge surprises. |
-| CI time and runner consumption | 4 | Important operationally, but deliberately lower than correctness and coverage. |
-| Maintenance burden | 4 | Avoid unnecessary duplicated YAML and orchestration. |
-| Scope fit | 3 | Prefer using the planned topology when it meets the safety requirement. |
-
-The rubric gives 75% to prevention, coverage, exact-code fidelity, and edition proof. CI cost, maintenance, and scope total only 11%.
+| Factual truth and internal coherence | 20 | The final T1 wording must be literally true, free of contradictory “only difference” claims, and understandable without comparing hidden implementation assumptions. |
+| Security and trust-boundary quality | 25 | The choice should preserve explicit, fail-closed checkout, temporary-root, archive, destination, and diagnostic contracts. Security is weighted above convenience and issue churn. |
+| Maintainable cross-repository parity | 20 | A security or correctness fix should be portable between repositories with minimal semantic translation, and future drift should be easy to detect in review. |
+| Repository autonomy | 10 | Each repository should build, test, recover, and respond to incidents without another repository or external package being available. |
+| Deliverability from the Terraform issue | 10 | A cold implementer must be able to complete the selected change through T1/T2 without waiting for an unspecified P1 rewrite or external project. |
+| Clarity and reviewability | 10 | Public parameters, intentional differences, and evidence should be obvious to new developers, reviewers, operations staff, and auditors. |
+| Churn and scope cost | 5 | Lower code/file churn and narrower issue expansion score better, but this is deliberately the least important criterion. |
 
 ### Scoring
 
-| Option | Prevent merge | Runtime coverage | Exact helper | Edition proof | Localization | Push parity | CI cost | Maintenance | Scope | Total / 100 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1. Push-only | 1 | 1 | 1 | 1 | 1 | 1 | 5 | 5 | 5 | 28.8 |
-| 2. Static inspection only | 2 | 1 | 2 | 1 | 2 | 1 | 5 | 4 | 4 | 37.2 |
-| 3. Ubuntu only | 3 | 2 | 5 | 3 | 5 | 3 | 5 | 5 | 5 | 69.6 |
-| 4. Windows editions only | 4 | 4 | 5 | 5 | 4 | 4 | 4 | 4 | 5 | 86.2 |
-| 5. Ubuntu + one Windows cell per edition | 5 | 5 | 5 | 5 | 4 | 4 | 5 | 4 | 5 | 96.4 |
-| 6. Ubuntu + all four Windows cells | 5 | 5 | 5 | 5 | 5 | 5 | 2 | 4 | 5 | **96.8** |
-| 7. Dedicated three-cell helper matrix | 5 | 5 | 5 | 5 | 5 | 3 | 4 | 3 | 3 | 94.0 |
-| 8. Sequential editions in one Windows job | 5 | 5 | 5 | 4 | 3 | 3 | 4 | 3 | 4 | 89.0 |
+| Option | Truth (20) | Security (25) | Parity (20) | Autonomy (10) | Deliverability (10) | Clarity (10) | Churn (5) | Total / 100 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1A — Narrow claim, retain T1 design | 5 | 3 | 3 | 5 | 5 | 5 | 5 | 82 |
+| 1B — T1 adopts P1's complete contract | 5 | 5 | 5 | 5 | 4 | 5 | 2 | **95** |
+| 1C — T1-specific hybrid | 5 | 5 | 3 | 5 | 4 | 4 | 3 | 86 |
+| 1D — Wait for P1 to adopt current T1 | 5 | 2 | 5 | 5 | 1 | 4 | 3 | 73 |
+| 1E — Remove alignment objective | 5 | 4 | 2 | 5 | 5 | 3 | 5 | 79 |
+| 1F — Shared runtime dependency | 5 | 4 | 5 | 1 | 2 | 4 | 1 | 75 |
 
 ### Selected option
 
-Select **Option 6: execute the permanent suite in the existing Ubuntu PR job and all four existing Windows PR cells**, while retaining every push-consumer execution.
+**Select Option 1B: make T1 adopt P1's stronger complete helper/harness
+contract.**
 
-Implementation requirements:
+Implementation instructions:
 
-1. In the Ubuntu PR job, after exact-SHA checkout and before generation, create a unique test root under `runner.temp`, run the permanent fixture suite against the exact tracked helper with `shell: pwsh`, assert Core edition/version, and clean up in `finally`.
-2. In every Windows PR matrix cell, run the same suite before source EOL mutation:
-   - Desktop cells use `shell: powershell` and assert Desktop 5.1.
-   - Core cells use `shell: pwsh` and assert Core major version 7.
-3. Do not create or download a production candidate on pull requests. The permanent suite itself invokes the production helper against deterministic fixture archives.
-4. Do not use `continue-on-error`; a suite failure fails its PR job.
-5. Preserve `fail-fast: false` so all Windows runtime/EOL results remain visible.
-6. Keep the suite in every executing push consumer. Pre-merge tests are not a substitute for use-time validation.
-7. Add pull-request evidence and acceptance criteria explicitly requiring successful Ubuntu, Desktop/LF, Desktop/CRLF, Core/LF, and Core/CRLF helper-suite execution.
+1. Add the five mandatory and three optional parameters to T1's helper
+   contract, using the same names and scalar semantics as P1.
+2. Require the helper—not the caller—to validate both supplied trust roots,
+   every strict-descendant relationship, and every relevant existing path
+   component.
+3. Copy P1's omitted-versus-explicitly-empty diagnostic-label semantics.
+4. Add the separately tracked, versioned test harness and make it the sole
+   fixture-suite definition.
+5. Align validation order, repeat checks, archive manifest/lifecycle rules,
+   and diagnostic phases with P1.
+6. Preserve TerraformStyleGuide's four exact manifest names and independent
+   files; do not add a runtime cross-repository dependency.
+7. Replace the false “only difference” sentence with precise wording:
+   the helper/harness contract is aligned; manifest names, workflow artifact
+   names, and any explicitly documented invocation-topology differences are
+   repository-specific.
+8. Propagate the final parameter, trust-root, harness, and topology contract
+   into T2's prerequisite verification.
 
-The small duplicated fixture cost is justified because it removes conditional blind spots, gives direct per-cell evidence, and uses the topology already required by T1.
+This selection establishes the architectural direction used by Findings 2, 4,
+and 5; those findings will still be evaluated independently so their detailed
+implementation choices and evidence are defensible on their own.
 
-## T1.3 — Helper execution is not unambiguously bound to the assigned matrix edition
+## Finding 2 — Give the permanent suite one tracked, versioned owner
 
 ### Options
 
-1. **Retain the current general shell prose.** Rely on implementer interpretation of “use `powershell` when Desktop” while also allowing `pwsh` for fixture work. This leaves the identified loophole.
-2. **Add prose and acceptance criteria without prescribing workflow structure.** Say helper calls use the assigned edition, but allow the implementer to decide how. This improves reviewability but can still produce a step whose outer shell and helper process are hard to prove.
-3. **Use a `pwsh` dispatcher step that launches `powershell.exe` or `pwsh` as a child process.** The dispatcher examines `matrix.edition`, starts the chosen executable, passes helper arguments, and checks its exit code. It can be correct but introduces a second layer of quoting, process exit handling, and diagnostics.
-4. **Use two mutually exclusive, explicit-shell steps.** The Desktop step has `if: matrix.edition == 'desktop'` and `shell: powershell`; the Core step has the complementary condition and `shell: pwsh`. Each asserts its edition/version and invokes the self-test and production helper in that same process.
-5. **Put the shell name in matrix data and use a dynamic `shell` expression.** This reduces duplicated YAML, but changing the current simple edition × EOL cross-product into object/include data makes it easier to create an invalid combination and less obvious to occasional contributors.
-6. **Split Desktop and Core into separate jobs.** Each job can have one fixed shell and a two-value EOL matrix. This is unambiguous but duplicates complete job definitions and moves away from the required visible four-cell cross-product.
-7. **Add a tracked edition-dispatch wrapper script.** The workflow always calls a wrapper, which selects and launches the requested interpreter. This centralizes behavior but adds another security-sensitive script whose own cross-edition behavior must be tested.
-8. **Use a job-level or platform-default shell.** Windows defaults to PowerShell Core on GitHub-hosted runners, so this cannot establish Desktop coverage and is rejected.
+#### Option 2A — Add one standalone PowerShell harness
 
-Permutations considered:
+Create
+`.github/workflows/Test-Expand-StyleGuideCandidateArtifact.ps1` as the sole
+definition of the deterministic fixture suite. It accepts the exact tracked
+helper path, builds fixtures, invokes the helper only through its public
+interface, verifies phase/postcondition oracles, and cleans up.
 
-- A separate self-test step and production-helper step can each be edition-specific, or one edition-specific step can invoke both in order. One step is preferable when both are applicable because the edition assertion, self-test, and production call share one process.
-- Fixture construction may remain a separate `pwsh` step. It must only create inputs; it must not invoke or dot-source the production helper.
-- The same structure must appear in pull-request and push Windows matrices. On pull requests, only the self-test runs; on pushes, the self-test is immediately followed by the production invocation.
+Every required workflow cell invokes this same file under its assigned
+PowerShell edition. Developers can run the same harness locally without
+simulating GitHub Actions.
+
+#### Option 2B — Add a self-test mode to the production helper
+
+Put the fixtures and test runner in
+`Expand-StyleGuideCandidateArtifact.ps1`, selected by a `-SelfTest` switch or
+parameter set. This creates one physical file but expands the production
+interface, interleaves test-only and production control flow, and risks tests
+sharing private implementation details instead of exercising only the public
+contract.
+
+Permutations include a hidden environment-variable switch, a dot-sourced
+private function, or a documented parameter set. Hidden switches are
+unacceptable; all variants make the production artifact larger and harder to
+audit.
+
+#### Option 2C — Repeat inline PowerShell suites in workflow steps
+
+Embed fixture creation and assertions directly in every Ubuntu, Windows
+pull-request, Windows push, and writer step.
+
+This requires no added file but creates several independently editable copies.
+The copies can silently drift in case coverage, shell behavior, diagnostics,
+and cleanup. Local execution also requires extracting workflow text manually.
+
+#### Option 2D — Define one inline suite through YAML anchors and aliases
+
+Place a large `run:` block in `build.yml`, anchor it, and alias it into the
+required steps or jobs. GitHub now documents support for YAML anchors and
+aliases.
+
+This reduces textual duplication inside one workflow, but the suite remains
+embedded in orchestration YAML, is awkward to invoke locally, and still needs
+edition-specific shell and surrounding-step variations. Anchoring a complete
+job would also couple unrelated job behavior to the test definition.
+
+#### Option 2E — Implement a local composite action
+
+Create a local action directory with `action.yml` and one or more test scripts.
+Invoke the composite action from each job.
+
+This is reusable at the step level, but it adds metadata and shell-indirection
+without improving on direct script execution. Composite-action internals are
+also grouped differently in logs, which can make a large fixture suite less
+transparent during incident diagnosis.
+
+#### Option 2F — Implement a same-repository reusable workflow
+
+Create another `.github/workflows/*.yml` file with `workflow_call` and call it
+for the suite.
+
+GitHub documents that reusable workflows are called as whole jobs, not as steps
+inside an existing job. The suite must run immediately before production helper
+use in each consumer and under each matrix cell's assigned edition, so a
+separate called job cannot prove same-process or same-cell behavior. It is also
+not directly locally executable.
+
+#### Option 2G — Add a Pester-based harness
+
+Create a tracked Pester test file plus a thin launcher. This provides rich test
+structure and reporting, but introduces a framework/version/bootstrap
+dependency that must work under Windows PowerShell 5.1 and PowerShell 7 on
+Windows and Ubuntu. The fixture suite needs no mocking framework and is
+security-sensitive enough that implicit module discovery is undesirable.
+
+#### Option 2H — Add a test module plus a thin executable harness
+
+Separate fixture builders/assertions into a `.psm1` module and keep a small
+`Test-*.ps1` entry point. This offers internal organization for a very large
+suite, but creates another versioned file and module-loading boundary. It is
+useful only if a single script proves unmaintainable during implementation.
 
 ### Evaluation rubric
 
-Score 1–5 and normalize to 100.
+Score 1 (poor) through 5 (excellent), using
+`sum(weight × score / 5)` for a maximum of 100.
 
-| Criterion | Weight | Why it matters |
+This rubric is specific to ownership of a security-sensitive executable test
+oracle:
+
+| Criterion | Weight | Detailed meaning |
 | --- | ---: | --- |
-| Strength of interpreter-to-helper binding | 28 | The finding exists because generator coverage can be mistaken for helper coverage. |
-| Resistance to silent shell fallback or dispatcher error | 18 | CI must fail rather than quietly exercise only Core. |
-| Runtime proof in the same process | 15 | `$PSVersionTable` evidence is useful only when it describes the process invoking the helper. |
-| Review and log clarity | 12 | Maintainers should identify the edition and failure without reconstructing dispatch logic. |
-| Resistance to future workflow drift | 8 | Shell choice and helper call should change together in review. |
-| Applicability to both PR and push matrices | 8 | The contract must be uniform across pre-merge and use-time validation. |
-| Maintenance and duplication | 5 | Worth considering, but secondary to actual edition proof. |
-| Scope fit | 3 | Avoid a new wrapper or topology unless needed. |
-| GitHub Actions portability | 3 | Prefer ordinary supported workflow constructs. |
-
-Interpreter evidence, fail-closed behavior, same-process proof, and review clarity account for 73%.
+| Oracle fidelity and regression detection | 30 | Tests must exercise the exact public production helper, distinguish expected phases/postconditions, and make bypasses or implementation-coupled false positives difficult. |
+| Single-source drift resistance | 25 | There must be one obvious, versioned definition used by every required consumer, with code review able to detect case additions/removals. |
+| Cross-edition and local executability | 20 | The same suite must run under Desktop 5.1 and Core 7, on required operating systems, and from a developer shell without reproducing CI orchestration. |
+| Auditability and failure diagnostics | 10 | Reviewers and responders should see stable case IDs, exact failures, and cleanup behavior with little indirection. |
+| Dependency and supply-chain simplicity | 10 | Prefer built-in PowerShell/.NET behavior and avoid an extra framework, action runtime, module-resolution assumption, or remote dependency. |
+| Churn and implementation cost | 5 | Fewer files and less wiring score better, but only after correctness and maintainability. |
 
 ### Scoring
 
-| Option | Binding | No fallback | Same-process proof | Clarity | Drift resistance | PR/push | Maintenance | Scope | Portability | Total / 100 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1. Current prose | 1 | 1 | 1 | 1 | 1 | 1 | 5 | 5 | 5 | 28.8 |
-| 2. Stronger prose only | 2 | 1 | 2 | 3 | 2 | 2 | 5 | 5 | 5 | 45.4 |
-| 3. `pwsh` dispatcher | 5 | 4 | 5 | 3 | 3 | 5 | 3 | 3 | 4 | 84.6 |
-| 4. Two explicit-shell steps | 5 | 5 | 5 | 5 | 5 | 5 | 4 | 5 | 5 | **99.0** |
-| 5. Dynamic matrix shell | 5 | 4 | 5 | 4 | 4 | 5 | 5 | 4 | 4 | 91.2 |
-| 6. Separate jobs | 5 | 5 | 5 | 5 | 4 | 5 | 2 | 2 | 2 | 91.8 |
-| 7. Tracked dispatch wrapper | 5 | 4 | 5 | 3 | 3 | 5 | 2 | 2 | 2 | 81.8 |
-| 8. Default shell | 1 | 1 | 1 | 2 | 1 | 1 | 5 | 4 | 4 | 30.0 |
+| Option | Oracle (30) | Drift resistance (25) | Cross-edition/local (20) | Auditability (10) | Dependency simplicity (10) | Churn (5) | Total / 100 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2A — Standalone PowerShell harness | 5 | 5 | 5 | 5 | 5 | 3 | **98** |
+| 2B — Production-helper self-test mode | 4 | 5 | 5 | 3 | 5 | 4 | 89 |
+| 2C — Repeated inline workflow suites | 4 | 1 | 3 | 3 | 5 | 5 | 62 |
+| 2D — YAML-anchored inline suite | 4 | 4 | 2 | 3 | 4 | 4 | 70 |
+| 2E — Local composite action | 4 | 5 | 4 | 3 | 4 | 2 | 81 |
+| 2F — Reusable workflow job | 3 | 5 | 1 | 4 | 4 | 2 | 65 |
+| 2G — Pester-based harness | 5 | 5 | 5 | 5 | 2 | 1 | 90 |
+| 2H — Module plus thin harness | 5 | 5 | 5 | 5 | 4 | 1 | 94 |
 
 ### Selected option
 
-Select **Option 4: two mutually exclusive explicit-shell steps**.
+**Select Option 2A: add one standalone, tracked PowerShell harness.**
 
-For every Windows matrix job:
+Implementation instructions:
 
-1. Edition-neutral fixture construction and raw-byte inspection may be separate `shell: pwsh` steps.
-2. Add a Desktop helper step with:
-   - `if: ${{ matrix.edition == 'desktop' }}`;
-   - `shell: powershell`;
-   - an assertion that `$PSVersionTable.PSEdition -eq 'Desktop'` and the version is exactly 5.1;
-   - the permanent self-test invocation;
-   - on push only, the production helper invocation with the propagated digest.
-3. Add a Core helper step with:
-   - `if: ${{ matrix.edition == 'core' }}`;
-   - `shell: pwsh`;
-   - an assertion that `$PSVersionTable.PSEdition -eq 'Core'` and the major version is 7;
-   - the same self-test and, on push, production invocation.
-4. Each helper step starts with `$ErrorActionPreference = 'Stop'`, defines all paths it consumes, and cleans its self-test root in `finally`.
-5. No `pwsh` fixture-preparation or inspection step may dot-source, call, or launch `Expand-StyleGuideCandidateArtifact.ps1`.
-6. The normative generator run and lone-CR probe remain similarly bound to the assigned edition.
-7. Evidence and acceptance text must say that the edition assertion and helper invocation occur in the same step/process.
+1. Add
+   `.github/workflows/Test-Expand-StyleGuideCandidateArtifact.ps1` to T1's
+   affected files and exact staged/working-tree sets.
+2. Require `#Requires -Version 5.1`, top-level comment-based-help version
+   metadata, strict failure behavior, and a mandatory scalar `HelperPath`.
+3. Resolve `HelperPath` exactly once to the existing tracked regular,
+   non-reparse-point helper file before changing location; invoke that absolute
+   path for every case.
+4. Build every deterministic fixture under one unique runner-temporary root.
+5. Invoke the helper only as a child script through its documented public
+   parameters. Do not copy or dot-source the helper's digest, path, archive, or
+   extraction implementation.
+6. Use the T1 outcome table as the normative case inventory and assert the
+   required phase, candidate-leaf state, sentinel state, extracted type/count,
+   and bytes for every case.
+7. Change working directory during at least one valid case to prove that
+   neither harness nor helper depends on ambient location.
+8. Return nonzero for an unexpected outcome, diagnostic, filesystem state, or
+   cleanup failure. Clean the complete fixture root in `finally`.
+9. Invoke this exact harness in Ubuntu pull-request verification, all four
+   Windows pull-request cells, all four Windows push cells, and the writer when
+   it executes. Keep each Windows invocation in the same explicit-shell process
+   as its edition assertion.
+10. Update T2 to require this named harness and include the harness in the final
+    T1 implementation set. Finding 3 may add further files, so use the
+    consolidated final count rather than freezing this finding's interim
+    five-file count.
 
-This is intentionally a little repetitive: the repetition makes the security claim visible in YAML and Actions logs.
+The GitHub reuse alternatives remain documented in
+`docs/planning/artifacts/prompt-02-primary-source-research.md`; they are not a
+better fit for a directly executable cross-edition test program.
 
-## T1.4 — The helper's checkout boundary and exhaustive enumeration need an implementation contract
+## Finding 3 — Pin checkout in the security-sensitive modified workflow
 
 ### Options
 
-1. **Leave the root and enumeration method implementation-defined.** The issue continues to require “outside” and “exactly,” but compatible-looking implementations can use the current directory, omit hidden files, or miss a dangling leaf.
-2. **Add a mandatory `CheckoutRoot` parameter and require exhaustive enumeration.** The caller passes `$env:GITHUB_WORKSPACE`; the helper canonicalizes it, cross-checks that its own tracked path is beneath it, uses `.NET` entry enumeration, and rejects any preexisting candidate-leaf entry. This is explicit but expands the public interface and lets a non-CI caller supply the trust boundary.
-3. **Derive the trusted root from the helper's fixed tracked location and use exhaustive .NET enumeration.** Resolve the filesystem path corresponding to `$PSScriptRoot/../..`, verify that the helper is at `.github/workflows/Expand-StyleGuideCandidateArtifact.ps1` under that root, and use that root for separator-aware containment checks. Use `Directory.EnumerateFileSystemEntries` for exact entry sets and parent enumeration for leaf absence.
-4. **Use `$env:GITHUB_WORKSPACE` and `Get-ChildItem -LiteralPath -Force`.** This is natural in Actions and includes hidden items, but makes the production helper dependent on runner-specific process state and complicates local/self-test invocation.
-5. **Run `git rev-parse --show-toplevel` inside the helper.** This discovers the checkout but depends on current working directory/repository context, adds a native command to a filesystem helper, and can consult mutable Git configuration rather than the helper's own location.
-6. **Use only `Path.GetFullPath`, string prefixes, and `Test-Path`.** This is small and cross-version, but a naive prefix accepts siblings such as `repo-other`, and existence APIs can miss a dangling final link.
-7. **Create a separate path-safety module shared by the helper and workflow.** Centralize canonicalization, OS-aware comparison, enumeration, and link checks. This is reusable but creates another production dependency and a larger scope than one helper requires.
-8. **Use OS-specific native canonicalization and link APIs.** Call Windows handle/final-path APIs and POSIX `realpath`/`lstat` equivalents. This can model physical paths deeply but is difficult to implement and test in Windows PowerShell 5.1, and the protected runner-temporary-parent model does not require a full filesystem security library.
+#### Option 3A — Retain movable major tags
 
-Important permutations:
+Keep `actions/checkout@v4`, `actions/setup-node@v4`, and any other existing
+major tags, relying on GitHub's ownership of the `actions` organization and
+ordinary release management.
 
-- **Root source:** explicit parameter, `GITHUB_WORKSPACE`, Git discovery, or fixed helper location.
-- **Enumeration:** plain `Get-ChildItem` (rejected), `Get-ChildItem -LiteralPath -Force`, or `.NET` filesystem-entry enumeration.
-- **Leaf absence:** `Test-Path` only (rejected), or enumerate the existing parent and compare the final leaf using filesystem-appropriate case rules.
-- **Containment:** naive prefix (rejected), or equal-root/descendant comparison with a trailing directory-separator boundary and OS-appropriate ordinal comparison.
+This is convenient but does not address the finding. GitHub's secure-use
+reference says that only a full commit SHA makes the selected action revision
+immutable.
 
-### Evaluation rubric
+#### Option 3B — Pin checkout only in `build.yml`
 
-Score 1–5 and normalize to 100.
+Pin every checkout step in the modified build/push workflow to the current
+approved full SHA. Keep T1's artifact-action pins, and leave
+`markdownlint.yml` unchanged.
 
-| Criterion | Weight | Why it matters |
-| --- | ---: | --- |
-| Correct checkout trust boundary | 25 | A wrong root invalidates every “outside checkout” assurance. |
-| Detection of all entry types, including hidden and dangling links | 22 | Archive and destination exactness must describe actual directory entries, not a filtered view. |
-| Windows PowerShell 5.1 / PowerShell 7 portability | 16 | The helper's declared contract spans .NET Framework and modern .NET on two OS families. |
-| Independence from caller working directory and mutable process state | 12 | The same inputs should produce the same boundary decision in CI and self-tests. |
-| Preservation of fresh-destination lifecycle | 8 | A preexisting leaf must never be reused or followed. |
-| Testability and diagnostics | 7 | Fixtures must be able to prove hidden-extra, sibling-prefix, reparse, and dangling-leaf rejection. |
-| Implementer comprehensibility | 5 | Security-sensitive path logic needs a concrete, reviewable recipe. |
-| Churn/difficulty | 3 | Kept low relative to correctness. |
-| Scope fit | 2 | Avoid a general-purpose path library when a local contract suffices. |
+This closes the identified credential-bearing writer path with minimal churn,
+but leaves another checkout reference and setup-node on mutable tags and
+establishes no repository-wide policy.
 
-Trust-boundary correctness, exhaustive enumeration, portability, and caller independence account for 75%.
+#### Option 3C — Pin every checkout reference, but no other existing action
 
-### Scoring
+Pin checkout in both `build.yml` and `markdownlint.yml`, mirroring P1's
+action-class scope. Leave `actions/setup-node` on its major tag while pinning
+the artifact actions introduced or changed by T1.
 
-| Option | Boundary | All entries | Portability | Independence | Lifecycle | Tests/diagnostics | Clarity | Churn | Scope | Total / 100 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1. Implementation-defined | 1 | 1 | 3 | 1 | 1 | 1 | 1 | 5 | 5 | 30.4 |
-| 2. `CheckoutRoot` parameter | 4 | 5 | 5 | 3 | 5 | 5 | 4 | 3 | 4 | 87.6 |
-| 3. Fixed-location root + .NET enumeration | 5 | 5 | 5 | 5 | 5 | 5 | 4 | 4 | 5 | **98.4** |
-| 4. `GITHUB_WORKSPACE` + `Get-ChildItem -Force` | 4 | 4 | 5 | 4 | 4 | 3 | 4 | 5 | 5 | 82.8 |
-| 5. `git rev-parse` + exhaustive enumeration | 3 | 5 | 4 | 2 | 5 | 4 | 3 | 3 | 3 | 74.2 |
-| 6. Lexical prefix + `Test-Path` | 1 | 1 | 5 | 4 | 1 | 2 | 4 | 5 | 5 | 48.4 |
-| 7. Separate path-safety module | 5 | 5 | 5 | 5 | 5 | 5 | 3 | 1 | 1 | 94.0 |
-| 8. OS-specific native APIs | 5 | 5 | 3 | 5 | 5 | 4 | 2 | 1 | 1 | 85.2 |
+This is more consistent for checkout and updates both workflows to the Node 24
+action runtime. It still requires reviewers to explain why one executable
+third-party action in `markdownlint.yml` remains mutable.
 
-### Selected option
+#### Option 3D — Pin every external action in both workflows
 
-Select **Option 3: derive the root from the tracked helper's fixed location and use exhaustive .NET enumeration**.
+Pin checkout, setup-node, upload-artifact, and download-artifact to verified
+full SHAs with adjacent release comments. Add `markdownlint.yml` to T1's
+affected files and validation sets.
 
-Implementation requirements:
+This gives the repository one simple execution-time policy. Its weakness is
+maintenance: without a reminder or updater, immutable references can silently
+age.
 
-1. Keep the existing three-parameter interface. Do not trust the process working directory or add a caller-selected boundary.
-2. At startup, resolve the helper's actual filesystem path and derive the checkout root as two parents above `$PSScriptRoot`. Verify the expected relative helper path beneath that root; fail if the tracked-location invariant is false.
-3. Convert every caller-supplied PowerShell path to an absolute filesystem provider path before using .NET. Do not pass unresolved relative paths to `Path.GetFullPath`.
-4. Implement one separator-aware descendant test:
-   - use `StringComparison.OrdinalIgnoreCase` on Windows;
-   - use `StringComparison.Ordinal` on non-Windows;
-   - compare either equality or a root string ending in a directory separator, so sibling prefixes do not pass.
-5. Require the download directory and the candidate parent to be outside the checkout. Require each existing parent to be an ordinary directory rather than a reparse point.
-6. Materialize `Directory.EnumerateFileSystemEntries($strDownloadDirectory)` once and require exactly one entry. Check its attributes and require a regular, non-reparse-point file.
-7. To prove candidate-leaf absence, enumerate its existing parent and compare every returned leaf name using OS-appropriate filesystem comparison. Reject any matching entry even if `File.Exists`, `Directory.Exists`, or `Test-Path` would report false because it is a dangling link.
-8. Repeat the parent enumeration immediately before creating the leaf. Create it once; never delete/recreate or reuse it.
-9. Use the same exhaustive enumeration after extraction to require exactly the four expected ordinary files.
-10. Extend the permanent suite with at least:
-    - a hidden extra entry in the download directory;
-    - a checkout-sibling prefix path that must not be classified as inside the checkout;
-    - an existing candidate leaf;
-    - a reparse-point/symlink candidate leaf;
-    - a dangling candidate-leaf link where the runner permits creating it.
-11. If a runner cannot create a required link fixture, fail or explicitly record a narrowly justified platform skip; do not silently count an unexecuted case as passing.
+#### Option 3E — Pin only the build workflow and add Dependabot
 
-This preserves the simple caller interface while making every boundary and exact-count assertion implementable and testable.
+Combine Option 3B with a new `.github/dependabot.yml` entry for GitHub Actions.
+Dependabot can propose updates for both SHA- and tag-based references.
 
-## T1.5 — Both successful fixture cases are not classified explicitly
+This maintains the critical pins, but Dependabot's presence does not make the
+remaining tags immutable between update reviews. The policy remains mixed.
 
-### Options
+#### Option 3F — Pin all external actions and add Dependabot version updates
 
-1. **Keep the singular “valid fixture” wording.** Depend on the list item's phrase “must still extract” to communicate the second success outcome. This remains internally ambiguous.
-2. **Change only “the valid fixture” to “each valid fixture.”** This is a useful grammatical repair but still forces an implementer to infer which list items are positive, what each must prove, and which postconditions differ.
-3. **Add an explicit fixture outcome table.** Give every fixture a stable case name, classify it as success or rejection, state the required failure phase where applicable, and state exact destination postconditions.
-4. **Define positive and negative fixture arrays in the implementation guidance.** Require the harness to iterate data records with expected outcomes. This is implementable, but without a human-readable issue table it makes the contract dependent on code structure not yet written.
-5. **Create separate positive- and negative-fixture scripts/files.** This is auditable but adds tracked test artifacts and file-management overhead for a suite that can remain inside the workflow/helper test harness.
-6. **Reclassify symlink-like external attributes as invalid.** Reject the archive. This simplifies the oracle but contradicts the extraction design: metadata is intentionally ignored while permitted bytes are copied into new ordinary files.
-7. **Remove the external-attributes fixture.** Avoid the ambiguity by dropping the case. That loses evidence that the helper does not restore attacker-controlled ZIP metadata.
+Combine Option 3D with a minimal weekly GitHub Actions Dependabot
+configuration. Dependabot opens reviewable pull requests that update the SHA
+and adjacent version comment; no update is auto-merged.
 
-Permutations considered:
+Permutations include daily, weekly, or monthly schedules; grouped or separate
+pull requests; and major-version ignores. A weekly schedule with separate
+default pull requests gives timely visibility and isolated release review
+without daily noise. The issue must still require human verification of the
+upstream repository, release notes, Node runtime, inputs, and compatibility.
 
-- The outcome table can group negative fixtures by common postcondition while retaining a row for each case and its diagnostic identifier.
-- The metadata-ignored positive case can modify one or all expected entries. One modified entry is sufficient to exercise the behavior; post-extraction inspection must cover all four destination files.
-- The table and data-driven harness can be combined. The table is the normative issue contract; implementation arrays are an allowed realization.
+#### Option 3G — Depend on an organization/repository SHA-enforcement policy
+
+Configure or assume a GitHub Actions policy that rejects non-SHA references,
+without explicitly revising every workflow reference in this issue.
+
+Enforcement is valuable defense in depth but is external state and cannot make
+the committed workflow runnable until the references are converted. It also
+does not select or validate the intended releases.
+
+#### Option 3H — Vendor or replace the actions
+
+Check action code into the repository, use a local composite action, or replace
+checkout/setup with handwritten Git and tool-install commands.
+
+This removes movable remote references but shifts patching, credential
+handling, platform behavior, and supply-chain review onto this repository.
+Vendoring the large JavaScript distributions would be disproportionate and
+handwritten checkout would weaken a mature security boundary.
 
 ### Evaluation rubric
 
-Score 1–5 and normalize to 100.
+Score 1 through 5. Weighted total:
+`sum(weight × score / 5)`, maximum 100.
 
-| Criterion | Weight | Why it matters |
+This rubric is specific to executable workflow dependency governance:
+
+| Criterion | Weight | Detailed meaning |
 | --- | ---: | --- |
-| Correctness and completeness of the test oracle | 25 | A fixture without an explicit expected result is not a reliable test specification. |
-| Preservation of the intended archive-metadata security model | 20 | The helper must ignore metadata while creating ordinary files, not restore or reflexively reject it. |
-| Resistance to false passes or inverted expectations | 16 | Ambiguous classification can make the suite accept the wrong behavior. |
-| Clarity for an implementer coming in cold | 14 | Case names, phases, and postconditions should be directly translatable into tests. |
-| Diagnostic and maintenance quality | 10 | Stable case identifiers make cross-platform failures actionable. |
-| Cross-runtime determinism | 6 | Every edition/OS must apply the same outcome oracle. |
-| Audit traceability | 5 | Reviewers should map every acceptance bullet to a concrete fixture. |
-| Churn/difficulty | 2 | Very low weight because clarity is worth a few lines. |
-| Scope fit | 2 | Avoid unnecessary test-file architecture. |
-
-Oracle correctness, the security model, false-pass resistance, and implementer clarity account for 75%.
+| Execution-time supply-chain protection | 35 | Every action capable of reading the checkout, token, generated artifacts, or workflow environment should execute immutable, upstream-verified code. |
+| Policy consistency and auditability | 15 | A reviewer should be able to state and mechanically inspect one repository-wide rule without action-class exceptions. |
+| Runtime currency and compatibility | 15 | Selected releases must use supported runtimes, retain required inputs/credential behavior, and work on the targeted GitHub-hosted runners. |
+| Sustainable update lifecycle | 15 | The design should surface new releases and keep SHA comments synchronized without silently reverting to mutable tags. |
+| Operational control and review burden | 10 | Updates must remain human-reviewable, avoid unbounded alert/PR noise, and permit release-specific risk assessment. |
+| Verification and rollback simplicity | 5 | Each update should have a clear upstream identity, focused diff, test path, and reversible commit. |
+| Churn and issue expansion | 5 | Fewer affected files and new automation surfaces score better, with intentionally low weight. |
 
 ### Scoring
 
-| Option | Oracle | Security model | False-pass resistance | Clarity | Diagnostics | Determinism | Audit | Churn | Scope | Total / 100 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1. Keep singular wording | 1 | 3 | 1 | 2 | 2 | 3 | 1 | 5 | 5 | 38.4 |
-| 2. Plural wording only | 3 | 5 | 3 | 4 | 3 | 5 | 3 | 5 | 5 | 74.8 |
-| 3. Explicit outcome table | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 4 | 5 | **99.6** |
-| 4. Positive/negative implementation arrays | 5 | 5 | 5 | 4 | 5 | 5 | 4 | 4 | 4 | 95.4 |
-| 5. Separate fixture files/scripts | 5 | 5 | 5 | 4 | 5 | 5 | 5 | 1 | 1 | 94.0 |
-| 6. Reject external attributes | 2 | 1 | 4 | 4 | 4 | 5 | 3 | 5 | 2 | 57.8 |
-| 7. Remove metadata fixture | 1 | 1 | 2 | 4 | 3 | 5 | 2 | 5 | 3 | 43.8 |
+| Option | Protection (35) | Consistency (15) | Compatibility (15) | Updates (15) | Operations (10) | Verification (5) | Churn (5) | Total / 100 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 3A — Retain major tags | 1 | 1 | 3 | 5 | 5 | 5 | 5 | 54 |
+| 3B — Pin build checkout only | 4 | 3 | 5 | 2 | 5 | 5 | 5 | 78 |
+| 3C — Pin all checkout references | 4 | 4 | 5 | 2 | 5 | 5 | 4 | 80 |
+| 3D — Pin every external action | 5 | 5 | 5 | 2 | 5 | 5 | 2 | 88 |
+| 3E — Build pins plus Dependabot | 4 | 3 | 5 | 5 | 3 | 4 | 3 | 80 |
+| 3F — All pins plus Dependabot | 5 | 5 | 5 | 5 | 3 | 4 | 1 | **91** |
+| 3G — Enforcement policy only | 2 | 5 | 2 | 3 | 2 | 2 | 4 | 54 |
+| 3H — Vendor or replace actions | 4 | 4 | 2 | 1 | 2 | 2 | 1 | 56 |
 
 ### Selected option
 
-Select **Option 3: add a normative fixture outcome table**, and permit a data-driven harness that mirrors it.
+**Select Option 3F: pin every external action in both workflows and add
+review-only Dependabot version updates.**
 
-The table must include at least these classifications:
+Implementation instructions:
 
-| Fixture class | Expected result | Required phase/postcondition |
-| --- | --- | --- |
-| Exact valid archive + correct digest | Success | Extract exactly four ordinary, non-reparse files with expected bytes. |
-| Exact valid archive + symlink-like external attributes | Success | Extract exactly four ordinary, non-reparse files; restore no link/type/mode/timestamp metadata. |
-| Correct archive + altered well-formed digest | Reject | Fail before opening the ZIP and before destination creation. |
-| Missing, extra, duplicate, case collision, nested, traversal, absolute, drive-qualified, directory, file/directory collision, or empty-name entry | Reject | Fail after ZIP open but before destination creation or entry extraction. |
-| Invalid or truncated ZIP | Reject | Fail during ZIP open/read before destination creation. |
-| Hidden extra download-directory entry | Reject | Fail before selecting/opening an archive. |
-| Existing, reparse-point, symlink, or dangling candidate leaf | Reject | Fail before ZIP extraction; never reuse or follow the leaf. |
+1. Add `.github/workflows/markdownlint.yml` and
+   `.github/dependabot.yml` to T1's affected files and all exact path-set
+   checks.
+2. As of 2026-07-29, prescribe these verified full action-distribution SHAs:
 
-For every case:
-
-1. Use a stable diagnostic case identifier.
-2. Compute the actual fixture digest except in the deliberate digest-mismatch case.
-3. Assert success or failure explicitly; a thrown exception alone is not a complete negative-test oracle.
-4. For every rejection, assert the candidate leaf remains absent and no path outside the fixture root changed.
-5. For each success, inspect exact path set, file kind, bytes, BOM/CR policy, and absence of restored metadata.
-6. Clean all fixture state in `finally`.
-
-This eliminates the wording ambiguity and makes the metadata-ignored behavior a deliberate positive security test.
-
-## T2.1 — Every destination preflight misses a dangling final symlink
-
-### Options
-
-1. **Retain `[ -e "$PATH" ]` alone.** This detects resolvable existing objects but follows the final link and therefore misses a dangling symlink.
-2. **Reject either a resolvable object or a final symlink with `-e || -L`.** Apply `[ -e "$PATH" ] || [ -L "$PATH" ]` to every `RECOVERY_PATH` and `TFC_RESPONSE_PATH` preflight.
-3. **Use `-e || -h`.** POSIX defines `-h` and `-L` equivalently for this purpose. It is correct, but `-L` communicates “link” more directly and matches the primary-source wording used in the issue.
-4. **Inspect with `readlink` or `realpath`.** Attempt to resolve the destination and infer whether it is a link. Tool availability and behavior for nonexistent targets differ, and parsing adds complexity unnecessary for the final component.
-5. **Parse `ls -ld` output.** Human-oriented output, locale, escaping, and aliases make this unsuitable for a copy-safe security guard.
-6. **Rely only on provider-native no-clobber options.** Azure and GCS have useful native protections, but AWS lacks the needed flag and HCP's curl flow has different behavior. It also does not give one consistent diagnostic before network access.
-7. **Atomically reserve every recovery path before calling the provider command.** This would detect all preexisting entries, but AWS/Azure/GCS commands expect to own/open the pathname and have inconsistent behavior when an empty reservation already exists.
-8. **Rely solely on a protected parent/no-competing-writer assumption.** This narrows likelihood but leaves an operator-created dangling link undetected and contradicts the stated fresh-path check.
-
-Permutations considered:
-
-- `-L` can replace `-e` or supplement it. It must supplement it because ordinary existing files and directories are not links.
-- The two tests can use deprecated/ambiguous `-o` inside one `[` expression or shell `||` between two simple tests. Use shell `||`; it is clearer and avoids `test` expression-precedence pitfalls.
-- The guard can be applied only to provider recovery paths or to those plus the HCP response page. Apply it uniformly to all final output paths.
-
-### Evaluation rubric
-
-Score 1–5 and normalize to 100.
-
-| Criterion | Weight | Why it matters |
-| --- | ---: | --- |
-| Detection of every final-leaf state | 26 | The guard must catch files, directories, resolvable links, and dangling links. |
-| Prevention of unintended target writes | 22 | A followed link can redirect sensitive state to an unintended path. |
-| POSIX/Bash portability | 16 | The examples promise POSIX-style Bash paths and should use standard primitives. |
-| Copy-paste clarity | 11 | Operators must understand exactly why execution was refused. |
-| Uniform applicability across providers | 9 | One common contract reduces provider-specific mistakes. |
-| Diagnostic quality | 6 | The error should name the exact refused destination before network access. |
-| Compatibility with native provider behavior | 5 | The preflight should compose with existing Azure/GCS no-clobber defenses and AWS output handling. |
-| Churn/difficulty | 3 | Kept low; a small fix is valuable because it is complete. |
-| Scope fit | 2 | Do not create a general path-management framework. |
-
-Detection, write prevention, and portability account for 64%; churn and scope only 5%.
-
-### Scoring
-
-| Option | All states | Prevent redirect | Portable | Copy-safe | Uniform | Diagnostics | Provider compatibility | Churn | Scope | Total / 100 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1. `-e` only | 1 | 1 | 5 | 2 | 1 | 2 | 5 | 5 | 5 | 44.2 |
-| 2. `-e \|\| -L` | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | **100.0** |
-| 3. `-e \|\| -h` | 5 | 5 | 5 | 4 | 5 | 5 | 5 | 5 | 5 | 97.8 |
-| 4. `readlink`/`realpath` | 4 | 4 | 3 | 2 | 4 | 3 | 3 | 2 | 3 | 68.6 |
-| 5. Parse `ls` | 2 | 2 | 3 | 1 | 3 | 2 | 3 | 3 | 2 | 44.4 |
-| 6. Native no-clobber only | 3 | 4 | 5 | 3 | 1 | 3 | 3 | 3 | 4 | 67.6 |
-| 7. Reserve all paths first | 5 | 5 | 2 | 2 | 1 | 3 | 1 | 1 | 1 | 66.2 |
-| 8. Protected-parent assumption only | 1 | 3 | 5 | 4 | 5 | 2 | 5 | 5 | 5 | 64.6 |
-
-### Selected option
-
-Select **Option 2: use `[ -e "$path" ] || [ -L "$path" ]` uniformly**.
-
-Implementation requirements:
-
-1. In the AWS, Azure, and GCS recovery blocks, replace the current preflight with:
-
-   ```sh
-   if [ -e "$RECOVERY_PATH" ] || [ -L "$RECOVERY_PATH" ]; then
-     printf 'Refusing to overwrite or follow an existing recovery destination: %s\n' \
-       "$RECOVERY_PATH" >&2
-     exit 1
-   fi
+   ```yaml
+   actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+   actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+   actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+   actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
    ```
 
-2. Apply the identical predicate to `TFC_RESPONSE_PATH`, with an HCP-response-specific message.
-3. Keep the absolute POSIX path check and `umask 077`.
-4. Keep Azure's `--overwrite false` and GCS's `--no-clobber` as provider-native defense in depth.
-5. Retain AWS's documented protected-parent/no-competing-writer limitation because its preflight and output open remain non-atomic.
-6. Treat parent-directory symlink topology as the operator's responsibility, as already scoped; explicitly distinguish that non-goal from the now-guarded final leaf.
-7. Add validation cases for an ordinary existing file, directory, valid symlink, and dangling symlink at each generic path shape. Every case must fail before the provider command is invoked.
+3. Require immediate preimplementation revalidation of every SHA, adjacent
+   comment, upstream repository, latest required security release, action
+   metadata/runtime, and every relied-on input/output. Update references and
+   evidence atomically if a release changes.
+4. Preserve markdown lint's current Node/package behavior; pinning and runtime
+   currency do not authorize changing lint semantics or dependency versions.
+5. Configure:
 
-This is the only option that is complete, portable, uniform, and minimally invasive.
-
-## T2.2 — HCP response-file creation does not match the stated no-overwrite assurance
-
-### Options
-
-1. **Keep the preflight plus `curl --output` and disclose the race.** This makes the prose accurate but leaves curl able to truncate an exact path created between preflight and open.
-2. **Add curl `--no-clobber`.** Curl chooses a numbered alternate filename when the requested name exists. That violates the exact `TFC_RESPONSE_PATH` contract and can cause an operator to inspect the wrong page file.
-3. **Open the exact response path through a Bash noclobber file descriptor, then stream curl stdout to it.** After variable/path prevalidation and `-e || -L`, enable `set -C`, run `exec 3> "$TFC_RESPONSE_PATH"`, disable noclobber, invoke curl without `--output` and with `>&3`, capture curl's status, close descriptor 3, and report any empty/partial file on failure.
-4. **Use direct noclobber redirection on the curl command.** `curl ... > "$TFC_RESPONSE_PATH"` under `set -C` is shorter, but it combines path-open failures, shell expansion failures, and curl failures into one command and makes diagnostics/descriptor closure less explicit.
-5. **Download to a protected temporary file and publish with `mv -n`.** This avoids a partial final file but `mv -n` is not POSIX, can have platform-specific replacement semantics, and does not give a universally atomic “exact destination or fail” guarantee.
-6. **Use `mktemp` and make its generated pathname the response path.** This provides fresh secure creation but abandons the operator-selected `TFC_RESPONSE_PATH`, complicates pagination bookkeeping, and adds another command dependency.
-7. **Use Python or another helper to call `open(..., O_CREAT|O_EXCL)` and pass a descriptor.** This can be robust but adds a runtime dependency and substantially reduces copy-paste accessibility for a shell example.
-8. **Precreate a mode-600 file, then pass it to `curl --output`.** This reserves the name but curl reopens/truncates the pathname; it loses descriptor identity and remains vulnerable to replacement by a competing parent-directory writer.
-
-Permutations considered:
-
-- The example can automatically remove a partial response on curl failure or retain it. Automatic deletion risks unlinking a replaced path and prescribes sensitive-data deletion behavior. Retain the protected partial/empty file, emit a warning, and require a fresh path for retry.
-- Curl can use `--output` or stdout. Stdout is required when the shell owns the already-open exact descriptor.
-- Noclobber can remain enabled throughout the subshell or be disabled immediately after descriptor acquisition. Disable it after the exact open so it does not have surprising effects on unrelated later redirections.
-
-### Evaluation rubric
-
-Score 1–5 and normalize to 100.
-
-| Criterion | Weight | Why it matters |
-| --- | ---: | --- |
-| Exact-path create-or-fail behavior | 25 | The operator must know which file contains the requested page; alternate names are unsafe. |
-| Confidential file creation and permissions | 18 | Response pages contain state download URLs and must begin life under `umask 077`. |
-| Failure and partial-file semantics | 15 | HTTP/network failure must not be mistaken for a valid response or silently erase evidence. |
-| Preservation of token secrecy | 12 | The bearer token must remain off the argument list and ordinary output. |
-| Link/race behavior within the documented threat model | 10 | The design must reject existing links and state the protected-parent assumption honestly. |
-| Portability and dependency availability | 8 | The example should work in the declared Bash/curl environment without an extra language runtime. |
-| Copy-paste usability | 6 | Operators need a sequence they can safely execute and understand. |
-| Diagnostic quality | 3 | Distinguish refusal to create, curl failure, and success. |
-| Churn/difficulty | 2 | Low weight; a few shell lines are justified by exactness. |
-| Scope fit | 1 | Avoid a general download utility. |
-
-Exact creation, confidentiality, failure semantics, token secrecy, and race behavior account for 80%.
-
-### Scoring
-
-| Option | Exact path | Confidentiality | Failure semantics | Token secrecy | Link/race model | Portability | Copy-safe | Diagnostics | Churn | Scope | Total / 100 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1. Keep and disclose | 2 | 4 | 2 | 5 | 2 | 5 | 4 | 3 | 5 | 5 | 64.0 |
-| 2. curl `--no-clobber` | 1 | 5 | 3 | 5 | 4 | 3 | 2 | 3 | 5 | 5 | 64.0 |
-| 3. Noclobber descriptor + curl stdout | 5 | 5 | 5 | 5 | 4 | 5 | 5 | 5 | 4 | 5 | **97.6** |
-| 4. Direct noclobber redirection | 5 | 5 | 4 | 5 | 4 | 5 | 4 | 4 | 5 | 5 | 93.2 |
-| 5. Temporary file + `mv -n` | 3 | 5 | 5 | 5 | 3 | 2 | 3 | 3 | 2 | 3 | 76.0 |
-| 6. Generated `mktemp` path | 2 | 5 | 5 | 5 | 5 | 3 | 2 | 4 | 3 | 2 | 76.2 |
-| 7. Python `O_EXCL` helper | 5 | 5 | 5 | 5 | 5 | 2 | 2 | 3 | 1 | 1 | 88.0 |
-| 8. Precreate, then `curl --output` | 3 | 5 | 3 | 5 | 2 | 5 | 3 | 3 | 3 | 4 | 73.4 |
-
-### Selected option
-
-Select **Option 3: acquire the exact output through a Bash noclobber descriptor and stream curl stdout to it**.
-
-The HCP block must follow this order:
-
-1. Enter a subshell and set `umask 077`.
-2. Guard and assign every required variable before creating the response file:
-   - `TFC_RESPONSE_PATH`;
-   - `TFC_TOKEN`;
-   - organization name;
-   - workspace name;
-   - page number default.
-3. Validate the absolute path and reject `[ -e "$TFC_RESPONSE_PATH" ] || [ -L "$TFC_RESPONSE_PATH" ]`.
-4. Enable noclobber and acquire descriptor 3:
-
-   ```bash
-   set -C
-   exec 3> "$TFC_RESPONSE_PATH" || {
-     printf 'Unable to create new HCP response file without overwriting: %s\n' \
-       "$TFC_RESPONSE_PATH" >&2
-     exit 1
-   }
-   set +C
+   ```yaml
+   version: 2
+   updates:
+     - package-ecosystem: github-actions
+       directory: /
+       schedule:
+         interval: weekly
    ```
 
-5. Invoke `curl -q --config - ...` without `--output`; preserve the here-document on standard input and direct only the response body to descriptor 3 with `>&3`.
-6. Immediately save curl's exit status, then close descriptor 3 with `exec 3>&-`.
-7. If curl failed, report its exact exit code and state that the protected path may contain an empty or partial response, must not be treated as valid, and must be handled under retention/deletion policy before a retry uses a new path. Exit with curl's status.
-8. On success, state that the exact requested path contains the response page and should be inspected only with a trusted local JSON viewer.
-9. Explain that noclobber descriptor creation plus the link preflight protects the final name under the required protected-parent/no-competing-writer model. Do not claim safety against a process that can unlink/replace entries in that parent.
-10. Explicitly explain why curl `--no-clobber` is not used: it can write a numbered alternate name.
+   Keep update pull requests separate by default and require human review; do
+   not add auto-merge.
+6. Validate the checkout v6 credential model and runner compatibility. Prove
+   the controlled writer can push and post-job cleanup completes.
+7. Require a static scan that every nonlocal `uses:` in both workflow files is
+   a 40-hex full SHA with an adjacent version comment.
+8. Update T2's prerequisite and affected-path expectations to the resulting
+   seven-file T1 implementation set.
 
-This is exact, dependency-light, token-safe, and honest about both partial files and parent-directory trust.
+The upstream facts and exact refs are preserved in
+`docs/planning/artifacts/prompt-02-primary-source-research.md`.
 
-## T2.3 — Post-merge evidence contradicts the no-drift writer skip
+## Finding 4 — Define an explicit diagnostic-context interface
 
 ### Options
 
-1. **Keep “every push consumer” in the evidence.** Treat the skipped writer's successful check status as if its steps ran. This is factually false.
-2. **Change only the one numbered evidence item to “every Windows push cell.”** This fixes the immediate contradiction, but broad “every push consumer on every run” wording elsewhere in T2/T1 can still recreate it.
-3. **Define “consumer” to mean only a job when it executes.** Say every executing consumer runs the helper. Logically defensible, but easy for readers to misinterpret when adjacent text says “every run.”
-4. **Make the write-enabled synchronization job run on no-drift pushes.** Always download/self-test/extract, then condition only mutation steps. This would make the evidence true but unnecessarily activates the sole write-permission job when no write is needed.
-5. **Split synchronization validation and mutation into separate jobs.** Always run a read-only writer-validation job and condition a write-only mutation job. This is strong architecture but materially redesigns T1 for a T2 evidence wording problem.
-6. **Remove helper/writer statements from T2 post-merge evidence.** Limit T2 to content generation and no drift. This avoids contradiction but loses useful proof that the inherited matrix transport still worked.
-7. **State two precise execution branches.** Require all four Windows push cells to self-test and invoke the helper on every push candidate; require the synchronization job to do so only when `has_changes=true`; for T2's expected no-drift merge, require the writer to be skipped and cite T1's controlled write-path/static evidence.
-8. **Refer only to T1 by dependency link.** Say T1 establishes all workflow behavior and omit T2-specific runtime expectations. Concise, but insufficiently actionable when collecting post-merge evidence.
+#### Option 4A — Add three optional scalar diagnostic parameters
 
-Permutations considered:
+Add optional `ArtifactId`, `RunId`, and `RunAttempt` parameters beside the five
+mandatory functional parameters selected in Finding 1. Use
+`$PSBoundParameters` to distinguish an omitted label from an explicitly bound
+empty value.
 
-- The wording must be corrected in prerequisite verification, post-merge evidence, and acceptance criteria—not just one numbered line.
-- A no-drift run can prove the writer is correctly skipped, not that its internals ran.
-- T1 controlled evidence proves the `has_changes=true` branch; T2 post-merge evidence proves the `has_changes=false` branch. Together they cover the conditional topology without synthetic drift.
+Callers that possess the labels pass them explicitly. Local validation and
+fixtures may omit them and receive an unambiguous “unavailable” representation.
+The helper owns a stable phase/context diagnostic format.
+
+#### Option 4B — Make all three diagnostic parameters mandatory
+
+Require every helper call to provide artifact ID, run ID, and attempt.
+Production CI always has or can propagate these values.
+
+This maximizes production consistency but forces local use and most fixtures to
+invent labels. Invented IDs undermine provenance and make logs look more
+authoritative than they are.
+
+#### Option 4C — Keep the helper silent about workflow context and enrich in callers
+
+The helper reports only phase, paths, entry names, and digests. Each workflow
+step catches its failure and adds artifact/run context.
+
+This can work, but multiple wrappers can format context differently or lose the
+original phase/exception. A helper contract requiring the labels “when
+available” remains untestable unless every caller wrapper is separately
+specified.
+
+#### Option 4D — Read context from environment variables
+
+Have the helper inspect standard GitHub variables and custom environment
+variables such as `CANDIDATE_ARTIFACT_ID`.
+
+This avoids parameters, but couples behavior to mutable ambient process state,
+makes local behavior implicit, and risks stale variables leaking between cases.
+It is particularly unsuitable for a helper whose trust boundaries are intended
+to be explicit.
+
+#### Option 4E — Return or throw a structured diagnostic object
+
+Define a custom PowerShell class, error-record schema, JSON payload, or result
+object containing phase, paths, digest data, and optional labels. Callers render
+it.
+
+This provides strong machine readability, but custom-class serialization and
+error propagation across Windows PowerShell 5.1, PowerShell 7, child scripts,
+and workflow logs add considerable complexity. A failed child script also needs
+a reliable exit code and human-readable message.
+
+#### Option 4F — Accept one extensible `DiagnosticContext` dictionary
+
+Take a hashtable/dictionary with keys such as `ArtifactId`, `RunId`, and
+`RunAttempt`. Future callers can add fields without changing the parameter
+list.
+
+This is flexible, but key spelling, value type, omission, emptiness, and unknown
+keys require another schema. It is less discoverable through PowerShell help
+and tab completion than three stable scalar parameters.
+
+#### Option 4G — Accept a logger callback or diagnostic sink
+
+Pass a script block, delegate, or interface that receives structured events.
+Workflows can format or route diagnostics independently.
+
+This is appropriate for a library but disproportionate for a child script. It
+creates executable caller input, complicates process boundaries, and reduces
+P1/T1 parity.
+
+#### Option 4H — Split a diagnostic-aware wrapper from a private extraction module
+
+Add a workflow-facing wrapper that accepts context and calls a separate private
+module containing validation/extraction.
+
+This isolates concerns, but creates another production file and risks the
+harness testing the wrapper while callers or future code bypass it. The
+selected single production helper already has a manageable public interface.
 
 ### Evaluation rubric
 
-Score 1–5 and normalize to 100.
+Score 1 through 5, with
+`sum(weight × score / 5)` and a maximum of 100.
 
-| Criterion | Weight | Why it matters |
+This rubric is specific to provenance-quality failure diagnostics:
+
+| Criterion | Weight | Detailed meaning |
 | --- | ---: | --- |
-| Factual correspondence between prose and executed jobs | 28 | Evidence language must describe steps that actually ran. |
-| Integrity of security and release evidence | 20 | False claims weaken confidence in the sole writer's controls. |
-| Consistency between T1 prerequisite and T2 inherited behavior | 15 | The two sequential issues must describe the same conditional topology. |
-| Clarity for operators collecting evidence | 13 | A person after merge needs an exact pass/skip checklist. |
-| Preservation of least privilege | 10 | No-drift runs should not activate a write-permission job merely to satisfy prose. |
-| Auditability of both conditional branches | 7 | Controlled T1 evidence and ordinary T2 evidence should cover complementary paths. |
-| Maintenance quality | 4 | Precise terminology should remain correct as content issues are added. |
-| Churn/difficulty | 2 | Wording changes are cheap, but low weight prevents architecture decisions based on churn. |
-| Scope fit | 1 | Avoid redesigning T1 solely for evidence phrasing. |
-
-Factual accuracy, evidence integrity, cross-issue consistency, and operator clarity account for 76%.
+| Diagnostic accuracy and provenance | 25 | Logs must never invent identity, confuse omitted with empty, or associate a failure with stale ambient context. |
+| Interface explicitness and testability | 25 | Inputs and semantics must be visible in help/parameter binding and directly exercisable by the permanent harness. |
+| Local and fixture usability | 15 | Developers and deterministic tests without real GitHub artifact metadata must be able to invoke the same production path honestly. |
+| Failure-path completeness | 15 | Digest, archive, manifest, containment, lifecycle, extraction, and cleanup failures must retain phase plus all context known at that point. |
+| P1/T1 parity and maintenance | 15 | The solution should match the corresponding PSStyleGuide contract so diagnostic fixes port cleanly. |
+| Churn and complexity | 5 | Simpler interfaces score better after provenance and completeness. |
 
 ### Scoring
 
-| Option | Factual | Evidence integrity | T1/T2 consistency | Operator clarity | Least privilege | Both branches auditable | Maintenance | Churn | Scope | Total / 100 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 1. Keep wording | 1 | 1 | 1 | 1 | 3 | 1 | 4 | 5 | 5 | 28.8 |
-| 2. Fix one line only | 4 | 4 | 3 | 4 | 5 | 4 | 5 | 5 | 5 | 80.4 |
-| 3. “Executing consumer” definition | 4 | 4 | 4 | 3 | 5 | 3 | 4 | 5 | 5 | 78.6 |
-| 4. Always run writer | 5 | 3 | 5 | 5 | 2 | 5 | 3 | 1 | 1 | 82.0 |
-| 5. Split validation/write jobs | 5 | 5 | 5 | 5 | 5 | 5 | 3 | 1 | 1 | 96.0 |
-| 6. Remove helper evidence | 5 | 3 | 3 | 3 | 5 | 2 | 5 | 5 | 4 | 76.4 |
-| 7. Precise two-branch semantics | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | 5 | **100.0** |
-| 8. Dependency reference only | 4 | 4 | 4 | 3 | 5 | 3 | 5 | 5 | 4 | 79.2 |
+| Option | Provenance (25) | Explicit/testable (25) | Local use (15) | Failure completeness (15) | Parity (15) | Churn (5) | Total / 100 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4A — Optional scalar parameters | 5 | 5 | 5 | 5 | 5 | 4 | **99** |
+| 4B — Mandatory diagnostic parameters | 5 | 5 | 2 | 5 | 4 | 3 | 86 |
+| 4C — Caller-only enrichment | 4 | 3 | 5 | 3 | 2 | 4 | 69 |
+| 4D — Ambient environment variables | 2 | 1 | 5 | 2 | 2 | 5 | 47 |
+| 4E — Structured result/error object | 5 | 4 | 4 | 5 | 3 | 2 | 83 |
+| 4F — Diagnostic-context dictionary | 4 | 4 | 5 | 4 | 3 | 4 | 80 |
+| 4G — Logger callback/sink | 5 | 3 | 3 | 4 | 2 | 1 | 68 |
+| 4H — Wrapper plus private module | 4 | 4 | 4 | 4 | 2 | 1 | 71 |
 
 ### Selected option
 
-Select **Option 7: define and evidence the two conditional execution branches precisely**.
+**Select Option 4A: add explicit optional scalar diagnostic parameters.**
 
-Apply this terminology throughout T1 and T2:
+Implementation instructions:
 
-1. **Windows push cells:** every one of the four cells downloads the candidate, runs the permanent suite, and invokes the production helper on every push pipeline.
-2. **Synchronization job:** it is the only push consumer with `contents: write`; it runs only when approval reports `has_changes=true`. Whenever it runs, it downloads the same candidate, runs the permanent suite, invokes the production helper, proves identity, and performs the exact-lease write.
-3. **No-drift branch:** when `has_changes=false`, approval succeeds and the synchronization job is expected to be `skipped`; none of its steps executed.
-4. **Evidence allocation:**
-   - T1's controlled synchronization drill proves the writer's `has_changes=true` helper and write path.
-   - T1/T2 ordinary no-drift post-merge runs prove all four read-only Windows cells and the expected writer skip.
-   - Static inspection confirms the writer still invokes the same tracked helper before any copy or mutation.
-5. In T2 post-merge evidence, replace “Every push consumer” with “Every Windows push cell.”
-6. Retain the explanatory paragraph that the skipped writer's integration is inherited from T1's controlled evidence; make it part of the numbered evidence rather than a potential contradiction.
-7. Require the UI/result evidence to distinguish `success` for the four cells from `skipped` for synchronization.
+1. Add optional `ArtifactId`, `RunId`, and `RunAttempt` string parameters to
+   the helper after the five mandatory functional parameters.
+2. Reject null or empty values when a label is explicitly bound. Use
+   `$PSBoundParameters.ContainsKey(<name>)` to distinguish omission from an
+   invalid supplied value.
+3. Treat the values only as caller-supplied diagnostic labels. Do not use them
+   for selection, authorization, path construction, or digest trust, and never
+   derive or invent a missing value.
+4. Represent each omitted label consistently as `unavailable`.
+5. Require production callers to pass the validated artifact ID and the
+   workflow's run ID/attempt. Local callers may omit the labels.
+6. Define stable validation-phase identifiers and require diagnostics to
+   include:
+   - every supplied or unavailable label;
+   - normalized checkout and trusted-temporary roots;
+   - normalized download/candidate paths;
+   - archive path once selected;
+   - expected digest and actual digest once computed;
+   - offending entry or destination when applicable; and
+   - the failing phase.
+7. Preserve the original exception and a nonzero child-process result while
+   adding context; do not replace a precise helper failure with a generic
+   wrapper message.
+8. Add harness cases for omitted labels, all supplied labels, and each
+   explicitly empty label. Prove supplied labels appear, omitted labels are
+   marked unavailable, and empty labels fail before archive or destination
+   processing.
+9. Keep event, edition, version, fixture EOL, and workflow artifact-path
+   context in the workflow layer; those describe the consumer, while the three
+   optional labels travel through the shared helper interface.
+10. Propagate the exact interface into T2's prerequisite verification.
 
-This makes the evidence truthful without weakening least privilege or manufacturing a write-enabled no-op job.
+## Finding 5 — Define the complete temporary-path trust envelope
+
+### Options
+
+#### Option 5A — Keep immediate-parent checks and narrow the guarantee
+
+Retain T1's current checks for the download directory, candidate leaf, and
+their immediate parents. Explicitly call all checkout comparisons lexical and
+state that callers alone guarantee link-free ancestors beneath a protected
+runner-temporary directory.
+
+This is honest and inexpensive, but the security-sensitive helper cannot
+verify the central assumption. A caller mistake can silently make an
+apparently outside path traverse into the checkout or another location.
+
+#### Option 5B — Adopt P1's declared-root-to-working-path envelope
+
+Accept explicit `CheckoutRoot` and `TrustedTemporaryRoot` parameters. Require
+both roots to exist, be separate, and be ordinary non-reparse directories.
+Require download and candidate paths to be strict descendants of the trusted
+root. Walk and reject links/reparse points from each declared root through each
+working path.
+
+This is substantially stronger and matches P1. It does not inspect ancestors
+above the two declared roots, so two lexically separate roots could theoretically
+arrive through earlier indirection.
+
+#### Option 5C — Reject indirection in every absolute existing component
+
+Use the explicit roots from Option 5B, but inspect every existing component
+from each filesystem volume/share root through:
+
+- `CheckoutRoot`;
+- `TrustedTemporaryRoot`;
+- `DownloadDirectory` and the retained archive;
+- the existing parent of `CandidateDirectory`; and
+- every created candidate path.
+
+Reject any component with `FileAttributes.ReparsePoint` or any attribute/read
+failure. After establishing an indirection-free absolute envelope, apply
+separator-aware lexical strict-descendant tests. Repeat relevant component and
+containment checks immediately before archive open, immediately before
+candidate creation, and after extraction.
+
+State the residual model: runner-controlled ancestors, job-owned roots, and no
+competing writer. This is the strongest common-denominator design available
+without OS-specific handle APIs.
+
+#### Option 5D — Resolve physical targets with modern .NET or external `realpath`
+
+Canonicalize each root and working path using
+`FileSystemInfo.ResolveLinkTarget`, `realpath`, or platform-specific
+equivalents, then compare final targets.
+
+This can follow rather than reject links, which complicates dangling links and
+root-overlap rules. More importantly, the modern .NET API is not a reliable
+Windows PowerShell 5.1 common denominator, while external tools differ by
+runner and platform.
+
+#### Option 5E — Use OS-native no-follow handles for race resistance
+
+Implement Unix `openat`/`O_NOFOLLOW`-style traversal and Windows handle/reparse
+APIs so every component is opened relative to a trusted directory handle.
+
+This offers stronger time-of-check/time-of-use protection but requires native
+interop, separate operating-system implementations, careful resource
+management, and extensive review. It is disproportionate for four files on
+ephemeral GitHub-hosted runners and conflicts with the portable PowerShell 5.1
+contract.
+
+#### Option 5F — Let the helper create and own all temporary paths
+
+Pass only an approved runner-temporary root or derive it from ambient state.
+The helper creates unique download/candidate children and returns paths.
+
+This reduces caller mistakes but does not fit the download action, which must
+receive a destination before the helper runs. Deriving `RUNNER_TEMP` from the
+environment also reintroduces hidden trust input; accepting it explicitly
+becomes a variant of Option 5B or 5C.
+
+#### Option 5G — Rely on directory permissions or ACLs
+
+Require a private temporary parent and assume permissions prevent link
+replacement, without exhaustively checking path components.
+
+Permissions help the no-competing-writer model but do not prove that the path
+used to reach the protected directory is itself free of indirection. They are
+defense in depth, not a replacement for validation.
+
+#### Option 5H — Isolate extraction in a container or sandbox
+
+Perform download validation/extraction inside a container, restricted user
+namespace, or dedicated sandbox and copy the four outputs out afterward.
+
+This adds image/runtime trust, cross-platform asymmetry, another transfer
+boundary, and weak Windows PowerShell 5.1 parity. It does not remove the need
+to validate host paths used for ingress and egress.
+
+### Evaluation rubric
+
+Score 1 through 5. Weighted total:
+`sum(weight × score / 5)`, maximum 100.
+
+This rubric is specific to filesystem containment under a portable
+GitHub-hosted-runner threat model:
+
+| Criterion | Weight | Detailed meaning |
+| --- | ---: | --- |
+| Containment and indirection correctness | 30 | Lexical sibling prefixes, root overlap, ancestor links, final links, dangling links, and reparse points must fail closed before an unsafe read/write. |
+| Windows PowerShell 5.1 and cross-platform compatibility | 20 | The same normative algorithm must work with built-in APIs under Desktop 5.1 and Core 7 on Windows and Ubuntu. |
+| Race resistance within the stated threat model | 20 | Relevant checks must be repeated near use, roots must be job-owned/protected, and residual no-competing-writer assumptions must be explicit. |
+| Caller and maintainer clarity | 10 | Trust inputs, strict-descendant rules, ownership, and unsupported topologies must be obvious to a cold implementer. |
+| Deterministic testability | 10 | The harness must be able to build positive and negative roots, sibling prefixes, component links, final links, and overlap cases with stable oracles. |
+| P1/T1 portability | 5 | The contract should minimize semantic divergence between the two self-contained helpers. |
+| Churn and implementation difficulty | 5 | Simpler algorithms score better only after containment and portability. |
+
+### Scoring
+
+| Option | Containment (30) | Compatibility (20) | Race model (20) | Clarity (10) | Testability (10) | Parity (5) | Churn (5) | Total / 100 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 5A — Immediate parent plus narrow claim | 2 | 5 | 2 | 5 | 4 | 2 | 5 | 65 |
+| 5B — Declared-root envelope | 4 | 5 | 4 | 5 | 5 | 5 | 3 | 88 |
+| 5C — Full existing-component rejection | 5 | 5 | 4 | 4 | 5 | 4 | 2 | **90** |
+| 5D — Physical target-resolution APIs | 5 | 2 | 4 | 3 | 4 | 2 | 2 | 72 |
+| 5E — OS-native no-follow handles | 5 | 1 | 5 | 1 | 3 | 1 | 1 | 64 |
+| 5F — Helper-owned temporary paths | 4 | 5 | 4 | 5 | 4 | 2 | 4 | 84 |
+| 5G — Permissions/ACLs only | 2 | 4 | 3 | 3 | 2 | 2 | 4 | 56 |
+| 5H — Container or sandbox | 4 | 3 | 4 | 2 | 3 | 1 | 1 | 64 |
+
+### Selected option
+
+**Select Option 5C: explicit roots plus rejection of indirection in every
+absolute existing component.**
+
+Implementation instructions:
+
+1. Require the five mandatory helper parameters selected in Finding 1.
+2. Resolve `CheckoutRoot` and `TrustedTemporaryRoot` through the filesystem
+   provider to exactly one existing directory each. Reject relative paths,
+   wildcards, non-filesystem providers, files, and missing roots.
+3. Convert all accepted paths to deterministic absolute filesystem paths before
+   using .NET.
+4. Build a component sequence from the filesystem volume/share root through
+   every existing root and working-path component. For each component:
+   - require exactly one existing filesystem entry of the expected kind;
+   - obtain attributes with APIs available under Windows PowerShell 5.1;
+   - reject `FileAttributes.ReparsePoint`;
+   - reject a symbolic link, junction, Windows volume-mount/reparse entry,
+     dangling entry, or attribute/read failure; and
+   - never follow a component merely to classify it as safe.
+5. Require the two declared roots to be mutually non-overlapping: neither may
+   equal or contain the other. Require download and candidate paths to be strict
+   descendants of the trusted root and outside checkout. Use separator-aware
+   ordinal-ignore-case comparison on Windows and ordinal comparison elsewhere.
+6. For the initially nonexistent candidate leaf, validate every existing
+   component through its parent and enumerate that parent exhaustively to
+   reject every same-name leaf entry, including a dangling link.
+7. Repeat the applicable full component, containment, parent, leaf, and
+   ordinary-file/directory checks:
+   - immediately before opening the retained archive;
+   - after complete archive/manifest validation and immediately before creating
+     the candidate directory; and
+   - after extraction before returning paths.
+8. Use `FileMode.CreateNew` and no sharing for extracted files, as already
+   required. Do not delete/recreate or follow an existing candidate leaf.
+9. State the residual race model explicitly: supported jobs use GitHub-hosted
+   runners; ancestors are runner-controlled; checkout and the unique trusted
+   temporary root are job-owned; and no competing writer may replace entries
+   during the helper call. The repeated checks narrow but do not claim to
+   eliminate all same-user races.
+10. Extend the harness with root-overlap, ancestor-link, component-link,
+    dangling-final-link, sibling-prefix, case-variant, and
+    filesystem-provider-qualified path cases. If a link cannot be created on a
+    runner, emit a narrowly justified skip and require the same case on another
+    mandatory runner.
+11. Align P1 in a coordinated pass if exact helper parity remains the declared
+    objective. Until then, T1 must describe the stronger full-component walk
+    as an intentional contract improvement rather than claiming a nonexistent
+    line-for-line implementation identity.
+12. Propagate the complete root/component/recheck contract into T2's
+    prerequisite verification.
+
+The API portability and runner facts supporting this choice are preserved in
+`docs/planning/artifacts/prompt-02-primary-source-research.md`.
+
+## Consolidated selected design
+
+The five selected options combine into one coherent T1 implementation:
+
+1. T1 adopts P1's explicit five mandatory helper inputs, three optional
+   diagnostic labels, and separate harness architecture.
+2. The tracked harness is the sole fixture-suite definition and runs under
+   every required edition/cell.
+3. Every external action in both workflows is pinned to a verified full SHA,
+   with weekly review-only Dependabot updates.
+4. Diagnostic provenance is explicit and testable; ambient environment state
+   is not part of the helper interface.
+5. Both declared roots and every existing absolute path component are
+   indirection-free, with repeat checks and an explicit protected/no-competing-
+   writer model.
+
+These selections expand T1's implementation set to seven files:
+
+1. `.gitattributes`;
+2. `.github/dependabot.yml`;
+3. `.github/workflows/Expand-StyleGuideCandidateArtifact.ps1`;
+4. `.github/workflows/Generate-StyleGuideArtifacts.ps1`;
+5. `.github/workflows/Test-Expand-StyleGuideCandidateArtifact.ps1`;
+6. `.github/workflows/build.yml`; and
+7. `.github/workflows/markdownlint.yml`.
+
+T2 remains the second issue. It does not reimplement T1, but its prerequisite
+verification, exact prerequisite path set, evidence, and acceptance language
+must reflect this final seven-file contract.
