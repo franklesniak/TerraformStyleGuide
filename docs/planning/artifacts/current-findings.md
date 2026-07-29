@@ -1,521 +1,581 @@
-# Findings on the TerraformStyleGuide T1/T2 issue slate
-
-## Scope and review basis
-
-This review assesses
-[T1](../TerraformStyleGuide/03TerraformStyleGuideT1.md) and
-[T2](../TerraformStyleGuide/04TerraformStyleGuideT2.md) as sequential issues,
-with T1 implemented before T2. The PSStyleGuide P1/P2/P3 drafts were consulted
-only where T1/T2 claim or require cross-repository convergence; they are not
-independently critiqued here.
-
-The review also evaluates every recommendation in the supplied
-[TerraformStyleGuide slate criticism](../TerraformStyleGuide/slate-criticism.md).
-“Confirmed” means the criticism identifies a real gap. It does not necessarily
-mean its severity or exact remedy is accepted.
-
-Current-state checks included the repository workflows, generator-related
-surfaces, Markdown package manifest and hook, state-management source sections,
-the corresponding PSStyleGuide contracts, current Node release status, the
-named action tags, HCP Terraform API/Europe documentation, and curl config-file
-grammar.
+# Findings on the revised TerraformStyleGuide issue slate
 
 ## Overall assessment
 
-The proposed work is technically serious and security-conscious, but the slate
-is not ready to file unchanged.
+The revised slate is substantially better than the earlier monolithic design.
+T1, T1A, and T1B now describe three real trust boundaries: deterministic
+generation, untrusted candidate validation, and trusted publication. T2 through
+T4 also have unusually strong safety intent, testability, and negative-case
+coverage for documentation issues.
 
-The most important blockers are:
+The slate is not ready to file or implement unchanged. Five design gaps are
+blocking because they make an acceptance criterion impossible to implement or
+leave a safety-critical claim unproved:
 
-1. T1 explicitly preserves Node 20 even though Node 20 is now end-of-life.
-2. T1 and T2 require a real linked npm-remediation issue, but the slate has no
-   Terraform T3 draft.
-3. T1 leaves several executable contracts underspecified: trusted-root
-   creation, harness case IDs, writer input normalization, and exact action
-   tuple validation.
-4. T2's HCP example does not support the documented Europe host and does not
-   validate its page number or curl-config-sensitive token characters.
-5. T2 supplies behavioral evidence only for HCP xtrace, not for the four
-   published recovery/discovery blocks as a whole.
-6. Independent of the supplied criticism, T1 is approximately 2,000 lines and
-   94 KB and combines deterministic serialization, repository text policy,
-   action governance, a cross-platform secure ZIP subsystem, and an automated
-   write pipeline. It is an epic-sized specification, not a reviewable
-   single-purpose issue.
+1. T1 lost the reciprocal generator-convergence contract with PSStyleGuide.
+2. T1A does not provide a complete, stable test oracle for its public
+   parameters, limits, and caller-context lifecycle.
+3. T1B attempts to make a job depend on a job in another workflow, omits the
+   transport for four required preparation hashes, and does not define unique
+   per-matrix-cell evidence.
+4. T3 does not define a permanent residual-audit validator, and its proposed
+   advisory-URL/path identity cannot be derived safely from npm audit report
+   version 2.
+5. T4 requires a copyable PowerShell backup path but supplies neither a
+   byte-preserving implementation contract nor Windows tests, while its
+   no-replace publication primitive is tested only as a stub.
 
-The generator-convergence direction is sound: converge observable algorithms
-and failure semantics while keeping each repository self-contained. The same
-approach should replace T1's now-stale hypothetical helper-convergence prose.
+After those corrections, the issue order should remain T1 → T1A → T1B → T2 →
+T3 → T4. Each issue should consume the actual merge commit of its predecessor.
+T3 may be expedited only under the security exception already contemplated by
+the slate; doing so should be an explicit scheduling decision, not an
+alternative dependency graph embedded in the issue text.
 
-## Current-state anchors
+This review preserves each issue's H1 as its title and uses T1/T1A/T1B/T2/T3/T4
+as the short names. The PSStyleGuide issues were used only to validate the
+supplied cross-repository recommendations and generator/workflow convergence;
+they were not independently reviewed as a second slate.
 
-- T1 is 93,982 bytes and 2,030 lines; T2 is 40,506 bytes and 912 lines.
-- The live Markdown workflow selects Node 20. The current nested package
-  manifest has no `engines.node`, `packageManager`, or
-  `devEngines.packageManager` field, and the Husky hook has no Node-major
-  guard.
-- Registry metadata for the installed direct lint versions,
-  `markdownlint-cli2@0.20.0` and `markdownlint@0.40.0`, declares Node `>=20`.
-  Moving only the hosted workflow to Node 24 is therefore within those declared
-  engine ranges and does not itself require a package or lockfile change.
-- A fresh `npm audit --package-lock-only --audit-level=moderate --json` on
-  2026-07-29 with npm 11.7.0 returned the documented vulnerability exit and
-  the same seven affected nodes: five high and two moderate. Their
-  object-valued `via` entries expose 14 distinct advisory URLs; string-valued
-  `via` links are a separate relationship and must also be traversed by T3.
-- All seven T2 Bash fences pass `bash -n` after normalizing the planning
-  checkout's CRLF transport to LF. This establishes syntax only, not the
-  behavioral contracts discussed below.
-- The live source contains copy-sensitive state operations outside T2's four
-  target blocks, including backup redirections in `STYLE_GUIDE.md` and
-  `STYLE_GUIDE_RATIONALE.md`, plus corruption recovery using
-  `terraform state push`.
+## Review anchors
 
-## Recommendation-by-recommendation audit
+- TerraformStyleGuide `main` was reviewed at
+  `6ee3f57b2b71b885a5927b770dde47532944de62`.
+- The live repository still has a single build job that generates and pushes
+  directly, a separate Markdown workflow, Node 20 setup, mutable action tags,
+  and four `Set-Content -Encoding UTF8` generator writes. Those facts make the
+  proposed work relevant rather than hypothetical.
+- T1/T1A/T1B are 345/457/473 lines respectively. The split improves ownership
+  and reviewability even though each issue remains detailed.
+- A local `npm --prefix .github/workflows audit --package-lock-only --json`
+  produced npm audit report version 2 with package-level `nodes` and
+  advisory objects, but no direct advisory-to-node edge. That matters to T3's
+  proposed exception identity.
 
-### T1-1: The action pins are current, but the installed Node target is not
+## Review of the seven supplied recommendations
 
-**Decision: Confirmed. The defect is real; the proposed ownership choice is
-reasonable but not the only coherent remedy.**
-
-T1 lines 730–731 require preserving Markdown lint's existing Node behavior,
-lines 788–790 prohibit changing the Node version, and lines 908–914 put the npm
-issue after T2 by default. The live workflow selects Node 20.
-
-The current Node release table identifies Node 20 as EOL and Node 24 as LTS.
-The four action tag/SHA pairs named by T1 were independently resolved from the
-official repositories and match the draft.
-
-Preferred correction if the order remains T1 → T2 → T3:
-
-- T1 should change only the hosted lint runtime to Node 24, explicitly set
-  `package-manager-cache: false`, assert the actual Node major before
-  installation, and run the existing clean install plus both lint commands.
-- T1 should continue to prohibit dependency, lockfile, lint-rule, and hook-floor
-  changes; those remain T3 work.
-- T2 should treat hosted Node 24 as a merged T1 invariant.
-
-The alternative is to draft and execute T3 first, then rebaseline T1 and T2.
-What is not coherent is preserving an EOL runtime through T1 and T2 while
-leaving the issue that owns the replacement unfiled and last.
-
-The cache setting is worth making explicit even though the current package
-manifest does not activate setup-node's automatic npm cache. This prevents a
-later `packageManager` or `devEngines.packageManager` field from silently
-changing the workflow's cache behavior.
-
-Primary source:
-[Node.js release status](https://nodejs.org/en/about/previous-releases).
-
-### T1-2: The caller-owned trusted-root factory is still undefined
-
-**Decision: Confirmed as an implementation-contract gap; severity is Medium,
-not High under T1's hosted-runner/no-competing-writer threat model.**
-
-T1 repeatedly requires a “unique trusted temporary root,” but it defines only
-helper-side validation. It does not define how workflow and harness callers
-establish uniqueness and ownership, nor does it give them a consistent
-nonrecursive teardown contract. A careless implementation can use
-`Directory.CreateDirectory()` or `New-Item -Force` and silently accept a
-pre-existing child.
-
-Add a normative caller contract covering:
-
-- normalized runner-controlled parent;
-- bounded retries around `Path.GetRandomFileName()`;
-- absence, create-without-force, then ordinary/non-reparse verification;
-- retry only for a proved collision;
-- separate download and initially absent candidate children;
-- absolute path propagation; and
-- caller-owned, journaled, nonrecursive `finally` teardown that preserves the
-  primary error and reports cleanup failure.
-
-The criticism's algorithm is appropriate. “Reuse one factory” needs a concrete
-home, however. If that means another tracked script, T1's exact seven-file
-boundary must change. If the contract is repeated in workflow blocks, the issue
-should require one reviewed implementation pattern and parity tests rather than
-pretend there is one shared function.
-
-Primary source:
-[Path.GetRandomFileName](https://learn.microsoft.com/dotnet/api/system.io.path.getrandomfilename).
-
-### T1-3: The harness promises stable IDs but still groups distinct cases
-
-**Decision: Confirmed; severity is Medium.**
-
-T1 requires stable case identifiers, but its oracle table supplies prose
-classes and combines materially distinct cases. A future implementation could
-technically assign IDs, but the issue would not prove that every listed
-permutation received one executable case. This is especially weak for
-cross-repository parity and platform skip accounting.
-
-Split the grouped rows and assign stable IDs in the issue. Add:
-
-- a supplied-label induced failure;
-- an equivalent all-labels-omitted failure requiring `unavailable`; and
-- separate empty-value cases for `ArtifactId`, `RunId`, and `RunAttempt`.
-
-Each row should state platform/precondition, expected phase, diagnostic fields,
-candidate initial/final state before harness teardown, and whether
-`ZipArchive` construction is permitted.
-
-The criticism is right about the missing omitted-label failure. The existing
-omitted-label success proves formatting on success, not the fallback carried
-by a failure diagnostic.
-
-### T1-4: Writer inputs are not normalized to a one-read contract
-
-**Decision: Confirmed, with a correction to the criticism's comparison.**
-
-T1 copies only `TARGET_REF` and `EXPECTED_SHA`, checks nonemptiness and a
-`refs/heads/` prefix, then compares against ambient `GITHUB_REF` and
-`GITHUB_SHA`. It does not reject whitespace or CR/LF and does not run
-`git check-ref-format`.
-
-Require one-time locals for all four values; reject missing/empty,
-leading/trailing whitespace, and CR/LF; validate the full branch ref with
-`git check-ref-format`; compare only the locals; and reuse them unchanged for
-checkout, remote, parent, lease, and refspec proofs.
-
-The criticism says this “matches P1,” but current P1 actually copies only
-`TARGET_REF` and `EXPECTED_SHA` at its first boundary, reads `GITHUB_REF` and
-`GITHUB_SHA` once during comparison, and then prohibits all four rereads. The
-criticism's proposed four-local rule is stronger than P1's literal text. It is
-still a clean convergence improvement and should be applied to both drafts if
-exact symmetry is intended.
-
-Because all four values originate from GitHub-controlled contexts, this is
-primarily fail-closed validation and maintainability, not a demonstrated
-high-likelihood exploit.
-
-### T1-5: The directly tested cleanup function is never actually named
-
-**Decision: Partially confirmed as a convergence/clarity improvement; denied as
-a High-severity correctness defect.**
-
-T1 already requires one named function in the exact production helper, requires
-the production failure path to invoke it, requires the harness to call that
-same exact production function directly, and prohibits copied cleanup logic or
-a test wrapper. A compliant implementation cannot choose unrelated production
-and harness functions merely because the issue does not preselect the
-identifier.
-
-Using P1's `Remove-StyleGuideCandidateInvocationState` name is nevertheless
-desirable if the helper contracts are intentionally converging. Add the exact
-name to T1's lifecycle, harness, validation, acceptance, and T2 prerequisite
-text. Treat this as Low-severity specification closure rather than evidence
-that the current contract permits two cleanup implementations.
-
-The recommendation to resolve helper and harness files to ordinary absolute
-paths before launching children is valid independently and should be retained.
-
-### T1-6: The action-pin verifier accepts unreviewed full-SHA tuples
-
-**Decision: Confirmed; severity is Medium.**
-
-T1's automated/static instruction checks only SHA shape and a nonempty version
-comment, followed by a separate manual upstream review. A substituted 40-hex
-commit and plausible comment can pass the shape check.
-
-Add an exact repository → SHA → version allowlist plus workflow-role rules.
-Reject unknown action repositories, tuple mismatches, and roles in unapproved
-workflows. The implementation-time upstream check still controls freshness;
-when it selects a newer approved release, update the allowlist, table, comments,
-and evidence atomically.
-
-The current tuples do resolve exactly:
-
-| Action | Tag | SHA |
-| --- | --- | --- |
-| `actions/checkout` | `v7.0.1` | `3d3c42e5aac5ba805825da76410c181273ba90b1` |
-| `actions/setup-node` | `v7.0.0` | `820762786026740c76f36085b0efc47a31fe5020` |
-| `actions/upload-artifact` | `v7.0.1` | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` |
-| `actions/download-artifact` | `v8.0.1` | `3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c` |
-
-The criticism overstates this as High severity because T1 also mandates
-implementation-time official-repository verification. The gap is that the
-checked-in state is not mechanically bound to the result of that review.
-
-### T1/T2-1: Helper convergence is hypothetical and T2 duplicates T1
+### 1. Split P1 along T1/T1A/T1B trust boundaries
 
 **Decision: Confirmed.**
 
-T1's generator matrix is concrete and reciprocal. Its helper text still says
-the Terraform rules govern “even if” P1 has not adopted them, although current
-P1 already has a convergence matrix and many shared contracts. Replace this
-with a current reciprocal matrix covering parameters, archive identity, path
-security, manifest grammar, lifecycle, diagnostics, fixtures, transport, and
-intentional CI-placement differences.
+The recommendation is valid. P1 currently combines generation, validation,
+caller-context cleanup, artifact transport, and trusted publication in one
+roughly 129 KB issue. The T1/T1A/T1B split is the clearer model because each
+issue has one dominant security boundary and can be merged and validated before
+the next begins.
 
-Use the same first/second-mover evidence rule as the generator. Keep scripts,
-manifests, names, and transforms repository-local.
+Implications for this slate:
 
-T2's prerequisite is too large and already depends on details that the
-criticism proposes changing. After T1 and T3 are final, T2 should link to their
-actual issues and merged acceptance evidence, summarize only the invariants T2
-relies on, and stop restating their implementation specifications.
+- Preserve the Terraform split.
+- If the PSStyleGuide slate adopts the same split, route reciprocal comparisons
+  to P1/P1A/P1B rather than continuing to call all three layers “P1.”
+- Do not move final writer behavior back into T1 or T1A merely to keep the two
+  repositories textually similar. Convergence should be by shared contract and
+  reusable implementation, not by collapsing distinct trust boundaries.
 
-### T1/T2-2: The required npm-remediation issue does not exist
-
-**Decision: Confirmed; this is a High-severity slate-completeness defect.**
-
-T1 says a real separately reviewable linked issue must exist before T1 closes.
-T2 treats that issue as a prerequisite invariant. The planning directory has no
-`05TerraformStyleGuideT3.md`. Detailed seed requirements embedded in T1/T2 do
-not create a fileable, independently orderable issue.
-
-Draft T3 now, retain its title as an H1, and link it reciprocally. T3 should own
-the Terraform repository's real full-lint Husky integration rather than copy
-PSStyleGuide's nonexistent-here staged-content API. The criticism's proposed
-T3 scope is directionally correct:
-
-- final package and lockfile selection;
-- final package minimum plus hosted Node policy;
-- `engines.node` and hook guard;
-- clean install, `npm ls --all`, positive/negative/tooling-failure evidence;
-- a tracked cross-platform integration harness and at least one real installed
-  Husky invocation;
-- normalized audit/advisory/path evidence and structured expiring residual
-  approvals;
-- exact npm Dependabot policy/final state; and
-- explicit supersession of T1/T2's one-time path and intermediate Dependabot
-  gates.
-
-Remove T1's “documented equivalent evidence” escape hatch for the real
-installed-hook smoke test. T3 should require at least one actual disposable
-repository invocation.
-
-The final filing/implementation order must be explicit:
-
-- T1 → T2 → T3 only if T1 establishes Node 24 and policy permits the current
-  advisories to remain through T2; or
-- T3 → T1 → T2 if Node ownership stays in T3 or policy requires advisory
-  remediation first.
-
-### T2-1: The HCP block has endpoint and input-grammar gaps
-
-**Decision: Confirmed in full; severity is High.**
-
-The HCP example hardcodes `app.terraform.io`, accepts arbitrary page values, and
-interpolates the token into curl's quoted config-file grammar without rejecting
-characters that can alter that grammar.
-
-Add a closed host selector accepting only:
-
-- `app.terraform.io`; and
-- `app.eu.terraform.io`.
-
-Reject every other value before token expansion or response-file creation.
-Construct the HTTPS URL only from the accepted host. Explicitly keep Terraform
-Enterprise out of scope; arbitrary enterprise hosts require a separate
-certificate, redirect, and token-destination trust contract.
-
-Require `TFC_PAGE_NUMBER` to match canonical positive decimal syntax
-(`^[1-9][0-9]*$`) before file creation. Reject token values containing CR, LF,
-double quote, backslash, or other control characters before producing curl
-config input, unless a separately specified escaping algorithm is used and
-behaviorally tested.
-
-HashiCorp documents `app.eu.terraform.io` as the Europe hostname. Curl documents
-that quoted config parameters recognize backslash escapes and require
-quote/backslash handling, so ordinary shell quoting alone is not a sanitizer.
-
-Primary sources:
-
-- [HCP Terraform in Europe](https://developer.hashicorp.com/terraform/cloud-docs/europe)
-- [HCP Terraform state versions API](https://developer.hashicorp.com/terraform/cloud-docs/api-docs/state-versions)
-- [curl config-file grammar](https://curl.se/docs/manpage.html)
-
-### T2-2: The state-safety quantifier exceeds the issue inventory
-
-**Decision: Partially confirmed.**
-
-The live source contains state operations outside the four target blocks,
-including `terraform state pull` backup redirections, `terraform state push`,
-state removal, another S3 version-listing example, and corruption-recovery
-guidance. T2 does not harden those locations.
-
-The phrase “every recovery destination” can reasonably be read as scoped to the
-blocks modified by this issue, so the criticism overstates the present wording
-as a universal claim. Still, the issue should remove doubt:
-
-- say “every destination introduced or modified by this issue”;
-- name the four S3/Azure/GCS/HCP blocks as the exact scope;
-- inventory nearby state operations as reviewed but out of scope; and
-- open a follow-up only for locations that the inventory finds copy-unsafe,
-  rather than presuming every adjacent operation belongs in T2.
-
-Do not expand T2 into all state-management guidance. The provider-neutral
-sensitive-state warning should remain.
-
-### T2-3: Only the HCP xtrace behavior is executed
+### 2. Replace P1's stale “parallel T1” comparisons
 
 **Decision: Confirmed.**
 
-Syntax review and one HCP xtrace stub are not enough evidence for shell examples
-whose selling point is copy safety. Require non-network behavioral tests of the
-exact finalized blocks, with `aws`, `az`, `gcloud`, and `curl` stubs and exact
-argument-vector capture.
+The recommendation is valid and is now bidirectional. P1's comparisons target
+an older, monolithic understanding of T1. T1A and T1B compare themselves with
+monolithic P1, while T1 has no PSStyleGuide comparison at all. The current text
+therefore cannot prove the thoughtful generator unification requested for the
+two repositories.
 
-At minimum cover:
+Required convergence model:
 
-- `bash -n`;
-- missing/empty/relative/existing/file/directory/link/dangling-link
-  destinations before provider invocation;
-- literal paths containing spaces and shell metacharacters;
-- unchanged selected IDs/generations;
-- exact provider filters and native no-clobber flags;
-- both HCP hosts, invalid host classes, valid/invalid page values, and
-  config-breaking token values;
-- inherited xtrace;
-- simulated curl failure and retained invalid partial output; and
-- expected rejection reason, not merely any nonzero status.
+- T1 ↔ P1: generator input/output bytes, destination-path resolution, BOM,
+  newline, and failure postconditions.
+- T1A ↔ P1A: candidate validation, resource limits, caller-context lifecycle,
+  and stable test cases.
+- T1B ↔ P1B: artifact transport, credential lifetime, trusted identity, lease,
+  regeneration, and publication behavior.
 
-The criticism allows an untracked temporary harness to preserve T2's six-file
-scope. That is acceptable as implementation evidence, but a tracked harness is
-better regression protection if the maintainer is willing to change the file
-boundary. The issue must choose explicitly.
+If the PS issues have not yet been split when a Terraform issue is filed, the
+Terraform text should name the exact corresponding section and commit in P1,
+then be updated to the final P1/P1A/P1B identifier before implementation.
 
-### T2-4: Local npm validation does not establish the T1 runtime boundary
+### 3. Converge the generator destination-path contract
 
-**Decision: Confirmed if T1 owns Node 24; otherwise parameterize it to the merged
-T3 contract.**
+**Decision: Confirmed.**
 
-T2 runs ambient `npm` without checking `node`, does not bind one node/npm
-executable pair, and does not explicitly scope `CI=true` around `npm ci`.
+The recommendation is valid. T1's proposed contract is stronger: accept one
+filesystem path; reject unresolved wildcards, provider paths, and ambiguous
+multi-match inputs; perform one explicit BOM-less UTF-8 write; and do not alter
+the destination on failure. P1's sample path resolution does not state all of
+those rejection and postcondition rules.
 
-After the ordering decision, T2 should resolve one application pair, assert the
-merged required Node major before installation, record npm version, reuse the
-same npm executable for installation and both lint commands, and restore the
-prior `CI` environment value in `finally`.
+T1 should keep its stronger semantics and add a reciprocal matrix that records
+whether PSStyleGuide is identical for each behavior. The intended end state is
+one shared generator contract and, where practical, one shared implementation.
+Any deliberate difference must include a repository-specific reason and test.
+An unresolved difference must block the “unified generator” acceptance
+criterion rather than be recorded as informational drift.
 
-This is validation discipline only. T2 must not update dependencies or
-lockfiles.
+### 4. Add candidate resource limits and a caller-context lifecycle
 
-## Independent findings
+**Decision: Confirmed.**
 
-### I-1: T1 is an epic disguised as one issue
+The recommendation is valid. T1A's archive, entry, and generated-file byte
+limits and its explicit `New-...`/`Remove-...` caller context are meaningful
+improvements over P1. They bound decompression and cleanup work and make
+adversarial cleanup testable.
 
-**Severity: High planning and review risk.**
+T1A does not yet prove its own stronger contract. It needs one exact oracle row
+per stable case ID for:
 
-T1 is roughly 2,000 lines/94 KB. Its title foregrounds deterministic generation
-and LF checkouts, but its acceptance surface also includes:
+- each 8 MiB entry, 32 MiB archive, and 32 MiB generated-file boundary;
+- just-below, exactly-at, and just-above cases where the boundary permits them;
+- invalid artifact digest grammar;
+- zero, one, and multiple artifact-download results;
+- wrong download result types;
+- wildcard, provider, missing, and multi-match path resolution;
+- omitted, explicit-null, empty, and non-empty optional labels;
+- candidate cleanup and caller-context cleanup after validation failures and
+  cleanup failures.
 
-- action pinning and Dependabot policy;
-- least-privilege workflow permissions and event redesign;
-- a new secure cross-platform ZIP validator/extractor;
-- a permanent multi-platform adversarial harness;
-- immutable artifact promotion;
-- four-cell Windows pull and push matrices;
-- an approval stage and exact-lease automated writer; and
-- cross-repository generator/helper convergence.
+The permanent harness also needs an explicit `ContextManagerPath` parameter or
+a normative, testable sibling-resolution rule. A `HelperPath` alone does not
+tell an out-of-tree caller which context-manager implementation is under test.
 
-These concerns are related, but they are not one review unit. A defect in the
-custom archive subsystem can block a straightforward serialization fix, and a
-reviewer must validate too many trust boundaries at once.
+### 5. Bring the P writer to T1B's credential and identity boundary
 
-The same normative requirements are repeated in requested changes, validation,
-acceptance criteria, T2's prerequisite, and cross-repository drafts. That
-repetition has already produced the stale helper-convergence wording and makes
-future drift likely. Each child issue should have one normative contract, with
-validation and downstream prerequisites linking to it rather than paraphrasing
-it.
+**Decision: Confirmed.**
 
-Preferred correction: treat the current document as an epic/design record and
-create sequential child issues for:
+The recommendation is valid. T1B's four-local model, process-scoped HTTP
+authorization for only the exact push, no credential persistence, NUL-safe
+enumeration, ref/object identity checks, independent regeneration, and
+force-with-lease publication are a better least-privilege boundary.
 
-1. deterministic serialization, script version, and `.gitattributes`;
-2. helper plus tracked harness and convergence;
-3. workflow permissions, immutable candidate transport, matrices, approval,
-   and writer; and
-4. Node/package governance (the proposed T3, ordered according to policy).
+Persisted checkout credentials can be functional, but they leave the write
+credential available for more steps and subprocesses than the exact push
+requires. That conflicts with the slate's own least-privilege goal. The two
+repositories should converge on the T1B model unless a documented platform
+constraint makes one element impossible.
 
-If the maintainer deliberately keeps T1 atomic, record that decision and expect
-one correspondingly large PR. In that case, all criticism corrections must be
-integrated before filing because review-time discovery will be expensive.
+T1 should also name the same process-scoped authorization method for its
+temporary writer. “Expose its write credential only for the exact push step”
+states a goal, not an implementation contract, and could otherwise be
+implemented with a credential-bearing remote URL or another broader mechanism.
 
-### I-2: T2 should validate the GCS generation grammar
+### 6. Bound P3's Node support policy
 
-**Severity: Low to Medium.**
+**Decision: Confirmed.**
 
-T2 describes the selected GCS generation as numeric but only checks that
-`GCS_GENERATION` is nonempty. Quoting prevents shell injection, and gcloud
-should reject an invalid generation, but the example can fail earlier and more
-clearly.
+The recommendation is valid. A minimum-only range silently admits unsupported
+future majors and intervening releases. T3's bounded engine policy plus an
+exact CI major is the safer contract.
 
-Require the selected generation to match canonical positive decimal syntax
-before provider invocation. Do not similarly invent narrow grammars for opaque
-S3 or Azure version IDs.
+T3 should retain that policy and make the hook oracle explicit:
 
-Primary source:
-[Google Cloud object generation identifiers](https://docs.cloud.google.com/storage/docs/objects).
+- the minimum supported version passes;
+- each supported major passes;
+- a version below the minimum fails;
+- an intervening unsupported major fails; and
+- the first major above the upper bound fails.
 
-### I-3: The full CI topology needs an explicit cost decision
+The package `engines.node`, hook message, local tests, and CI setup must all
+derive from or assert the same range so they cannot drift.
 
-**Severity: Low; operational choice.**
+### 7. Make residual P3 audit approvals durable
 
-T1 intentionally runs Ubuntu verification plus four Windows pull-request cells,
-and on every push to `main` runs preparation plus four Windows cells even when
-the final writer will skip. With unfiltered events, unrelated documentation
-changes pay the full matrix cost.
+**Decision: Confirmed, with a correction to the Terraform identity model.**
 
-This is stronger evidence, not a correctness defect. Before filing, explicitly
-accept that cost or reduce redundant helper placement while preserving required
-checks and the unfiltered required-check behavior. Do not let the topology be
-an accidental consequence of convergence wording.
+The recommendation is valid. A one-time array or issue snapshot does not
+enforce expiry, topology, or clean-baseline behavior after merge. T3 correctly
+moves toward a conditional, versioned exception file and recurring CI
+enforcement.
 
-## Strengths to preserve
+However, T3 should not make an advisory URL/path pair the primary identity.
+npm's audit report exposes package nodes and advisory objects without a direct
+edge proving that every advisory applies to every node. Blind pairing can
+over-approve paths. Use:
 
-- Keep issue titles as H1 headers and continue using T1/T2/T3 terminology.
-- Preserve T1's complete-payload LF normalization, resolved BOM-less
-  `WriteAllText` boundaries, LF checkout policy, and cross-edition raw-byte
-  evidence.
-- Preserve the generator convergence definition: shared observable algorithms,
-  invariants, and failure semantics without cross-repository runtime coupling.
-- Preserve the retained-stream digest/ZIP identity, manifest validation,
-  explicit roots, full-component checks, case-specific cleanup outcomes, and
-  same-child PowerShell edition assertions.
-- Preserve immutable artifact ID/digest propagation, download-by-ID,
-  least-privilege writer, blob identity proofs, exact expected-SHA lease, and
-  no retry/adaptation.
-- Preserve review-only action/Dependabot governance and implementation-time
-  upstream verification.
-- Preserve T2's separation of discovery and recovery, exact-object filters,
-  deliberate selection, no-clobber destination design, restrictive `umask`,
-  AWS bucket/KMS reconciliation, Azure HNS limitation, GCS Object
-  Versioning/soft-delete distinction, and `gcloud storage` modernization.
-- Preserve `set +x` as the first HCP subshell command, protected exact-path
-  response creation, no token in ordinary process arguments, explicit curl
-  failure handling, manual pagination, and sensitive state/Archivist URL
-  handling.
-- Do not copy PSStyleGuide's staged-content lint implementation into this
-  repository; TerraformStyleGuide has a different full-lint Husky surface.
+- primary identity: `(Package, AdvisoryUrl)`;
+- a separate, exact package-keyed set of approved audit node paths;
+- an exact semver-aware validator if advisory-to-node pairing is retained; and
+- no exception file at all when a clean install has no residual findings.
 
-## Recommended disposition
+The validator must run after a clean install in local integration tests and in
+the hosted workflow, reject expired or unused entries, reject new packages,
+advisories, or paths, and require deletion of the exception file when the
+baseline becomes clean.
 
-Before the slate is filed:
+## Sequential TerraformStyleGuide issue review
 
-1. Decide whether current T1 becomes an epic with child issues or remains one
-   unusually large issue.
-2. Resolve the Node/order policy.
-3. Draft and reciprocally link a real Terraform T3.
-4. Apply the confirmed T1 contract corrections, while treating cleanup naming
-   and writer one-read details at their proportionate severity.
-5. Replace helper hypothetical convergence with a current reciprocal matrix.
-6. Shorten T2's prerequisite after T1/T3 are final.
-7. Close HCP host/page/config grammar, GCS generation grammar, and T2 scope
-   language.
-8. Add exact non-network behavioral evidence for all four shell surfaces.
-9. Make T2's local npm validation assert the merged runtime contract.
+## T1 — Make artifact generation byte-deterministic and standardize repository text checkouts on LF
 
-## Primary references
+**Disposition: Good foundation; revise before filing.**
 
-- [T1 issue draft](../TerraformStyleGuide/03TerraformStyleGuideT1.md)
-- [T2 issue draft](../TerraformStyleGuide/04TerraformStyleGuideT2.md)
-- [Supplied slate criticism](../TerraformStyleGuide/slate-criticism.md)
-- [Node.js release status](https://nodejs.org/en/about/previous-releases)
-- [HCP Terraform state versions API](https://developer.hashicorp.com/terraform/cloud-docs/api-docs/state-versions)
-- [HCP Terraform in Europe](https://developer.hashicorp.com/terraform/cloud-docs/europe)
-- [HCP Terraform API overview](https://developer.hashicorp.com/terraform/cloud-docs/api-docs)
-- [curl manual](https://curl.se/docs/manpage.html)
-- [setup-node automatic cache guidance](https://github.com/actions/setup-node)
+### Improvements to preserve
+
+- The issue is now limited to repository text policy, deterministic generator
+  writes, pinned workflow actions, Node 24, and a temporary publication path.
+- The one-path, no-wildcard/no-provider/no-multi-match destination contract is
+  precise and reusable.
+- A single `UTF8Encoding(false)` plus `WriteAllText` boundary is a sound way to
+  avoid PowerShell-edition-dependent BOM behavior.
+- Exact action SHAs and explicit Node 24 setup reduce mutable runtime inputs.
+- Separating untrusted validation and the final writer into T1A/T1B is the
+  correct trust-boundary design.
+- The five-file LF normalization scope is feasible against the reviewed `main`
+  tree; the issue does not need a repository-wide historical rewrite.
+
+### Required revisions
+
+1. **Restore the missing generator-convergence matrix.** Add the T1 ↔ P1
+   comparison described under recommendation 2. It should cover public
+   parameters, path resolution, content assembly, LF/BOM behavior, write count,
+   failure destination state, and shared tests. Classify every row as identical,
+   deliberate difference, or unresolved blocker.
+2. **Specify temporary push authentication.** Reuse T1B's process-scoped
+   environment-backed HTTP authorization, prohibit credential-bearing remote
+   URLs and persisted checkout credentials, and limit the token to the exact
+   `git push` process.
+3. **Fix the merge-commit acceptance criterion.** A T1 pull request cannot know
+   its own future merge commit. T1 should require T1A's issue/PR to record the
+   T1 merge commit it consumes. T1 may record the reviewed head commit and the
+   required successor handoff.
+4. **Name the temporary boundary clearly.** State that T1's publication path is
+   intentionally transitional and must be removed, not preserved alongside,
+   T1B's final writer. This prevents the two writers from coexisting after T1B.
+
+### Concern, not a blocker
+
+The issue allows T3 to be run early under a policy exception. That is sensible
+for an active advisory, but the normal dependency remains T1 through T1B first.
+Record an actual exception decision and the commits compared if the order is
+changed; do not weaken T1's Node/action requirements to accommodate it.
+
+## T1A — Add a fail-closed cross-platform style-guide candidate validator
+
+**Disposition: Strong design; test contract is incomplete.**
+
+### Improvements to preserve
+
+- The helper has a narrow parameter surface and a single structured result.
+- Candidate materialization is fail-closed, avoids following directory links,
+  and holds the validated file open through inspection.
+- The 8/32/32 MiB limits bound individual entries, archive work, and generated
+  content.
+- The caller context gives normal and adversarial cleanup explicit ownership.
+- The permanent harness and Windows PowerShell 5.1/PowerShell 7 coverage turn a
+  subtle helper into a maintainable repository contract.
+- Exact candidate names and cleanup ownership reduce path-substitution and
+  stale-file reuse.
+
+### Required revisions
+
+1. **Make the context-manager input deterministic.** Add a mandatory exact
+   `ContextManagerPath`, or define and test one safe sibling-resolution rule.
+   Reject missing, wildcard, provider, multiple, and non-file resolutions for
+   both helper scripts.
+2. **Replace grouped case ranges with one row per stable ID.** Each row should
+   name setup, invocation, expected result or exception class, expected
+   candidate state, expected context state, and expected cleanup diagnostics.
+   “V01–V08” is not the promised exact oracle.
+3. **Add resource-boundary cases.** Test every declared limit, actual
+   decompressed byte counting, misleading ZIP metadata, and cumulative archive
+   overflow. Include exact-at-limit behavior so future maintainers cannot
+   silently change `<` to `<=`.
+4. **Complete public-input coverage.** Add invalid digest grammar, zero and
+   multiple downloads, unexpected result types, wildcard/multi-match paths,
+   explicit-null labels, and invalid label types where PowerShell binding does
+   not already make the result unambiguous.
+5. **Exercise both production cleanup paths.** Current cleanup cases emphasize
+   candidate deletion. Add failures and idempotency tests for caller-context
+   cleanup, including a primary validation error followed by cleanup failure
+   without losing either diagnostic.
+6. **Fix the future-merge wording.** The T1A pull request cannot record its own
+   future merge commit. T1B must record the T1A merge commit it consumes.
+7. **Update the reciprocal comparison target.** If PSStyleGuide is split, this
+   layer should compare with P1A rather than monolithic P1.
+
+### Exactness improvement
+
+Assign stable IDs to the newly added cases rather than renumbering existing
+ones. Stable IDs are valuable only if a historical failure can still be mapped
+to the same behavior after the suite grows.
+
+## T1B — Promote generated style-guide artifacts through a least-privileged verified writer
+
+**Disposition: Security model is good; workflow topology is not implementable
+as written.**
+
+### Improvements to preserve
+
+- The preparation, four-cell read-only validation, approval, and writer stages
+  express the intended trust boundary well.
+- The four-local writer identity model prevents branch/ref/object ambiguity.
+- The writer independently regenerates both artifacts rather than trusting the
+  promoted bytes alone.
+- Exact artifact identity/digest checks and archive-entry checks reduce
+  transport substitution.
+- NUL-safe changed-path enumeration, canonical ref resolution, four-object
+  equality, and an explicit lease make the write set and push target auditable.
+- The credential is limited to one exact push process; diagnostic checks are
+  explicitly credential-free.
+- The cost guard prevents an expensive four-cell matrix from running on
+  irrelevant changes.
+
+### Required revisions
+
+1. **Resolve the cross-workflow dependency.** `markdownlint.yml` is a separate
+   workflow, so a job in `build.yml` cannot name its Markdown job in
+   `jobs.<job_id>.needs` or consume its result. GitHub documents `needs` as the
+   jobs that a job depends on in the workflow, and the `needs` context contains
+   direct dependency jobs. Keep Markdown as an independent required check and
+   add a build-local Ubuntu/preparation gate, or deliberately consolidate the
+   jobs into one workflow. Do not leave “approval depends on Markdown/Ubuntu”
+   as an impossible cross-workflow edge.
+2. **Transport the four preparation hashes.** The preparation step records four
+   candidate SHA-256 values, but the exhaustive job-output list omits them
+   while the writer must compare against them. Add four explicitly named
+   immutable outputs, include them in the approval/writer contract, or remove
+   that comparison and rely on the artifact service digest plus independent
+   writer regeneration.
+3. **Define unique matrix evidence.** Matrix job outputs are combined only when
+   output names are unique; duplicate names can be overwritten by the
+   last-finishing cell, whose order is not guaranteed. Give each of the four
+   static cells unique result/digest keys or use four explicitly named jobs.
+   The approval job must prove that all four expected cells ran, not merely that
+   some matrix execution succeeded.
+4. **Make the YAML structural check executable.** Name the parser or exact
+   in-repository validation method used to prove action SHAs, permissions,
+   credential settings, job dependencies, and event routing. Text matching is
+   insufficient for nested YAML structure.
+5. **Update the comparison target to P1B** if the PSStyleGuide split is adopted.
+
+The first three points are acceptance blockers. GitHub's documented matrix
+output behavior explicitly requires unique names when combining matrix outputs:
+[workflow syntax for job outputs](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idoutputs).
+The job dependency boundary is documented in
+[Using jobs in a workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-jobs)
+and the
+[`needs` context](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#needs-context).
+
+## T2 — Make state-version discovery and recovery examples copy-safe with guarded identifiers
+
+**Disposition: Nearly ready; define failure-state semantics.**
+
+### Improvements to preserve
+
+- The AWS, Azure, GCS, and HCP examples separate discovery from retrieval and
+  require operators to inspect identifiers before use.
+- Closed filters, exact cardinality checks, explicit pagination behavior, and
+  GCS generation qualification reduce “latest-looking object” mistakes.
+- The HCP host, endpoint, page, and token constraints are appropriately
+  fail-closed.
+- Recovery uses a fresh destination and requires validation before the file is
+  treated as usable state.
+- Seven marker-owned blocks plus a permanent harness make the documentation
+  samples testable without live provider accounts.
+- The warnings about plaintext sensitive values are necessary; Terraform's
+  machine-readable state can expose sensitive values in plain text. Preserve
+  the exact cleanup and access-control guidance.
+
+### Required revisions
+
+1. **Choose one postcondition for provider failure.** AWS, Azure, and GCS
+   download commands may create a partial destination before returning failure.
+   The provider sections must say whether the exact newly owned partial file is
+   retained as invalid evidence or safely removed. The harness already expects
+   partial-file cases, but it cannot assert an unstated result.
+2. **Make ownership conditions executable.** If partials are removed, deletion
+   must be limited to the exact fresh ordinary file created by that invocation;
+   never recursively clean or follow a substituted link. If retained, label it
+   invalid, stop before `terraform show`, and require a different fresh path on
+   retry.
+3. **Say Bash, not “Bash or compatible POSIX.”** The GCS examples use Bash
+   `[[ ... =~ ... ]]`, and the permanent harness is Bash. Calling the contract
+   generic POSIX invites incompatible copying.
+4. **Carry T1B's workflow decision forward.** T2 may add its Bash harness to
+   Markdown validation, but must not recreate the impossible cross-workflow
+   approval dependency identified in T1B.
+
+Terraform documents that `terraform state pull` writes state to stdout and may
+upgrade it to the locally supported format:
+[`terraform state pull`](https://developer.hashicorp.com/terraform/cli/commands/state/pull).
+It also documents JSON inspection and the plaintext-sensitive-value risk:
+[`terraform show`](https://developer.hashicorp.com/terraform/cli/commands/show).
+Those behaviors support T2's insistence on fresh destinations and validation,
+but make the partial-output rule important.
+
+### Minor clarity improvement
+
+Give each partial-retention/removal case a stable provider-prefixed ID. This
+will keep failures useful when more provider variants are added.
+
+## T3 — Remediate Markdown lint dependency advisories and add npm update governance
+
+**Disposition: Correct policy direction; residual-audit enforcement needs a
+redesign.**
+
+### Improvements to preserve
+
+- The issue requires a fresh clean-install audit rather than assuming the
+  planning snapshot remains accurate.
+- A bounded Node support range, exact CI major, package engines, and hook guard
+  create a coherent runtime policy.
+- The real-git-commit hook harness is much stronger than testing an isolated
+  shell fragment.
+- The full outer/nested lint sequence is retained.
+- The exception file is conditional and must disappear when no residual
+  findings remain.
+- Update governance covers lockfile maintenance instead of treating the first
+  remediation as permanent.
+
+### Required revisions
+
+1. **Define one permanent audit validator.** Name its path, command line,
+   inputs, output, exit codes, and stable cases. Invoke that same validator
+   after a clean install in the local integration harness and the hosted
+   workflow.
+2. **Use a derivable residual identity.** Prefer `(Package, AdvisoryUrl)` plus
+   exact package-keyed `AuditNodePaths`. If T3 keeps advisory/path pairs, it
+   must implement advisory semver-range evaluation against the installed node,
+   not take a Cartesian product of advisory URLs and package paths.
+3. **Define the repository maximum approval lifetime.** “Within repository
+   maximum” has no value. Specify an exact duration, the timestamp basis and
+   timezone, whether the boundary is inclusive, and which owners may approve a
+   renewal.
+4. **Reject stale permission, not just new risk.** The validator must fail for
+   expired entries, unused entries, extra paths, extra advisory URLs, unknown
+   schema fields, duplicate identities, malformed timestamps, and an exception
+   file that remains after a clean audit.
+5. **Add stable audit cases.** The current NPM/HOOK inventory needs AUDIT cases
+   for clean/no-file, findings/no-file, exact approved residual, new advisory,
+   new node, removed advisory, expiry boundary, malformed schema, duplicate
+   record, and clean-with-file.
+6. **Expand the Node boundary cases.** Explicitly cover below-minimum,
+   intervening unsupported, maximum supported, and first future unsupported
+   major.
+7. **State the workflow event behavior.** Dependency changes from Dependabot
+   and ordinary pull requests must exercise the validator before merge. A
+   scheduled run is useful for newly published advisories but cannot replace
+   pull-request enforcement.
+
+### Evidence behind the identity concern
+
+The reviewed npm report placed `nodes` at the package vulnerability level and
+placed source advisory URLs in advisory objects. It did not state which node
+was affected by which one of several advisory ranges. The proposed
+URL/path-pair identity therefore requires additional semver reasoning that the
+issue does not specify. Keeping approval identity and topology as separate
+exact sets is simpler and less likely to grant accidental coverage.
+
+## T4 — Make manual state backup and destructive recovery guidance copy-safe
+
+**Disposition: Sound recovery sequence; PowerShell and no-replace claims are
+unproved.**
+
+### Improvements to preserve
+
+- The issue correctly prefers declarative `moved`, `removed`, and `import`
+  mechanisms before destructive state commands.
+- Backup, inspection, typed confirmation, destructive mutation, and recovery
+  are separated into explicit phases.
+- The backup path is fresh, protected, and tied to digest, serial, lineage, and
+  backend identity.
+- The no-overwrite publication goal prevents an existing backup from being
+  silently replaced.
+- Recovery rechecks lineage and serial before `state push` and requires
+  external exclusion when the backend cannot lock.
+- Provider calls are stubbed in the permanent harness, preventing tests from
+  touching real state.
+
+### Required revisions
+
+1. **Specify the PowerShell backup implementation.** Ordinary native-output
+   redirection is not byte-preserving in Windows PowerShell 5.1; Microsoft
+   documents that it treats byte streams as strings and can corrupt them.
+   PowerShell 7.4 introduced byte-preserving native redirection. The copyable
+   cross-edition example therefore needs an exact .NET process/file strategy
+   that copies redirected stdout bytes to a `FileMode.CreateNew` temporary file,
+   observes the native exit code, and publishes without replacement.
+2. **Add Windows PowerShell tests.** Give the PowerShell block its own stable
+   marker and extend the affected-file list with a PowerShell harness. Test
+   Windows PowerShell 5.1 and current PowerShell 7 on Windows, including
+   non-ASCII state, empty/truncated output, command failure after partial
+   output, existing destination, link substitution, and cleanup failure.
+3. **Test the real no-replace primitive.** Stubbing `terraform` is appropriate;
+   stubbing the safety-critical hard-link/publication operation is not enough.
+   Add real same-filesystem tests proving create-new behavior, existing-target
+   refusal, and the competing-creator race on each supported implementation.
+4. **Define fallback support.** If hard links are unavailable, either fail
+   closed with a clear message or specify an equally atomic no-replace
+   primitive and test it. Do not silently fall back to copy/rename operations
+   that can overwrite.
+5. **Assign stable case IDs.** The current behavior groups should become
+   durable Bash and PowerShell case identifiers with one exact oracle per row.
+6. **Define typed-confirmation strength.** Specify the digest-prefix length and
+   case format; accepting an arbitrary one-character prefix does not meaningfully
+   bind the operator to the reviewed backup.
+7. **Describe backend identity honestly.** If `EXPECTED_BACKEND_ID` is supplied
+   manually, call the check operator-attested. A claim that the script
+   mechanically verifies the exact backend needs an exact derivation method for
+   every supported backend.
+8. **Specify lock waiting for recovery.** Keep locking enabled and use an
+   explicit positive lock timeout for `terraform state push`, or state why an
+   immediate lock failure is the deliberate policy.
+9. **Update the exact affected-file list.** Adding the required PowerShell
+   harness and Windows workflow coverage changes the present eight-path claim.
+
+Microsoft's Windows PowerShell documentation states the binary-redirection
+limitation:
+[about_Redirection for Windows PowerShell 5.1](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_redirection?view=powershell-5.1#redirecting-binary-data).
+The current documentation identifies byte preservation as a PowerShell 7.4
+change:
+[about_Redirection for PowerShell 7.5](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_redirection?view=powershell-7.5#redirecting-binary-data).
+
+Terraform already rejects some unsafe pushes using lineage and serial, but also
+warns that manual push is dangerous:
+[manual state pull/push](https://developer.hashicorp.com/terraform/language/state/backends#manual-state-pull-push).
+T4's additional operator checks remain justified.
+
+## Cross-issue consistency changes
+
+These edits should be made consistently rather than repaired in only one issue:
+
+1. **Predecessor evidence:** the successor issue/PR records the actual merge
+   commit consumed. A pull request never promises to record its own unknown
+   future merge commit.
+2. **Workflow topology:** decide in T1B whether Markdown remains an independent
+   required workflow or becomes part of one consolidated workflow. T2, T3, and
+   T4 must extend that decision without inventing cross-workflow `needs` edges.
+3. **Stable oracle format:** every permanent harness should use one row per
+   durable case ID with setup, command, exact expected result, filesystem
+   postcondition, and cleanup postcondition.
+4. **Generator convergence:** compare the same layer on each side—T1/P1,
+   T1A/P1A, T1B/P1B—and make unexplained differences merge blockers.
+5. **Fresh-path ownership:** candidate files, recovered state, and local backups
+   should share one vocabulary for exact path ownership, ordinary-file checks,
+   link rejection, no-replace creation, failure state, and cleanup.
+6. **Runtime policy:** Node bounds, CI major, package engines, hook error text,
+   and tests should state one policy. Do not duplicate subtly different ranges.
+7. **Security exceptions:** exception records require an exact schema, durable
+   validator, stable negative cases, expiry rule, owner, and delete-when-clean
+   behavior.
+
+## Recommended disposition before downstream authoring
+
+Revise all six descriptions in place while preserving their current H1 titles.
+The minimum ready-to-file gate is:
+
+- T1 contains the generator convergence matrix and an exact temporary
+  credential method.
+- T1A has an exact context-manager input and a complete one-ID-per-oracle test
+  inventory.
+- T1B has an implementable single-workflow dependency graph, immutable hash
+  transport, and unique four-cell evidence.
+- T2 defines the partial-output postcondition and calls its shell contract
+  Bash.
+- T3 defines and invokes a permanent, semver-correct residual-audit validator
+  with an exact maximum approval lifetime.
+- T4 supplies and tests a real cross-edition PowerShell backup path and real
+  no-replace filesystem publication.
+
+With those changes, the slate will have a coherent progression from
+deterministic bytes, through untrusted validation, to least-privileged
+publication, followed by independently testable documentation and dependency
+governance.
