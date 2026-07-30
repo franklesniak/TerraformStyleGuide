@@ -40,4 +40,4 @@ I need to conduct the following loop:
 - Copy `docs\planning\PSStyleGuide\slate-criticism.md` from the `TerraformStyleGuide` repo to `docs\planning\PSStyleGuide\slate-criticism.md` in the `PSStyleGuide` repo.
 - Commit the changed file to `PSStyleGuide`.
 
-Repeat the loop up to 12 times, or until the state of the GitHub Issue drafts has converged.
+Repeat the loop up to 12 times, or until the state of the GitHub Issue drafts across both repositories has converged/stabilized.
