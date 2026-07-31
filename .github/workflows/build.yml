@@ -46,11 +46,13 @@ jobs:
           }
           $arrHelpers = @(& git config --local --get-all credential.helper)
           $intHelperExit = $LASTEXITCODE
+          $global:LASTEXITCODE = 0
           if (($intHelperExit -ne 0 -and $intHelperExit -ne 1) -or $arrHelpers.Count -ne 0) {
               throw 'credential-policy: a local credential helper is configured'
           }
           $arrAuthorizationKeys = @(& git config --local --name-only --get-regexp '^http\..*\.extraheader$')
           $intAuthorizationExit = $LASTEXITCODE
+          $global:LASTEXITCODE = 0
           if (($intAuthorizationExit -ne 0 -and $intAuthorizationExit -ne 1) -or $arrAuthorizationKeys.Count -ne 0) {
               throw 'credential-policy: persisted HTTP authorization is configured'
           }
@@ -207,11 +209,13 @@ jobs:
           }
           $arrHelpers = @(& git config --local --get-all credential.helper)
           $intHelperExit = $LASTEXITCODE
+          $global:LASTEXITCODE = 0
           if (($intHelperExit -ne 0 -and $intHelperExit -ne 1) -or $arrHelpers.Count -ne 0) {
               throw 'credential-policy: a local credential helper is configured'
           }
           $arrAuthorizationKeys = @(& git config --local --name-only --get-regexp '^http\..*\.extraheader$')
           $intAuthorizationExit = $LASTEXITCODE
+          $global:LASTEXITCODE = 0
           if (($intAuthorizationExit -ne 0 -and $intAuthorizationExit -ne 1) -or $arrAuthorizationKeys.Count -ne 0) {
               throw 'credential-policy: persisted HTTP authorization is configured'
           }

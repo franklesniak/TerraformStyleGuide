@@ -271,6 +271,10 @@ export function validateBuildPolicy(workflow, source) {
   const verifyIds = verify.steps.map((step) => step?.id);
   assertEqual(verifyIds, ['checkout', 'verify-checkout-credentials', 'generate-and-verify', 'upload-generated'], 'build.verify step order');
   assertActionStep(findStep(verify, 'checkout', 'build.verify'), 'build.verify.checkout', ACTIONS.checkout, CHECKOUT_INPUTS);
+  validateCredentialCleanupStep(
+    findStep(verify, 'verify-checkout-credentials', 'build.verify'),
+    'build.verify.verify-checkout-credentials',
+  );
   assertActionStep(
     findStep(verify, 'upload-generated', 'build.verify'),
     'build.verify.upload-generated',
@@ -290,6 +294,10 @@ export function validateBuildPolicy(workflow, source) {
   const writerIds = writer.steps.map((step) => step?.id);
   assertEqual(writerIds, ['checkout', 'verify-checkout-credentials', 'prepare-generated-commit', 'push-generated'], 'temporary writer step order');
   assertActionStep(findStep(writer, 'checkout', 'build.temporary-writer'), 'build.writer.checkout', ACTIONS.checkout, CHECKOUT_INPUTS);
+  validateCredentialCleanupStep(
+    findStep(writer, 'verify-checkout-credentials', 'build.temporary-writer'),
+    'build.temporary-writer.verify-checkout-credentials',
+  );
 
   const pushStep = findStep(writer, 'push-generated', 'build.temporary-writer');
   assertKeys(pushStep, ['name', 'id', 'shell', 'env', 'run'], 'build.writer.push-generated');
@@ -328,6 +336,32 @@ export function validateBuildPolicy(workflow, source) {
     ACTIONS.uploadArtifact,
     ACTIONS.checkout,
   ]);
+}
+
+function validateCredentialCleanupStep(step, label) {
+  assertKeys(step, ['name', 'id', 'shell', 'run'], label);
+  if (step.name !== 'Verify checkout credential cleanup' || step.shell !== 'pwsh') {
+    reject('credential-policy', `${label} execution contract changed`);
+  }
+  const requiredSequences = [
+    '$arrHelpers = @(& git config --local --get-all credential.helper)\n' +
+      '$intHelperExit = $LASTEXITCODE\n' +
+      '$global:LASTEXITCODE = 0\n' +
+      'if (($intHelperExit -ne 0 -and $intHelperExit -ne 1) -or $arrHelpers.Count -ne 0)',
+    "$arrAuthorizationKeys = @(& git config --local --name-only --get-regexp '^http\\..*\\.extraheader$')\n" +
+      '$intAuthorizationExit = $LASTEXITCODE\n' +
+      '$global:LASTEXITCODE = 0\n' +
+      'if (($intAuthorizationExit -ne 0 -and $intAuthorizationExit -ne 1) -or $arrAuthorizationKeys.Count -ne 0)',
+  ];
+  for (const sequence of requiredSequences) {
+    if (!step.run.includes(sequence)) {
+      reject('credential-policy', `${label} no longer normalizes an accepted absent-setting status`);
+    }
+  }
+  const normalizationCount = step.run.match(/^\$global:LASTEXITCODE = 0$/gmu)?.length ?? 0;
+  if (normalizationCount !== 2) {
+    reject('credential-policy', `${label} native-status normalization count changed`);
+  }
 }
 
 export function validateMarkdownPolicy(workflow, source) {
@@ -474,6 +508,8 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-033', 'extra trigger', 'build', (source) => replaceOnce(source, 'on:\n', 'on:\n  workflow_dispatch:\n')],
   ['T1-BUILD-034', 'dynamic uses', 'build', (source) => replaceOnce(source, ACTIONS.checkout.reference, '${{ inputs.action }}')],
   ['T1-BUILD-035', 'unreviewed Docker action', 'build', (source) => replaceOnce(source, ACTIONS.checkout.reference, 'docker://alpine:latest')],
+  ['T1-BUILD-036', 'credential-helper status normalization removed', 'build', (source) => replaceOnce(source, '          $intHelperExit = $LASTEXITCODE\n          $global:LASTEXITCODE = 0\n', '          $intHelperExit = $LASTEXITCODE\n')],
+  ['T1-BUILD-037', 'authorization status normalization removed', 'build', (source) => replaceOnce(source, '          $intAuthorizationExit = $LASTEXITCODE\n          $global:LASTEXITCODE = 0\n', '          $intAuthorizationExit = $LASTEXITCODE\n')],
   ['T1-MARKDOWN-001', 'floating Node major', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: '24'")],
   ['T1-MARKDOWN-002', 'latest Node', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: 'latest'")],
   ['T1-MARKDOWN-003', 'setup cache enabled', 'markdown', (source) => replaceOnce(source, '          package-manager-cache: false', '          package-manager-cache: true')],
