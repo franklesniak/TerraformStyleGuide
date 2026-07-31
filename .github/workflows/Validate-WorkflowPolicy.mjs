@@ -198,6 +198,7 @@ function inspectYamlNode(node, depth, state) {
         reject('yaml-syntax', 'mapping keys must be unique strings');
       }
       if (pair.key.value === '<<') reject('yaml-syntax', 'merge keys are prohibited');
+      inspectYamlNode(pair.key, depth + 1, state);
       inspectYamlNode(pair.value, depth + 1, state);
     }
     return;
@@ -362,8 +363,8 @@ export function validateBuildPolicy(workflow, source) {
   for (const { jobId, id, run, step } of allRunSteps(workflow)) {
     if ('continue-on-error' in step) reject('failure-policy', `${jobId}.${id} sets continue-on-error`);
     if (/\b(?:curl|wget|Invoke-WebRequest)\b/iu.test(run)) reject('network-policy', `${jobId}.${id} adds a network client`);
-    // Scan the whole step, not just run: a credential reaches the script through
-    // an env entry just as effectively as through the script text itself.
+    // Scan the whole step, not just run or env values: a credential reaches the
+    // script through any step key just as effectively as through script text.
     const serialized = JSON.stringify(step);
     if (/secrets\./u.test(serialized) || /GITHUB_TOKEN/u.test(serialized)) {
       reject('credential-policy', `${jobId}.${id} expands an unapproved credential`);
@@ -452,10 +453,10 @@ export function validateMarkdownPolicy(workflow, source) {
     'Get-FileHash -LiteralPath package-lock.json -Algorithm SHA256',
     // Derived from the reviewed constants so the pre-install gate in the
     // workflow and the policy baseline here cannot drift apart silently.
-    `$strReviewedPackage = '${REVIEWED_PACKAGE_DIGESTS['package.json'].toUpperCase()}'`,
-    `$strReviewedLock = '${REVIEWED_PACKAGE_DIGESTS['package-lock.json'].toUpperCase()}'`,
-    'if ($strPackageBefore -cne $strReviewedPackage)',
-    'if ($strLockBefore -cne $strReviewedLock)',
+    REVIEWED_PACKAGE_DIGESTS['package.json'].toUpperCase(),
+    REVIEWED_PACKAGE_DIGESTS['package-lock.json'].toUpperCase(),
+    'if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash)',
+    'supply: package metadata does not match the reviewed supply digest',
   ];
   for (const fragment of requiredFragments) {
     if (!validation.run.includes(fragment)) reject('markdown-policy', `required phase is missing: ${fragment}`);
@@ -572,8 +573,10 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-YAML-007', 'multiple documents', 'yaml', 'a: 1\n---\nb: 2\n'],
   ['T1-YAML-008', 'complex key', 'yaml', '? [a, b]\n: value\n'],
   ['T1-YAML-009', 'non-finite scalar', 'yaml', 'a: .nan\n'],
-  ['T1-YAML-010', 'explicit tag on a mapping key', 'yaml', '!!str a: 1\n'],
-  ['T1-YAML-011', 'anchor on a mapping key', 'yaml', '&x a: 1\n'],
+  ['T1-YAML-010', 'anchor on mapping key', 'yaml', '? &x a\n: 1\n'],
+  ['T1-YAML-011', 'explicit tag on mapping key', 'yaml', '? !!str a\n: 1\n'],
+  ['T1-YAML-012', 'explicit tag on an inline mapping key', 'yaml', '!!str a: 1\n'],
+  ['T1-YAML-013', 'anchor on an inline mapping key', 'yaml', '&x a: 1\n'],
   ['T1-BUILD-001', 'mutable action tag', 'build', (source) => replaceOnce(source, ACTIONS.checkout.reference, 'actions/checkout@v7')],
   ['T1-BUILD-002', 'arbitrary action SHA', 'build', (source) => replaceOnce(source, ACTIONS.checkout.reference, 'actions/checkout@1111111111111111111111111111111111111111')],
   ['T1-BUILD-003', 'wrong action repository', 'build', (source) => replaceOnce(source, ACTIONS.checkout.reference, 'example/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1')],
@@ -611,7 +614,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-035', 'unreviewed Docker action', 'build', (source) => replaceOnce(source, ACTIONS.checkout.reference, 'docker://alpine:latest')],
   ['T1-BUILD-036', 'credential-helper status normalization removed', 'build', (source) => replaceOnce(source, '          $intHelperExit = $LASTEXITCODE\n          $global:LASTEXITCODE = 0\n', '          $intHelperExit = $LASTEXITCODE\n')],
   ['T1-BUILD-037', 'authorization status normalization removed', 'build', (source) => replaceOnce(source, '          $intAuthorizationExit = $LASTEXITCODE\n          $global:LASTEXITCODE = 0\n', '          $intAuthorizationExit = $LASTEXITCODE\n')],
-  ['T1-BUILD-038', 'credential env on the verification script step', 'build', (source) => replaceOnce(source, '        id: generate-and-verify\n        shell: pwsh\n', '        id: generate-and-verify\n        shell: pwsh\n        env:\n          TOKEN: ${{ secrets.PAT }}\n')],
+  ['T1-BUILD-038', 'secret in step env', 'build', (source) => replaceOnce(source, '        id: generate-and-verify\n        shell: pwsh', "        id: generate-and-verify\n        env:\n          TOKEN: '${{ secrets.PAT }}'\n        shell: pwsh")],
   ['T1-BUILD-039', 'credential env on the writer script step', 'build', (source) => replaceOnce(source, '        id: prepare-generated-commit\n        shell: pwsh\n', '        id: prepare-generated-commit\n        shell: pwsh\n        env:\n          TOKEN: ${{ secrets.PAT }}\n')],
   ['T1-BUILD-040', 'unreviewed key on a script step', 'build', (source) => replaceOnce(source, '        id: generate-and-verify\n        shell: pwsh\n', '        id: generate-and-verify\n        shell: pwsh\n        working-directory: .\n')],
   ['T1-MARKDOWN-001', 'floating Node major', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: '24'")],
@@ -624,8 +627,9 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-MARKDOWN-008', 'nested lint removed', 'markdown', (source) => replaceOnce(source, 'run lint:md:nested', 'run lint:other:nested')],
   ['T1-MARKDOWN-009', 'policy validator removed', 'markdown', (source) => replaceOnce(source, './Validate-WorkflowPolicy.mjs', './other-validator.mjs')],
   ['T1-MARKDOWN-010', 'failure continuation', 'markdown', (source) => replaceOnce(source, '        shell: pwsh\n        working-directory:', '        shell: pwsh\n        continue-on-error: true\n        working-directory:')],
-  ['T1-MARKDOWN-011', 'pre-install supply gate neutralized', 'markdown', (source) => replaceOnce(source, 'if ($strPackageBefore -cne $strReviewedPackage)', 'if ($false -and $strPackageBefore -cne $strReviewedPackage)')],
-  ['T1-MARKDOWN-012', 'reviewed digest literal altered', 'markdown', (source) => replaceOnce(source, "$strReviewedLock = '277F7168", "$strReviewedLock = '377F7168")],
+  ['T1-MARKDOWN-011', 'reviewed package hash removed', 'markdown', (source) => replaceOnce(source, "'E206CDB3562F0397E8EED7FB2C2586269A1F5335CDFF2906DA8D5E070426321E'", "'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'")],
+  ['T1-MARKDOWN-012', 'reviewed lock hash altered', 'markdown', (source) => replaceOnce(source, "'277F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062'", "'377F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062'")],
+  ['T1-MARKDOWN-013', 'pre-install supply gate neutralized', 'markdown', (source) => replaceOnce(source, 'if ($strPackageBefore -cne $strReviewedPackageHash -or', 'if ($false -and $strPackageBefore -cne $strReviewedPackageHash -or')],
   ['T1-DEPENDABOT-001', 'duplicate updates', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n'],
   ['T1-DEPENDABOT-002', 'npm update introduced early', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: npm\n    directory: /.github/workflows\n    schedule: { interval: weekly }\n'],
   ['T1-DEPENDABOT-003', 'auto-merge key', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n    auto-merge: true\n'],

@@ -73,22 +73,17 @@ jobs:
           Write-Host "Node executable: $strNodePath ($strNodeVersion)"
           Write-Host "npm executable: $strNpmPath ($strNpmVersion)"
 
+          # Reviewed baseline. The before/after comparison further below proves
+          # only that npm ci left these files alone; it cannot detect metadata
+          # that was already altered at review time. This gate runs before
+          # installation so unreviewed scripts are never installed and never run.
+          $strReviewedPackageHash = 'E206CDB3562F0397E8EED7FB2C2586269A1F5335CDFF2906DA8D5E070426321E'
+          $strReviewedLockHash = '277F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062'
           $strPackageBefore = (Get-FileHash -LiteralPath package.json -Algorithm SHA256).Hash
           $strLockBefore = (Get-FileHash -LiteralPath package-lock.json -Algorithm SHA256).Hash
-
-          # Reviewed baseline. The before/after comparison below proves only that
-          # npm ci left these files alone; it cannot detect metadata that was
-          # already altered at review time. This gate runs before installation so
-          # unreviewed scripts are never installed and never executed.
-          $strReviewedPackage = 'E206CDB3562F0397E8EED7FB2C2586269A1F5335CDFF2906DA8D5E070426321E'
-          $strReviewedLock = '277F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062'
-          if ($strPackageBefore -cne $strReviewedPackage) {
-              throw 'supply-policy: package.json does not match its reviewed digest'
+          if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash) {
+              throw 'supply: package metadata does not match the reviewed supply digest'
           }
-          if ($strLockBefore -cne $strReviewedLock) {
-              throw 'supply-policy: package-lock.json does not match its reviewed digest'
-          }
-
           $boolCiExisted = Test-Path Env:CI
           $strPriorCi = $env:CI
           try {
