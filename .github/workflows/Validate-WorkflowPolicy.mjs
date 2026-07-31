@@ -104,6 +104,40 @@ const EXPECTED_TRIGGER = Object.freeze({
   pull_request: Object.freeze({ branches: Object.freeze(['main']) }),
 });
 
+// The Markdown workflow hashes package.json and package-lock.json only against
+// themselves, which proves npm ci left them alone but establishes the files
+// under review as their own baseline. A change that edits both together — for
+// example redefining lint:md as a no-op or swapping the yaml parser — survives
+// that check. These reviewed values are the independent baseline, so the
+// scripts the workflow runs and the graph it installs are fixed at review time.
+const REVIEWED_PACKAGE_DIGESTS = Object.freeze({
+  'package.json': 'e206cdb3562f0397e8eed7fb2c2586269a1f5335cdff2906da8d5e070426321e',
+  'package-lock.json': '277f7168ab3a4f1f7a2565de13191d64b1572e7cb92b67b0972b3242bd4de062',
+});
+
+const REVIEWED_SCRIPTS = Object.freeze({
+  'lint:md': 'cd ../.. && markdownlint-cli2 "**/*.md" "#node_modules" "#.github/workflows/node_modules" --config .github/workflows/.markdownlint.jsonc',
+  'lint:md:nested': 'node lint-nested-markdown.js',
+  prepare: 'cd ../.. && husky || true',
+});
+
+const REVIEWED_DEV_DEPENDENCIES = Object.freeze({
+  glob: '^10.3.10',
+  husky: '^9.1.7',
+  'markdown-it': '^14.0.0',
+  markdownlint: '^0.40.0',
+  'markdownlint-cli2': '^0.20.0',
+  yaml: '2.9.0',
+});
+
+// The validator parses policy YAML with this exact package, so its resolved
+// identity is part of the policy rather than an incidental transitive detail.
+const REVIEWED_PARSER = Object.freeze({
+  version: '2.9.0',
+  resolved: 'https://registry.npmjs.org/yaml/-/yaml-2.9.0.tgz',
+  integrity: 'sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==',
+});
+
 const EXPECTED_VERSION = '1.0.20260731.0';
 const MAXIMUM_YAML_BYTES = 1024 * 1024;
 const MAXIMUM_NODE_COUNT = 10000;
@@ -442,6 +476,42 @@ export function validateDependabotPolicy(value) {
   }, 'Dependabot configuration');
 }
 
+// Semantic assertions run before the digest so that an edit to a modelled field
+// fails with the reason it failed. The digest is the closing backstop for any
+// byte change the assertions above do not model.
+export function validatePackagePolicy(packageSource, lockSource) {
+  let manifest;
+  let lock;
+  try {
+    manifest = JSON.parse(packageSource);
+    lock = JSON.parse(lockSource);
+  } catch {
+    reject('supply-policy', 'package metadata is not parseable JSON');
+  }
+
+  assertEqual(manifest.scripts, REVIEWED_SCRIPTS, 'package.json scripts');
+  assertEqual(manifest.devDependencies, REVIEWED_DEV_DEPENDENCIES, 'package.json devDependencies');
+  if (manifest.private !== true) reject('supply-policy', 'package.json is not marked private');
+  if (manifest.dependencies !== undefined) reject('supply-policy', 'package.json declares runtime dependencies');
+
+  if (lock.lockfileVersion !== 3) reject('supply-policy', 'lockfile version is not the reviewed value');
+  assertEqual(lock.packages?.['']?.devDependencies, REVIEWED_DEV_DEPENDENCIES, 'lockfile root devDependencies');
+  const parser = lock.packages?.['node_modules/yaml'];
+  if (parser === null || typeof parser !== 'object' || Array.isArray(parser)) {
+    reject('supply-policy', 'lockfile does not resolve the yaml parser');
+  }
+  for (const [field, expected] of Object.entries(REVIEWED_PARSER)) {
+    if (parser[field] !== expected) reject('supply-policy', `resolved yaml parser ${field} is not the reviewed value`);
+  }
+
+  for (const [label, source] of [['package.json', packageSource], ['package-lock.json', lockSource]]) {
+    const digest = createHash('sha256').update(source, 'utf8').digest('hex');
+    if (digest !== REVIEWED_PACKAGE_DIGESTS[label]) {
+      reject('supply-policy', `${label} does not match its reviewed digest`);
+    }
+  }
+}
+
 export function parseGeneratorVersion(source, expectedVersion = undefined) {
   const firstFunction = source.search(/^function\s+/mu);
   if (firstFunction < 0) reject('invalid-version', 'generator has no first function boundary');
@@ -564,9 +634,35 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-TEXT-004', 'lone surrogate', 'text', Buffer.from([0x61, 0x3a, 0x20, 0xed, 0xa0, 0x80, 0x0a])],
   ['T1-TEXT-005', 'UTF-8 BOM', 'text', Buffer.from([0xef, 0xbb, 0xbf, 0x61, 0x3a, 0x20, 0x31, 0x0a])],
   ['T1-TEXT-006', 'carriage return', 'text', Buffer.from([0x61, 0x3a, 0x20, 0x31, 0x0d, 0x0a])],
+  ['T1-PACKAGE-001', 'lint script redefined as a no-op', 'package', (pkg, lock) => {
+    const parsed = JSON.parse(pkg);
+    parsed.scripts['lint:md'] = 'true';
+    return [JSON.stringify(parsed, null, 2), lock];
+  }],
+  ['T1-PACKAGE-002', 'yaml parser dependency loosened', 'package', (pkg, lock) => {
+    const parsed = JSON.parse(pkg);
+    parsed.devDependencies.yaml = '^2.9.0';
+    return [JSON.stringify(parsed, null, 2), lock];
+  }],
+  ['T1-PACKAGE-003', 'additional script introduced', 'package', (pkg, lock) => {
+    const parsed = JSON.parse(pkg);
+    parsed.scripts.postinstall = 'node unreviewed.js';
+    return [JSON.stringify(parsed, null, 2), lock];
+  }],
+  ['T1-PACKAGE-004', 'semantically equal but altered manifest bytes', 'package', (pkg, lock) => [`${pkg}\n`, lock]],
+  ['T1-PACKAGE-005', 'resolved parser integrity changed', 'package', (pkg, lock) => {
+    const parsed = JSON.parse(lock);
+    parsed.packages['node_modules/yaml'].integrity = `sha512-${'A'.repeat(86)}==`;
+    return [pkg, JSON.stringify(parsed, null, 2)];
+  }],
+  ['T1-PACKAGE-006', 'lockfile root dependency drift', 'package', (pkg, lock) => {
+    const parsed = JSON.parse(lock);
+    parsed.packages[''].devDependencies.yaml = '^2.9.0';
+    return [pkg, JSON.stringify(parsed, null, 2)];
+  }],
 ]);
 
-function runNegativeFixtures(buildSource, markdownSource) {
+function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource) {
   const ids = new Set();
   for (const [id, description, kind, fixture] of FIXTURE_INVENTORY) {
     if (ids.has(id)) reject('fixture-harness', `duplicate fixture ID ${id}`);
@@ -589,6 +685,8 @@ function runNegativeFixtures(buildSource, markdownSource) {
         parseGeneratorVersion(fixture, EXPECTED_VERSION);
       } else if (kind === 'text') {
         decodeStrictText(fixture, id);
+      } else if (kind === 'package') {
+        validatePackagePolicy(...fixture(packageSource, lockSource));
       } else {
         reject('fixture-harness', `unknown fixture kind for ${id}`);
       }
@@ -650,8 +748,11 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
   if (attributes !== '* text=auto eol=lf\n') reject('text-policy', '.gitattributes does not have exact content');
   const generatorSource = readOrdinaryText(join(workflowDirectory, 'Generate-StyleGuideArtifacts.ps1'), 'generator');
   parseGeneratorVersion(generatorSource, EXPECTED_VERSION);
+  const packageSource = readOrdinaryText(join(workflowDirectory, 'package.json'), 'package.json');
+  const lockSource = readOrdinaryText(join(workflowDirectory, 'package-lock.json'), 'package-lock.json');
+  validatePackagePolicy(packageSource, lockSource);
 
-  const fixtureCount = runNegativeFixtures(buildSource, markdownSource);
+  const fixtureCount = runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource);
   return Object.freeze({
     fixtureCount,
     generatorVersion: EXPECTED_VERSION,
@@ -659,6 +760,8 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
       .update(buildSource)
       .update(markdownSource)
       .update(dependabotSource)
+      .update(packageSource)
+      .update(lockSource)
       .digest('hex'),
   });
 }
