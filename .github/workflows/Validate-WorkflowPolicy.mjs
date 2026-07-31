@@ -820,10 +820,17 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
   return Object.freeze({
     fixtureCount,
     generatorVersion: EXPECTED_VERSION,
+    // Every input this function validates, folded in validation order, so the
+    // reported digest is complete evidence for the policy that was checked. The
+    // generator matters most here: its bytes can change substantially while its
+    // version marker stays fixed, so omitting it left the digest unmoved by a
+    // real change to validated content.
     policyDigest: createHash('sha256')
       .update(buildSource)
       .update(markdownSource)
       .update(dependabotSource)
+      .update(attributes)
+      .update(generatorSource)
       .update(packageSource)
       .update(lockSource)
       .digest('hex'),
