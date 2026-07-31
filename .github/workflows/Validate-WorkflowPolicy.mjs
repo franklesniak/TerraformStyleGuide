@@ -368,6 +368,17 @@ export function validateBuildPolicy(workflow, source) {
     if (/secrets\./u.test(serialized) || /GITHUB_TOKEN/u.test(serialized)) {
       reject('credential-policy', `${jobId}.${id} expands an unapproved credential`);
     }
+    // github.token is the contents-write credential the writer pushes with. It
+    // is approved in exactly one place: push-generated's asserted env mapping,
+    // from which the script reads it once and immediately clears it. Anywhere
+    // else — including push-generated's own script text — it is unreviewed.
+    if (id === 'push-generated') {
+      if (/github\.token/iu.test(run)) {
+        reject('credential-policy', `${jobId}.${id} inlines the workflow token in its script`);
+      }
+    } else if (/github\.token/iu.test(serialized)) {
+      reject('credential-policy', `${jobId}.${id} references the workflow token outside the approved push step`);
+    }
     if (id !== 'push-generated' && /ArgumentList\.Add\(['"]push['"]\)|\bgit\s+push\b/iu.test(run)) {
       reject('side-effect-policy', `${jobId}.${id} adds a second push path`);
     }
@@ -465,6 +476,32 @@ export function validateMarkdownPolicy(workflow, source) {
   ];
   for (const fragment of requiredFragments) {
     if (!validation.run.includes(fragment)) reject('markdown-policy', `required phase is missing: ${fragment}`);
+  }
+  // Token presence alone cannot prove a phase runs. An inserted early exit
+  // leaves every required fragment in place while skipping the phases below it,
+  // so the step would report success without linting or re-checking metadata.
+  // This script defines no functions, so these tokens have no legitimate use.
+  // Matched only in statement position — at the start of a line or directly
+  // after ; or { — so the word "exit" inside a throw message is not a hit.
+  if (/^[ \t]*(?:exit|return|break|continue)\b|[;{][ \t]*(?:exit|return|break|continue)\b/imu.test(validation.run)) {
+    reject('markdown-policy', 'validation script adds control flow that can bypass a required phase');
+  }
+  // Presence is order-independent; the phases must also run in the reviewed
+  // sequence, so a later phase cannot be hoisted above the gate that guards it.
+  let cursor = -1;
+  for (const phase of [
+    'supply: package metadata does not match the reviewed supply digest',
+    'ci --ignore-scripts --no-audit --no-fund',
+    'npm-ci: package metadata changed during frozen installation',
+    './Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml',
+    'run lint:md\n',
+    'run lint:md:nested',
+    'validation: package metadata changed after installation or linting',
+    'validation: one or more policy or lint phases failed',
+  ]) {
+    const at = validation.run.indexOf(phase, cursor + 1);
+    if (at <= cursor) reject('markdown-policy', `required phases are out of order at: ${phase}`);
+    cursor = at;
   }
   if ((validation.run.match(/^\s*& \$strNpmPath run lint:md\s*$/gmu) ?? []).length !== 1 ||
       (validation.run.match(/^\s*& \$strNpmPath run lint:md:nested\s*$/gmu) ?? []).length !== 1) {
@@ -636,6 +673,14 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-MARKDOWN-011', 'reviewed package hash removed', 'markdown', (source) => replaceOnce(source, "'E206CDB3562F0397E8EED7FB2C2586269A1F5335CDFF2906DA8D5E070426321E'", "'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'")],
   ['T1-MARKDOWN-012', 'reviewed lock hash altered', 'markdown', (source) => replaceOnce(source, "'277F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062'", "'377F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062'")],
   ['T1-MARKDOWN-013', 'pre-install supply gate neutralized', 'markdown', (source) => replaceOnce(source, 'if ($strPackageBefore -cne $strReviewedPackageHash -or', 'if ($false -and $strPackageBefore -cne $strReviewedPackageHash -or')],
+  ['T1-BUILD-042', 'workflow token referenced outside the approved push step', 'build', (source) => replaceOnce(source, "          $ErrorActionPreference = 'Stop'\n          $arrArtifacts", "          $ErrorActionPreference = 'Stop'\n          $strToken = '${{ github.token }}'\n          $arrArtifacts")],
+  ['T1-BUILD-043', 'workflow token inlined in the push script', 'build', (source) => replaceOnce(source, '          $strToken = $env:STYLE_GUIDE_PUSH_TOKEN', "          $strToken = '${{ github.token }}'")],
+  ['T1-MARKDOWN-015', 'early exit before the remaining required phases', 'markdown', (source) => replaceOnce(source, '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n', '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n          exit 0\n')],
+  ['T1-MARKDOWN-016', 'required phases reordered', 'markdown', (source) => {
+    const strValidator = '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n';
+    const strNested = '          & $strNpmPath run lint:md:nested\n';
+    return replaceOnce(replaceOnce(source, strValidator, ''), strNested, strValidator + strNested);
+  }],
   ['T1-MARKDOWN-014', 'native-command error mapping guard removed', 'markdown', (source) => replaceOnce(source, '          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n              $PSNativeCommandUseErrorActionPreference = $false\n          }\n', '')],
   ['T1-DEPENDABOT-001', 'duplicate updates', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n'],
   ['T1-DEPENDABOT-002', 'npm update introduced early', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: npm\n    directory: /.github/workflows\n    schedule: { interval: weekly }\n'],
