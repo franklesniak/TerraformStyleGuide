@@ -198,7 +198,6 @@ function inspectYamlNode(node, depth, state) {
         reject('yaml-syntax', 'mapping keys must be unique strings');
       }
       if (pair.key.value === '<<') reject('yaml-syntax', 'merge keys are prohibited');
-      inspectYamlNode(pair.key, depth + 1, state);
       inspectYamlNode(pair.value, depth + 1, state);
     }
     return;
