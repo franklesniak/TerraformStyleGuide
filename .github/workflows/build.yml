@@ -125,8 +125,7 @@ jobs:
                       throw "git-paths: ambiguous $Surface record"
                   }
                   if ($arrObserved -ccontains $strPath) { throw "git-paths: duplicate $Surface record" }
-                  if ($Allowed -notcontains $strPath) { throw "git-paths: unexpected $Surface path"
-                  }
+                  if ($Allowed -notcontains $strPath) { throw "git-paths: unexpected $Surface path" }
                   $arrObserved += $strPath
               }
               return @($arrObserved | Sort-Object -CaseSensitive)

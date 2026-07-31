@@ -19,8 +19,7 @@ This script generates Terraform style guide artifacts for this repository.
 Version: 1.0.20260731.0
 #>
 
-$script:strRepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path -Path $PSScriptRoot -ChildPath '..\..'))
-
+$script:strRepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path -Path $PSScriptRoot -ChildPath '../..'))
 function Get-StyleGuideFileSha256 {
     param (
         [Parameter(Mandatory = $true)]
