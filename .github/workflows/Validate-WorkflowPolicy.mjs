@@ -157,6 +157,9 @@ function inspectYamlNode(node, depth, state) {
 
   if (isMap(node)) {
     for (const pair of node.items) {
+      // Keys carry anchors, tags, and aliases exactly as values do, so they are
+      // inspected through the same path before the key-shape assertions below.
+      inspectYamlNode(pair.key, depth + 1, state);
       if (!isScalar(pair.key) || typeof pair.key.value !== 'string') {
         reject('yaml-syntax', 'mapping keys must be unique strings');
       }
@@ -473,6 +476,8 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-YAML-007', 'multiple documents', 'yaml', 'a: 1\n---\nb: 2\n'],
   ['T1-YAML-008', 'complex key', 'yaml', '? [a, b]\n: value\n'],
   ['T1-YAML-009', 'non-finite scalar', 'yaml', 'a: .nan\n'],
+  ['T1-YAML-010', 'explicit tag on a mapping key', 'yaml', '!!str a: 1\n'],
+  ['T1-YAML-011', 'anchor on a mapping key', 'yaml', '&x a: 1\n'],
   ['T1-BUILD-001', 'mutable action tag', 'build', (source) => replaceOnce(source, ACTIONS.checkout.reference, 'actions/checkout@v7')],
   ['T1-BUILD-002', 'arbitrary action SHA', 'build', (source) => replaceOnce(source, ACTIONS.checkout.reference, 'actions/checkout@1111111111111111111111111111111111111111')],
   ['T1-BUILD-003', 'wrong action repository', 'build', (source) => replaceOnce(source, ACTIONS.checkout.reference, 'example/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1')],
