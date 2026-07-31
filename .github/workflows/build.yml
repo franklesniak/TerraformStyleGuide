@@ -2,65 +2,158 @@ name: Build Style Guide Artifacts
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - 'STYLE_GUIDE.md'
-      - 'STYLE_GUIDE_RATIONALE.md'
+    branches: [main]
   pull_request:
-    branches:
-      - main
-    paths:
-      - 'STYLE_GUIDE.md'
-      - 'STYLE_GUIDE_RATIONALE.md'
+    branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
+  verify:
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: read
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - name: Check out triggering revision
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Generate style guide artifacts
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          token: ${{ github.token }}
+          persist-credentials: false
+          fetch-depth: 1
+          fetch-tags: false
+          show-progress: false
+          lfs: false
+          submodules: false
+          clean: true
+          set-safe-directory: true
+          allow-unsafe-pr-checkout: false
+
+      - name: Verify checkout credential cleanup
+        id: verify-checkout-credentials
         shell: pwsh
         run: |
-          ./.github/workflows/Generate-StyleGuideArtifacts.ps1
-      
-      - name: Check for changes
-        id: check_changes
-        shell: pwsh
-        run: |
-          $boolHasChanges = $false
-          $arrChangedFiles = @(git status --porcelain)
-          
-          if ($arrChangedFiles.Count -gt 0) {
-              $boolHasChanges = $true
-              Write-Host "Changes detected:"
-              git status --short
-          } else {
-              Write-Host "No changes detected"
+          $ErrorActionPreference = 'Stop'
+          $arrRemoteUrls = @(& git remote get-url --all origin)
+          if ($LASTEXITCODE -ne 0 -or $arrRemoteUrls.Count -ne 1) {
+              throw 'credential-policy: unable to resolve exactly one origin URL'
           }
-          
-          # Output for GitHub Actions
-          "has_changes=$($boolHasChanges.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-      
-      - name: Commit and push changes
-        if: github.event_name == 'push' && steps.check_changes.outputs.has_changes == 'true'
+          if ($arrRemoteUrls[0] -notmatch '^https://github\.com/[^/@]+/[^/@]+(?:\.git)?$') {
+              throw 'credential-policy: origin is not a credential-free GitHub HTTPS URL'
+          }
+          $arrHelpers = @(& git config --local --get-all credential.helper)
+          $intHelperExit = $LASTEXITCODE
+          if (($intHelperExit -ne 0 -and $intHelperExit -ne 1) -or $arrHelpers.Count -ne 0) {
+              throw 'credential-policy: a local credential helper is configured'
+          }
+          $arrAuthorizationKeys = @(& git config --local --name-only --get-regexp '^http\..*\.extraheader$')
+          $intAuthorizationExit = $LASTEXITCODE
+          if (($intAuthorizationExit -ne 0 -and $intAuthorizationExit -ne 1) -or $arrAuthorizationKeys.Count -ne 0) {
+              throw 'credential-policy: persisted HTTP authorization is configured'
+          }
+
+      - name: Generate and verify committed artifacts
+        id: generate-and-verify
+        shell: pwsh
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add copilot-instructions.md terraform.instructions.md STYLE_GUIDE_CHAT.md STYLE_GUIDE_FULL.md
-          git commit -m "chore: update generated style guide artifacts [skip ci]"
-          git push
-      
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+          $ErrorActionPreference = 'Stop'
+          $arrArtifacts = @(
+              'STYLE_GUIDE_CHAT.md'
+              'STYLE_GUIDE_FULL.md'
+              'copilot-instructions.md'
+              'terraform.instructions.md'
+          )
+
+          function Invoke-GitRaw {
+              param([string[]]$Arguments)
+              $objStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+              $arrGitCommands = @(Get-Command git -CommandType Application -ErrorAction Stop)
+              if ($arrGitCommands.Count -eq 0) { throw 'native-tool: Git application was not resolved' }
+              $objStartInfo.FileName = $arrGitCommands[0].Source
+              $objStartInfo.UseShellExecute = $false
+              $objStartInfo.RedirectStandardOutput = $true
+              $objStartInfo.RedirectStandardError = $true
+              foreach ($strArgument in $Arguments) {
+                  [void]$objStartInfo.ArgumentList.Add($strArgument)
+              }
+              $objProcess = [System.Diagnostics.Process]::new()
+              $objProcess.StartInfo = $objStartInfo
+              $objOutput = [System.IO.MemoryStream]::new()
+              try {
+                  if (-not $objProcess.Start()) { throw 'native-tool: Git did not start' }
+                  $objProcess.StandardOutput.BaseStream.CopyTo($objOutput)
+                  $strError = $objProcess.StandardError.ReadToEnd()
+                  $objProcess.WaitForExit()
+                  return [pscustomobject]@{ ExitCode = $objProcess.ExitCode; Bytes = $objOutput.ToArray(); Error = $strError }
+              } finally {
+                  $objOutput.Dispose()
+                  $objProcess.Dispose()
+              }
+          }
+
+          function ConvertFrom-NulRecords {
+              param([byte[]]$Bytes)
+              if ($Bytes.Length -eq 0) { return @() }
+              if ($Bytes[$Bytes.Length - 1] -ne 0) { throw 'git-paths: missing final NUL' }
+              $arrRecords = @()
+              $intStart = 0
+              for ($intIndex = 0; $intIndex -lt $Bytes.Length; $intIndex++) {
+                  if ($Bytes[$intIndex] -eq 0) {
+                      if ($intIndex -eq $intStart) { throw 'git-paths: empty or duplicate record' }
+                      $arrRecord = [byte[]]::new($intIndex - $intStart)
+                      [System.Array]::Copy($Bytes, $intStart, $arrRecord, 0, $arrRecord.Length)
+                      $arrRecords += ,$arrRecord
+                      $intStart = $intIndex + 1
+                  }
+              }
+              return $arrRecords
+          }
+
+          function Assert-AllowedPaths {
+              param([byte[][]]$Records, [string[]]$Allowed, [string]$Surface)
+              $objUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
+              $arrObserved = @()
+              foreach ($arrRecord in $Records) {
+                  try { $strPath = $objUtf8.GetString($arrRecord) } catch { throw "git-paths: undecodable $Surface record" }
+                  $arrRoundTrip = $objUtf8.GetBytes($strPath)
+                  if ([Convert]::ToBase64String($arrRecord) -cne [Convert]::ToBase64String($arrRoundTrip)) {
+                      throw "git-paths: ambiguous $Surface record"
+                  }
+                  if ($arrObserved -ccontains $strPath) { throw "git-paths: duplicate $Surface record" }
+                  if ($Allowed -notcontains $strPath) { throw "git-paths: unexpected $Surface path"
+                  }
+                  $arrObserved += $strPath
+              }
+              return @($arrObserved | Sort-Object -CaseSensitive)
+          }
+
+          & ./.github/workflows/Generate-StyleGuideArtifacts.ps1
+          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }
+
+          $objWorking = Invoke-GitRaw @('diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--')
+          $objStaged = Invoke-GitRaw @('diff', '--cached', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--')
+          $objUntracked = Invoke-GitRaw @('ls-files', '--others', '--exclude-standard', '-z', '--')
+          foreach ($objResult in @($objWorking, $objStaged, $objUntracked)) {
+              if ($objResult.ExitCode -ne 0) { throw "native-tool: Git path query failed with exit $($objResult.ExitCode)" }
+          }
+          $arrWorking = Assert-AllowedPaths (ConvertFrom-NulRecords $objWorking.Bytes) $arrArtifacts 'working'
+          $arrStaged = Assert-AllowedPaths (ConvertFrom-NulRecords $objStaged.Bytes) @() 'staged'
+          $arrUntracked = Assert-AllowedPaths (ConvertFrom-NulRecords $objUntracked.Bytes) @() 'untracked'
+          if ($arrStaged.Count -ne 0 -or $arrUntracked.Count -ne 0) { throw 'git-paths: checkout is not clean' }
+
+          $objDiff = Invoke-GitRaw (@('diff', '--no-ext-diff', '--no-textconv', '--exit-code', '--') + $arrArtifacts)
+          if ($objDiff.ExitCode -ne 0 -and $objDiff.ExitCode -ne 1) {
+              throw "native-tool: git diff failed with exit $($objDiff.ExitCode)"
+          }
+          Write-Host "generated-artifacts diff classification: $($objDiff.ExitCode)"
+
+      - name: Upload verified generated artifacts
+        id: upload-generated
+        if: ${{ success() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: style-guide-artifacts
           path: |
@@ -68,3 +161,231 @@ jobs:
             terraform.instructions.md
             STYLE_GUIDE_CHAT.md
             STYLE_GUIDE_FULL.md
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 6
+          overwrite: false
+          include-hidden-files: false
+
+  # Temporary pre-promotion writer. T1B deletes this job and replaces it with
+  # the reviewed candidate, approval, and exact-lease promotion topology.
+  temporary-writer:
+    needs: [verify]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.verify.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out triggering revision
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          token: ${{ github.token }}
+          persist-credentials: false
+          fetch-depth: 1
+          fetch-tags: false
+          show-progress: false
+          lfs: false
+          submodules: false
+          clean: true
+          set-safe-directory: true
+          allow-unsafe-pr-checkout: false
+
+      - name: Verify checkout credential cleanup
+        id: verify-checkout-credentials
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arrRemoteUrls = @(& git remote get-url --all origin)
+          if ($LASTEXITCODE -ne 0 -or $arrRemoteUrls.Count -ne 1) {
+              throw 'credential-policy: unable to resolve exactly one origin URL'
+          }
+          if ($arrRemoteUrls[0] -notmatch '^https://github\.com/[^/@]+/[^/@]+(?:\.git)?$') {
+              throw 'credential-policy: origin is not a credential-free GitHub HTTPS URL'
+          }
+          $arrHelpers = @(& git config --local --get-all credential.helper)
+          $intHelperExit = $LASTEXITCODE
+          if (($intHelperExit -ne 0 -and $intHelperExit -ne 1) -or $arrHelpers.Count -ne 0) {
+              throw 'credential-policy: a local credential helper is configured'
+          }
+          $arrAuthorizationKeys = @(& git config --local --name-only --get-regexp '^http\..*\.extraheader$')
+          $intAuthorizationExit = $LASTEXITCODE
+          if (($intAuthorizationExit -ne 0 -and $intAuthorizationExit -ne 1) -or $arrAuthorizationKeys.Count -ne 0) {
+              throw 'credential-policy: persisted HTTP authorization is configured'
+          }
+
+      - name: Regenerate and prepare the bounded artifact commit
+        id: prepare-generated-commit
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arrArtifacts = @(
+              'STYLE_GUIDE_CHAT.md'
+              'STYLE_GUIDE_FULL.md'
+              'copilot-instructions.md'
+              'terraform.instructions.md'
+          )
+
+          function Invoke-GitRaw {
+              param([string[]]$Arguments)
+              $objStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+              $arrGitCommands = @(Get-Command git -CommandType Application -ErrorAction Stop)
+              if ($arrGitCommands.Count -eq 0) { throw 'native-tool: Git application was not resolved' }
+              $objStartInfo.FileName = $arrGitCommands[0].Source
+              $objStartInfo.UseShellExecute = $false
+              $objStartInfo.RedirectStandardOutput = $true
+              $objStartInfo.RedirectStandardError = $true
+              foreach ($strArgument in $Arguments) { [void]$objStartInfo.ArgumentList.Add($strArgument) }
+              $objProcess = [System.Diagnostics.Process]::new()
+              $objProcess.StartInfo = $objStartInfo
+              $objOutput = [System.IO.MemoryStream]::new()
+              try {
+                  if (-not $objProcess.Start()) { throw 'native-tool: Git did not start' }
+                  $objProcess.StandardOutput.BaseStream.CopyTo($objOutput)
+                  $strError = $objProcess.StandardError.ReadToEnd()
+                  $objProcess.WaitForExit()
+                  return [pscustomobject]@{ ExitCode = $objProcess.ExitCode; Bytes = $objOutput.ToArray(); Error = $strError }
+              } finally {
+                  $objOutput.Dispose()
+                  $objProcess.Dispose()
+              }
+          }
+
+          function ConvertFrom-NulRecords {
+              param([byte[]]$Bytes)
+              if ($Bytes.Length -eq 0) { return @() }
+              if ($Bytes[$Bytes.Length - 1] -ne 0) { throw 'git-paths: missing final NUL' }
+              $arrRecords = @()
+              $intStart = 0
+              for ($intIndex = 0; $intIndex -lt $Bytes.Length; $intIndex++) {
+                  if ($Bytes[$intIndex] -eq 0) {
+                      if ($intIndex -eq $intStart) { throw 'git-paths: empty or duplicate record' }
+                      $arrRecord = [byte[]]::new($intIndex - $intStart)
+                      [System.Array]::Copy($Bytes, $intStart, $arrRecord, 0, $arrRecord.Length)
+                      $arrRecords += ,$arrRecord
+                      $intStart = $intIndex + 1
+                  }
+              }
+              return $arrRecords
+          }
+
+          function Assert-AllowedPaths {
+              param([byte[][]]$Records, [string[]]$Allowed, [string]$Surface)
+              $objUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
+              $arrObserved = @()
+              foreach ($arrRecord in $Records) {
+                  try { $strPath = $objUtf8.GetString($arrRecord) } catch { throw "git-paths: undecodable $Surface record" }
+                  $arrRoundTrip = $objUtf8.GetBytes($strPath)
+                  if ([Convert]::ToBase64String($arrRecord) -cne [Convert]::ToBase64String($arrRoundTrip)) {
+                      throw "git-paths: ambiguous $Surface record"
+                  }
+                  if ($arrObserved -ccontains $strPath) { throw "git-paths: duplicate $Surface record" }
+                  if ($Allowed -notcontains $strPath) { throw "git-paths: unexpected $Surface path" }
+                  $arrObserved += $strPath
+              }
+              return @($arrObserved | Sort-Object -CaseSensitive)
+          }
+
+          & ./.github/workflows/Generate-StyleGuideArtifacts.ps1
+          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }
+
+          $objWorking = Invoke-GitRaw @('diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--')
+          $objStaged = Invoke-GitRaw @('diff', '--cached', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--')
+          $objUntracked = Invoke-GitRaw @('ls-files', '--others', '--exclude-standard', '-z', '--')
+          foreach ($objResult in @($objWorking, $objStaged, $objUntracked)) {
+              if ($objResult.ExitCode -ne 0) { throw "native-tool: Git path query failed with exit $($objResult.ExitCode)" }
+          }
+          $arrWorking = Assert-AllowedPaths (ConvertFrom-NulRecords $objWorking.Bytes) $arrArtifacts 'working'
+          $arrStaged = Assert-AllowedPaths (ConvertFrom-NulRecords $objStaged.Bytes) @() 'staged'
+          $arrUntracked = Assert-AllowedPaths (ConvertFrom-NulRecords $objUntracked.Bytes) @() 'untracked'
+          if ($arrStaged.Count -ne 0 -or $arrUntracked.Count -ne 0) { throw 'git-paths: checkout is not clean' }
+          if ($arrWorking.Count -eq 0) { return }
+
+          & git add -- @arrArtifacts
+          if ($LASTEXITCODE -ne 0) { throw "native-tool: git add failed with exit $LASTEXITCODE" }
+          $objCached = Invoke-GitRaw @('diff', '--cached', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--')
+          if ($objCached.ExitCode -ne 0) { throw "native-tool: cached path query failed with exit $($objCached.ExitCode)" }
+          $arrCached = Assert-AllowedPaths (ConvertFrom-NulRecords $objCached.Bytes) $arrArtifacts 'staged'
+          if ($arrCached.Count -ne $arrWorking.Count) { throw 'git-paths: staged and working path sets differ' }
+          for ($intIndex = 0; $intIndex -lt $arrCached.Count; $intIndex++) {
+              if ($arrCached[$intIndex] -cne $arrWorking[$intIndex]) { throw 'git-paths: staged and working path sets differ' }
+          }
+
+          & git config --local user.email 'github-actions[bot]@users.noreply.github.com'
+          if ($LASTEXITCODE -ne 0) { throw "native-tool: git config email failed with exit $LASTEXITCODE" }
+          & git config --local user.name 'github-actions[bot]'
+          if ($LASTEXITCODE -ne 0) { throw "native-tool: git config name failed with exit $LASTEXITCODE" }
+          & git commit -m 'chore: update generated style guide artifacts [skip ci]'
+          if ($LASTEXITCODE -ne 0) { throw "native-tool: git commit failed with exit $LASTEXITCODE" }
+
+      - name: Push the temporary pre-promotion commit
+        id: push-generated
+        shell: pwsh
+        env:
+          STYLE_GUIDE_PUSH_TOKEN: ${{ github.token }}
+          STYLE_GUIDE_TRIGGER_SHA: ${{ github.sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $strToken = $env:STYLE_GUIDE_PUSH_TOKEN
+          Remove-Item Env:STYLE_GUIDE_PUSH_TOKEN -ErrorAction SilentlyContinue
+          $strTriggerSha = $env:STYLE_GUIDE_TRIGGER_SHA
+
+          $strHead = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "native-tool: git rev-parse HEAD failed with exit $LASTEXITCODE" }
+          if ($strHead -ceq $strTriggerSha) {
+              $strToken = $null
+              return
+          }
+          $strParent = (& git rev-parse 'HEAD^').Trim()
+          if ($LASTEXITCODE -ne 0 -or $strParent -cne $strTriggerSha) {
+              throw 'push-policy: prepared commit does not have the triggering SHA as its exact parent'
+          }
+          $arrRemoteUrls = @(& git remote get-url --all origin)
+          if ($LASTEXITCODE -ne 0 -or $arrRemoteUrls.Count -ne 1 -or
+              $arrRemoteUrls[0] -notmatch '^https://github\.com/[^/@]+/[^/@]+(?:\.git)?$') {
+              throw 'push-policy: origin is not one credential-free GitHub HTTPS URL'
+          }
+
+          $arrCredentialBytes = $null
+          $strAuthorization = $null
+          $objProcess = $null
+          try {
+              $arrCredentialBytes = [System.Text.Encoding]::UTF8.GetBytes("x-access-token:$strToken")
+              $strAuthorization = 'AUTHORIZATION: basic ' + [Convert]::ToBase64String($arrCredentialBytes)
+              $strToken = $null
+
+              $objStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+              $arrGitCommands = @(Get-Command git -CommandType Application -ErrorAction Stop)
+              if ($arrGitCommands.Count -eq 0) { throw 'native-tool: Git application was not resolved' }
+              $objStartInfo.FileName = $arrGitCommands[0].Source
+              $objStartInfo.UseShellExecute = $false
+              $objStartInfo.RedirectStandardOutput = $true
+              $objStartInfo.RedirectStandardError = $true
+              [void]$objStartInfo.ArgumentList.Add('push')
+              [void]$objStartInfo.ArgumentList.Add("--force-with-lease=refs/heads/main:$strTriggerSha")
+              [void]$objStartInfo.ArgumentList.Add('origin')
+              [void]$objStartInfo.ArgumentList.Add('HEAD:refs/heads/main')
+              $objStartInfo.Environment['GIT_CONFIG_COUNT'] = '1'
+              $objStartInfo.Environment['GIT_CONFIG_KEY_0'] = 'http.https://github.com/.extraheader'
+              $objStartInfo.Environment['GIT_CONFIG_VALUE_0'] = $strAuthorization
+              $objProcess = [System.Diagnostics.Process]::new()
+              $objProcess.StartInfo = $objStartInfo
+              if (-not $objProcess.Start()) { throw 'native-tool: git push did not start' }
+              $strStandardOutput = $objProcess.StandardOutput.ReadToEnd()
+              $strStandardError = $objProcess.StandardError.ReadToEnd()
+              $objProcess.WaitForExit()
+              $intPushExit = $objProcess.ExitCode
+          } finally {
+              $strToken = $null
+              $strAuthorization = $null
+              if ($null -ne $arrCredentialBytes) { [System.Array]::Clear($arrCredentialBytes, 0, $arrCredentialBytes.Length) }
+              Remove-Item Env:GIT_CONFIG_COUNT, Env:GIT_CONFIG_KEY_0, Env:GIT_CONFIG_VALUE_0 -ErrorAction SilentlyContinue
+              if ($null -ne $objProcess) { $objProcess.Dispose() }
+          }
+          if ($intPushExit -ne 0) { throw "native-tool: git push failed with exit $intPushExit" }
+          $strVerifiedHead = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $strVerifiedHead -cne $strHead) {
+              throw 'push-policy: local post-push ref verification failed'
+          }

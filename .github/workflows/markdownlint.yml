@@ -1,51 +1,118 @@
-# Markdownlint CI Workflow
-#
-# This workflow uses markdownlint by David Anson (@DavidAnson)
-# Licensed under MIT License
-# Source: https://github.com/DavidAnson/markdownlint
-#
-# Purpose: Enforce consistent Markdown formatting across the repository
-# Runs on: push and pull_request events
-
 name: Markdown Lint
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
-    branches: ["**"]
+    branches: [main]
+
+permissions:
+  contents: read
 
 jobs:
   markdownlint:
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: read
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Check out triggering revision
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: '20'
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          token: ${{ github.token }}
+          persist-credentials: false
+          fetch-depth: 1
+          fetch-tags: false
+          show-progress: false
+          lfs: false
+          submodules: false
+          clean: true
+          set-safe-directory: true
+          allow-unsafe-pr-checkout: false
 
-      - name: Install dependencies
+      - name: Set up exact hosted Node.js
+        id: setup-node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.18.1'
+          check-latest: false
+          package-manager-cache: false
+          token: ${{ github.token }}
+
+      - name: Install, validate policy, and lint both Markdown surfaces
+        id: validate-and-lint
+        shell: pwsh
         working-directory: .github/workflows
-        run: npm ci
-
-      - name: Run markdownlint on outer files
-        id: lint-outer
-        continue-on-error: true
-        working-directory: .github/workflows
-        run: npm run lint:md
-
-      - name: Run markdownlint on nested Markdown code fences
-        id: lint-nested
-        continue-on-error: true
-        working-directory: .github/workflows
-        run: npm run lint:md:nested
-
-      - name: Check linting results
-        if: steps.lint-outer.outcome == 'failure' || steps.lint-nested.outcome == 'failure'
         run: |
-          echo "::error::Markdown linting failed. Check the logs above for details."
-          exit 1
+          $ErrorActionPreference = 'Stop'
+          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
+              $PSNativeCommandUseErrorActionPreference = $false
+          }
+
+          $arrNodeCommands = @(Get-Command node -CommandType Application -ErrorAction Stop)
+          $arrNpmCommands = @(Get-Command npm -CommandType Application -ErrorAction Stop)
+          if ($arrNodeCommands.Count -eq 0 -or $arrNpmCommands.Count -eq 0) {
+              throw 'toolchain: node or npm was not resolved as an application'
+          }
+          $objNodeCommand = $arrNodeCommands[0]
+          $objNpmCommand = $arrNpmCommands[0]
+          $strNodePath = $objNodeCommand.Source
+          $strNpmPath = $objNpmCommand.Source
+          $strNodeVersion = (& $strNodePath --version).Trim()
+          $intNodeVersionExit = $LASTEXITCODE
+          $strNpmVersion = (& $strNpmPath --version).Trim()
+          $intNpmVersionExit = $LASTEXITCODE
+          if ($intNodeVersionExit -ne 0 -or $strNodeVersion -cne 'v24.18.1') {
+              throw "toolchain: node version check failed with exit $intNodeVersionExit"
+          }
+          if ($intNpmVersionExit -ne 0 -or $strNpmVersion -cne '11.16.0') {
+              throw "toolchain: npm version check failed with exit $intNpmVersionExit"
+          }
+          Write-Host "Node executable: $strNodePath ($strNodeVersion)"
+          Write-Host "npm executable: $strNpmPath ($strNpmVersion)"
+
+          $strPackageBefore = (Get-FileHash -LiteralPath package.json -Algorithm SHA256).Hash
+          $strLockBefore = (Get-FileHash -LiteralPath package-lock.json -Algorithm SHA256).Hash
+          $boolCiExisted = Test-Path Env:CI
+          $strPriorCi = $env:CI
+          try {
+              $env:CI = 'true'
+              & $strNpmPath ci --ignore-scripts --no-audit --no-fund
+              $intInstallExit = $LASTEXITCODE
+          } finally {
+              if ($boolCiExisted) {
+                  $env:CI = $strPriorCi
+              } else {
+                  Remove-Item Env:CI -ErrorAction SilentlyContinue
+              }
+          }
+          if ($intInstallExit -ne 0) { throw "npm-ci: native exit $intInstallExit" }
+
+          $strPackageAfterInstall = (Get-FileHash -LiteralPath package.json -Algorithm SHA256).Hash
+          $strLockAfterInstall = (Get-FileHash -LiteralPath package-lock.json -Algorithm SHA256).Hash
+          if ($strPackageAfterInstall -cne $strPackageBefore -or $strLockAfterInstall -cne $strLockBefore) {
+              throw 'npm-ci: package metadata changed during frozen installation'
+          }
+
+          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml
+          $intPolicyExit = $LASTEXITCODE
+          Write-Host "workflow-policy native exit: $intPolicyExit"
+
+          & $strNpmPath run lint:md
+          $intOuterExit = $LASTEXITCODE
+          Write-Host "outer-markdown native exit: $intOuterExit"
+
+          & $strNpmPath run lint:md:nested
+          $intNestedExit = $LASTEXITCODE
+          Write-Host "nested-markdown native exit: $intNestedExit"
+
+          $strPackageFinal = (Get-FileHash -LiteralPath package.json -Algorithm SHA256).Hash
+          $strLockFinal = (Get-FileHash -LiteralPath package-lock.json -Algorithm SHA256).Hash
+          if ($strPackageFinal -cne $strPackageBefore -or $strLockFinal -cne $strLockBefore) {
+              throw 'validation: package metadata changed after installation or linting'
+          }
+          if ($intPolicyExit -ne 0 -or $intOuterExit -ne 0 -or $intNestedExit -ne 0) {
+              throw 'validation: one or more policy or lint phases failed'
+          }
