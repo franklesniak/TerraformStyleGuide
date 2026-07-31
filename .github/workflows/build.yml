@@ -37,6 +37,14 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          # git config exits 1 when a queried key is absent, which is the secure
+          # expected state this step asserts. If the runner enables native-command
+          # error mapping, that accepted status would terminate the step before the
+          # explicit capture below runs, so it is disabled the same way
+          # markdownlint.yml disables it.
+          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
+              $PSNativeCommandUseErrorActionPreference = $false
+          }
           $arrRemoteUrls = @(& git remote get-url --all origin)
           if ($LASTEXITCODE -ne 0 -or $arrRemoteUrls.Count -ne 1) {
               throw 'credential-policy: unable to resolve exactly one origin URL'
@@ -199,6 +207,14 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          # git config exits 1 when a queried key is absent, which is the secure
+          # expected state this step asserts. If the runner enables native-command
+          # error mapping, that accepted status would terminate the step before the
+          # explicit capture below runs, so it is disabled the same way
+          # markdownlint.yml disables it.
+          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
+              $PSNativeCommandUseErrorActionPreference = $false
+          }
           $arrRemoteUrls = @(& git remote get-url --all origin)
           if ($LASTEXITCODE -ne 0 -or $arrRemoteUrls.Count -ne 1) {
               throw 'credential-policy: unable to resolve exactly one origin URL'

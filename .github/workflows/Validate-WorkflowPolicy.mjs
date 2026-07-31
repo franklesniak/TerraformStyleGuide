@@ -401,6 +401,11 @@ function validateCredentialCleanupStep(step, label) {
     reject('credential-policy', `${label} execution contract changed`);
   }
   const requiredSequences = [
+    // Both accepted absent-key statuses below are only reachable when native
+    // commands are not mapped onto $ErrorActionPreference.
+    'if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n' +
+      '    $PSNativeCommandUseErrorActionPreference = $false\n' +
+      '}',
     '$arrHelpers = @(& git config --local --get-all credential.helper)\n' +
       '$intHelperExit = $LASTEXITCODE\n' +
       '$global:LASTEXITCODE = 0\n' +
@@ -444,6 +449,7 @@ export function validateMarkdownPolicy(workflow, source) {
   const requiredFragments = [
     "-cne 'v24.18.1'",
     "-cne '11.16.0'",
+    'if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {',
     'ci --ignore-scripts --no-audit --no-fund',
     './Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml',
     'run lint:md',
@@ -616,6 +622,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-038', 'secret in step env', 'build', (source) => replaceOnce(source, '        id: generate-and-verify\n        shell: pwsh', "        id: generate-and-verify\n        env:\n          TOKEN: '${{ secrets.PAT }}'\n        shell: pwsh")],
   ['T1-BUILD-039', 'credential env on the writer script step', 'build', (source) => replaceOnce(source, '        id: prepare-generated-commit\n        shell: pwsh\n', '        id: prepare-generated-commit\n        shell: pwsh\n        env:\n          TOKEN: ${{ secrets.PAT }}\n')],
   ['T1-BUILD-040', 'unreviewed key on a script step', 'build', (source) => replaceOnce(source, '        id: generate-and-verify\n        shell: pwsh\n', '        id: generate-and-verify\n        shell: pwsh\n        working-directory: .\n')],
+  ['T1-BUILD-041', 'native-command error mapping guard removed', 'build', (source) => replaceOnce(source, '          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n              $PSNativeCommandUseErrorActionPreference = $false\n          }\n', '')],
   ['T1-MARKDOWN-001', 'floating Node major', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: '24'")],
   ['T1-MARKDOWN-002', 'latest Node', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: 'latest'")],
   ['T1-MARKDOWN-003', 'setup cache enabled', 'markdown', (source) => replaceOnce(source, '          package-manager-cache: false', '          package-manager-cache: true')],
@@ -629,6 +636,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-MARKDOWN-011', 'reviewed package hash removed', 'markdown', (source) => replaceOnce(source, "'E206CDB3562F0397E8EED7FB2C2586269A1F5335CDFF2906DA8D5E070426321E'", "'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'")],
   ['T1-MARKDOWN-012', 'reviewed lock hash altered', 'markdown', (source) => replaceOnce(source, "'277F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062'", "'377F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062'")],
   ['T1-MARKDOWN-013', 'pre-install supply gate neutralized', 'markdown', (source) => replaceOnce(source, 'if ($strPackageBefore -cne $strReviewedPackageHash -or', 'if ($false -and $strPackageBefore -cne $strReviewedPackageHash -or')],
+  ['T1-MARKDOWN-014', 'native-command error mapping guard removed', 'markdown', (source) => replaceOnce(source, '          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n              $PSNativeCommandUseErrorActionPreference = $false\n          }\n', '')],
   ['T1-DEPENDABOT-001', 'duplicate updates', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n'],
   ['T1-DEPENDABOT-002', 'npm update introduced early', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: npm\n    directory: /.github/workflows\n    schedule: { interval: weekly }\n'],
   ['T1-DEPENDABOT-003', 'auto-merge key', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n    auto-merge: true\n'],
