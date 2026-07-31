@@ -94,8 +94,12 @@ jobs:
               $objOutput = [System.IO.MemoryStream]::new()
               try {
                   if (-not $objProcess.Start()) { throw 'native-tool: Git did not start' }
-                  $objProcess.StandardOutput.BaseStream.CopyTo($objOutput)
-                  $strError = $objProcess.StandardError.ReadToEnd()
+                  # Both redirected pipes must drain concurrently. Reading one to
+                  # completion first deadlocks when the child fills the other.
+                  $objCopyTask = $objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)
+                  $objErrorTask = $objProcess.StandardError.ReadToEndAsync()
+                  $objCopyTask.GetAwaiter().GetResult()
+                  $strError = $objErrorTask.GetAwaiter().GetResult()
                   $objProcess.WaitForExit()
                   return [pscustomobject]@{ ExitCode = $objProcess.ExitCode; Bytes = $objOutput.ToArray(); Error = $strError }
               } finally {
@@ -262,8 +266,12 @@ jobs:
               $objOutput = [System.IO.MemoryStream]::new()
               try {
                   if (-not $objProcess.Start()) { throw 'native-tool: Git did not start' }
-                  $objProcess.StandardOutput.BaseStream.CopyTo($objOutput)
-                  $strError = $objProcess.StandardError.ReadToEnd()
+                  # Both redirected pipes must drain concurrently. Reading one to
+                  # completion first deadlocks when the child fills the other.
+                  $objCopyTask = $objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)
+                  $objErrorTask = $objProcess.StandardError.ReadToEndAsync()
+                  $objCopyTask.GetAwaiter().GetResult()
+                  $strError = $objErrorTask.GetAwaiter().GetResult()
                   $objProcess.WaitForExit()
                   return [pscustomobject]@{ ExitCode = $objProcess.ExitCode; Bytes = $objOutput.ToArray(); Error = $strError }
               } finally {
@@ -392,8 +400,14 @@ jobs:
               $objProcess = [System.Diagnostics.Process]::new()
               $objProcess.StartInfo = $objStartInfo
               if (-not $objProcess.Start()) { throw 'native-tool: git push did not start' }
-              $strStandardOutput = $objProcess.StandardOutput.ReadToEnd()
-              $strStandardError = $objProcess.StandardError.ReadToEnd()
+              # Both redirected pipes must drain concurrently. Reading one to
+              # completion first deadlocks when the child fills the other, which
+              # in this job would hang a contents-write step until the Actions
+              # timeout rather than failing.
+              $objOutputTask = $objProcess.StandardOutput.ReadToEndAsync()
+              $objErrorTask = $objProcess.StandardError.ReadToEndAsync()
+              $strStandardOutput = $objOutputTask.GetAwaiter().GetResult()
+              $strStandardError = $objErrorTask.GetAwaiter().GetResult()
               $objProcess.WaitForExit()
               $intPushExit = $objProcess.ExitCode
           } finally {

