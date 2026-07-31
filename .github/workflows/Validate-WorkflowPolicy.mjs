@@ -535,6 +535,12 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-VERSION-005', 'overflow', 'version', '<#\n.NOTES\nVersion: 2147483648.0.20260731.0\n#>\nfunction X {}\n'],
   ['T1-VERSION-006', 'impossible date', 'version', '<#\n.NOTES\nVersion: 1.0.20260229.0\n#>\nfunction X {}\n'],
   ['T1-VERSION-007', 'future valid but unexpected', 'unexpected-version', '<#\n.NOTES\nVersion: 1.0.20991231.0\n#>\nfunction X {}\n'],
+  ['T1-TEXT-001', 'truncated multi-byte sequence', 'text', Buffer.from([0x61, 0x3a, 0x20, 0xe2, 0x82, 0x0a])],
+  ['T1-TEXT-002', 'lone continuation byte', 'text', Buffer.from([0x61, 0x3a, 0x20, 0xa1, 0x0a])],
+  ['T1-TEXT-003', 'overlong encoding', 'text', Buffer.from([0x61, 0x3a, 0x20, 0xc0, 0xaf, 0x0a])],
+  ['T1-TEXT-004', 'lone surrogate', 'text', Buffer.from([0x61, 0x3a, 0x20, 0xed, 0xa0, 0x80, 0x0a])],
+  ['T1-TEXT-005', 'UTF-8 BOM', 'text', Buffer.from([0xef, 0xbb, 0xbf, 0x61, 0x3a, 0x20, 0x31, 0x0a])],
+  ['T1-TEXT-006', 'carriage return', 'text', Buffer.from([0x61, 0x3a, 0x20, 0x31, 0x0d, 0x0a])],
 ]);
 
 function runNegativeFixtures(buildSource, markdownSource) {
@@ -558,6 +564,8 @@ function runNegativeFixtures(buildSource, markdownSource) {
         parseGeneratorVersion(fixture, EXPECTED_VERSION);
       } else if (kind === 'unexpected-version') {
         parseGeneratorVersion(fixture, EXPECTED_VERSION);
+      } else if (kind === 'text') {
+        decodeStrictText(fixture, id);
       } else {
         reject('fixture-harness', `unknown fixture kind for ${id}`);
       }
@@ -570,14 +578,29 @@ function runNegativeFixtures(buildSource, markdownSource) {
   return ids.size;
 }
 
+// Buffer.prototype.toString('utf8') substitutes U+FFFD for malformed input, so
+// the validated character stream could differ from the committed bytes that
+// GitHub and PowerShell consume, and distinct malformed byte sequences could
+// collapse to one policy digest. Decoding fatally keeps bytes and characters
+// in exact correspondence.
+export function decodeStrictText(bytes, label) {
+  if (bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))) reject('text-policy', `${label} has a UTF-8 BOM`);
+  if (bytes.includes(0x0d)) reject('text-policy', `${label} contains a carriage return`);
+  let text;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    reject('text-policy', `${label} is not well-formed UTF-8`);
+  }
+  if (!Buffer.from(text, 'utf8').equals(bytes)) reject('text-policy', `${label} does not round-trip its committed bytes`);
+  return text;
+}
+
 function readOrdinaryText(path, label) {
   const stat = lstatSync(path);
   if (!stat.isFile() || stat.isSymbolicLink()) reject('filesystem-policy', `${label} is not an ordinary file`);
   if (realpathSync(path) !== resolve(path)) reject('filesystem-policy', `${label} resolves through an alias`);
-  const bytes = readFileSync(path);
-  if (bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))) reject('text-policy', `${label} has a UTF-8 BOM`);
-  if (bytes.includes(0x0d)) reject('text-policy', `${label} contains a carriage return`);
-  return bytes.toString('utf8');
+  return decodeStrictText(readFileSync(path), label);
 }
 
 export function validateRepositoryPolicy(buildPath, markdownPath) {
