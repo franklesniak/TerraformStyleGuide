@@ -244,6 +244,15 @@ function assertActionStep(step, role, action, inputs, condition = undefined) {
   assertEqual(step.with, inputs, `${role}.with`);
 }
 
+// Script steps are key-asserted for the same reason action steps are: an
+// unasserted mapping accepts additions such as env, which the role policy never
+// reviewed.
+function assertScriptStep(step, label, fragment, failure) {
+  assertKeys(step, ['name', 'id', 'shell', 'run'], label);
+  if (step.shell !== 'pwsh') reject('policy', `${label} execution contract changed`);
+  if (!step.run.includes(fragment)) reject('git-policy', failure);
+}
+
 function validateActionMultiset(source, expected) {
   const actual = actionAnnotations(source).sort((a, b) => `${a.reference}|${a.release}`.localeCompare(`${b.reference}|${b.release}`));
   const wanted = [...expected].sort((a, b) => `${a.reference}|${a.release}`.localeCompare(`${b.reference}|${b.release}`));
@@ -319,7 +328,12 @@ export function validateBuildPolicy(workflow, source) {
   for (const { jobId, id, run, step } of allRunSteps(workflow)) {
     if ('continue-on-error' in step) reject('failure-policy', `${jobId}.${id} sets continue-on-error`);
     if (/\b(?:curl|wget|Invoke-WebRequest)\b/iu.test(run)) reject('network-policy', `${jobId}.${id} adds a network client`);
-    if (/secrets\./u.test(run) || /GITHUB_TOKEN/u.test(run)) reject('credential-policy', `${jobId}.${id} expands an unapproved credential`);
+    // Scan the whole step, not just run: a credential reaches the script through
+    // an env entry just as effectively as through the script text itself.
+    const serialized = JSON.stringify(step);
+    if (/secrets\./u.test(serialized) || /GITHUB_TOKEN/u.test(serialized)) {
+      reject('credential-policy', `${jobId}.${id} expands an unapproved credential`);
+    }
     if (id !== 'push-generated' && /ArgumentList\.Add\(['"]push['"]\)|\bgit\s+push\b/iu.test(run)) {
       reject('side-effect-policy', `${jobId}.${id} adds a second push path`);
     }
@@ -327,12 +341,18 @@ export function validateBuildPolicy(workflow, source) {
       reject('side-effect-policy', `${jobId}.${id} adds an unapproved repository mutation`);
     }
   }
-  if (!findStep(verify, 'generate-and-verify', 'build.verify').run.includes("'diff', '--no-ext-diff', '--no-textconv', '--quiet'")) {
-    reject('git-policy', 'verification no longer classifies native git diff status');
-  }
-  if (!findStep(writer, 'prepare-generated-commit', 'build.temporary-writer').run.includes("'ls-files', '--others', '--exclude-standard', '-z'")) {
-    reject('git-policy', 'writer no longer uses NUL-delimited untracked paths');
-  }
+  assertScriptStep(
+    findStep(verify, 'generate-and-verify', 'build.verify'),
+    'build.verify.generate-and-verify',
+    "'diff', '--no-ext-diff', '--no-textconv', '--quiet'",
+    'verification no longer classifies native git diff status',
+  );
+  assertScriptStep(
+    findStep(writer, 'prepare-generated-commit', 'build.temporary-writer'),
+    'build.temporary-writer.prepare-generated-commit',
+    "'ls-files', '--others', '--exclude-standard', '-z'",
+    'writer no longer uses NUL-delimited untracked paths',
+  );
 
   validateActionMultiset(source, [
     ACTIONS.checkout,
@@ -515,6 +535,9 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-035', 'unreviewed Docker action', 'build', (source) => replaceOnce(source, ACTIONS.checkout.reference, 'docker://alpine:latest')],
   ['T1-BUILD-036', 'credential-helper status normalization removed', 'build', (source) => replaceOnce(source, '          $intHelperExit = $LASTEXITCODE\n          $global:LASTEXITCODE = 0\n', '          $intHelperExit = $LASTEXITCODE\n')],
   ['T1-BUILD-037', 'authorization status normalization removed', 'build', (source) => replaceOnce(source, '          $intAuthorizationExit = $LASTEXITCODE\n          $global:LASTEXITCODE = 0\n', '          $intAuthorizationExit = $LASTEXITCODE\n')],
+  ['T1-BUILD-038', 'credential env on the verification script step', 'build', (source) => replaceOnce(source, '        id: generate-and-verify\n        shell: pwsh\n', '        id: generate-and-verify\n        shell: pwsh\n        env:\n          TOKEN: ${{ secrets.PAT }}\n')],
+  ['T1-BUILD-039', 'credential env on the writer script step', 'build', (source) => replaceOnce(source, '        id: prepare-generated-commit\n        shell: pwsh\n', '        id: prepare-generated-commit\n        shell: pwsh\n        env:\n          TOKEN: ${{ secrets.PAT }}\n')],
+  ['T1-BUILD-040', 'unreviewed key on a script step', 'build', (source) => replaceOnce(source, '        id: generate-and-verify\n        shell: pwsh\n', '        id: generate-and-verify\n        shell: pwsh\n        working-directory: .\n')],
   ['T1-MARKDOWN-001', 'floating Node major', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: '24'")],
   ['T1-MARKDOWN-002', 'latest Node', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: 'latest'")],
   ['T1-MARKDOWN-003', 'setup cache enabled', 'markdown', (source) => replaceOnce(source, '          package-manager-cache: false', '          package-manager-cache: true')],
