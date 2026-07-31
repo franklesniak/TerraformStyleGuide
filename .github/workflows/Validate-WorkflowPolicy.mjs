@@ -450,6 +450,12 @@ export function validateMarkdownPolicy(workflow, source) {
     'run lint:md:nested',
     'Get-FileHash -LiteralPath package.json -Algorithm SHA256',
     'Get-FileHash -LiteralPath package-lock.json -Algorithm SHA256',
+    // Derived from the reviewed constants so the pre-install gate in the
+    // workflow and the policy baseline here cannot drift apart silently.
+    `$strReviewedPackage = '${REVIEWED_PACKAGE_DIGESTS['package.json'].toUpperCase()}'`,
+    `$strReviewedLock = '${REVIEWED_PACKAGE_DIGESTS['package-lock.json'].toUpperCase()}'`,
+    'if ($strPackageBefore -cne $strReviewedPackage)',
+    'if ($strLockBefore -cne $strReviewedLock)',
   ];
   for (const fragment of requiredFragments) {
     if (!validation.run.includes(fragment)) reject('markdown-policy', `required phase is missing: ${fragment}`);
@@ -618,6 +624,8 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-MARKDOWN-008', 'nested lint removed', 'markdown', (source) => replaceOnce(source, 'run lint:md:nested', 'run lint:other:nested')],
   ['T1-MARKDOWN-009', 'policy validator removed', 'markdown', (source) => replaceOnce(source, './Validate-WorkflowPolicy.mjs', './other-validator.mjs')],
   ['T1-MARKDOWN-010', 'failure continuation', 'markdown', (source) => replaceOnce(source, '        shell: pwsh\n        working-directory:', '        shell: pwsh\n        continue-on-error: true\n        working-directory:')],
+  ['T1-MARKDOWN-011', 'pre-install supply gate neutralized', 'markdown', (source) => replaceOnce(source, 'if ($strPackageBefore -cne $strReviewedPackage)', 'if ($false -and $strPackageBefore -cne $strReviewedPackage)')],
+  ['T1-MARKDOWN-012', 'reviewed digest literal altered', 'markdown', (source) => replaceOnce(source, "$strReviewedLock = '277F7168", "$strReviewedLock = '377F7168")],
   ['T1-DEPENDABOT-001', 'duplicate updates', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n'],
   ['T1-DEPENDABOT-002', 'npm update introduced early', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: npm\n    directory: /.github/workflows\n    schedule: { interval: weekly }\n'],
   ['T1-DEPENDABOT-003', 'auto-merge key', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n    auto-merge: true\n'],
