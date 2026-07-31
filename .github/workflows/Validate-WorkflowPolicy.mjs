@@ -144,6 +144,17 @@ const REVIEWED_PARSER = Object.freeze({
 // rather than a sample of it. Deliberately no /g flag: this is reused with test().
 const NETWORK_CLIENT = /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|Start-BitsTransfer|Net\.WebClient|WebClient|HttpClient|WebRequest|TcpClient|UdpClient|HttpListener|Socket)\b|System\.Net\./iu;
 
+// The push step is the only place a contents-write token is used, and three
+// successive rounds showed that pattern-matching its script is not winnable:
+// each targeted check was evaded by a more indirect construction — a different
+// ref namespace, then a direct "git ... push", then invoking Git through the
+// resolved .Source path with the ref assembled from concatenated fragments.
+// Enumerating bad forms in a script that can compute anything is the wrong
+// shape of defence, so the reviewed script is pinned exactly. The cost is low
+// precisely because this step is temporary and frozen: T1B deletes it, and any
+// intentional edit before then is expected to update this digest deliberately.
+const REVIEWED_PUSH_STEP_DIGEST = '29e198533f8f1a8e474a62eb8d79dbb818fef769ef29c9201ebe3b9869287d69';
+
 const EXPECTED_VERSION = '1.0.20260731.0';
 const MAXIMUM_YAML_BYTES = 1024 * 1024;
 const MAXIMUM_NODE_COUNT = 10000;
@@ -370,6 +381,9 @@ export function validateBuildPolicy(workflow, source) {
   if (!pushStep.run.includes("ArgumentList.Add('HEAD:refs/heads/main')")) {
     reject('side-effect-policy', 'temporary writer push destination is not HEAD:refs/heads/main');
   }
+  if (!pushStep.run.includes("ArgumentList.Add('--no-verify')")) {
+    reject('side-effect-policy', 'temporary writer push no longer bypasses repository hooks');
+  }
   // Every ref namespace, not only refs/heads: a lease on main does not constrain
   // a push to refs/tags or anywhere else.
   for (const match of pushStep.run.matchAll(/refs\/([^'":\s]+)/gu)) {
@@ -390,6 +404,13 @@ export function validateBuildPolicy(workflow, source) {
     if (!['rev-parse', 'remote'].includes(match[1])) {
       reject('side-effect-policy', `temporary writer invokes an unapproved direct git form: ${match[1]}`);
     }
+  }
+  // Closing backstop. The assertions above are kept because they name what
+  // changed; this pins everything they do not model — indirect invocation
+  // through a resolved executable path, refs assembled from fragments, or any
+  // other construction a script can express.
+  if (createHash('sha256').update(pushStep.run, 'utf8').digest('hex') !== REVIEWED_PUSH_STEP_DIGEST) {
+    reject('side-effect-policy', 'temporary writer push script does not match its reviewed digest');
   }
 
   for (const { jobId, id, run, step } of allRunSteps(workflow)) {
@@ -730,6 +751,8 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-048', 'direct git push form added to the writer step', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_COUNT'] = '1'", "              git push origin --tags\n              $objStartInfo.Environment['GIT_CONFIG_COUNT'] = '1'")],
   ['T1-BUILD-049', 'sequential push stream reads restored', 'build', (source) => replaceOnce(source, '              $objOutputTask = $objProcess.StandardOutput.ReadToEndAsync()\n              $objErrorTask = $objProcess.StandardError.ReadToEndAsync()\n              $strStandardOutput = $objOutputTask.GetAwaiter().GetResult()\n              $strStandardError = $objErrorTask.GetAwaiter().GetResult()\n', '              $strStandardOutput = $objProcess.StandardOutput.ReadToEnd()\n              $strStandardError = $objProcess.StandardError.ReadToEnd()\n')],
   ['T1-BUILD-050', 'sequential Git stream reads restored', 'build', (source) => replaceOnce(source, '                  $objCopyTask = $objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)\n                  $objErrorTask = $objProcess.StandardError.ReadToEndAsync()\n                  $objCopyTask.GetAwaiter().GetResult()\n                  $strError = $objErrorTask.GetAwaiter().GetResult()\n', '                  $objProcess.StandardOutput.BaseStream.CopyTo($objOutput)\n                  $strError = $objProcess.StandardError.ReadToEnd()\n')],
+  ['T1-BUILD-051', 'indirect Git invocation in the writer', 'build', (source) => replaceOnce(source, "              [void]$objStartInfo.ArgumentList.Add('push')", `              $strDestination = 'refs/' + 'tags/backdoor'\n              & ($arrGitCommands[0].Source) -c "http.https://github.com/.extraheader=$strAuthorization" push origin "HEAD:$strDestination"\n              [void]$objStartInfo.ArgumentList.Add('push')`)],
+  ['T1-BUILD-052', 'push hook bypass removed', 'build', (source) => replaceOnce(source, "              [void]$objStartInfo.ArgumentList.Add('--no-verify')\n", '')],
   ['T1-MARKDOWN-001', 'floating Node major', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: '24'")],
   ['T1-MARKDOWN-002', 'latest Node', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: 'latest'")],
   ['T1-MARKDOWN-003', 'setup cache enabled', 'markdown', (source) => replaceOnce(source, '          package-manager-cache: false', '          package-manager-cache: true')],
@@ -826,7 +849,11 @@ function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSou
         reject('fixture-harness', `unknown fixture kind for ${id}`);
       }
     } catch (error) {
-      if (error instanceof PolicyError) rejected = true;
+      // A fixture-harness error means the mutation was never built — typically a
+      // replaceOnce anchor gone stale after a refactor. Counting that as a
+      // rejection would report full coverage for a fixture that tested nothing
+      // and let the assertion it guards regress unnoticed, so it propagates.
+      if (error instanceof PolicyError && error.category !== 'fixture-harness') rejected = true;
       else throw error;
     }
     if (!rejected) reject('fixture-harness', `${id} (${description}) was not rejected`);

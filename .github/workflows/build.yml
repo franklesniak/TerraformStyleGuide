@@ -391,6 +391,10 @@ jobs:
               $objStartInfo.RedirectStandardOutput = $true
               $objStartInfo.RedirectStandardError = $true
               [void]$objStartInfo.ArgumentList.Add('push')
+              # Hooks live under .git and are invisible to the bounded working-tree
+              # checks, so a pre-push hook or core.hooksPath change would execute
+              # with the authorization header in this process environment.
+              [void]$objStartInfo.ArgumentList.Add('--no-verify')
               [void]$objStartInfo.ArgumentList.Add("--force-with-lease=refs/heads/main:$strTriggerSha")
               [void]$objStartInfo.ArgumentList.Add('origin')
               [void]$objStartInfo.ArgumentList.Add('HEAD:refs/heads/main')
