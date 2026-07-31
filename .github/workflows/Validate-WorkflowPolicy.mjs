@@ -324,7 +324,7 @@ export function validateBuildPolicy(workflow, source) {
       reject('side-effect-policy', `${jobId}.${id} adds an unapproved repository mutation`);
     }
   }
-  if (!findStep(verify, 'generate-and-verify', 'build.verify').run.includes("'diff', '--no-ext-diff', '--no-textconv', '--exit-code'")) {
+  if (!findStep(verify, 'generate-and-verify', 'build.verify').run.includes("'diff', '--no-ext-diff', '--no-textconv', '--quiet'")) {
     reject('git-policy', 'verification no longer classifies native git diff status');
   }
   if (!findStep(writer, 'prepare-generated-commit', 'build.temporary-writer').run.includes("'ls-files', '--others', '--exclude-standard', '-z'")) {

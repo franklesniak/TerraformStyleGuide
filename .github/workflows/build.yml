@@ -145,7 +145,7 @@ jobs:
           $arrUntracked = Assert-AllowedPaths (ConvertFrom-NulRecords $objUntracked.Bytes) @() 'untracked'
           if ($arrStaged.Count -ne 0 -or $arrUntracked.Count -ne 0) { throw 'git-paths: checkout is not clean' }
 
-          $objDiff = Invoke-GitRaw (@('diff', '--no-ext-diff', '--no-textconv', '--exit-code', '--') + $arrArtifacts)
+          $objDiff = Invoke-GitRaw (@('diff', '--no-ext-diff', '--no-textconv', '--quiet', '--') + $arrArtifacts)
           if ($objDiff.ExitCode -ne 0 -and $objDiff.ExitCode -ne 1) {
               throw "native-tool: git diff failed with exit $($objDiff.ExitCode)"
           }
