@@ -73,8 +73,13 @@ jobs:
           Write-Host "Node executable: $strNodePath ($strNodeVersion)"
           Write-Host "npm executable: $strNpmPath ($strNpmVersion)"
 
+          $strReviewedPackageHash = 'E206CDB3562F0397E8EED7FB2C2586269A1F5335CDFF2906DA8D5E070426321E'
+          $strReviewedLockHash = '277F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062'
           $strPackageBefore = (Get-FileHash -LiteralPath package.json -Algorithm SHA256).Hash
           $strLockBefore = (Get-FileHash -LiteralPath package-lock.json -Algorithm SHA256).Hash
+          if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash) {
+              throw 'supply: package metadata does not match the reviewed supply digest'
+          }
           $boolCiExisted = Test-Path Env:CI
           $strPriorCi = $env:CI
           try {
