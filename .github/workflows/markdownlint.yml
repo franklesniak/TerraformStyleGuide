@@ -84,6 +84,19 @@ jobs:
           if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash) {
               throw 'supply: package metadata does not match the reviewed supply digest'
           }
+
+          # npm reads .npmrc from the project directory before it runs anything,
+          # and script-shell there replaces the interpreter for every npm run. A
+          # pull request can add one without altering either reviewed digest or
+          # any governed workflow, after which both lint phases exit zero with the
+          # command echoed and no linter ever executed. No .npmrc is reviewed in
+          # this repository, so any is refused here, ahead of installation, so npm
+          # never reads one.
+          foreach ($strNpmConfigPath in @('.npmrc', '../.npmrc', '../../.npmrc')) {
+              if (Test-Path -LiteralPath $strNpmConfigPath) {
+                  throw 'supply: repository-controlled npm configuration is present'
+              }
+          }
           $boolCiExisted = Test-Path Env:CI
           $strPriorCi = $env:CI
           try {

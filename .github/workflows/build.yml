@@ -344,8 +344,24 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "native-tool: git config email failed with exit $LASTEXITCODE" }
           & git config --local user.name 'github-actions[bot]'
           if ($LASTEXITCODE -ne 0) { throw "native-tool: git config name failed with exit $LASTEXITCODE" }
-          & git commit -m 'chore: update generated style guide artifacts [skip ci]'
+          # Hooks are under .git, so they are invisible to every working-tree check
+          # above, and a pre-commit hook runs after the staged set has been proven
+          # bounded — it can stage any additional path into the very commit that is
+          # then pushed. The push already declines to run hooks; the commit must
+          # decline for the same reason.
+          & git commit --no-verify -m 'chore: update generated style guide artifacts [skip ci]'
           if ($LASTEXITCODE -ne 0) { throw "native-tool: git commit failed with exit $LASTEXITCODE" }
+
+          # Bounding the index proves what was offered to the commit, not what the
+          # commit contains. This asserts the property that actually travels: the
+          # paths recorded in the object that is about to be pushed.
+          $objCommitted = Invoke-GitRaw @('diff-tree', '--no-commit-id', '--no-renames', '--name-only', '-r', '-z', 'HEAD', '--')
+          if ($objCommitted.ExitCode -ne 0) { throw "native-tool: committed path query failed with exit $($objCommitted.ExitCode)" }
+          $arrCommitted = Assert-AllowedPaths (ConvertFrom-NulRecords $objCommitted.Bytes) $arrArtifacts 'committed'
+          if ($arrCommitted.Count -ne $arrWorking.Count) { throw 'git-paths: committed and working path sets differ' }
+          for ($intIndex = 0; $intIndex -lt $arrCommitted.Count; $intIndex++) {
+              if ($arrCommitted[$intIndex] -cne $arrWorking[$intIndex]) { throw 'git-paths: committed and working path sets differ' }
+          }
 
       - name: Push the temporary pre-promotion commit
         id: push-generated
@@ -359,17 +375,34 @@ jobs:
           Remove-Item Env:STYLE_GUIDE_PUSH_TOKEN -ErrorAction SilentlyContinue
           $strTriggerSha = $env:STYLE_GUIDE_TRIGGER_SHA
 
-          $strHead = (& git rev-parse HEAD).Trim()
+          # Which executable runs is decided by PATH, not by the argument list or
+          # by this script's text. Any earlier step in this job — including the
+          # repository-controlled generator — can append a directory to the file
+          # named by $GITHUB_PATH, and the runner prepends that directory to PATH
+          # for every later step. A PATH lookup here would therefore let a wrapper
+          # in a writable directory be started with the authorization header below
+          # in its environment, defeating the argument, ref, and digest checks that
+          # constrain this step. Resolution is pinned to root-owned system paths.
+          $strGitPath = $null
+          foreach ($strCandidate in @('/usr/bin/git', '/bin/git')) {
+              if (Test-Path -LiteralPath $strCandidate -PathType Leaf) {
+                  $strGitPath = $strCandidate
+                  break
+              }
+          }
+          if ($null -eq $strGitPath) { throw 'native-tool: trusted Git executable was not found' }
+
+          $strHead = (& $strGitPath rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0) { throw "native-tool: git rev-parse HEAD failed with exit $LASTEXITCODE" }
           if ($strHead -ceq $strTriggerSha) {
               $strToken = $null
               return
           }
-          $strParent = (& git rev-parse 'HEAD^').Trim()
+          $strParent = (& $strGitPath rev-parse 'HEAD^').Trim()
           if ($LASTEXITCODE -ne 0 -or $strParent -cne $strTriggerSha) {
               throw 'push-policy: prepared commit does not have the triggering SHA as its exact parent'
           }
-          $arrRemoteUrls = @(& git remote get-url --all origin)
+          $arrRemoteUrls = @(& $strGitPath remote get-url --all origin)
           if ($LASTEXITCODE -ne 0 -or $arrRemoteUrls.Count -ne 1 -or
               $arrRemoteUrls[0] -notmatch '^https://github\.com/[^/@]+/[^/@]+(?:\.git)?$') {
               throw 'push-policy: origin is not one credential-free GitHub HTTPS URL'
@@ -384,9 +417,7 @@ jobs:
               $strToken = $null
 
               $objStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
-              $arrGitCommands = @(Get-Command git -CommandType Application -ErrorAction Stop)
-              if ($arrGitCommands.Count -eq 0) { throw 'native-tool: Git application was not resolved' }
-              $objStartInfo.FileName = $arrGitCommands[0].Source
+              $objStartInfo.FileName = $strGitPath
               $objStartInfo.UseShellExecute = $false
               $objStartInfo.RedirectStandardOutput = $true
               $objStartInfo.RedirectStandardError = $true
@@ -398,6 +429,18 @@ jobs:
               [void]$objStartInfo.ArgumentList.Add("--force-with-lease=refs/heads/main:$strTriggerSha")
               [void]$objStartInfo.ArgumentList.Add('origin')
               [void]$objStartInfo.ArgumentList.Add('HEAD:refs/heads/main')
+              # The inherited environment steers this process as effectively as the
+              # executable path does. A single variable written by an earlier step
+              # through $GITHUB_ENV — a proxy setting, a loader preload, a Git
+              # configuration override, an askpass or SSH command — is enough to
+              # redirect or observe an authenticated push. Enumerating the unsafe
+              # names cannot be complete, so the child environment is built from
+              # empty and contains only what this push requires.
+              $objStartInfo.Environment.Clear()
+              $objStartInfo.Environment['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+              $objStartInfo.Environment['GIT_CONFIG_GLOBAL'] = '/dev/null'
+              $objStartInfo.Environment['GIT_CONFIG_SYSTEM'] = '/dev/null'
+              $objStartInfo.Environment['GIT_TERMINAL_PROMPT'] = '0'
               $objStartInfo.Environment['GIT_CONFIG_COUNT'] = '1'
               $objStartInfo.Environment['GIT_CONFIG_KEY_0'] = 'http.https://github.com/.extraheader'
               $objStartInfo.Environment['GIT_CONFIG_VALUE_0'] = $strAuthorization
@@ -422,7 +465,7 @@ jobs:
               if ($null -ne $objProcess) { $objProcess.Dispose() }
           }
           if ($intPushExit -ne 0) { throw "native-tool: git push failed with exit $intPushExit" }
-          $strVerifiedHead = (& git rev-parse HEAD).Trim()
+          $strVerifiedHead = (& $strGitPath rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0 -or $strVerifiedHead -cne $strHead) {
               throw 'push-policy: local post-push ref verification failed'
           }

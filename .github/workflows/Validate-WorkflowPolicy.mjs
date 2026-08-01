@@ -153,7 +153,16 @@ const NETWORK_CLIENT = /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|i
 // shape of defence, so the reviewed script is pinned exactly. The cost is low
 // precisely because this step is temporary and frozen: T1B deletes it, and any
 // intentional edit before then is expected to update this digest deliberately.
-const REVIEWED_PUSH_STEP_DIGEST = '29e198533f8f1a8e474a62eb8d79dbb818fef769ef29c9201ebe3b9869287d69';
+const REVIEWED_PUSH_STEP_DIGEST = 'e378fea66423b1c0511ce28b84c1c03695aa239cfb27b6405cebc9ff3c56b496';
+
+// The generator is repository-controlled code that runs in a job holding a
+// contents-write token, one step ahead of the push. Its version marker is fixed,
+// but a version marker constrains a string, not behaviour: the body can be
+// rewritten completely while the marker stays put. Pinning the bytes makes any
+// change to it a visible policy failure rather than a silent one. This is a
+// review signal, not a gate on the writer — build.yml does not run this
+// validator, so the containment the push depends on is enforced in that step.
+const REVIEWED_GENERATOR_DIGEST = 'bb8ba306acb130f8f7b5fcc75153f3c6bc69735ac5de4faffa6d38055535783f';
 
 const EXPECTED_VERSION = '1.0.20260731.0';
 const MAXIMUM_YAML_BYTES = 1024 * 1024;
@@ -384,6 +393,30 @@ export function validateBuildPolicy(workflow, source) {
   if (!pushStep.run.includes("ArgumentList.Add('--no-verify')")) {
     reject('side-effect-policy', 'temporary writer push no longer bypasses repository hooks');
   }
+  // Every check in this function constrains what the push says. None of them
+  // constrains who is asked to say it. The runner prepends each line written to
+  // $GITHUB_PATH by an earlier step onto PATH for this one, so resolving Git by
+  // name would let a wrapper in a writable directory be handed the authorization
+  // header — with the reviewed arguments, the reviewed refs, and this digest all
+  // still intact. The executable and the child environment are both pinned.
+  if (!pushStep.run.includes("@('/usr/bin/git', '/bin/git')") ||
+      !pushStep.run.includes('$objStartInfo.FileName = $strGitPath')) {
+    reject('side-effect-policy', 'temporary writer does not pin the credentialed Git executable');
+  }
+  if (/Get-Command/u.test(pushStep.run)) {
+    reject('side-effect-policy', 'temporary writer resolves Git through a PATH lookup');
+  }
+  // Clearing is the assertion. A denylist of unsafe variables cannot be complete
+  // — a loader preload, a proxy, an askpass helper, and a Git configuration
+  // override are each sufficient on their own — so the child starts from empty.
+  if (!pushStep.run.includes('$objStartInfo.Environment.Clear()')) {
+    reject('side-effect-policy', 'temporary writer inherits its credentialed environment');
+  }
+  for (const required of ["Environment['PATH']", "Environment['GIT_CONFIG_GLOBAL']", "Environment['GIT_CONFIG_SYSTEM']"]) {
+    if (!pushStep.run.includes(required)) {
+      reject('side-effect-policy', `temporary writer does not pin ${required} for the push`);
+    }
+  }
   // Every ref namespace, not only refs/heads: a lease on main does not constrain
   // a push to refs/tags or anywhere else.
   for (const match of pushStep.run.matchAll(/refs\/([^'":\s]+)/gu)) {
@@ -400,7 +433,9 @@ export function validateBuildPolicy(workflow, source) {
   // remote with the same authorization header, under no lease and in any ref
   // namespace. Only the read-only subcommands the step needs may be invoked
   // directly, so any other form — including "git -c ..." — is rejected by name.
-  for (const match of pushStep.run.matchAll(/(?:^|[;{(=])[ \t]*&?[ \t]*git[ \t]+(--?[A-Za-z][A-Za-z-]*|[a-z][a-z-]*)/gmu)) {
+  // The pinned-path variable is now the invocation form, so the allowlist has to
+  // recognise it too; matching only the bare name would make this check vacuous.
+  for (const match of pushStep.run.matchAll(/(?:^|[;{(=])[ \t]*&?[ \t]*(?:git|\$strGitPath)[ \t]+(--?[A-Za-z][A-Za-z-]*|[a-z][a-z-]*)/gmu)) {
     if (!['rev-parse', 'remote'].includes(match[1])) {
       reject('side-effect-policy', `temporary writer invokes an unapproved direct git form: ${match[1]}`);
     }
@@ -446,12 +481,27 @@ export function validateBuildPolicy(workflow, source) {
     "'diff', '--no-ext-diff', '--no-textconv', '--quiet'",
     'verification no longer classifies native git diff status',
   );
+  const prepareStep = findStep(writer, 'prepare-generated-commit', 'build.temporary-writer');
   assertScriptStep(
-    findStep(writer, 'prepare-generated-commit', 'build.temporary-writer'),
+    prepareStep,
     'build.temporary-writer.prepare-generated-commit',
     "'ls-files', '--others', '--exclude-standard', '-z'",
     'writer no longer uses NUL-delimited untracked paths',
   );
+  // Hooks live under .git, where none of the working-tree path checks can see
+  // them, and pre-commit runs after the index has been proven bounded — it can
+  // stage anything into the commit that is then pushed. Refusing hooks on the
+  // push while allowing them on the commit contains the wrong end of the pair.
+  if (!/&[ \t]+git[ \t]+commit[ \t]+--no-verify\b/u.test(prepareStep.run)) {
+    reject('side-effect-policy', 'writer commit no longer bypasses repository hooks');
+  }
+  // Proving the index proves what was offered, not what was recorded. The paths
+  // that travel are the ones in the object, so they are what must be asserted.
+  if (!prepareStep.run.includes("'diff-tree', '--no-commit-id', '--no-renames', '--name-only', '-r', '-z', 'HEAD'") ||
+      !prepareStep.run.includes("$arrCommitted = Assert-AllowedPaths") ||
+      !prepareStep.run.includes('git-paths: committed and working path sets differ')) {
+    reject('side-effect-policy', 'writer does not verify the committed path set');
+  }
   // Redirected stdout and stderr must be drained concurrently. Reading either to
   // completion before the other deadlocks once the child fills the unread pipe,
   // which hangs the step until the Actions timeout instead of failing.
@@ -544,6 +594,10 @@ export function validateMarkdownPolicy(workflow, source) {
     REVIEWED_PACKAGE_DIGESTS['package-lock.json'].toUpperCase(),
     'if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash)',
     'supply: package metadata does not match the reviewed supply digest',
+    // Neither reviewed digest covers .npmrc, and no governed YAML mentions it,
+    // so script-shell there is a lint bypass that leaves every other check green.
+    "@('.npmrc', '../.npmrc', '../../.npmrc')",
+    'supply: repository-controlled npm configuration is present',
   ];
   for (const fragment of requiredFragments) {
     if (!validation.run.includes(fragment)) reject('markdown-policy', `required phase is missing: ${fragment}`);
@@ -562,6 +616,8 @@ export function validateMarkdownPolicy(workflow, source) {
   let cursor = -1;
   for (const phase of [
     'supply: package metadata does not match the reviewed supply digest',
+    // Must precede installation: npm reads .npmrc before it runs any command.
+    'supply: repository-controlled npm configuration is present',
     'ci --ignore-scripts --no-audit --no-fund',
     'npm-ci: package metadata changed during frozen installation',
     './Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml',
@@ -753,6 +809,18 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-050', 'sequential Git stream reads restored', 'build', (source) => replaceOnce(source, '                  $objCopyTask = $objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)\n                  $objErrorTask = $objProcess.StandardError.ReadToEndAsync()\n                  $objCopyTask.GetAwaiter().GetResult()\n                  $strError = $objErrorTask.GetAwaiter().GetResult()\n', '                  $objProcess.StandardOutput.BaseStream.CopyTo($objOutput)\n                  $strError = $objProcess.StandardError.ReadToEnd()\n')],
   ['T1-BUILD-051', 'indirect Git invocation in the writer', 'build', (source) => replaceOnce(source, "              [void]$objStartInfo.ArgumentList.Add('push')", `              $strDestination = 'refs/' + 'tags/backdoor'\n              & ($arrGitCommands[0].Source) -c "http.https://github.com/.extraheader=$strAuthorization" push origin "HEAD:$strDestination"\n              [void]$objStartInfo.ArgumentList.Add('push')`)],
   ['T1-BUILD-052', 'push hook bypass removed', 'build', (source) => replaceOnce(source, "              [void]$objStartInfo.ArgumentList.Add('--no-verify')\n", '')],
+  ['T1-BUILD-053', 'credentialed executable resolved through PATH', 'build', (source) => replaceOnce(source, '              $objStartInfo.FileName = $strGitPath\n', '              $arrGitCommands = @(Get-Command git -CommandType Application -ErrorAction Stop)\n              $objStartInfo.FileName = $arrGitCommands[0].Source\n')],
+  ['T1-BUILD-054', 'trusted Git path list widened', 'build', (source) => replaceOnce(source, "@('/usr/bin/git', '/bin/git')", "@($env:RUNNER_TEMP + '/git', '/usr/bin/git')")],
+  ['T1-BUILD-055', 'credentialed environment inherited', 'build', (source) => replaceOnce(source, '              $objStartInfo.Environment.Clear()\n', '')],
+  ['T1-BUILD-056', 'child PATH left inheritable', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'\n", '')],
+  ['T1-BUILD-057', 'global Git configuration re-enabled for the push', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_GLOBAL'] = '/dev/null'\n", '')],
+  // Isolates the PATH-lookup ban: the pinned assignment is left in place, so
+  // only the ban itself can reject this.
+  ['T1-BUILD-061', 'PATH lookup reintroduced beside the pinned path', 'build', (source) => replaceOnce(source, '              $objStartInfo.FileName = $strGitPath\n', '              $arrFallback = @(Get-Command git -CommandType Application -ErrorAction SilentlyContinue)\n              $objStartInfo.FileName = $strGitPath\n')],
+  ['T1-BUILD-062', 'system Git configuration re-enabled for the push', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_SYSTEM'] = '/dev/null'\n", '')],
+  ['T1-BUILD-058', 'commit hook bypass removed', 'build', (source) => replaceOnce(source, '          & git commit --no-verify -m', '          & git commit -m')],
+  ['T1-BUILD-059', 'committed path verification removed', 'build', (source) => replaceOnce(source, "          $objCommitted = Invoke-GitRaw @('diff-tree'", "          $objCommitted = Invoke-GitRaw @('rev-parse'")],
+  ['T1-BUILD-060', 'committed path comparison removed', 'build', (source) => replaceOnce(source, "          $arrCommitted = Assert-AllowedPaths (ConvertFrom-NulRecords $objCommitted.Bytes) $arrArtifacts 'committed'\n", '')],
   ['T1-MARKDOWN-001', 'floating Node major', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: '24'")],
   ['T1-MARKDOWN-002', 'latest Node', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: 'latest'")],
   ['T1-MARKDOWN-003', 'setup cache enabled', 'markdown', (source) => replaceOnce(source, '          package-manager-cache: false', '          package-manager-cache: true')],
@@ -779,6 +847,25 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-DEPENDABOT-001', 'duplicate updates', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n'],
   ['T1-DEPENDABOT-002', 'npm update introduced early', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: npm\n    directory: /.github/workflows\n    schedule: { interval: weekly }\n'],
   ['T1-DEPENDABOT-003', 'auto-merge key', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n    auto-merge: true\n'],
+  ['T1-MARKDOWN-018', 'npm configuration gate removed', 'markdown', (source) => replaceOnce(source, "          foreach ($strNpmConfigPath in @('.npmrc', '../.npmrc', '../../.npmrc')) {\n              if (Test-Path -LiteralPath $strNpmConfigPath) {\n                  throw 'supply: repository-controlled npm configuration is present'\n              }\n          }\n", '')],
+  ['T1-MARKDOWN-019', 'npm configuration gate moved after installation', 'markdown', (source) => {
+    const gate = "          foreach ($strNpmConfigPath in @('.npmrc', '../.npmrc', '../../.npmrc')) {\n              if (Test-Path -LiteralPath $strNpmConfigPath) {\n                  throw 'supply: repository-controlled npm configuration is present'\n              }\n          }\n";
+    return replaceOnce(
+      replaceOnce(source, gate, ''),
+      '          $strPackageAfterInstall = (Get-FileHash',
+      `${gate}          $strPackageAfterInstall = (Get-FileHash`,
+    );
+  }],
+  ['T1-GENERATOR-001', 'generator body rewritten under an unchanged version marker', 'generator', (source) => `${source}\nfunction Invoke-Unreviewed { Add-Content -Path $env:GITHUB_PATH -Value '/tmp/hijack' }\n`],
+  ['T1-GENERATOR-002', 'generator truncated', 'generator', (source) => source.slice(0, Math.floor(source.length / 2))],
+  ['T1-NPMRC-001', 'npm configuration beside the governed workflows', 'npm-config', {
+    '/repo': [{ name: '.github', isDirectory: () => true }],
+    '/repo/.github': [{ name: 'workflows', isDirectory: () => true }],
+    '/repo/.github/workflows': [{ name: '.npmrc', isDirectory: () => false }],
+  }],
+  ['T1-NPMRC-002', 'npm configuration at the repository root', 'npm-config', {
+    '/repo': [{ name: '.npmrc', isDirectory: () => false }],
+  }],
   ['T1-VERSION-001', 'missing marker', 'version', '<#\n.NOTES\nnone\n#>\nfunction X {}\n'],
   ['T1-VERSION-002', 'duplicate marker', 'version', '<#\n.NOTES\nVersion: 1.0.20260731.0\nVersion: 1.0.20260731.0\n#>\nfunction X {}\n'],
   ['T1-VERSION-003', 'decoy marker', 'version', '<#\n.NOTES\nnone\n#>\nfunction X {}\nVersion: 1.0.20260731.0\n'],
@@ -820,7 +907,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   }],
 ]);
 
-function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource) {
+function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource, generatorSource) {
   const ids = new Set();
   for (const [id, description, kind, fixture] of FIXTURE_INVENTORY) {
     if (ids.has(id)) reject('fixture-harness', `duplicate fixture ID ${id}`);
@@ -845,6 +932,10 @@ function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSou
         decodeStrictText(fixture, id);
       } else if (kind === 'package') {
         validatePackagePolicy(...fixture(packageSource, lockSource));
+      } else if (kind === 'generator') {
+        validateGeneratorPolicy(fixture(generatorSource));
+      } else if (kind === 'npm-config') {
+        assertNoNpmConfiguration('/repo', '/repo', (directory) => fixture[directory] ?? []);
       } else {
         reject('fixture-harness', `unknown fixture kind for ${id}`);
       }
@@ -891,6 +982,36 @@ function readOrdinaryText(path, label) {
 // identical combined stream, so the digest would not move even though two
 // committed inputs changed. Framing each contribution with its label and exact
 // byte length makes the boundaries unambiguous.
+// npm resolves its project configuration from .npmrc before it runs a command,
+// and script-shell there replaces the interpreter for every npm run — so a lint
+// script can be echoed to the log, exit zero, and never reach a linter. That
+// file is covered by no reviewed digest and named by no governed workflow, which
+// makes an absence rule the only form the policy can take. node_modules is not
+// tracked and its packages may legitimately carry .npmrc, so it is skipped.
+// The directory reader is a parameter so the walk is reachable from the fixture
+// harness. Asserting an absence against the live checkout can only ever observe
+// the passing case, which is no evidence that the rule fires.
+export function assertNoNpmConfiguration(directory, repositoryRoot, readDirectory = readdirSync) {
+  for (const entry of readDirectory(directory, { withFileTypes: true })) {
+    if (entry.name === '.git' || entry.name === 'node_modules') continue;
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      assertNoNpmConfiguration(path, repositoryRoot, readDirectory);
+    } else if (entry.name === '.npmrc') {
+      reject('supply-policy', `repository-controlled npm configuration is present: ${path.slice(repositoryRoot.length + 1)}`);
+    }
+  }
+}
+
+// Version first, then bytes: an intentional edit that forgot the version bump
+// should say so, rather than reporting only that a hash moved.
+export function validateGeneratorPolicy(source) {
+  parseGeneratorVersion(source, EXPECTED_VERSION);
+  if (createHash('sha256').update(source, 'utf8').digest('hex') !== REVIEWED_GENERATOR_DIGEST) {
+    reject('supply-policy', 'generator does not match its reviewed digest');
+  }
+}
+
 function foldPolicyInput(hash, label, source) {
   const bytes = Buffer.from(source, 'utf8');
   hash.update(`${label}:${bytes.length}\n`, 'utf8');
@@ -920,17 +1041,18 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
   const attributes = readOrdinaryText(join(repositoryRoot, '.gitattributes'), '.gitattributes');
   if (attributes !== '* text=auto eol=lf\n') reject('text-policy', '.gitattributes does not have exact content');
   const generatorSource = readOrdinaryText(join(workflowDirectory, 'Generate-StyleGuideArtifacts.ps1'), 'generator');
-  parseGeneratorVersion(generatorSource, EXPECTED_VERSION);
+  validateGeneratorPolicy(generatorSource);
   const packageSource = readOrdinaryText(join(workflowDirectory, 'package.json'), 'package.json');
   const lockSource = readOrdinaryText(join(workflowDirectory, 'package-lock.json'), 'package-lock.json');
   validatePackagePolicy(packageSource, lockSource);
+  assertNoNpmConfiguration(repositoryRoot, repositoryRoot);
   // The digest covered every governed input but not the implementation defining
   // what those inputs were checked against, so removing an assertion here left
   // the reported hash unchanged. Evidence for a policy run has to bind the rules
   // as well as the material.
   const validatorSource = readOrdinaryText(join(workflowDirectory, 'Validate-WorkflowPolicy.mjs'), 'validator');
 
-  const fixtureCount = runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource);
+  const fixtureCount = runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource, generatorSource);
   return Object.freeze({
     fixtureCount,
     generatorVersion: EXPECTED_VERSION,
