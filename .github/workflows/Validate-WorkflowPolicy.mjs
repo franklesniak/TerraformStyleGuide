@@ -153,7 +153,7 @@ const NETWORK_CLIENT = /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|i
 // shape of defence, so the reviewed script is pinned exactly. The cost is low
 // precisely because this step is temporary and frozen: T1B deletes it, and any
 // intentional edit before then is expected to update this digest deliberately.
-const REVIEWED_PUSH_STEP_DIGEST = 'ff7604ab17b30bdd64d1723f52c5e402c95430af5ac006c4df2c11c84dc92aa1';
+const REVIEWED_PUSH_STEP_DIGEST = 'a06736b81cac51f56b93eb77477cbab4504fed961f4acfa9a04ad79af679cde7';
 
 // The generator is repository-controlled code that runs in a job holding a
 // contents-write token, one step ahead of the push. Its version marker is fixed,
@@ -404,6 +404,28 @@ export function validateBuildPolicy(workflow, source) {
   if (!pushStep.run.includes("ArgumentList.Add('--no-verify')")) {
     reject('side-effect-policy', 'temporary writer push no longer bypasses repository hooks');
   }
+  // push.followTags turns one approved invocation into a tag write that no
+  // refspec in the argument list names, so the refusal is an argument rather
+  // than a configuration value whose precedence could be argued.
+  if (!pushStep.run.includes("ArgumentList.Add('--no-follow-tags')")) {
+    reject('side-effect-policy', 'temporary writer push can propagate tags implicitly');
+  }
+  // Overriding repository-local configuration key by key is not winnable: a
+  // URL-specific setting outranks a generic one regardless of which file each
+  // came from, and the URL prefix can always be made longer. The configuration
+  // the push runs against is therefore authored rather than inspected.
+  if (!pushStep.run.includes('$strReviewedConfig = ') ||
+      !pushStep.run.includes('[System.IO.File]::WriteAllText(') ||
+      !pushStep.run.includes("[System.IO.Path]::Combine($strGitDirectory, 'config')")) {
+    reject('side-effect-policy', 'temporary writer does not author the configuration the push runs against');
+  }
+  // A fetch refspec in the authored configuration would name refs outside
+  // refs/heads/main, which the ref scan below would then have to permit.
+  // No word boundary before "fetch": in the authored configuration the preceding
+  // character is the "t" of a PowerShell `t escape, so \b would never match.
+  if (/fetch\s*=/u.test(pushStep.run)) {
+    reject('side-effect-policy', 'temporary writer authors a fetch refspec it does not need');
+  }
   // Every check in this function constrains what the push says. None of them
   // constrains who is asked to say it. The runner prepends each line written to
   // $GITHUB_PATH by an earlier step onto PATH for this one, so resolving Git by
@@ -530,6 +552,23 @@ export function validateBuildPolicy(workflow, source) {
       !prepareStep.run.includes("$arrCommitted = Assert-AllowedPaths") ||
       !prepareStep.run.includes('git-paths: committed and working path sets differ')) {
     reject('side-effect-policy', 'writer does not verify the committed path set');
+  }
+  // A clean working tree is not evidence that nothing happened: a commit built
+  // on the triggering SHA and checked out leaves every status surface empty and
+  // satisfies the push step's parent check. This must be asserted before the
+  // early return, so it holds on the path where no artifact commit is made.
+  if (!prepareStep.run.includes('git-state: the generator moved HEAD') ||
+      prepareStep.run.indexOf('git-state: the generator moved HEAD') > prepareStep.run.indexOf('if ($arrWorking.Count -eq 0) { return }')) {
+    reject('side-effect-policy', 'writer does not assert HEAD is unmoved before returning early');
+  }
+  // Anything a step writes to these files is applied by the runner to every
+  // later step, including the one holding the push token, and .NET reads
+  // variables such as DOTNET_STARTUP_HOOKS before that step's first line runs.
+  // Emptiness is the assertion; naming variables would be a list to outgrow.
+  if (!prepareStep.run.includes('$env:GITHUB_ENV, $env:GITHUB_PATH') ||
+      !prepareStep.run.includes('runner-state: the generator wrote to a runner step communication file') ||
+      prepareStep.run.indexOf('runner-state: the generator wrote to a runner step communication file') > prepareStep.run.indexOf('if ($arrWorking.Count -eq 0) { return }')) {
+    reject('side-effect-policy', 'writer does not assert the runner step communication files are empty');
   }
   // Redirected stdout and stderr must be drained concurrently. Reading either to
   // completion before the other deadlocks once the child fills the unread pipe,
@@ -900,6 +939,19 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-064', 'transport allowlist removed from the credentialed push', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_KEY_1'] = 'protocol.allow'\n              $objStartInfo.Environment['GIT_CONFIG_VALUE_1'] = 'never'\n", '')],
   ['T1-BUILD-065', 'command-executing ext transport re-permitted', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_VALUE_3'] = 'never'", "              $objStartInfo.Environment['GIT_CONFIG_VALUE_3'] = 'always'")],
   ['T1-BUILD-066', 'credential helper reset removed', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_KEY_4'] = 'credential.helper'\n              $objStartInfo.Environment['GIT_CONFIG_VALUE_4'] = ''\n", '')],
+  ['T1-BUILD-067', 'implicit tag propagation re-enabled', 'build', (source) => replaceOnce(source, "              [void]$objStartInfo.ArgumentList.Add('--no-follow-tags')\n", '')],
+  ['T1-BUILD-068', 'authored push configuration removed', 'build', (source) => replaceOnce(source, '          [System.IO.File]::WriteAllText(\n', '          $null = (\n')],
+  ['T1-BUILD-069', 'fetch refspec added to the authored configuration', 'build', (source) => replaceOnce(source, "`turl = $($arrRemoteUrls[0])`n\"", "`turl = $($arrRemoteUrls[0])`n`tfetch = +refs/heads/*:refs/remotes/origin/*`n\"")],
+  ['T1-BUILD-070', 'HEAD movement check removed from the writer', 'build', (source) => replaceOnce(source, "              throw 'git-state: the generator moved HEAD'\n", "              Write-Host 'head moved'\n")],
+  ['T1-BUILD-071', 'HEAD movement check moved below the early return', 'build', (source) => {
+    const guard = "          $objHeadAfter = Invoke-GitRaw @('rev-parse', 'HEAD')\n          if ($objHeadAfter.ExitCode -ne 0) { throw \"native-tool: HEAD query failed with exit $($objHeadAfter.ExitCode)\" }\n          if ([Convert]::ToBase64String($objHeadAfter.Bytes) -cne [Convert]::ToBase64String($objHeadBefore.Bytes)) {\n              throw 'git-state: the generator moved HEAD'\n          }\n";
+    return replaceOnce(
+      replaceOnce(source, guard, ''),
+      '          & git add -- @arrArtifacts',
+      `${guard}          & git add -- @arrArtifacts`,
+    );
+  }],
+  ['T1-BUILD-072', 'runner communication file check removed', 'build', (source) => replaceOnce(source, "                  throw 'runner-state: the generator wrote to a runner step communication file'\n", "                  Write-Host 'channel written'\n")],
   ['T1-MARKDOWN-020', 'lint asset digest gate removed', 'markdown', (source) => replaceOnce(source, '          if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {\n              throw \'supply: lint configuration or helper does not match the reviewed digest\'\n          }\n', '')],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',

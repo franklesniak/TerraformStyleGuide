@@ -315,8 +315,35 @@ jobs:
               return @($arrObserved | Sort-Object -CaseSensitive)
           }
 
+          $objHeadBefore = Invoke-GitRaw @('rev-parse', 'HEAD')
+          if ($objHeadBefore.ExitCode -ne 0) { throw "native-tool: HEAD query failed with exit $($objHeadBefore.ExitCode)" }
+
           & ./.github/workflows/Generate-StyleGuideArtifacts.ps1
           if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }
+
+          # A clean working tree does not mean nothing happened. The generator can
+          # build a commit whose parent is the triggering SHA and reset onto it,
+          # leaving the working, index, and untracked sets all empty -- and the
+          # push step accepts any commit with that exact parent. Whether HEAD
+          # moved is therefore asserted rather than inferred from cleanliness.
+          $objHeadAfter = Invoke-GitRaw @('rev-parse', 'HEAD')
+          if ($objHeadAfter.ExitCode -ne 0) { throw "native-tool: HEAD query failed with exit $($objHeadAfter.ExitCode)" }
+          if ([Convert]::ToBase64String($objHeadAfter.Bytes) -cne [Convert]::ToBase64String($objHeadBefore.Bytes)) {
+              throw 'git-state: the generator moved HEAD'
+          }
+
+          # Everything a step writes to these two files is applied by the runner to
+          # every later step, including the one that receives the push token. .NET
+          # reads variables such as DOTNET_STARTUP_HOOKS during process start-up,
+          # before that step's first line can run, so no in-step handling of the
+          # token can undo a write here. Emptiness is asserted, not the absence of
+          # any particular variable.
+          foreach ($strChannel in @($env:GITHUB_ENV, $env:GITHUB_PATH)) {
+              if ([string]::IsNullOrEmpty($strChannel)) { throw 'runner-state: a step communication file path is unset' }
+              if ((Get-Item -LiteralPath $strChannel -Force).Length -ne 0) {
+                  throw 'runner-state: the generator wrote to a runner step communication file'
+              }
+          }
 
           $objWorking = Invoke-GitRaw @('diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--')
           $objStaged = Invoke-GitRaw @('diff', '--cached', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--')
@@ -417,6 +444,23 @@ jobs:
               throw 'push-policy: origin push URL is not one credential-free GitHub HTTPS URL'
           }
 
+          # Repository-local configuration is the one configuration file the
+          # generator can still author, and no GIT_CONFIG_GLOBAL or
+          # GIT_CONFIG_SYSTEM value suppresses it. Overriding it key by key cannot
+          # work: a URL-specific setting such as http.https://github.com/.proxy
+          # outranks a generic http.proxy no matter which file each came from, and
+          # the URL prefix can always be made longer than any prefix written here.
+          # So this stops reading a file the generator can write, and writes the
+          # configuration the push runs against from the URL validated above. No
+          # fetch refspec is included because nothing here fetches.
+          $strGitDirectory = (& $strGitPath rev-parse --git-dir).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "native-tool: git directory query failed with exit $LASTEXITCODE" }
+          $strReviewedConfig = "[core]`n`trepositoryformatversion = 0`n`tfilemode = true`n`tbare = false`n`tlogallrefupdates = true`n[remote `"origin`"]`n`turl = $($arrRemoteUrls[0])`n"
+          [System.IO.File]::WriteAllText(
+              [System.IO.Path]::Combine($strGitDirectory, 'config'),
+              $strReviewedConfig,
+              [System.Text.UTF8Encoding]::new($false))
+
           $arrCredentialBytes = $null
           $strAuthorization = $null
           $objProcess = $null
@@ -435,6 +479,10 @@ jobs:
               # checks, so a pre-push hook or core.hooksPath change would execute
               # with the authorization header in this process environment.
               [void]$objStartInfo.ArgumentList.Add('--no-verify')
+              # push.followTags expands one approved invocation into a tag write
+              # that no refspec in this list names. Refused as an argument, so the
+              # guarantee does not rest on configuration precedence.
+              [void]$objStartInfo.ArgumentList.Add('--no-follow-tags')
               [void]$objStartInfo.ArgumentList.Add("--force-with-lease=refs/heads/main:$strTriggerSha")
               [void]$objStartInfo.ArgumentList.Add('origin')
               [void]$objStartInfo.ArgumentList.Add('HEAD:refs/heads/main')
