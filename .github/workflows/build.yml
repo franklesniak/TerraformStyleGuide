@@ -318,6 +318,13 @@ jobs:
           $objHeadBefore = Invoke-GitRaw @('rev-parse', 'HEAD')
           if ($objHeadBefore.ExitCode -ne 0) { throw "native-tool: HEAD query failed with exit $($objHeadBefore.ExitCode)" }
 
+          # Captured before the generator runs. The generator executes in this
+          # session, so it can reassign $env:GITHUB_ENV in-process; the runner
+          # still reads the path it originally exported. Resolving the paths
+          # afterwards would let the generator point the assertion below at a
+          # file it never wrote while its real write stands.
+          $arrChannelPaths = @($env:GITHUB_ENV, $env:GITHUB_PATH)
+
           & ./.github/workflows/Generate-StyleGuideArtifacts.ps1
           if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }
 
@@ -338,9 +345,14 @@ jobs:
           # before that step's first line can run, so no in-step handling of the
           # token can undo a write here. Emptiness is asserted, not the absence of
           # any particular variable.
-          foreach ($strChannel in @($env:GITHUB_ENV, $env:GITHUB_PATH)) {
+          # PowerShell resolves functions ahead of cmdlets, so the generator can
+          # define a global Get-Item returning an object whose Length is 0 and
+          # the check passes over a file it just wrote. A type literal is not a
+          # command and cannot be shadowed that way, and the fully qualified name
+          # cannot be captured by a PowerShell class the generator declares.
+          foreach ($strChannel in $arrChannelPaths) {
               if ([string]::IsNullOrEmpty($strChannel)) { throw 'runner-state: a step communication file path is unset' }
-              if ((Get-Item -LiteralPath $strChannel -Force).Length -ne 0) {
+              if ([System.IO.FileInfo]::new($strChannel).Length -ne 0) {
                   throw 'runner-state: the generator wrote to a runner step communication file'
               }
           }
