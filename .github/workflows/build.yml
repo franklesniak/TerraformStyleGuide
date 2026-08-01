@@ -407,6 +407,15 @@ jobs:
               $arrRemoteUrls[0] -notmatch '^https://github\.com/[^/@]+/[^/@]+(?:\.git)?$') {
               throw 'push-policy: origin is not one credential-free GitHub HTTPS URL'
           }
+          # get-url reports fetch URLs. A push uses remote.origin.pushurl when one
+          # is set, and local .git/config can set it -- neither GIT_CONFIG_GLOBAL
+          # nor GIT_CONFIG_SYSTEM suppresses repository-local configuration. The
+          # URL the push will actually contact is therefore checked on its own.
+          $arrPushUrls = @(& $strGitPath remote get-url --push --all origin)
+          if ($LASTEXITCODE -ne 0 -or $arrPushUrls.Count -ne 1 -or
+              $arrPushUrls[0] -notmatch '^https://github\.com/[^/@]+/[^/@]+(?:\.git)?$') {
+              throw 'push-policy: origin push URL is not one credential-free GitHub HTTPS URL'
+          }
 
           $arrCredentialBytes = $null
           $strAuthorization = $null
@@ -441,9 +450,30 @@ jobs:
               $objStartInfo.Environment['GIT_CONFIG_GLOBAL'] = '/dev/null'
               $objStartInfo.Environment['GIT_CONFIG_SYSTEM'] = '/dev/null'
               $objStartInfo.Environment['GIT_TERMINAL_PROMPT'] = '0'
-              $objStartInfo.Environment['GIT_CONFIG_COUNT'] = '1'
+              # Configuration injected through GIT_CONFIG_COUNT outranks every
+              # configuration file, including repository-local .git/config, which
+              # is the one file the generator can still write and which no
+              # GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM setting suppresses. A
+              # transport allowlist is applied here rather than a list of bad
+              # settings: ext:: and the other command-executing transports run a
+              # program that would inherit the authorization header below, and a
+              # URL validated a moment ago can still be rewritten into one of them
+              # by url.<base>.insteadOf. Restricting the transport makes the
+              # rewrite harmless, since https is the only reachable one and the
+              # header is scoped to https://github.com/. The empty credential
+              # helper resets any helper the same file could have configured,
+              # which would otherwise be another program git executes.
+              $objStartInfo.Environment['GIT_CONFIG_COUNT'] = '5'
               $objStartInfo.Environment['GIT_CONFIG_KEY_0'] = 'http.https://github.com/.extraheader'
               $objStartInfo.Environment['GIT_CONFIG_VALUE_0'] = $strAuthorization
+              $objStartInfo.Environment['GIT_CONFIG_KEY_1'] = 'protocol.allow'
+              $objStartInfo.Environment['GIT_CONFIG_VALUE_1'] = 'never'
+              $objStartInfo.Environment['GIT_CONFIG_KEY_2'] = 'protocol.https.allow'
+              $objStartInfo.Environment['GIT_CONFIG_VALUE_2'] = 'always'
+              $objStartInfo.Environment['GIT_CONFIG_KEY_3'] = 'protocol.ext.allow'
+              $objStartInfo.Environment['GIT_CONFIG_VALUE_3'] = 'never'
+              $objStartInfo.Environment['GIT_CONFIG_KEY_4'] = 'credential.helper'
+              $objStartInfo.Environment['GIT_CONFIG_VALUE_4'] = ''
               $objProcess = [System.Diagnostics.Process]::new()
               $objProcess.StartInfo = $objStartInfo
               if (-not $objProcess.Start()) { throw 'native-tool: git push did not start' }
@@ -461,7 +491,7 @@ jobs:
               $strToken = $null
               $strAuthorization = $null
               if ($null -ne $arrCredentialBytes) { [System.Array]::Clear($arrCredentialBytes, 0, $arrCredentialBytes.Length) }
-              Remove-Item Env:GIT_CONFIG_COUNT, Env:GIT_CONFIG_KEY_0, Env:GIT_CONFIG_VALUE_0 -ErrorAction SilentlyContinue
+              Remove-Item Env:GIT_CONFIG_COUNT, Env:GIT_CONFIG_KEY_0, Env:GIT_CONFIG_VALUE_0, Env:GIT_CONFIG_KEY_1, Env:GIT_CONFIG_VALUE_1, Env:GIT_CONFIG_KEY_2, Env:GIT_CONFIG_VALUE_2, Env:GIT_CONFIG_KEY_3, Env:GIT_CONFIG_VALUE_3, Env:GIT_CONFIG_KEY_4, Env:GIT_CONFIG_VALUE_4 -ErrorAction SilentlyContinue
               if ($null -ne $objProcess) { $objProcess.Dispose() }
           }
           if ($intPushExit -ne 0) { throw "native-tool: git push failed with exit $intPushExit" }

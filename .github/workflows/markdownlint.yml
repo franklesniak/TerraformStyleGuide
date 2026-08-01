@@ -97,6 +97,20 @@ jobs:
                   throw 'supply: repository-controlled npm configuration is present'
               }
           }
+
+          # The reviewed digests above cover what is installed, not what the lint
+          # actually does. Both lint phases execute from the checkout: the rule
+          # configuration decides which rules run at all, and the nested-fence
+          # helper is the whole of the second phase. A pull request editing either
+          # keeps every npm command string, every captured status, and every
+          # digest intact while both phases report zero errors over nothing.
+          $strReviewedLintConfigHash = '5EB07BF7F30829E0091E82F235A96FDBA21BE1EF1160CA1E22CDBE8D82DA5300'
+          $strReviewedLintHelperHash = '4EEFEC7AFBA1C79809D916365B2EB3E2EA17AA482593338492A10D6DDA5E2031'
+          $strLintConfigHash = (Get-FileHash -LiteralPath .markdownlint.jsonc -Algorithm SHA256).Hash
+          $strLintHelperHash = (Get-FileHash -LiteralPath lint-nested-markdown.js -Algorithm SHA256).Hash
+          if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {
+              throw 'supply: lint configuration or helper does not match the reviewed digest'
+          }
           $boolCiExisted = Test-Path Env:CI
           $strPriorCi = $env:CI
           try {
