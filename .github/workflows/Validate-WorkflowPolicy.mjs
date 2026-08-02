@@ -708,13 +708,26 @@ export function validateBuildPolicy(workflow, source) {
   // PowerShell does not care where a statement sits, so a top-level return
   // could simply be indented to look nested.
   //
-  // Position separates them exactly. Every function is defined before the
-  // generator runs and every legitimate return is inside one, while everything
-  // after the generator is a probe. A return there is a bypass whatever it
-  // looks like, and the region after the generator is precisely the region
-  // that must not be short-circuited.
-  if (/\breturn\b/iu.test(afterGenerator)) {
-    reject('side-effect-policy', 'build.verify returns from the script after the generator runs');
+  // This was previously separated by position: refuse a return anywhere after
+  // the generator, on the reasoning that every legitimate return is inside a
+  // function defined before it. That reasoning was sound about where the
+  // legitimate returns are and wrong about where a hostile one has to go. A
+  // return placed one line *above* the generator ends the script before the
+  // generator ever runs, and it satisfies every fragment, ordering, and depth
+  // assertion here -- reproduced directly, and only the closing digest
+  // objected, which is the arrangement lines 550-553 already call out as
+  // insufficient on its own.
+  //
+  // Depth separates them exactly, and unlike position it does not care which
+  // side of the generator the return sits on. Every legitimate return is
+  // inside a function body, so at brace depth one or more; a return at depth
+  // zero is a script-level return whatever it looks like and wherever it is.
+  // A return inside a comment or a quoted span scans as null rather than zero
+  // and is left alone, because it is not code.
+  for (const returnToken of generateStep.run.matchAll(/\breturn\b/giu)) {
+    if (powerShellBraceDepthAt(generateStep.run, returnToken.index) === 0) {
+      reject('side-effect-policy', 'build.verify returns from the script at top level');
+    }
   }
   // Every probe reports by throwing, so a handler around the governed region
   // turns each verdict into a no-op and the step succeeds having rejected
@@ -1265,6 +1278,11 @@ const FIXTURE_INVENTORY = Object.freeze([
   // A top-level return exits the script exactly as exit would, and every
   // fragment and ordering assertion still passes.
   ['T1-BUILD-101', 'top-level return inserted after the generator', 'build', (source) => replaceOnce(source, '          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }\n', '          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }\n          return\n')],
+  // The case the position-based rule could not see. Textually one line earlier
+  // than T1-BUILD-101 and far worse: the script ends before the generator runs
+  // at all, so nothing is generated, nothing is compared, and the step still
+  // exits zero.
+  ['T1-BUILD-122', 'top-level return inserted before the generator', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          return\n          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n')],
   // Inert text satisfies a substring match. This wraps the approved invocation
   // in a single-quoted here-string, so the command appears verbatim in the
   // script and never executes.
@@ -1483,7 +1501,8 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-097": "credential-policy: verify.generate-and-verify expands an unapproved credential",
   "T1-BUILD-098": "credential-policy: verify.generate-and-verify expands an unapproved credential",
   "T1-BUILD-100": "credential-policy: verify.generate-and-verify contains a workflow expression",
-  "T1-BUILD-101": "side-effect-policy: build.verify returns from the script after the generator runs",
+  "T1-BUILD-101": "side-effect-policy: build.verify returns from the script at top level",
+  "T1-BUILD-122": "side-effect-policy: build.verify returns from the script at top level",
   "T1-BUILD-104": "side-effect-policy: the generator is not invoked exactly once as a statement",
   "T1-BUILD-106": "side-effect-policy: verify.generate-and-verify uses a here-string or block comment",
   "T1-BUILD-105": "side-effect-policy: build.verify can suppress a probe failure after the generator runs",
