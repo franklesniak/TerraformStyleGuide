@@ -356,6 +356,24 @@ const REVIEWED_VERIFY_GUARDS = Object.freeze([
   ['if ((-not $objWorktreeAfter.ContainsKey($strPath)) -or ($objWorktreeAfter[$strPath] -cne $objWorktreeBefore[$strPath])) {', 1],
 ]);
 
+// Round 52. The generator's dispatch tail, as an ordered sequence of exact
+// statements rather than a wildcard family. Each must appear once, in this
+// order, at brace depth zero, and the terminal exit must follow all of them.
+// Naming the callees exactly is the point: the previous family pattern accepted
+// four calls to a no-op function of a matching name.
+const REVIEWED_GENERATOR_DISPATCH = Object.freeze([
+  '$intCopilotResult = New-StyleGuideCopilotVersion -SourcePath $strSourceFile -DestinationPath $strCopilotFile',
+  'if ($intCopilotResult -ne 0) {',
+  '$intTerraformInstructionsResult = New-StyleGuideTerraformInstructionsVersion -SourcePath $strSourceFile -DestinationPath $strTerraformInstructionsFile',
+  'if ($intTerraformInstructionsResult -ne 0) {',
+  '$intChatResult = New-StyleGuideChatVersion -SourcePath $strSourceFile -DestinationPath $strChatFile',
+  'if ($intChatResult -ne 0) {',
+  '$intFullResult = New-StyleGuideFullVersion -SourcePath $strSourceFile -RationalePath $strRationaleFile -DestinationPath $strFullFile',
+  // The result checks are part of the sequence, not a separate list: a
+  // dispatch whose failure is ignored is a dispatch that did not happen.
+  'if ($intFullResult -ne 0) {',
+]);
+
 // Round 51. The generator's safety assertions, with the number of times each
 // must appear. Every one of these was deleted or neutered in a measured battery
 // that the policy accepted, because until now only command *resolution* was
@@ -2814,6 +2832,12 @@ const FIXTURE_INVENTORY = Object.freeze([
   // exit code that is neither 0 nor 1, falls past the drift branch, and reads
   // as "no drift".
   ['T1-BUILD-143', 'diff exit-code sanity check short-circuited', 'build', (source) => replaceOnce(source, '          if ($objDiff.ExitCode -ne 0 -and $objDiff.ExitCode -ne 1) {', '          if ($false -and $objDiff.ExitCode -ne 0 -and $objDiff.ExitCode -ne 1) {')],
+  // Round 52. Four walks through the round-51 dispatch rule, which matched a
+  // wildcard family and counted four rather than pinning the sequence.
+  ['T1-GENERATOR-020', 'dispatches retargeted to a same-family no-op generator', 'generator', (source) => replaceOnce(source, '# Generate copilot-instructions.md\n', 'function New-StyleGuideNoopVersion { param($SourcePath,$DestinationPath,$RationalePath) return 0 }\n\n# Generate copilot-instructions.md\n').replace('New-StyleGuideCopilotVersion -SourcePath', 'New-StyleGuideNoopVersion -SourcePath')],
+  ['T1-GENERATOR-021', 'a dispatch result check short-circuited', 'generator', (source) => replaceOnce(source, 'if ($intFullResult -ne 0) {', 'if ($false -and $intFullResult -ne 0) {')],
+  ['T1-GENERATOR-022', 'successful exit inserted before the final dispatch', 'generator', (source) => replaceOnce(source, '# Generate STYLE_GUIDE_FULL.md\n', 'exit 0\n\n# Generate STYLE_GUIDE_FULL.md\n')],
+  ['T1-GENERATOR-023', 'dispatch sequence wrapped in a block that never runs', 'generator', (source) => replaceOnce(replaceOnce(source, '# Generate copilot-instructions.md\n$intCopilotResult', '# Generate copilot-instructions.md\nif ($false) {\n$intCopilotResult'), 'if ($intFullResult -ne 0) {\n    exit 1\n}\n', 'if ($intFullResult -ne 0) {\n    exit 1\n}\n}\n')],
   ['T1-MARKDOWN-072', 'supply prelude closed twice, shortening the compared region', 'markdown', (source) => replaceOnce(source, "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n", "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n")],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -2999,7 +3023,7 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   // Truncation removes the dispatch, so this now reports the specific missing
   // structure rather than "the bytes moved". T1-GENERATOR-001 still covers the
   // digest message: it appends a function and trips nothing else.
-  "T1-GENERATOR-002": "supply-policy: the generator does not dispatch exactly the four reviewed artifacts",
+  "T1-GENERATOR-002": "supply-policy: the generator no longer dispatches the reviewed sequence: $intCopilotResult = New-StyleGuideCopilotVersion -SourcePath $strSourceFile -DestinationPath $strCopilotFile",
   "T1-GENERATOR-013": "supply-policy: the generator writes a variable through an indirect API",
   "T1-GENERATOR-014": "supply-policy: the generator returns at the top level",
   "T1-GENERATOR-015": "supply-policy: the generator no longer performs a reviewed safety check: Assert-StyleGuideTrackedDestination -DestinationLeaf $strDestinationLeaf",
@@ -3011,6 +3035,10 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-141": "side-effect-policy: build.verify no longer performs a reviewed drift guard: $arrArtifacts -cnotcontains $_",
   "T1-BUILD-142": "side-effect-policy: build.verify no longer performs a reviewed drift guard: Sort-Object -CaseSensitive",
   "T1-BUILD-143": "side-effect-policy: build.verify no longer performs a reviewed drift guard: if ($objDiff.ExitCode -ne 0 -and $objDiff.ExitCode -ne 1) {",
+  "T1-GENERATOR-020": "supply-policy: the generator no longer dispatches the reviewed sequence: $intCopilotResult = New-StyleGuideCopilotVersion -SourcePath $strSourceFile -DestinationPath $strCopilotFile",
+  "T1-GENERATOR-021": "supply-policy: the generator no longer dispatches the reviewed sequence: if ($intFullResult -ne 0) {",
+  "T1-GENERATOR-022": "supply-policy: the generator can terminate before completing the reviewed dispatch",
+  "T1-GENERATOR-023": "supply-policy: the generator dispatch is not reachable at the top level: $intCopilotResult = New-StyleGuideCopilotVersion -SourcePath $strSourceFile -DestinationPath $strCopilotFile",
   "T1-MARKDOWN-020": "markdown-policy: markdown.markdownlint.lint is missing a required phase: supply: lint configuration or helper does not match the reviewed digest",
   "T1-BUILD-086": "isolation-policy: build.verify.upload-generated uses an action",
   "T1-BUILD-087": "policy: build.publish step order differs from the locked policy",
@@ -3409,27 +3437,62 @@ export function validateGeneratorPolicy(source) {
   // to the generator itself, which is the same omission round 50 found for the
   // non-ASCII ban. So they are extended here rather than the two reported
   // spellings being matched.
-  const arrDispatch = [...generatorCode.matchAll(/\$int\w+Result = New-StyleGuide\w+Version/gu)];
-  if (arrDispatch.length !== 4) {
-    reject('supply-policy', 'the generator does not dispatch exactly the four reviewed artifacts');
+  // Round 52 rewrote this. The first version matched the family
+  // /\$int\w+Result = New-StyleGuide\w+Version/ and counted four, which four
+  // separate reports then walked through -- correctly, and by the same
+  // criticism this file makes of matching text instead of meaning. All four
+  // were reproduced accepted:
+  //
+  //   a wildcard family    define New-StyleGuideNoopVersion returning 0 and
+  //                        retarget all four assignments: still four matches
+  //   b result guards      if ($false -and $intFullResult -ne 0): the four
+  //                        result checks were in no list at all
+  //   c late exit          exit 0 before the *fourth* dispatch: the exit scan
+  //                        stopped at the *first*
+  //   d unreachable        wrap all four in if ($false) { ... }: text intact,
+  //                        depth never checked
+  //
+  // Each ends the same way: the generator exits zero having written nothing or
+  // only some artifacts, and build.verify compares an unchanged worktree
+  // against itself and reports stale output as verified.
+  //
+  // So the tail is pinned as a structure rather than a count: the exact
+  // statements, once each, in order, executable at depth zero, with the
+  // terminal exit after all of them.
+  let intCursor = -1;
+  let intLastDispatchEnd = -1;
+  for (const strStatement of REVIEWED_GENERATOR_DISPATCH) {
+    const intAt = generatorCode.indexOf(strStatement, intCursor + 1);
+    if (intAt <= intCursor) {
+      reject('supply-policy', `the generator no longer dispatches the reviewed sequence: ${strStatement}`);
+    }
+    if (generatorCode.indexOf(strStatement, intAt + 1) !== -1) {
+      reject('supply-policy', `the generator repeats a reviewed dispatch statement: ${strStatement}`);
+    }
+    // Depth zero, so wrapping the sequence in a block that never runs is not a
+    // way to keep the text and lose the behaviour.
+    if (powerShellBraceDepthAt(generatorCode, intAt) !== 0) {
+      reject('supply-policy', `the generator dispatch is not reachable at the top level: ${strStatement}`);
+    }
+    intCursor = intAt;
+    intLastDispatchEnd = intAt + strStatement.length;
   }
   // A top-level return exits with the status of what ran before it, which is
-  // success. The generator would then define nothing, write nothing, and exit
-  // zero over a stale worktree -- and the build's drift check compares the
-  // worktree against itself, so it would observe no drift and pass. Depth is
-  // computed on the projection, so a return inside a comment or string is not
-  // one. Exit is refused only before the dispatch, because the reviewed script
-  // ends with exactly one depth-zero `exit 0` and that one is legitimate.
-  const intFirstDispatch = arrDispatch.length > 0 ? arrDispatch[0].index : generatorCode.length;
+  // success. Depth is computed on the projection, so a return inside a comment
+  // or string is not one.
   for (const objReturn of generatorCode.matchAll(/\breturn\b/gu)) {
     if (powerShellBraceDepthAt(generatorCode, objReturn.index) === 0) {
       reject('supply-policy', 'the generator returns at the top level');
     }
   }
+  // Successful termination must come after the whole sequence. The reviewed
+  // script's failure exits all sit at depth one inside their result checks, so
+  // depth zero distinguishes them from the terminal `exit 0` without having to
+  // read the exit's argument.
   for (const objExit of generatorCode.matchAll(/\bexit\b|\[\s*(?:System\.)?Environment\s*\]\s*::\s*Exit|SetShouldExit/giu)) {
-    if (objExit.index < intFirstDispatch &&
+    if (objExit.index < intLastDispatchEnd &&
         powerShellBraceDepthAt(generatorCode, objExit.index) === 0) {
-      reject('supply-policy', 'the generator can terminate before the reviewed dispatch');
+      reject('supply-policy', 'the generator can terminate before completing the reviewed dispatch');
     }
   }
   // The Git-path binding added last round counts `=` assignments, so an
