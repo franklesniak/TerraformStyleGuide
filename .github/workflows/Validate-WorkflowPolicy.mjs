@@ -161,7 +161,7 @@ const REVIEWED_VALIDATION_STEP_DIGEST = 'e4157f6e13dc2863b2339ba16b8fbe73a380d6c
 // while skipping the probes entirely, and the upload action then publishes
 // artifacts labelled verified. The same backstop the Markdown step and the
 // former push step carry applies here for the same reason.
-const REVIEWED_VERIFY_STEP_DIGEST = '4f073beb45abda2eb77461c8151d6077e3ac62eb14cadb5843fe839179ec23a3';
+const REVIEWED_VERIFY_STEP_DIGEST = '1b24d25364b95f5a975671ff6042e0d2cf52067a4ee1852acfb680bec7a131e4';
 
 // The generator is repository-controlled code that runs in a job holding a
 // contents-write token, one step ahead of the push. Its version marker is fixed,
@@ -479,6 +479,23 @@ export function validateBuildPolicy(workflow, source) {
       generateStep.run.indexOf('$objWorktreeBefore = Get-WorktreeFileDigests') > generateStep.run.indexOf('& pwsh -NoProfile') ||
       generateStep.run.indexOf('$objWorktreeAfter = Get-WorktreeFileDigests') < generateStep.run.indexOf('& pwsh -NoProfile')) {
     reject('side-effect-policy', 'build.verify does not bracket the generator with a worktree byte comparison');
+  }
+  // How the walk reaches the files decides what it can be made to read.
+  // EnumerateFiles with AllDirectories descends through a directory link and
+  // reports only the files behind it, so the walk leaves the workspace with no
+  // entry to refuse; holding the frontier explicitly is what makes the link
+  // visible first. Refusing a link rather than skipping one keeps the signal:
+  // a skipped link is absent from both maps, which reads exactly like a
+  // generator that did nothing. Streaming bounds the cost of a large file, and
+  // consulting Length before opening keeps a FIFO from blocking the step until
+  // the job times out.
+  if (!generateStep.run.includes('[System.IO.Directory]::EnumerateFileSystemEntries($objPending.Pop())') ||
+      generateStep.run.includes('[System.IO.SearchOption]::AllDirectories') ||
+      !generateStep.run.includes("throw 'worktree: the working tree contains a link'") ||
+      !generateStep.run.includes('[System.IO.FileAttributes]::ReparsePoint') ||
+      !generateStep.run.includes('$objSha.ComputeHash($objStream)') ||
+      generateStep.run.includes('[System.IO.File]::ReadAllBytes($strEntry)')) {
+    reject('side-effect-policy', 'build.verify worktree walk can follow a link or read a file whole');
   }
   // The digest is only meaningful if its encoding is injective. Concatenating
   // the components raw is not: renaming pre-commit.sample to pre-commit and
@@ -885,6 +902,11 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-087', 'script step added to the publishing job', 'build', (source) => replaceOnce(source, '      - name: Upload verified generated artifacts\n        id: upload-generated\n', '      - name: Stage\n        id: stage\n        shell: pwsh\n        run: |\n          Write-Host staged\n\n      - name: Upload verified generated artifacts\n        id: upload-generated\n')],
   ['T1-BUILD-088', 'publishing job no longer waits for verification', 'build', (source) => replaceOnce(source, '  publish:\n    needs: verify\n', '  publish:\n')],
   ['T1-BUILD-089', 'step appended after the verification step', 'build', (source) => replaceOnce(source, "          Write-Host 'generated-artifacts: committed bytes match generator output'\n", "          Write-Host 'generated-artifacts: committed bytes match generator output'\n\n      - name: Summarize\n        id: summarize\n        shell: pwsh\n        run: |\n          Write-Host done\n")],
+  // The walk decides what the verification can be made to read, so each way of
+  // loosening it is a fixture rather than a comment.
+  ['T1-BUILD-091', 'worktree walk follows links again', 'build', (source) => replaceOnce(source, "                          if (($objAttributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {\n                              throw 'worktree: the working tree contains a link'\n                          }\n", '')],
+  ['T1-BUILD-092', 'worktree walk recurses with AllDirectories', 'build', (source) => replaceOnce(source, '[System.IO.Directory]::EnumerateFileSystemEntries($objPending.Pop())', '[System.IO.Directory]::EnumerateFiles($objPending.Pop(), \'*\', [System.IO.SearchOption]::AllDirectories)')],
+  ['T1-BUILD-093', 'worktree walk loads each file whole', 'build', (source) => replaceOnce(source, '                                  $objMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash($objStream))\n', '                                  $objMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash([System.IO.File]::ReadAllBytes($strEntry)))\n')],
   ['T1-BUILD-084', 'worktree byte comparison removed', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigests\n', '')],
   ['T1-BUILD-085', 'worktree snapshot taken after the generator', 'build', (source) => replaceOnce(source, '          $objWorktreeBefore = Get-WorktreeFileDigests\n', '')],
   ['T1-BUILD-083', 'control-surface digest framing removed', 'build', (source) => replaceOnce(source, "                      $arrLength = [System.BitConverter]::GetBytes([long]$arrComponent.Length)\n", '')],

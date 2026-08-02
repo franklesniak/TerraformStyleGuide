@@ -254,16 +254,53 @@ jobs:
           # bytes that reach consumers come from the commit, fetched by a job
           # that never runs the generator, so the window this comparison cannot
           # cover has nothing downstream to act on.
+          # The walk descends one directory at a time rather than calling
+          # EnumerateFiles with AllDirectories, because that overload reports
+          # files and never the directories it passed through: given a link to
+          # somewhere outside the workspace it happily yields the files behind
+          # it, and there is no entry to refuse. Holding the frontier here means
+          # a link is seen before anything is read through it.
+          #
+          # A link is refused rather than skipped. Skipping drops it from both
+          # maps, so a generator that creates one leaves the comparison looking
+          # exactly like a generator that did nothing; refusing keeps the signal.
+          # The repository tracks no links, so this cannot fire on honest input.
           function Get-WorktreeFileDigests {
               $strRoot = $PWD.Path
-              $strGitPrefix = [System.IO.Path]::Combine($strRoot, '.git') + [System.IO.Path]::DirectorySeparatorChar
+              $strGitDirectory = [System.IO.Path]::Combine($strRoot, '.git')
               $objMap = [System.Collections.Generic.SortedDictionary[string, string]]::new([System.StringComparer]::Ordinal)
               $objSha = [System.Security.Cryptography.SHA256]::Create()
+              $objPending = [System.Collections.Generic.Stack[string]]::new()
+              $objPending.Push($strRoot)
               try {
-                  foreach ($strFile in [System.IO.Directory]::EnumerateFiles($strRoot, '*', [System.IO.SearchOption]::AllDirectories)) {
-                      if (-not $strFile.StartsWith($strGitPrefix, [System.StringComparison]::Ordinal)) {
-                          $strRelative = $strFile.Substring($strRoot.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar)
-                          $objMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash([System.IO.File]::ReadAllBytes($strFile)))
+                  while ($objPending.Count -ne 0) {
+                      foreach ($strEntry in [System.IO.Directory]::EnumerateFileSystemEntries($objPending.Pop())) {
+                          $objAttributes = [System.IO.File]::GetAttributes($strEntry)
+                          if (($objAttributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                              throw 'worktree: the working tree contains a link'
+                          }
+                          if (($objAttributes -band [System.IO.FileAttributes]::Directory) -ne 0) {
+                              if ($strEntry -cne $strGitDirectory) { $objPending.Push($strEntry) }
+                          } else {
+                              $strRelative = $strEntry.Substring($strRoot.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar)
+                              # Length comes from stat, which answers for a FIFO
+                              # immediately, while reading one never returns at
+                              # all. Both an empty regular file and a FIFO digest
+                              # as empty: correct for the first, and it turns the
+                              # second from a step that hangs to the job timeout
+                              # into a mismatch against a non-empty artifact.
+                              # Content is streamed rather than loaded whole, so
+                              # a large file costs a buffer instead of its size.
+                              $objFile = [System.IO.FileInfo]::new($strEntry)
+                              if ($objFile.Length -eq 0) {
+                                  $objMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash([byte[]]::new(0)))
+                              } else {
+                                  $objStream = [System.IO.File]::OpenRead($strEntry)
+                                  try {
+                                      $objMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash($objStream))
+                                  } finally { $objStream.Dispose() }
+                              }
+                          }
                       }
                   }
               } finally { $objSha.Dispose() }
