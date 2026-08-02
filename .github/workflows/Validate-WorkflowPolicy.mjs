@@ -1,14 +1,30 @@
 import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import {
-  isAlias,
-  isMap,
-  isScalar,
-  isSeq,
-  parseAllDocuments,
-} from 'yaml';
+import { createRequire } from 'node:module';
+import { basename, dirname, join, resolve, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+// The YAML parser is deliberately *not* imported here. Round 44, and the
+// finding that refuted this pull request's own stated soundness argument.
+//
+// The policy job was justified by "npm ci --ignore-scripts unpacks the
+// dependency tree without executing any of it, so no package code has run when
+// the validator is invoked". That is true right up to the moment the validator
+// starts, and false immediately afterwards: a static `import ... from 'yaml'`
+// evaluates the installed package before a single line of this file runs.
+// --ignore-scripts suppresses lifecycle scripts; it says nothing about what a
+// later Node process imports.
+//
+// Measured, with the parser's entry file prefixed by one statement:
+//
+//   process.exit(0)                        -> validator exits 0, validating nothing
+//   print a pass line, then process.exit(0) -> validator exits 0 and forges the
+//                                              evidence, digest and all
+//
+// The step captures only $LASTEXITCODE, so both are a green policy job over an
+// unvalidated repository. So the parser is loaded rather than imported: its
+// bytes on disk are folded into one digest and checked before any of it is
+// evaluated, which is the ordering the job split claimed and did not have.
 
 const ACTIONS = Object.freeze({
   checkout: Object.freeze({
@@ -134,6 +150,19 @@ const REVIEWED_PARSER = Object.freeze({
   resolved: 'https://registry.npmjs.org/yaml/-/yaml-2.9.0.tgz',
   integrity: 'sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==',
 });
+
+// The three fields above describe what npm was told to install. They are
+// checked by validatePackagePolicy, which runs inside this process -- long
+// after a static import would have evaluated whatever is actually on disk. A
+// lockfile assertion cannot defend the thing that runs before it, so the bytes
+// get their own gate, taken over the installed package directory and compared
+// before the parser is loaded.
+//
+// The whole directory rather than the entry file: which files the loader
+// reaches is a property of the package's own exports map, and pinning only the
+// files reachable today would be a list to be one entry short of. yaml declares
+// no dependencies, so this directory is the entire parser.
+const REVIEWED_PARSER_TREE_SHA256 = 'ce50e3ffc11ca6ee6cbcde528ef7a0cca908241ee3394d8e01d9e7a813bdd53e';
 
 // Naming three cmdlets left every other client open, including Invoke-RestMethod
 // and the .NET networking types. That gap was written when a step held a
@@ -314,6 +343,12 @@ const MARKDOWN_JOBS = Object.freeze({
     name: 'Install without executing packages and validate workflow policy',
     digest: REVIEWED_POLICY_STEP_DIGEST,
     capturedStatuses: Object.freeze(['intNodeVersionExit', 'intNpmVersionExit', 'intInstallExit', 'intPolicyExit']),
+    invocations: Object.freeze([
+      '$strNodeVersion = (& $strNodePath --version).Trim()',
+      '$strNpmVersion = (& $strNpmPath --version).Trim()',
+      '& $strNpmPath ci --ignore-scripts --no-audit --no-fund',
+      '& $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml',
+    ]),
     fragments: Object.freeze([
       './Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml',
       '$env:T1_EXPECTED_BUILD_DIGEST = (Get-FileHash -LiteralPath ./build.yml -Algorithm SHA256).Hash',
@@ -347,6 +382,13 @@ const MARKDOWN_JOBS = Object.freeze({
     name: 'Install and lint both Markdown surfaces',
     digest: REVIEWED_LINT_STEP_DIGEST,
     capturedStatuses: Object.freeze(['intNodeVersionExit', 'intNpmVersionExit', 'intInstallExit', 'intOuterExit', 'intNestedExit']),
+    invocations: Object.freeze([
+      '$strNodeVersion = (& $strNodePath --version).Trim()',
+      '$strNpmVersion = (& $strNpmPath --version).Trim()',
+      '& $strNpmPath ci --ignore-scripts --no-audit --no-fund',
+      '& $strNpmPath run lint:md',
+      '& $strNpmPath run lint:md:nested',
+    ]),
     fragments: Object.freeze([
       'run lint:md',
       'run lint:md:nested',
@@ -398,6 +440,68 @@ function reject(category, message) {
   throw new PolicyError(category, message);
 }
 
+// Folded the same way policyDigest folds its inputs, and for the same reason:
+// concatenating file bytes is ambiguous, so each contribution is framed by its
+// path and exact byte length. Sorted by name so the walk order of the
+// filesystem cannot change the result.
+//
+// The readers are parameters for the same reason assertNoNpmConfiguration's
+// are: a gate asserted only against the live checkout can be observed passing
+// and never observed firing, which is no evidence that it works.
+export function foldParserTree(root, readDirectory = readdirSync, readFile = readFileSync) {
+  const hash = createHash('sha256');
+  const walk = (directory, prefix) => {
+    const entries = [...readDirectory(directory, { withFileTypes: true })]
+      .sort((left, right) => (left.name < right.name ? -1 : 1));
+    for (const entry of entries) {
+      const path = join(directory, entry.name);
+      const relative = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) {
+        walk(path, relative);
+        continue;
+      }
+      // A symbolic link in the parser tree is content this digest would read
+      // through rather than describe, so the shape is refused outright.
+      if (!entry.isFile()) {
+        reject('supply-policy', `the YAML parser tree contains a non-ordinary entry: ${relative}`);
+      }
+      const bytes = readFile(path);
+      hash.update(`${relative}:${bytes.length}\n`, 'utf8');
+      hash.update(bytes);
+    }
+  };
+  walk(root, '');
+  return hash.digest('hex');
+}
+
+export function assertReviewedParserTree(root, readDirectory = readdirSync, readFile = readFileSync) {
+  if (foldParserTree(root, readDirectory, readFile) !== REVIEWED_PARSER_TREE_SHA256) {
+    reject('supply-policy', 'the installed YAML parser does not match its reviewed bytes');
+  }
+}
+
+let loadedParser = null;
+
+// Loaded on first use rather than at module evaluation, so a mismatch reports
+// as an ordinary policy rejection through the caller's error path instead of
+// as an exception thrown during import.
+function reviewedParser() {
+  if (loadedParser !== null) return loadedParser;
+  const parserRoot = join(dirname(fileURLToPath(import.meta.url)), 'node_modules', 'yaml');
+  assertReviewedParserTree(parserRoot);
+  // Resolution does not evaluate anything, so this is safe to ask before the
+  // load and worth asking: hashing one directory and then loading whatever the
+  // resolver happens to return would leave the digest describing a tree the
+  // process never used.
+  const load = createRequire(import.meta.url);
+  const entry = realpathSync(load.resolve('yaml'));
+  if (!entry.startsWith(realpathSync(parserRoot) + sep)) {
+    reject('supply-policy', 'the YAML parser resolves outside the reviewed package directory');
+  }
+  loadedParser = load('yaml');
+  return loadedParser;
+}
+
 function stable(value) {
   if (Array.isArray(value)) return value.map(stable);
   if (value !== null && typeof value === 'object') {
@@ -425,19 +529,20 @@ function assertKeys(value, expected, label) {
 
 function inspectYamlNode(node, depth, state) {
   if (node === null || node === undefined) return;
+  const parser = reviewedParser();
   state.count += 1;
   if (state.count > MAXIMUM_NODE_COUNT) reject('yaml-limit', 'node count exceeds the bound');
   if (depth > MAXIMUM_DEPTH) reject('yaml-limit', 'nesting depth exceeds the bound');
   if (node.anchor) reject('yaml-syntax', 'anchors are prohibited');
   if (node.tag) reject('yaml-syntax', 'explicit or custom tags are prohibited');
-  if (isAlias(node)) reject('yaml-syntax', 'aliases are prohibited');
+  if (parser.isAlias(node)) reject('yaml-syntax', 'aliases are prohibited');
 
-  if (isMap(node)) {
+  if (parser.isMap(node)) {
     for (const pair of node.items) {
       // Keys carry anchors, tags, and aliases exactly as values do, so they are
       // inspected through the same path before the key-shape assertions below.
       inspectYamlNode(pair.key, depth + 1, state);
-      if (!isScalar(pair.key) || typeof pair.key.value !== 'string') {
+      if (!parser.isScalar(pair.key) || typeof pair.key.value !== 'string') {
         reject('yaml-syntax', 'mapping keys must be unique strings');
       }
       if (pair.key.value === '<<') reject('yaml-syntax', 'merge keys are prohibited');
@@ -445,11 +550,11 @@ function inspectYamlNode(node, depth, state) {
     }
     return;
   }
-  if (isSeq(node)) {
+  if (parser.isSeq(node)) {
     for (const item of node.items) inspectYamlNode(item, depth + 1, state);
     return;
   }
-  if (isScalar(node)) {
+  if (parser.isScalar(node)) {
     const value = node.value;
     if (value !== null && !['string', 'number', 'boolean'].includes(typeof value)) {
       reject('yaml-syntax', 'only JSON-like scalar values are permitted');
@@ -463,13 +568,17 @@ function inspectYamlNode(node, depth, state) {
 }
 
 export function parseStrictYaml(source, sourceName = '<fixture>') {
+  // Ahead of every other check in this function, because the parser's bytes are
+  // the first thing this validator depends on and the only one it cannot verify
+  // after the fact.
+  const parser = reviewedParser();
   if (typeof source !== 'string') reject('yaml-input', `${sourceName} is not text`);
   if (Buffer.byteLength(source, 'utf8') > MAXIMUM_YAML_BYTES) reject('yaml-limit', `${sourceName} is too large`);
   if (/^\s*%/mu.test(source)) reject('yaml-syntax', `${sourceName} contains a directive`);
 
   let documents;
   try {
-    documents = parseAllDocuments(source, {
+    documents = parser.parseAllDocuments(source, {
       intAsBigInt: false,
       keepSourceTokens: true,
       logLevel: 'silent',
@@ -1613,6 +1722,56 @@ function validateMarkdownGovernedStep(step, label, expected) {
   }
 }
 
+// Round 44, findings B and C, which are one defect seen from both jobs. The
+// cross-job separation rules test raw text for './Validate-WorkflowPolicy.mjs'
+// and for 'run lint:md'. Measured with the edited step's digest re-baselined --
+// the premise both findings state -- these were accepted:
+//
+//   lint job:   $strValidatorPath = './Validate-' + 'WorkflowPolicy.mjs'
+//               & $strNodePath $strValidatorPath ./build.yml ./markdownlint.yml
+//   policy job: & $strNpmPath run ('lint:' + 'md')
+//
+// Neither string appears contiguously, so neither rule sees it, and each puts
+// the program back on the runner the split exists to keep it off. Matching
+// harder would lose to the next spelling, which is the control that has failed
+// repeatedly on this branch. So the invocation surface of a governed step is
+// closed the way the acquire steps' already is: positively.
+//
+// Every line that invokes anything must be one of the reviewed invocations,
+// and the multiset must match exactly -- so a second copy of a permitted
+// invocation is refused too. Whole lines rather than parsed arguments, because
+// two of these sit inside an assignment and a sub-expression, and a rule that
+// has to understand PowerShell's grammar to say what an argument is would be a
+// new place to be wrong. Which lines invoke is decided on the projection, so a
+// call operator inside a comment or a string is not one; the comparison is
+// against the raw line, so nothing can hide in what the projection blanks.
+function assertMarkdownStepInvocations(step, label, expected) {
+  const projected = powerShellCodeProjection(step.run).split('\n');
+  const raw = step.run.split('\n');
+  const observed = [];
+  for (let index = 0; index < projected.length; index += 1) {
+    if (projected[index].includes('&')) observed.push(raw[index].trim());
+  }
+  const remaining = [...expected.invocations];
+  for (const invocation of observed) {
+    const at = remaining.indexOf(invocation);
+    if (at < 0) {
+      // Reviewed but already used is a different failure from never reviewed,
+      // and saying which one it is decides where to look: a duplicate is a
+      // permitted command doing an unreviewed thing, an unknown line is a
+      // command that was never reviewed at all.
+      const known = expected.invocations.includes(invocation);
+      reject('markdown-policy', known
+        ? `${label} repeats a reviewed invocation: ${invocation}`
+        : `${label} makes an unreviewed invocation: ${invocation}`);
+    }
+    remaining.splice(at, 1);
+  }
+  if (remaining.length !== 0) {
+    reject('markdown-policy', `${label} no longer makes a reviewed invocation: ${remaining[0]}`);
+  }
+}
+
 // Closing backstop, the same shape as the one on the verify step. The named
 // assertions are kept because they say what changed; this pins everything they
 // do not model -- an indirect write to a captured status through Set-Variable,
@@ -1712,6 +1871,14 @@ export function validateMarkdownPolicy(workflow, source) {
   // exposure.
   if (/run lint:md/u.test(governed.policy.run)) {
     reject('markdown-policy', 'markdown.policy.validate runs a lint phase');
+  }
+  // After the two rules above, so a linter or a validator placed in the wrong
+  // job reports as the separation failure it is rather than as an unreviewed
+  // invocation. This is the closing net beneath them: it does not care how the
+  // command was spelled, only that the step invokes exactly what it was
+  // reviewed to invoke.
+  for (const [jobId, expected] of Object.entries(MARKDOWN_JOBS)) {
+    assertMarkdownStepInvocations(governed[jobId], `markdown.${jobId}.${expected.stepId}`, expected);
   }
   // Last of all, so every rule above can be isolated by a fixture.
   for (const [jobId, expected] of Object.entries(MARKDOWN_JOBS)) {
@@ -2282,6 +2449,16 @@ const FIXTURE_INVENTORY = Object.freeze([
   // leave everything between the two copies outside the comparison entirely --
   // which is where divergent text would then go. Requiring exactly one is what
   // keeps "the preludes are identical" a statement about the whole prelude.
+  // Round 44, findings B and C. Both spell a program the separation rules test
+  // for as a contiguous string, and neither string appears contiguously, so
+  // only the invocation allowlist can reject them. Measured accepted before it
+  // existed, with the edited step's digest re-baselined.
+  ['T1-MARKDOWN-073', 'validator invoked in the lint job through an assembled filename', 'markdown', (source) => replaceOnce(source, '          & $strNpmPath run lint:md\n', "          $strValidatorPath = './Validate-' + 'WorkflowPolicy.mjs'\n          & $strNodePath $strValidatorPath ./build.yml ./markdownlint.yml\n          & $strNpmPath run lint:md\n")],
+  ['T1-MARKDOWN-074', 'lint phase run in the policy job through an assembled script name', 'markdown', (source) => replaceOnce(source, '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n', "          & $strNpmPath run ('lint:' + 'md')\n          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n")],
+  // The multiset is exact in both directions, so a reviewed invocation may not
+  // be duplicated either -- a second frozen install between the gate and the
+  // phases that trust it is a permitted command doing an unreviewed thing.
+  ['T1-MARKDOWN-075', 'reviewed invocation repeated in the policy job', 'markdown', (source) => replaceOnce(source, '          & $strNpmPath ci --ignore-scripts --no-audit --no-fund\n', '          & $strNpmPath ci --ignore-scripts --no-audit --no-fund\n              & $strNpmPath ci --ignore-scripts --no-audit --no-fund\n')],
   ['T1-MARKDOWN-072', 'supply prelude closed twice, shortening the compared region', 'markdown', (source) => replaceOnce(source, "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n", "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n")],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -2289,6 +2466,26 @@ const FIXTURE_INVENTORY = Object.freeze([
   }],
   ['T1-LINTASSET-002', 'nested-fence helper reduced to a successful no-op', 'lint-asset', {
     'lint-nested-markdown.js': 'process.exit(0);\n',
+  }],
+  // Round 44, finding A. The parser is the one input this validator cannot
+  // check after the fact, because checking is what it is for. The first fixture
+  // is the reported attack in miniature: one statement prepended to the entry
+  // file, which against the pre-fix validator exited 0 having validated nothing
+  // and could print a passing line with a forged digest on its way out.
+  ['T1-PARSER-001', 'parser entry file prefixed with a process exit', 'parser-tree', {
+    directories: {
+      '/yaml': [{ name: 'dist', isDirectory: () => true, isFile: () => false }],
+      '/yaml/dist': [{ name: 'index.js', isDirectory: () => false, isFile: () => true }],
+    },
+    files: { '/yaml/dist/index.js': 'process.exit(0);\n' },
+  }],
+  // A link is content the digest would read through rather than describe, so
+  // the shape is refused before any question of bytes arises.
+  ['T1-PARSER-002', 'parser tree containing a symbolic link', 'parser-tree', {
+    directories: {
+      '/yaml': [{ name: 'dist', isDirectory: () => false, isFile: () => false }],
+    },
+    files: {},
   }],
   ['T1-NPMRC-001', 'npm configuration beside the governed workflows', 'npm-config', {
     '/repo': [{ name: '.github', isDirectory: () => true }],
@@ -2557,6 +2754,11 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-070": "policy: markdown.markdownlint step order differs from the locked policy",
   "T1-MARKDOWN-071": "markdown-policy: the two governed steps do not share one byte-identical supply prelude",
   "T1-MARKDOWN-072": "markdown-policy: markdown.policy.validate does not close its supply prelude exactly once",
+  "T1-MARKDOWN-073": "markdown-policy: markdown.markdownlint.lint makes an unreviewed invocation: & $strNodePath $strValidatorPath ./build.yml ./markdownlint.yml",
+  "T1-MARKDOWN-074": "markdown-policy: markdown.policy.validate makes an unreviewed invocation: & $strNpmPath run ('lint:' + 'md')",
+  "T1-MARKDOWN-075": "markdown-policy: markdown.policy.validate repeats a reviewed invocation: & $strNpmPath ci --ignore-scripts --no-audit --no-fund",
+  "T1-PARSER-001": "supply-policy: the installed YAML parser does not match its reviewed bytes",
+  "T1-PARSER-002": "supply-policy: the YAML parser tree contains a non-ordinary entry: dist",
 });
 
 function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource, generatorSource) {
@@ -2592,6 +2794,12 @@ function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSou
         validateLintAssetPolicy(fixture);
       } else if (kind === 'npm-config') {
         assertNoNpmConfiguration('/repo', '/repo', (directory) => fixture[directory] ?? []);
+      } else if (kind === 'parser-tree') {
+        assertReviewedParserTree(
+          '/yaml',
+          (directory) => fixture.directories[directory] ?? [],
+          (path) => Buffer.from(fixture.files[path] ?? '', 'utf8'),
+        );
       } else {
         reject('fixture-harness', `unknown fixture kind for ${id}`);
       }
