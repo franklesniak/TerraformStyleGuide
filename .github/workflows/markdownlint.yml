@@ -200,6 +200,21 @@ jobs:
           $intPolicyExit = $LASTEXITCODE
           Write-Host "workflow-policy native exit: $intPolicyExit"
 
+          # The validator is repository-controlled and it runs before both lint
+          # phases, so the digests taken further above no longer describe what
+          # the linters are about to read. A pull request that edits the
+          # validator can have it rewrite the rule configuration and the
+          # nested-fence helper after those digests were checked, then exit
+          # zero; both phases would then report success over rules that were
+          # disabled and a helper that checks nothing. The assets are
+          # re-verified here, between the validator and the phases that consume
+          # them, so nothing that ran in between can change what they read.
+          $strLintConfigAfterPolicy = (Get-FileHash -LiteralPath .markdownlint.jsonc -Algorithm SHA256).Hash
+          $strLintHelperAfterPolicy = (Get-FileHash -LiteralPath lint-nested-markdown.js -Algorithm SHA256).Hash
+          if ($strLintConfigAfterPolicy -cne $strReviewedLintConfigHash -or $strLintHelperAfterPolicy -cne $strReviewedLintHelperHash) {
+              throw 'supply: lint configuration or helper changed after policy validation'
+          }
+
           & $strNpmPath run lint:md
           $intOuterExit = $LASTEXITCODE
           Write-Host "outer-markdown native exit: $intOuterExit"

