@@ -423,17 +423,134 @@ const REVIEWED_VERIFY_GUARDS = Object.freeze([
 // measured, so closing only `$local:` and `${...}` here would have been a rule
 // that changes no outcome. Each of these is assigned exactly once in the
 // reviewed step, counted in every spelling PowerShell accepts.
+// Round 54 added arrChanged. It is the accumulator the byte-level gate reads --
+// `if ($arrChanged.Count -ne 0)` -- and omitting it meant `$arrChanged = @()`
+// inserted immediately before that gate disabled the authoritative drift check
+// while every other single-assignment assertion still passed. Measured
+// accepted. The list is the set of names the guards read; it was one short.
 const REVIEWED_VERIFY_SINGLE_ASSIGNMENT = Object.freeze([
-  'arrArtifacts', 'arrRecord', 'arrRoundTrip', 'objDiff',
-  'objWorktreeAfter', 'objWorktreeBefore', 'strControlSurfaceBefore', 'arrOutside',
+  'arrArtifacts', 'arrChanged', 'arrOutside', 'arrRecord', 'arrRoundTrip',
+  'objDiff', 'objWorktreeAfter', 'objWorktreeBefore', 'strControlSurfaceBefore',
 ]);
 
-// One variable write, in every spelling that reaches the same variable: bare,
-// braced, and scope- or provider-qualified. Built per name because the name is
-// what a caller is holding; the qualifier is admitted here rather than refused
-// so that a qualified write is *counted*, not overlooked.
-function singleAssignmentPattern(strName) {
-  return new RegExp(`\\$(?:\\{)?(?:[A-Za-z_][A-Za-z0-9_]*:)?${strName}(?:\\})?[ \\t]*(?:\\+|-|\\*|\\/|%)?=(?!=)`, 'gu');
+// One variable write, in every spelling that reaches the same variable.
+//
+// Round 54, and three reported findings that are one defect: this pattern, the
+// generator's Git-path count and the Markdown captured-status count all compared
+// the *name* case-sensitively and recognised only a bare `=`. PowerShell does
+// neither. Measured in PowerShell: `$STRGITPATH = 'git'` rebinds `$strGitPath`,
+// `$INTPOLICYEXIT = 0` zeroes `$intPolicyExit`, and `$intPolicyExit -=
+// $intPolicyExit` zeroes it without ever spelling a plain assignment. All three
+// were accepted by the validator.
+//
+// So there is now one pattern and all three sites use it. Case-insensitive
+// because PowerShell variable names are; every assignment operator it accepts,
+// plus `++`/`--`, because each of them writes. `-eq` and friends cannot collide
+// with this -- PowerShell comparisons are word operators and carry no `=`. A
+// boundary follows the bare form so `$intPolicyExitOther` is a different name.
+function variableWritePattern(strName) {
+  return new RegExp(
+    `\\$(?:\\{(?:[A-Za-z_][A-Za-z0-9_]*:)?${strName}\\}` +
+    `|(?:[A-Za-z_][A-Za-z0-9_]*:)?${strName}(?![A-Za-z0-9_]))` +
+    // The increment and decrement forms need a boundary, and finding out why
+    // cost a false rejection: `& $strGitPath --no-optional-locks` put `--`
+    // directly after the variable, so an unbounded alternative read a command
+    // flag as a decrement and reported the reviewed generator as broken. A real
+    // decrement is not followed by an identifier character.
+    `[ \\t]*(?:(?:\\+\\+|--)(?![A-Za-z0-9_])|(?:\\+|-|\\*|\\/|%|\\?\\?)?=(?!=))`,
+    'giu');
+}
+
+// Counting *bindings* never sees a *mutation*. Round 54, reported: with the
+// verify digest re-baselined, `$objWorktreeBefore.Clear()` followed by a refill
+// from `$objWorktreeAfter` leaves every name assigned exactly once while both
+// sides of the authoritative byte comparison describe the post-generator tree.
+// Confirmed in PowerShell -- the gate reports no drift over a changed file.
+//
+// So the member surface of each measured collection is closed the way the
+// generator's call operator is: enumerated from the reviewed step, by exact
+// count. These are all reads except arrChanged's two Add calls, which are how
+// the accumulator is built. Clear, Remove, and an indexer write on either
+// worktree map are absent from the reviewed step and therefore refused.
+const REVIEWED_VERIFY_MEMBER_ACCESS = Object.freeze({
+  arrArtifacts: Object.freeze({}),
+  arrChanged: Object.freeze({ '.Add': 2, '.Count': 1 }),
+  arrOutside: Object.freeze({ '.Count': 2 }),
+  arrRecord: Object.freeze({ '.Length': 1 }),
+  arrRoundTrip: Object.freeze({}),
+  objDiff: Object.freeze({ '.ExitCode': 4 }),
+  objWorktreeAfter: Object.freeze({ '.ContainsKey': 1, '.Keys': 1, '[': 1 }),
+  objWorktreeBefore: Object.freeze({ '.ContainsKey': 1, '.Keys': 1, '[': 1 }),
+  strControlSurfaceBefore: Object.freeze({}),
+});
+
+// Round 54, found by re-running the round-53 batteries against the round-54
+// fix rather than by report. Round 53 measured indirect writers reaching this
+// step and left them, on the stated ground that the plain reassignment was
+// open too, so closing the exotic spellings would have changed no outcome.
+// The single-assignment rule above closed the plain form -- which retired that
+// argument and made these live. Re-measured, all five accepted:
+//
+//   . sv strControlSurfaceBefore 'x'      & sv strControlSurfaceBefore 'x'
+//   sv strControlSurfaceBefore 'x'        Set-Variable -Name ... -Value 'x'
+//   Set-Item -Path 'variable:strControlSurfaceBefore' -Value 'x'
+//
+// None is an assignment, so none moved any count. Closed the way the generator
+// and the Markdown steps already are, and with the same three-part shape: the
+// invocation surface, the command-position surface, and the ban that reaches
+// what neither of those sees.
+const REVIEWED_VERIFY_INVOCATIONS = Object.freeze([
+  ['& pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1', 0],
+]);
+// Bytes, Error, ExitCode and string]]::new are not commands. The anchor treats
+// the token after `(` or `=` as command position and they are listed rather
+// than the anchor narrowed, for the reason the generator's list records:
+// narrowing it would stop it seeing a command inside a subexpression.
+const REVIEWED_VERIFY_COMMANDS = Object.freeze([
+  'Assert-AllowedPaths', 'ConvertFrom-NulRecords', 'Get-GitControlSurfaceDigest',
+  'Get-WorktreeFileDigests', 'Invoke-GitRaw', 'New-Variable', 'Select-Object',
+  'Sort-Object', 'Where-Object', 'Write-Host',
+  'catch', 'else', 'finally', 'for', 'foreach', 'function', 'if', 'param',
+  'return', 'throw', 'try', 'while',
+  'Bytes', 'Error', 'ExitCode', 'string]]::new',
+]);
+// New-Variable stays on that list because the step legitimately uses it twice,
+// to bind its two constants -- so it is pinned to exactly those two statements
+// instead. Without this, the allowlist would have admitted
+// `New-Variable -Name strControlSurfaceBefore -Value 'x' -Force`.
+const REVIEWED_VERIFY_NEW_VARIABLE = Object.freeze([
+  'New-Variable -Name strGitPath -Value $strResolvedGit -Option Constant',
+  'New-Variable -Name arrChannelPaths -Value @($env:GITHUB_ENV, $env:GITHUB_PATH) -Option Constant',
+]);
+
+// Reviewed invocations carrying the brace depth each was reviewed at. Third
+// site to need this shape, so it is one function: a line whose projection holds
+// an invocation operator must be a reviewed line, in order, at its depth.
+function assertReviewedInvocations(strRaw, strCode, arrReviewed, strCategory, strLabel) {
+  const arrProjected = strCode.split('\n');
+  const arrRawLines = strRaw.split('\n');
+  const arrObserved = [];
+  let intLineStart = 0;
+  for (let intIndex = 0; intIndex < arrProjected.length; intIndex += 1) {
+    const intAt = invocationOperatorOffset(arrProjected[intIndex]);
+    if (intAt >= 0) {
+      arrObserved.push([(arrRawLines[intIndex] ?? '').trim(), powerShellBraceDepthAt(strCode, intLineStart + intAt)]);
+    }
+    intLineStart += arrProjected[intIndex].length + 1;
+  }
+  if (arrObserved.length !== arrReviewed.length) {
+    reject(strCategory, `${strLabel} does not invoke exactly where it was reviewed to`);
+  }
+  for (let intIndex = 0; intIndex < arrReviewed.length; intIndex += 1) {
+    const [strReviewedLine, intReviewedDepth] = arrReviewed[intIndex];
+    const [strObservedLine, intObservedDepth] = arrObserved[intIndex];
+    if (strObservedLine !== strReviewedLine) {
+      reject(strCategory, `${strLabel} makes an unreviewed invocation: ${strObservedLine}`);
+    }
+    if (intObservedDepth !== intReviewedDepth) {
+      reject(strCategory, `a reviewed invocation is no longer reachable where it was reviewed: ${strReviewedLine}`);
+    }
+  }
 }
 
 // The generator's command-position surface, enumerated from the reviewed script.
@@ -1596,9 +1713,31 @@ export function validateBuildPolicy(workflow, source) {
     : `a reviewed drift guard is no longer reachable where it was reviewed: ${frag}`);
   // What those guards read must still be what the step measured.
   for (const strName of REVIEWED_VERIFY_SINGLE_ASSIGNMENT) {
-    const arrWrites = strVerifyCode.match(singleAssignmentPattern(strName)) ?? [];
+    const arrWrites = strVerifyCode.match(variableWritePattern(strName)) ?? [];
     if (arrWrites.length !== 1) {
       reject('side-effect-policy', `build.verify does not assign $${strName} exactly once`);
+    }
+  }
+  // And what it does to them afterwards, since a mutation is not an assignment.
+  for (const [strName, objReviewed] of Object.entries(REVIEWED_VERIFY_MEMBER_ACCESS)) {
+    const objObserved = new Map();
+    const objPattern = new RegExp(`\\$${strName}(?![A-Za-z0-9_])[ \\t]*(\\.[A-Za-z_][A-Za-z0-9_]*|\\[)`, 'giu');
+    for (const objMatch of strVerifyCode.matchAll(objPattern)) {
+      const strMember = objMatch[1] === '[' ? '[' : objMatch[1];
+      objObserved.set(strMember, (objObserved.get(strMember) ?? 0) + 1);
+    }
+    for (const [strMember, intCount] of objObserved) {
+      if (objReviewed[strMember] === undefined) {
+        reject('side-effect-policy', `build.verify makes an unreviewed use of $${strName}: ${strMember}`);
+      }
+      if (objReviewed[strMember] !== intCount) {
+        reject('side-effect-policy', `build.verify uses $${strName}${strMember} ${intCount} times rather than the reviewed ${objReviewed[strMember]}`);
+      }
+    }
+    for (const [strMember, intCount] of Object.entries(objReviewed)) {
+      if ((objObserved.get(strMember) ?? 0) !== intCount) {
+        reject('side-effect-policy', `build.verify no longer uses $${strName}${strMember} as reviewed`);
+      }
     }
   }
 
@@ -1613,6 +1752,31 @@ export function validateBuildPolicy(workflow, source) {
   // method. See PROCESS_TERMINATION for the enumeration and why it closes.
   if (PROCESS_TERMINATION.test(generateStep.run)) {
     reject('side-effect-policy', 'build.verify adds a process-termination path that can bypass a required probe');
+  }
+  // What may invoke, what may sit in command position, and the writers that are
+  // neither. The three together are what the generator and the Markdown steps
+  // already carry; this step had none of them.
+  assertReviewedInvocations(generateStep.run, strVerifyCode, REVIEWED_VERIFY_INVOCATIONS,
+    'side-effect-policy', 'build.verify');
+  for (const objToken of strVerifyCode.matchAll(GENERATOR_COMMAND_POSITION)) {
+    if (!REVIEWED_VERIFY_COMMANDS.includes(objToken[1])) {
+      reject('side-effect-policy', `build.verify runs an unreviewed command: ${objToken[1]}`);
+    }
+  }
+  const fnCountOf = (strHaystack, strNeedle) => strHaystack.split(strNeedle).length - 1;
+  for (const strStatement of REVIEWED_VERIFY_NEW_VARIABLE) {
+    if (fnCountOf(strVerifyCode, strStatement) !== 1) {
+      reject('side-effect-policy', `build.verify no longer binds its reviewed constant: ${strStatement}`);
+    }
+  }
+  if (fnCountOf(strVerifyCode, 'New-Variable') !== REVIEWED_VERIFY_NEW_VARIABLE.length) {
+    reject('side-effect-policy', 'build.verify uses New-Variable outside its reviewed constant bindings');
+  }
+  // Reaches the Variable: provider and the PSVariable API, which are not command
+  // position tokens, so the allowlist above cannot see them. None appears in the
+  // reviewed step; New-Variable is excluded because it is pinned just above.
+  if (/\b(?:Set-Variable|Get-Variable|Clear-Variable|Remove-Variable|Set-Item)\b|Variable:|PSVariable/iu.test(strVerifyCode)) {
+    reject('side-effect-policy', 'build.verify writes a variable through an indirect API');
   }
   // return could not join that list: this script defines five functions and
   // every one of them ends in a return, so refusing the token outright would
@@ -2168,24 +2332,28 @@ function validateMarkdownGovernedStep(step, label, expected) {
   //
   // Qualified writes are refused as a class just below, so the count itself
   // only has to learn the braced spelling.
-  for (const strName of expected.capturedStatuses) {
-    const arrAssignments = step.run.match(new RegExp(`\\$\\{?${strName}\\}?\\s*=`, 'gu')) ?? [];
-    if (arrAssignments.length !== 1) {
-      reject('markdown-policy', `${label} captured phase status ${strName} is not assigned exactly once`);
-    }
-    if (!step.run.includes(`$${strName} = $LASTEXITCODE`)) {
-      reject('markdown-policy', `${label} captured phase status ${strName} is not taken from $LASTEXITCODE`);
-    }
-  }
   // The qualifier as a class. Env: is the one these steps legitimately write,
   // and it has its own allowlist above; every other qualifier -- scope modifier
   // or provider, in either spelling and any case -- reaches a variable some
   // count here is holding, so none is admitted. Audited: env: is the only
   // qualified assignment target in either governed step.
+  //
+  // Ahead of the count for the reason its generator counterpart is: round 54
+  // made the count qualifier-aware, so both rules now catch a qualified write
+  // and the specific message is the one worth reporting.
   for (const objMatch of powerShellCodeProjection(step.run).matchAll(QUALIFIED_ASSIGNMENT)) {
     const strTarget = objMatch[1] ?? objMatch[2];
     if (!strTarget.startsWith('env:')) {
       reject('markdown-policy', `${label} writes an unreviewed qualified variable: ${strTarget}`);
+    }
+  }
+  for (const strName of expected.capturedStatuses) {
+    const arrAssignments = step.run.match(variableWritePattern(strName)) ?? [];
+    if (arrAssignments.length !== 1) {
+      reject('markdown-policy', `${label} captured phase status ${strName} is not assigned exactly once`);
+    }
+    if (!step.run.includes(`$${strName} = $LASTEXITCODE`)) {
+      reject('markdown-policy', `${label} captured phase status ${strName} is not taken from $LASTEXITCODE`);
     }
   }
 }
@@ -3091,6 +3259,9 @@ const FIXTURE_INVENTORY = Object.freeze([
   // The reviewed invocation kept, counted, and unreachable. Balanced, for the
   // reason T1-BUILD-144 records: an unclosed brace shifts every later depth and
   // the suite then reports whichever check comes next rather than this one.
+  // Round 54. PowerShell variable names are case-insensitive -- measured, the
+  // invocation site read `git` -- and every count here compared them exactly.
+  ['T1-GENERATOR-033', 'Git path rebound through a case-variant assignment', 'generator', (source) => replaceOnce(source, '    $strGitPath = $arrGitCommands[0].Source\n', "    $strGitPath = $arrGitCommands[0].Source\n    $STRGITPATH = 'git'\n")],
   ['T1-GENERATOR-032', 'reviewed invocation kept but made unreachable', 'generator', (source) => replaceOnce(source, '    $arrTrackedPath = @(& $strGitPath --no-optional-locks -C $script:strRepositoryRoot ls-files --error-unmatch -- $DestinationLeaf 2>$null)\n    $intGitExit = $LASTEXITCODE\n', '    if ($false) {\n    $arrTrackedPath = @(& $strGitPath --no-optional-locks -C $script:strRepositoryRoot ls-files --error-unmatch -- $DestinationLeaf 2>$null)\n    }\n    $intGitExit = $LASTEXITCODE\n')],
   ['T1-BUILD-144', 'outside-paths drift guard kept but made unreachable', 'build', (source) => replaceOnce(replaceOnce(source, '              if ($arrOutside.Count -ne 0) {', '              if ($false) { if ($arrOutside.Count -ne 0) {'), '                  throw "git-state: the generator changed $($arrOutside.Count) path(s) outside the four generated artifacts"\n              }\n', '                  throw "git-state: the generator changed $($arrOutside.Count) path(s) outside the four generated artifacts"\n              } }\n')],
   // Round 53, found by extending the reported finding rather than reported. The
@@ -3101,6 +3272,21 @@ const FIXTURE_INVENTORY = Object.freeze([
   // spelling class and a fix aimed at spellings would have changed nothing.
   ['T1-BUILD-145', 'control-surface digest re-recorded before its own gate', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n')],
   ['T1-BUILD-146', 'worktree baseline re-recorded through a qualified write', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n          $local:objWorktreeBefore = @{}\n')],
+  // Round 54, reported. The authoritative accumulator was missing from the
+  // single-assignment list, so emptying it immediately before its own gate
+  // disabled the byte-level drift check with every other assertion satisfied.
+  ['T1-BUILD-147', 'changed-path accumulator emptied before its gate', 'build', (source) => replaceOnce(source, '          if ($arrChanged.Count -ne 0) {', '          $arrChanged = @()\n          if ($arrChanged.Count -ne 0) {')],
+  // Case-variant of the same class, on a different protected name.
+  ['T1-BUILD-148', 'control-surface digest re-recorded through a case variant', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n          $STRCONTROLSURFACEBEFORE = Get-GitControlSurfaceDigest\n')],
+  // A mutation, not an assignment: every name stays bound exactly once while
+  // both sides of the byte comparison come to describe the post-generator tree.
+  ['T1-BUILD-149', 'measured worktree map mutated in place', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigests\n', '          $objWorktreeAfter = Get-WorktreeFileDigests\n          $objWorktreeBefore.Clear()\n')],
+  // Round 54, found by re-running the round-53 batteries against the round-54
+  // fix. Each writes a measured value without assigning it, so no count moves.
+  ['T1-BUILD-150', 'measured value rebound through a call-operator alias', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', "          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n          & sv strControlSurfaceBefore 'x'\n")],
+  ['T1-BUILD-151', 'measured value rebound through a bare alias', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', "          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n          sv strControlSurfaceBefore 'x'\n")],
+  ['T1-BUILD-152', 'measured value rebound through the Variable provider', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', "          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n          Set-Item -Path 'variable:strControlSurfaceBefore' -Value 'x'\n")],
+  ['T1-BUILD-153', 'a third constant bound outside the reviewed pair', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', "          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n          New-Variable -Name strEvil -Value 'x' -Option Constant\n")],
   // Balanced deliberately. An unclosed `if ($false) {` shifts the depth of every
   // later gate too, so the suite would report whichever gate happens to come
   // next rather than the one this fixture is about.
@@ -3113,6 +3299,10 @@ const FIXTURE_INVENTORY = Object.freeze([
   // again for ${strGitPath}. This is the third place it was owed.
   ['T1-MARKDOWN-092', 'captured phase status zeroed through a braced write', 'markdown', (source) => replaceOnce(source, '          $intPolicyExit = $LASTEXITCODE\n', "          $intPolicyExit = $LASTEXITCODE\n          ${intPolicyExit} = 0\n")],
   ['T1-MARKDOWN-093', 'captured lint status zeroed through a scope-qualified write', 'markdown', (source) => replaceOnce(source, '          $intNestedExit = $LASTEXITCODE\n', "          $intNestedExit = $LASTEXITCODE\n          $private:intOuterExit = 0\n")],
+  // Round 54, reported. Neither spelling is a plain lower-case `=`, and both
+  // zero the captured status -- confirmed in PowerShell.
+  ['T1-MARKDOWN-094', 'captured phase status zeroed through a compound assignment', 'markdown', (source) => replaceOnce(source, '          $intPolicyExit = $LASTEXITCODE\n', '          $intPolicyExit = $LASTEXITCODE\n          $intPolicyExit -= $intPolicyExit\n')],
+  ['T1-MARKDOWN-095', 'captured phase status zeroed through a case variant', 'markdown', (source) => replaceOnce(source, '          $intPolicyExit = $LASTEXITCODE\n', '          $intPolicyExit = $LASTEXITCODE\n          $INTPOLICYEXIT = 0\n')],
   ['T1-MARKDOWN-072', 'supply prelude closed twice, shortening the compared region', 'markdown', (source) => replaceOnce(source, "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n", "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n")],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -3314,6 +3504,20 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-093": "markdown-policy: markdown.markdownlint.lint writes an unreviewed qualified variable: private:intOuterExit",
   "T1-BUILD-145": "side-effect-policy: build.verify does not assign $strControlSurfaceBefore exactly once",
   "T1-BUILD-146": "side-effect-policy: build.verify does not assign $objWorktreeBefore exactly once",
+  "T1-BUILD-147": "side-effect-policy: build.verify does not assign $arrChanged exactly once",
+  "T1-BUILD-148": "side-effect-policy: build.verify does not assign $strControlSurfaceBefore exactly once",
+  "T1-BUILD-149": "side-effect-policy: build.verify makes an unreviewed use of $objWorktreeBefore: .Clear",
+  "T1-BUILD-150": "side-effect-policy: build.verify does not invoke exactly where it was reviewed to",
+  "T1-BUILD-151": "side-effect-policy: build.verify runs an unreviewed command: sv",
+  // Reported by the command allowlist rather than the ban: Set-Item is a
+  // command-position token, so the positive rule sees it first. The ban still
+  // earns its place -- it reaches the Variable: provider and the PSVariable API
+  // reached without a command name, which the allowlist cannot see.
+  "T1-BUILD-152": "side-effect-policy: build.verify runs an unreviewed command: Set-Item",
+  "T1-BUILD-153": "side-effect-policy: build.verify uses New-Variable outside its reviewed constant bindings",
+  "T1-MARKDOWN-094": "markdown-policy: markdown.policy.validate captured phase status intPolicyExit is not assigned exactly once",
+  "T1-MARKDOWN-095": "markdown-policy: markdown.policy.validate captured phase status intPolicyExit is not assigned exactly once",
+  "T1-GENERATOR-033": "supply-policy: the generator does not assign its Git path exactly once",
   // Truncation removes the dispatch, so this now reports the specific missing
   // structure rather than "the bytes moved". T1-GENERATOR-001 still covers the
   // digest message: it appends a function and trips nothing else.
@@ -3703,7 +3907,34 @@ export function validateGeneratorPolicy(source) {
   // as the captured phase statuses in the Markdown steps.
   // Both spellings: PowerShell accepts ${name} as well as $name, and the braced
   // form rebound the path while this count saw nothing -- measured accepted.
-  const arrGitPathAssignments = generatorCode.match(/\$\{?strGitPath\}?[ \t]*=/gu) ?? [];
+  // Qualified-assignment closure, as an exact multiset so a second write to the
+  // one reviewed target is refused alongside every unreviewed one.
+  //
+  // Ordered ahead of the Git-path count deliberately. Round 54 made that count
+  // case-insensitive and qualifier-aware, which means it now also catches a
+  // qualified rebind -- and the suite caught the consequence immediately: the
+  // two qualified fixtures started reporting "does not assign its Git path
+  // exactly once" instead of naming the qualifier. Both messages are true; the
+  // specific one is the one worth reading, so it runs first.
+  const arrObservedQualified = [...generatorCode.matchAll(QUALIFIED_ASSIGNMENT)].map((m) => m[1] ?? m[2]);
+  const arrRemainingQualified = [...REVIEWED_GENERATOR_QUALIFIED_ASSIGNMENTS];
+  for (const strTarget of arrObservedQualified) {
+    const intAt = arrRemainingQualified.indexOf(strTarget);
+    if (intAt < 0) {
+      reject('supply-policy', REVIEWED_GENERATOR_QUALIFIED_ASSIGNMENTS.includes(strTarget)
+        ? `the generator writes a reviewed qualified variable more than once: ${strTarget}`
+        : `the generator writes an unreviewed qualified variable: ${strTarget}`);
+    }
+    arrRemainingQualified.splice(intAt, 1);
+  }
+  if (arrRemainingQualified.length > 0) {
+    reject('supply-policy', `the generator no longer writes a reviewed qualified variable: ${arrRemainingQualified[0]}`);
+  }
+  // Round 54: shared with build.verify and the Markdown steps, so the name is
+  // matched case-insensitively and every assignment operator counts. This
+  // regex previously saw only a lower-case bare `=`, and `$STRGITPATH = 'git'`
+  // rebound the path while it counted one.
+  const arrGitPathAssignments = generatorCode.match(variableWritePattern('strGitPath')) ?? [];
   if (arrGitPathAssignments.length !== 1) {
     reject('supply-policy', 'the generator does not assign its Git path exactly once');
   }
@@ -3845,22 +4076,6 @@ export function validateGeneratorPolicy(source) {
     if (intObservedDepth !== intReviewedDepth) {
       reject('supply-policy', `a reviewed invocation is no longer reachable where it was reviewed: ${strReviewedLine}`);
     }
-  }
-  // Qualified-assignment closure, as an exact multiset so a second write to the
-  // one reviewed target is refused alongside every unreviewed one.
-  const arrObservedQualified = [...generatorCode.matchAll(QUALIFIED_ASSIGNMENT)].map((m) => m[1] ?? m[2]);
-  const arrRemainingQualified = [...REVIEWED_GENERATOR_QUALIFIED_ASSIGNMENTS];
-  for (const strTarget of arrObservedQualified) {
-    const intAt = arrRemainingQualified.indexOf(strTarget);
-    if (intAt < 0) {
-      reject('supply-policy', REVIEWED_GENERATOR_QUALIFIED_ASSIGNMENTS.includes(strTarget)
-        ? `the generator writes a reviewed qualified variable more than once: ${strTarget}`
-        : `the generator writes an unreviewed qualified variable: ${strTarget}`);
-    }
-    arrRemainingQualified.splice(intAt, 1);
-  }
-  if (arrRemainingQualified.length > 0) {
-    reject('supply-policy', `the generator no longer writes a reviewed qualified variable: ${arrRemainingQualified[0]}`);
   }
   // The safety assertions themselves, by exact count. Each of these was deleted
   // or disabled in the battery above and the policy still passed, because
