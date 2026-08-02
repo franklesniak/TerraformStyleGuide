@@ -16,7 +16,7 @@ This script reads STYLE_GUIDE.md and creates four derived files:
 
 .NOTES
 This script generates Terraform style guide artifacts for this repository.
-Version: 1.0.20260802.0
+Version: 1.0.20260802.1
 #>
 
 $script:strRepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path -Path $PSScriptRoot -ChildPath '../..'))
@@ -127,6 +127,7 @@ function Write-StyleGuideArtifact {
     $objTemporaryStream = $null
     $boolTemporaryCreated = $false
     $boolReplaceReturned = $false
+    $boolDestinationExists = $false
     $intOriginalLength = $null
     $strOriginalSha256 = $null
 
@@ -185,11 +186,43 @@ function Write-StyleGuideArtifact {
         }
 
         Assert-StyleGuideOrdinaryPath -LiteralPath $script:strRepositoryRoot -ExpectedType 'Directory'
-        Assert-StyleGuideOrdinaryPath -LiteralPath $strExpectedPath -ExpectedType 'File'
-        Assert-StyleGuideTrackedDestination -DestinationLeaf $strDestinationLeaf
+
+        # A tracked artifact that has been deleted from the working tree is an
+        # ordinary state -- a bad merge, a stray clean -- and the build
+        # workflow's drift failure tells contributors to repair it by running
+        # this generator. Asserting the destination is an existing ordinary file
+        # before anything is written made that instruction unfollowable: the
+        # run failed at path-validation and created nothing. So absence is now
+        # a state this writer handles rather than a precondition it demands.
+        #
+        # FileInfo rather than File.Exists or GetAttributes for the test.
+        # GetAttributes throws on an absent path, and File.Exists answers False
+        # for both an absent path and a dangling symlink -- confirmed on this
+        # runner -- which would let a link pointing outside the repository be
+        # treated as "nothing here". FileInfo.Exists is False only for genuine
+        # absence and LinkTarget is non-null for a link whether or not its
+        # target resolves, so the two together separate the three cases without
+        # throwing.
         $objOriginalInfo = New-Object System.IO.FileInfo($strExpectedPath)
-        $intOriginalLength = $objOriginalInfo.Length
-        $strOriginalSha256 = Get-StyleGuideFileSha256 -LiteralPath $strExpectedPath
+        $boolDestinationExists = $objOriginalInfo.Exists
+        if ($null -ne $objOriginalInfo.LinkTarget) {
+            throw [System.IO.IOException]::new('A link or reparse point is not permitted.')
+        }
+        if ($boolDestinationExists) {
+            Assert-StyleGuideOrdinaryPath -LiteralPath $strExpectedPath -ExpectedType 'File'
+        }
+        # Unconditional. git ls-files reads the index, not the working tree, so
+        # a deleted artifact is still the one exact tracked path -- confirmed:
+        # --error-unmatch exits 0 and returns the leaf for a deleted file. The
+        # identity check the previous round added is therefore not weakened by
+        # admitting absence; a path that was never tracked is still refused.
+        Assert-StyleGuideTrackedDestination -DestinationLeaf $strDestinationLeaf
+        $intOriginalLength = if ($boolDestinationExists) { $objOriginalInfo.Length } else { $null }
+        $strOriginalSha256 = if ($boolDestinationExists) {
+            Get-StyleGuideFileSha256 -LiteralPath $strExpectedPath
+        } else {
+            $null
+        }
 
         $objUtf8NoBom = New-Object System.Text.UTF8Encoding($false)
         $arrExpectedBytes = $objUtf8NoBom.GetBytes($Content)
@@ -260,13 +293,27 @@ function Write-StyleGuideArtifact {
         }
 
         Assert-StyleGuideOrdinaryPath -LiteralPath $script:strRepositoryRoot -ExpectedType 'Directory'
-        Assert-StyleGuideOrdinaryPath -LiteralPath $strExpectedPath -ExpectedType 'File'
+        if ($boolDestinationExists) {
+            Assert-StyleGuideOrdinaryPath -LiteralPath $strExpectedPath -ExpectedType 'File'
+        }
         Assert-StyleGuideOrdinaryPath -LiteralPath $strTemporaryPath -ExpectedType 'File'
 
         $strPhase = 'replace'
-        # NullString is the PowerShell 5.1-safe representation of a true null
-        # reference for the optional File.Replace backup path.
-        [System.IO.File]::Replace($strTemporaryPath, $strExpectedPath, [NullString]::Value)
+        if ($boolDestinationExists) {
+            # NullString is the PowerShell 5.1-safe representation of a true null
+            # reference for the optional File.Replace backup path.
+            [System.IO.File]::Replace($strTemporaryPath, $strExpectedPath, [NullString]::Value)
+        } else {
+            # File.Replace requires an existing destination, so a first
+            # appearance commits through Move instead. Move is the same
+            # publish-by-rename and it refuses rather than overwrites when the
+            # destination is occupied, so the interval between the absence test
+            # far above and this call is closed by the call itself rather than
+            # by a second check -- including against a dangling symlink, which
+            # Move reports as already existing rather than writing through to
+            # its target. Confirmed on this runner.
+            [System.IO.File]::Move($strTemporaryPath, $strExpectedPath)
+        }
         $boolReplaceReturned = $true
         $strTemporaryPath = $null
         return

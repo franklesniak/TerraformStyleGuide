@@ -318,7 +318,7 @@ const MARKDOWN_ACQUIRE = Object.freeze({
 // a silent one. This is a review signal rather than a runtime gate -- build.yml
 // does not run this validator, so what actually contains the generator at run
 // time is the process boundary and the byte comparison in that step.
-const REVIEWED_GENERATOR_DIGEST = 'a0a447c09d6923b3d8519520521d30dc2f4a28f4ae42f341fd42d1a805ea6cc0';
+const REVIEWED_GENERATOR_DIGEST = '72af6c4d5caded3fb8c52694d3fd32d1aceccc81605feaacb9bd7fecdc7eb3d2';
 
 // The lint phases execute these two files out of the checkout. The rule
 // configuration decides which rules run at all, and the nested-fence helper is
@@ -331,6 +331,38 @@ const REVIEWED_LINT_DIGESTS = Object.freeze({
   'lint-nested-markdown.js': '4eefec7afba1c79809d916365b2eb3e2ea17aa482593338492a10d6dda5e2031',
 });
 
+// Round 45, finding C. The invocation allowlist below records only lines whose
+// projection contains &, so a command run bare -- no call operator -- was never
+// compared against it. Measured with the policy step's digest re-baselined:
+// `npm run ('lint:' + 'md')` was accepted, and because the step has already put
+// the reviewed Node bin directory on PATH, that is installed package code
+// running before the validator in the job whose whole purpose is to run nothing
+// of the sort.
+//
+// So bare command position is closed the same way the call operator already is:
+// by naming what may appear there. These are the only two lists, and both jobs
+// share them because the enumerated surface of the two steps is identical --
+// five cmdlets and six control keywords, verified against both step bodies.
+// Cmdlets are named rather than shape-matched: a Verb-Noun test would admit
+// Set-Item, Set-Variable, New-Item and Invoke-Expression, which is the whole
+// class this is meant to exclude.
+const MARKDOWN_STEP_COMMANDS = Object.freeze([
+  'Get-Content', 'Get-FileHash', 'Remove-Item', 'Test-Path', 'Write-Host',
+]);
+// Control flow, not commands. catch and trap are absent deliberately -- both are
+// refused outright by an earlier rule -- as are function, param and return,
+// none of which these steps use.
+const MARKDOWN_STEP_KEYWORDS = Object.freeze([
+  'if', 'elseif', 'else', 'foreach', 'for', 'while', 'do', 'switch',
+  'try', 'finally', 'throw', 'break', 'continue',
+]);
+// A token is in command position at the start of a line, or directly after one
+// of ; { } | = ( , or a && / || operator. Anchored the same way the acquire
+// step's dot-source scan is, and for the same reason: without an anchor the
+// names collide with ordinary text. Tokens beginning $ [ @ ' " - or a digit are
+// not command names and are not captured.
+const MARKDOWN_COMMAND_POSITION = /(?:^[ \t]*|[;{}|=(,][ \t]*|&&[ \t]*|\|\|[ \t]*)([A-Za-z_.\/\\][^\s;{}()]*)/gmu;
+
 // The reviewed shape of each governed step, side by side so the two jobs can be
 // compared at a glance. The preludes are identical and asserted to be; only the
 // tails differ, and each tail is asserted to contain neither the other job's
@@ -342,6 +374,21 @@ const MARKDOWN_JOBS = Object.freeze({
     stepId: 'validate',
     name: 'Install without executing packages and validate workflow policy',
     digest: REVIEWED_POLICY_STEP_DIGEST,
+    // Round 45, finding B. Every environment variable this step assigns, and
+    // nothing else. NODE_OPTIONS is the one that motivated the rule -- Node
+    // documents its contents as interpreted before the command line, so
+    // `$env:NODE_OPTIONS = '--require=./payload.cjs'` preloads a
+    // checkout-controlled module into the validator process, and a preload that
+    // exits zero only when process.argv[1] names the validator leaves every
+    // other assertion here untouched. Measured accepted before this list
+    // existed. An allowlist rather than a NODE_OPTIONS ban, because the same
+    // shape is available through NODE_PATH, npm_config_* and LD_PRELOAD, and
+    // naming the bad ones has lost to the next spelling every time on this
+    // branch.
+    envWrites: Object.freeze([
+      'CI', 'PATH', 'T1_EXPECTED_BUILD_DIGEST', 'T1_EXPECTED_MARKDOWN_DIGEST',
+      'npm_config_globalconfig', 'npm_config_userconfig',
+    ]),
     capturedStatuses: Object.freeze(['intNodeVersionExit', 'intNpmVersionExit', 'intInstallExit', 'intPolicyExit']),
     invocations: Object.freeze([
       '$strNodeVersion = (& $strNodePath --version).Trim()',
@@ -381,6 +428,11 @@ const MARKDOWN_JOBS = Object.freeze({
     stepId: 'lint',
     name: 'Install and lint both Markdown surfaces',
     digest: REVIEWED_LINT_STEP_DIGEST,
+    // Shorter than the policy job's by exactly the two digest baselines, which
+    // only the step that hands them to the validator records.
+    envWrites: Object.freeze([
+      'CI', 'PATH', 'npm_config_globalconfig', 'npm_config_userconfig',
+    ]),
     capturedStatuses: Object.freeze(['intNodeVersionExit', 'intNpmVersionExit', 'intInstallExit', 'intOuterExit', 'intNestedExit']),
     invocations: Object.freeze([
       '$strNodeVersion = (& $strNodePath --version).Trim()',
@@ -423,7 +475,7 @@ const MARKDOWN_JOBS = Object.freeze({
   }),
 });
 
-const EXPECTED_VERSION = '1.0.20260802.0';
+const EXPECTED_VERSION = '1.0.20260802.1';
 const MAXIMUM_YAML_BYTES = 1024 * 1024;
 const MAXIMUM_NODE_COUNT = 10000;
 const MAXIMUM_DEPTH = 64;
@@ -1772,6 +1824,41 @@ function assertMarkdownStepInvocations(step, label, expected) {
   }
 }
 
+// Round 45, findings B and C. The two halves of the governed step's surface
+// that the invocation allowlist above does not cover: what runs without a call
+// operator, and what the step puts into the environment of everything it runs.
+//
+// Both are positive lists for the same reason the invocation allowlist is one.
+// The alternative -- refusing `npm`, refusing `NODE_OPTIONS` -- loses to the
+// next spelling, and on this branch it has, repeatedly.
+function assertMarkdownStepSurface(step, label, expected) {
+  const stepCode = powerShellCodeProjection(step.run);
+  // Command position. A bare token here is an invocation by literal name, so
+  // neither the & scan nor anything else sees it.
+  for (const command of stepCode.matchAll(MARKDOWN_COMMAND_POSITION)) {
+    const token = command[1];
+    if (MARKDOWN_STEP_KEYWORDS.includes(token)) continue;
+    if (MARKDOWN_STEP_COMMANDS.includes(token)) continue;
+    reject('markdown-policy', `${label} runs an unreviewed bare command: ${token}`);
+  }
+  // Environment writes. Read from the projection so a variable name inside a
+  // throw message is not mistaken for an assignment.
+  for (const write of stepCode.matchAll(/\$env:([A-Za-z_][A-Za-z0-9_]*)[ \t]*\+?=/gu)) {
+    if (!expected.envWrites.includes(write[1])) {
+      reject('markdown-policy', `${label} assigns an unreviewed environment variable: ${write[1]}`);
+    }
+  }
+  // $env:NAME is the only spelling the scan above can see. The computed forms
+  // reach the same variables without ever writing the name, so -- as in the
+  // acquire steps, where this argument was made first -- the capability is
+  // removed rather than its spellings enumerated. Set-Item, New-Item and
+  // Set-Variable are already excluded by the command list above; these are the
+  // static-method forms, which never appear at command position.
+  if (/GetEnvironmentVariable|SetEnvironmentVariable/iu.test(stepCode)) {
+    reject('markdown-policy', `${label} resolves an environment variable through a computed name`);
+  }
+}
+
 // Closing backstop, the same shape as the one on the verify step. The named
 // assertions are kept because they say what changed; this pins everything they
 // do not model -- an indirect write to a captured status through Set-Variable,
@@ -1879,6 +1966,12 @@ export function validateMarkdownPolicy(workflow, source) {
   // reviewed to invoke.
   for (const [jobId, expected] of Object.entries(MARKDOWN_JOBS)) {
     assertMarkdownStepInvocations(governed[jobId], `markdown.${jobId}.${expected.stepId}`, expected);
+  }
+  // After the invocation allowlist, so a re-spelled *reviewed* command still
+  // reports as the allowlist failure it is, and this reports only what the
+  // allowlist structurally cannot see.
+  for (const [jobId, expected] of Object.entries(MARKDOWN_JOBS)) {
+    assertMarkdownStepSurface(governed[jobId], `markdown.${jobId}.${expected.stepId}`, expected);
   }
   // Last of all, so every rule above can be isolated by a fixture.
   for (const [jobId, expected] of Object.entries(MARKDOWN_JOBS)) {
@@ -2459,6 +2552,30 @@ const FIXTURE_INVENTORY = Object.freeze([
   // be duplicated either -- a second frozen install between the gate and the
   // phases that trust it is a permitted command doing an unreviewed thing.
   ['T1-MARKDOWN-075', 'reviewed invocation repeated in the policy job', 'markdown', (source) => replaceOnce(source, '          & $strNpmPath ci --ignore-scripts --no-audit --no-fund\n', '          & $strNpmPath ci --ignore-scripts --no-audit --no-fund\n              & $strNpmPath ci --ignore-scripts --no-audit --no-fund\n')],
+  // Round 45. The governed-step digest lost its only fixture to the command
+  // allowlist, so this restores it with a mutation no named rule models: a
+  // comment, which the projection blanks, in the lint tail rather than the
+  // shared prelude, which is compared between jobs before the digest runs.
+  ['T1-MARKDOWN-076', 'governed step edited without re-review', 'markdown', (source) => replaceOnce(source, '          & $strNpmPath run lint:md\n', '          # unreviewed edit\n          & $strNpmPath run lint:md\n')],
+  // Finding C, both jobs and both spellings the report named. The assembled
+  // script name is deliberate: it is what defeated the raw-text separation
+  // rules, and it must not matter here, because this rule reads the command
+  // name and never the arguments.
+  ['T1-MARKDOWN-077', 'package script run bare in the policy job', 'markdown', (source) => replaceOnce(source, '          $boolCiExisted = Test-Path Env:CI\n', "          npm run ('lint:' + 'md')\n          $boolCiExisted = Test-Path Env:CI\n")],
+  // Not the validator by name: that is caught earlier, and correctly, by the
+  // cross-job separation rule. What this isolates is the lint job's call site of
+  // the bare-command rule itself.
+  ['T1-MARKDOWN-078', 'script path run bare from the lint job', 'markdown', (source) => replaceLast(source, '          $boolCiExisted = Test-Path Env:CI\n', '          tools/prepare.ps1\n          $boolCiExisted = Test-Path Env:CI\n')],
+  // Finding B. Node interprets NODE_OPTIONS before the command line, so this
+  // preloads a checkout-controlled module into every Node process the step
+  // starts -- including the validator, in the job whose exit status is the
+  // policy result.
+  ['T1-MARKDOWN-079', 'Node preload configured in the policy job', 'markdown', (source) => replaceOnce(source, '          $boolCiExisted = Test-Path Env:CI\n', "          $env:NODE_OPTIONS = '--require=./payload.cjs'\n          $boolCiExisted = Test-Path Env:CI\n")],
+  ['T1-MARKDOWN-080', 'Node preload configured in the lint job', 'markdown', (source) => replaceLast(source, '          $boolCiExisted = Test-Path Env:CI\n', "          $env:NODE_OPTIONS = '--require=./payload.cjs'\n          $boolCiExisted = Test-Path Env:CI\n")],
+  // The $env: scan sees a literal name. This is the same write with the name
+  // computed, which that scan cannot see and which the capability ban catches.
+  ['T1-MARKDOWN-081', 'environment written through a computed name in the policy job', 'markdown', (source) => replaceOnce(source, '          $boolCiExisted = Test-Path Env:CI\n', "          [System.Environment]::SetEnvironmentVariable('NODE_' + 'OPTIONS', '--require=./payload.cjs')\n          $boolCiExisted = Test-Path Env:CI\n")],
+  ['T1-MARKDOWN-082', 'policy-only environment baseline assigned in the lint job', 'markdown', (source) => replaceLast(source, '          $boolCiExisted = Test-Path Env:CI\n', '          $env:T1_EXPECTED_BUILD_DIGEST = (Get-FileHash -LiteralPath ./build.yml -Algorithm SHA256).Hash\n          $boolCiExisted = Test-Path Env:CI\n')],
   ['T1-MARKDOWN-072', 'supply prelude closed twice, shortening the compared region', 'markdown', (source) => replaceOnce(source, "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n", "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n")],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -2682,7 +2799,21 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-075": "git-policy: build.verify does not pin the Git executable before repository code runs",
   "T1-BUILD-076": "side-effect-policy: verify.generate-and-verify adds a push path to a read-only workflow",
   "T1-BUILD-077": "side-effect-policy: verify.generate-and-verify adds a repository mutation to a read-only workflow",
-  "T1-MARKDOWN-021": "markdown-policy: markdown.markdownlint.lint does not match its reviewed digest",
+  // Was the governed-step digest's only fixture until round 45. The command
+  // allowlist added then reaches Set-Variable directly, so this now reports the
+  // specific rule rather than "the bytes moved"; T1-MARKDOWN-076 replaces the
+  // digest coverage this vacated.
+  "T1-MARKDOWN-021": "markdown-policy: markdown.markdownlint.lint runs an unreviewed bare command: Set-Variable",
+  "T1-MARKDOWN-076": "markdown-policy: markdown.markdownlint.lint does not match its reviewed digest",
+  "T1-MARKDOWN-077": "markdown-policy: markdown.policy.validate runs an unreviewed bare command: npm",
+  "T1-MARKDOWN-078": "markdown-policy: markdown.markdownlint.lint runs an unreviewed bare command: tools/prepare.ps1",
+  "T1-MARKDOWN-079": "markdown-policy: markdown.policy.validate assigns an unreviewed environment variable: NODE_OPTIONS",
+  "T1-MARKDOWN-080": "markdown-policy: markdown.markdownlint.lint assigns an unreviewed environment variable: NODE_OPTIONS",
+  "T1-MARKDOWN-081": "markdown-policy: markdown.policy.validate resolves an environment variable through a computed name",
+  // The two jobs' lists differ by exactly the digest baselines, and this proves
+  // the difference is enforced per job rather than pooled: a name the policy
+  // step may legitimately assign is refused in the lint step.
+  "T1-MARKDOWN-082": "markdown-policy: markdown.markdownlint.lint assigns an unreviewed environment variable: T1_EXPECTED_BUILD_DIGEST",
   "T1-MARKDOWN-023": "markdown-policy: markdown.markdownlint.lint contains a workflow expression",
   "T1-MARKDOWN-022": "policy: markdown.markdownlint job permissions differs from the locked policy",
   "T1-LINTASSET-001": "supply-policy: .markdownlint.jsonc does not match its reviewed digest",
