@@ -158,6 +158,20 @@ const REVIEWED_COMMAND_BINDINGS = Object.freeze({
   strCurlPath: { source: 'strResolvedCurl', paths: ['/usr/bin/curl', '/bin/curl'] },
   strTarPath: { source: 'strResolvedTar', paths: ['/usr/bin/tar', '/bin/tar'] },
 });
+// The bare-cmdlet surface, allowlisted for the same reason as the static one:
+// the static allowlist closed [System.IO.File]::Copy and left Copy-Item open,
+// because a cmdlet is neither a static call nor an & / dot invocation. Measured
+// from the *projection* of both acquire steps, not the raw text -- the raw text
+// also contains Invoke-WebRequest, inside the comment explaining why curl is
+// pinned, and allowlisting from it would have admitted a network client.
+const REVIEWED_ACQUIRE_CMDLETS = new Set([
+  'get-filehash',
+  'new-variable',
+  'select-object',
+  'test-path',
+  'where-object',
+  'write-host',
+]);
 const REVIEWED_ACQUIRE_STATIC_CALLS = new Set([
   'system.io.directory::createdirectory',
   'system.io.directory::enumeratefilesystementries',
@@ -1241,6 +1255,11 @@ function validateAcquireStep(step, label, expected) {
       reject('acquire-policy', `${label} calls an unreviewed static member: ${call[1]}::${call[2]}`);
     }
   }
+  for (const objCmdlet of stepCode.matchAll(/\b([A-Z][a-z]+-[A-Z][A-Za-z]+)\b/gu)) {
+    if (!REVIEWED_ACQUIRE_CMDLETS.has(objCmdlet[1].toLowerCase())) {
+      reject('acquire-policy', `${label} invokes an unreviewed cmdlet: ${objCmdlet[1]}`);
+    }
+  }
   // Provenance for every reviewed command variable this step invokes. Only the
   // targets it actually uses are required, because verify.acquire invokes Git
   // and never curl or tar.
@@ -1351,7 +1370,11 @@ function validateCredentialCleanupStep(step, label) {
   // catch [Environment]::Exit through the word Exit, but it does not catch
   // SetShouldExit, where the word boundary falls inside the name; relying on
   // that coincidence would leave the class half-covered.
-  if (/\b(?:exit|break|continue)\b/iu.test(step.run) || PROCESS_TERMINATION.test(step.run)) {
+  // return and trap were in the acquire ban and not this one. A top-level
+  // return exits the script successfully before the origin, credential-helper
+  // and authorization-header assertions run, which is precisely the bypass this
+  // ban exists to refuse; the two lists should not have differed.
+  if (/\b(?:exit|return|break|continue|trap)\b/iu.test(step.run) || PROCESS_TERMINATION.test(step.run)) {
     reject('credential-policy', `${label} adds control flow that can bypass a required assertion`);
   }
   if (createHash('sha256').update(step.run, 'utf8').digest('hex') !== REVIEWED_CREDENTIAL_STEP_DIGEST) {
@@ -1847,6 +1870,9 @@ const FIXTURE_INVENTORY = Object.freeze([
   // than beginning a statement.
   ['T1-BUILD-130', 'generate step terminated successfully before the probes', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          [System.Environment]::Exit(0)\n          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n')],
   ['T1-BUILD-131', 'generate step status forced through the host', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          $host.SetShouldExit(0)\n          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n')],
+  // return was banned in acquire steps and not here; a top-level return exits
+  // successfully before the origin and credential-helper assertions run.
+  ['T1-BUILD-137', 'credential step returns before its required assertions', 'build', (source) => replaceOnce(source, '          $arrRemoteUrls = @(& $strGitPath remote get-url --all origin)\n', '          return\n          $arrRemoteUrls = @(& $strGitPath remote get-url --all origin)\n')],
   ['T1-BUILD-132', 'credential step status forced through the host', 'build', (source) => replaceOnce(source, '          $arrRemoteUrls = @(& $strGitPath remote get-url --all origin)\n', '          $host.SetShouldExit(0)\n          $arrRemoteUrls = @(& $strGitPath remote get-url --all origin)\n')],
   // Round 37, finding B, on the build acquire step.
   ['T1-BUILD-133', 'build acquire step gains a dynamic execution path', 'build', (source) => replaceOnce(source, '          $strServerUrl = $env:GITHUB_SERVER_URL\n', "          Invoke-Expression ('gi' + 't fetch https://example.invalid/x')\n          $strServerUrl = $env:GITHUB_SERVER_URL\n")],
@@ -2019,6 +2045,10 @@ const FIXTURE_INVENTORY = Object.freeze([
   // Provenance for the reviewed command variables. Each of these leaves the
   // invocation allowlist satisfied -- the tail still calls $strCurlPath -- and
   // changes what that name is bound to.
+  // A cmdlet is neither a static call nor an & / dot invocation, so the static
+  // allowlist did not see it and the quoted .mjs target is blanked from
+  // stepCode. Only the cmdlet allowlist stands in the way.
+  ['T1-MARKDOWN-065', 'validator overwritten by an unreviewed cmdlet', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          Copy-Item -LiteralPath './payload.mjs' -Destination './.github/workflows/Validate-WorkflowPolicy.mjs' -Force\n          $strNodeUrl = 'https://nodejs.org")],
   ['T1-MARKDOWN-061', 'constant binding replaced by a plain assignment', 'markdown', (source) => replaceOnce(source, '          New-Variable -Name strCurlPath -Value $strResolvedCurl -Option Constant', "          $strCurlPath = './payload'")],
   ['T1-MARKDOWN-062', 'reviewed binding kept while its resolution source is rebound', 'markdown', (source) => replaceOnce(source, "$strResolvedCurl = @('/usr/bin/curl', '/bin/curl')", "$strResolvedCurl = @('./payload')")],
   ['T1-MARKDOWN-063', 'reviewed target rebound by a second New-Variable', 'markdown', (source) => replaceOnce(source, '          New-Variable -Name strCurlPath -Value $strResolvedCurl -Option Constant', "          New-Variable -Name strCurlPath -Value $strResolvedCurl -Option Constant\n          New-Variable -Name strCurlPath -Value './payload' -Force")],
@@ -2306,6 +2336,8 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-058": "acquire-policy: markdown.acquire constructs an object through New-Object",
   "T1-MARKDOWN-059": "acquire-policy: markdown.acquire calls an unreviewed static member: System.IO.File::Copy",
   "T1-MARKDOWN-060": "acquire-policy: markdown.acquire calls a static member through a computed name",
+  "T1-MARKDOWN-065": "acquire-policy: markdown.acquire invokes an unreviewed cmdlet: Copy-Item",
+  "T1-BUILD-137": "credential-policy: build.verify.verify-checkout-credentials adds control flow that can bypass a required assertion",
   "T1-MARKDOWN-061": "acquire-policy: markdown.acquire does not bind $strCurlPath exactly once as a reviewed constant",
   "T1-MARKDOWN-062": "acquire-policy: markdown.acquire does not resolve $strResolvedCurl from its reviewed absolute paths",
   "T1-MARKDOWN-063": "acquire-policy: markdown.acquire names strCurlPath outside its reviewed constant binding",
