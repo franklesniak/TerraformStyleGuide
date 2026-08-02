@@ -160,7 +160,7 @@ const REVIEWED_VALIDATION_STEP_DIGEST = 'febb2a5e4656ade32ab2e5877aff5acc2c11434
 // pins the whole script for the same reason the other two substantive steps
 // are pinned. It is a backstop and not a substitute: the assertions it stands
 // behind are named individually so a re-baseline cannot quietly drop them.
-const REVIEWED_CREDENTIAL_STEP_DIGEST = 'cec60ee92660f500987f0b14926e85add62b9879c041bc3e87939472fd1471f5';
+const REVIEWED_CREDENTIAL_STEP_DIGEST = 'e94b265f97f20d46df3bafcee77f546463f650c2d537a114c9f276f28707d3ad';
 
 // The verify step runs repository-controlled code and then draws a conclusion
 // from Git probes. Its required fragments and their ordering are asserted
@@ -185,8 +185,8 @@ const BUILD_ACQUIRE = Object.freeze({
   // step takes its worktree baseline and its Git control-surface digest
   // afterwards, so the mutation sits inside the baseline and the comparison
   // reports no drift over a generator that was replaced.
-  tail: '& git init --quiet .\nif ($LASTEXITCODE -ne 0) { throw "acquire: git init exited $LASTEXITCODE" }\n& git remote add origin "$strServerUrl/$strRepository"\nif ($LASTEXITCODE -ne 0) { throw "acquire: git remote add exited $LASTEXITCODE" }\n# Fetching the commit itself, not a ref that names it. No credential\n# is supplied and none is configured, so nothing is persisted for the\n# next step to have to clean up.\n& git fetch --depth 1 --no-tags --no-recurse-submodules origin $strSha\nif ($LASTEXITCODE -ne 0) { throw "acquire: git fetch exited $LASTEXITCODE" }\n& git checkout --quiet --detach FETCH_HEAD\nif ($LASTEXITCODE -ne 0) { throw "acquire: git checkout exited $LASTEXITCODE" }\n$strHead = (& git rev-parse HEAD).Trim()\nif ($LASTEXITCODE -ne 0 -or $strHead -cne $strSha) {\n    throw \'acquire: the checked out revision is not the triggering revision\'\n}\nWrite-Host "acquire: anonymous shallow checkout of $strSha"',
-  digest: '0eb96c20d7d2adfd724248f504b2fc5eb1b9306b8f51640ed7a0bafacdc5ff8c',
+  tail: '& $strGitPath init --quiet .\nif ($LASTEXITCODE -ne 0) { throw "acquire: git init exited $LASTEXITCODE" }\n& $strGitPath remote add origin "$strServerUrl/$strRepository"\nif ($LASTEXITCODE -ne 0) { throw "acquire: git remote add exited $LASTEXITCODE" }\n# Fetching the commit itself, not a ref that names it. No credential\n# is supplied and none is configured, so nothing is persisted for the\n# next step to have to clean up.\n& $strGitPath fetch --depth 1 --no-tags --no-recurse-submodules origin $strSha\nif ($LASTEXITCODE -ne 0) { throw "acquire: git fetch exited $LASTEXITCODE" }\n& $strGitPath checkout --quiet --detach FETCH_HEAD\nif ($LASTEXITCODE -ne 0) { throw "acquire: git checkout exited $LASTEXITCODE" }\n$strHead = (& $strGitPath rev-parse HEAD).Trim()\nif ($LASTEXITCODE -ne 0 -or $strHead -cne $strSha) {\n    throw \'acquire: the checked out revision is not the triggering revision\'\n}\nWrite-Host "acquire: anonymous shallow checkout of $strSha"',
+  digest: '201af2ff2fad27dcb14f4c84867c853f3528ca48ff1aaf865c6c31039c82dd64',
 });
 
 // The Markdown job additionally brings the Node distribution setup-node used to
@@ -199,7 +199,7 @@ const REVIEWED_NODE_ARCHIVE_SHA256 = 'D6C664DF3F3F61458E8C277585571328522D705166
 const MARKDOWN_ACQUIRE = Object.freeze({
   name: 'Acquire triggering revision and pinned toolchain without an action',
   classifiedStatuses: 7,
-  digest: '8416025cdcf74b9157bff09d4e931710f904c67c1321235a5e3398c18e6270b6',
+  digest: 'ede69b239684d6a0bf393a331e7eceab1725fbcae94ed2ede287cea4d51fe832',
   networkClients: 1,
   extraSequences: Object.freeze([
     ['the exact reviewed Node archive',
@@ -215,13 +215,13 @@ const MARKDOWN_ACQUIRE = Object.freeze({
     // binaries that came out of it. Requiring the region to be exactly this
     // leaves no position for either.
     ['the download, its verification, and the extraction as one uninterrupted block',
-      '& curl --silent --show-error --fail --location --proto \'=https\' --tlsv1.2 --output $strArchivePath $strNodeUrl\nif ($LASTEXITCODE -ne 0) { throw "acquire: node download exited $LASTEXITCODE" }\n$strObservedNodeSha256 = (Get-FileHash -LiteralPath $strArchivePath -Algorithm SHA256).Hash\nif ($strObservedNodeSha256 -cne $strReviewedNodeSha256) {\n    throw \'acquire: the Node archive does not match the reviewed digest\'\n}\n[void][System.IO.Directory]::CreateDirectory($strNodeRoot)\n& tar -xJf $strArchivePath -C $strNodeRoot --strip-components=1\nif ($LASTEXITCODE -ne 0) { throw "acquire: node extraction exited $LASTEXITCODE" }\nWrite-Host "acquire: revision $strSha and the reviewed Node distribution"'],
+      '$strNodeUrl = \'https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz\'\n$strReviewedNodeSha256 = \'D6C664DF3F3F61458E8C277585571328522D705166723A7C7823A9253A4D15A0\'\n$strNodeRoot = [System.IO.Path]::Combine($env:RUNNER_TEMP, \'node24\')\n$strArchivePath = [System.IO.Path]::Combine($env:RUNNER_TEMP, \'node24.tar.xz\')\n& $strCurlPath --silent --show-error --fail --location --proto \'=https\' --tlsv1.2 --output $strArchivePath $strNodeUrl\nif ($LASTEXITCODE -ne 0) { throw "acquire: node download exited $LASTEXITCODE" }\n$strObservedNodeSha256 = (Get-FileHash -LiteralPath $strArchivePath -Algorithm SHA256).Hash\nif ($strObservedNodeSha256 -cne $strReviewedNodeSha256) {\n    throw \'acquire: the Node archive does not match the reviewed digest\'\n}\n[void][System.IO.Directory]::CreateDirectory($strNodeRoot)\n& $strTarPath -xJf $strArchivePath -C $strNodeRoot --strip-components=1\nif ($LASTEXITCODE -ne 0) { throw "acquire: node extraction exited $LASTEXITCODE" }\nWrite-Host "acquire: revision $strSha and the reviewed Node distribution"'],
   ]),
   // And the block is the end of the step, so nothing follows the extraction
   // at all. Without this the region above could sit anywhere and a later
   // statement could still overwrite the extracted tree from the checkout,
   // which needs no network and so is not caught by the count below.
-  tail: '& curl --silent --show-error --fail --location --proto \'=https\' --tlsv1.2 --output $strArchivePath $strNodeUrl\nif ($LASTEXITCODE -ne 0) { throw "acquire: node download exited $LASTEXITCODE" }\n$strObservedNodeSha256 = (Get-FileHash -LiteralPath $strArchivePath -Algorithm SHA256).Hash\nif ($strObservedNodeSha256 -cne $strReviewedNodeSha256) {\n    throw \'acquire: the Node archive does not match the reviewed digest\'\n}\n[void][System.IO.Directory]::CreateDirectory($strNodeRoot)\n& tar -xJf $strArchivePath -C $strNodeRoot --strip-components=1\nif ($LASTEXITCODE -ne 0) { throw "acquire: node extraction exited $LASTEXITCODE" }\nWrite-Host "acquire: revision $strSha and the reviewed Node distribution"',
+  tail: '$strNodeUrl = \'https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz\'\n$strReviewedNodeSha256 = \'D6C664DF3F3F61458E8C277585571328522D705166723A7C7823A9253A4D15A0\'\n$strNodeRoot = [System.IO.Path]::Combine($env:RUNNER_TEMP, \'node24\')\n$strArchivePath = [System.IO.Path]::Combine($env:RUNNER_TEMP, \'node24.tar.xz\')\n& $strCurlPath --silent --show-error --fail --location --proto \'=https\' --tlsv1.2 --output $strArchivePath $strNodeUrl\nif ($LASTEXITCODE -ne 0) { throw "acquire: node download exited $LASTEXITCODE" }\n$strObservedNodeSha256 = (Get-FileHash -LiteralPath $strArchivePath -Algorithm SHA256).Hash\nif ($strObservedNodeSha256 -cne $strReviewedNodeSha256) {\n    throw \'acquire: the Node archive does not match the reviewed digest\'\n}\n[void][System.IO.Directory]::CreateDirectory($strNodeRoot)\n& $strTarPath -xJf $strArchivePath -C $strNodeRoot --strip-components=1\nif ($LASTEXITCODE -ne 0) { throw "acquire: node extraction exited $LASTEXITCODE" }\nWrite-Host "acquire: revision $strSha and the reviewed Node distribution"',
 });
 
 // The generator is repository-controlled code that the verify job executes. Its
@@ -425,6 +425,13 @@ function allRunSteps(workflow) {
 // the remaining span kinds are '...' and "...", both terminated on their own
 // quote, with the doubling escape ('' and "") and the double-quoted backtick
 // escape handled.
+// Drops whole-line comments only. Trimming from the first # on every line
+// would truncate a code line containing one inside a string, which would hide
+// text these counts exist to see; a line that is entirely a comment cannot.
+function powerShellCodeOnly(text) {
+  return text.split('\n').filter((line) => !/^\s*#/u.test(line)).join('\n');
+}
+
 function powerShellBraceDepthAt(text, offset) {
   let depth = 0;
   let index = 0;
@@ -545,7 +552,12 @@ export function validateBuildPolicy(workflow, source) {
 
   for (const { jobId, id, run, step } of allRunSteps(workflow)) {
     if ('continue-on-error' in step) reject('failure-policy', `${jobId}.${id} sets continue-on-error`);
-    if (NETWORK_CLIENT.test(run)) reject('network-policy', `${jobId}.${id} adds a network client`);
+    // Code, not prose. The rationale for pinning these executables to fixed
+    // paths necessarily names curl and wget, and a rule that cannot tell a
+    // comment from a call would forbid the comment explaining it.
+    if (NETWORK_CLIENT.test(powerShellCodeOnly(run))) {
+      reject('network-policy', `${jobId}.${id} adds a network client`);
+    }
     // Two checks, most specific first, over the whole serialized step rather
     // than over run alone -- a credential reaches the script through any step
     // key just as effectively as through script text.
@@ -892,10 +904,10 @@ function validateAcquireStep(step, label, expected) {
     ['an empty workspace before fetching',
       'if (@([System.IO.Directory]::EnumerateFileSystemEntries($PWD.Path)).Count -ne 0) {'],
     ['a fetch of the commit itself',
-      '& git fetch --depth 1 --no-tags --no-recurse-submodules origin $strSha'],
+      '& $strGitPath fetch --depth 1 --no-tags --no-recurse-submodules origin $strSha'],
     // Without this the step would accept whatever FETCH_HEAD happened to be.
     ['that the checked out revision is the triggering revision',
-      '$strHead = (& git rev-parse HEAD).Trim()\n' +
+      '$strHead = (& $strGitPath rev-parse HEAD).Trim()\n' +
       'if ($LASTEXITCODE -ne 0 -or $strHead -cne $strSha) {'],
   ];
   for (const [requirement, sequence] of [...requiredSequences, ...(expected.extraSequences ?? [])]) {
@@ -924,16 +936,23 @@ function validateAcquireStep(step, label, expected) {
   // so the invocation target is constrained rather than the spelling of the
   // name: an indirect call has no literal to match and is refused here
   // however the name was assembled.
-  for (const call of step.run.matchAll(/&\s*(\S+)/gu)) {
-    if (!['git', 'curl', 'tar'].includes(call[1])) {
+  const stepCode = powerShellCodeOnly(step.run);
+  for (const call of stepCode.matchAll(/&\s*(\S+)/gu)) {
+    if (!['$strGitPath', '$strCurlPath', '$strTarPath'].includes(call[1])) {
       reject('acquire-policy', `${label} invokes something other than a reviewed literal command`);
     }
   }
   // Counted, not merely permitted. The Markdown acquire step is allowed one
   // download and the build one is allowed none, and a second request is how a
   // re-baselined step would fetch something the reviewed digest never covered.
-  const networkClients = step.run.match(new RegExp(NETWORK_CLIENT.source, 'giu'))?.length ?? 0;
-  if (networkClients !== expected.networkClients) {
+  // Counted as invocations, not as name tokens. Matching client names counted
+  // the candidate-list literals /usr/bin/curl and /bin/curl as two requests
+  // when the step makes one -- the same defect in miniature that the previous
+  // round reported, so it is counted the way that round asked for. This is
+  // exact rather than approximate because the allowlist above admits only
+  // three call targets, so no other invocation form can exist here at all.
+  const networkCalls = (stepCode.match(/&\s*\$strCurlPath\b/gu) ?? []).length;
+  if (networkCalls !== expected.networkClients) {
     reject('acquire-policy', `${label} network request count changed`);
   }
   if (expected.tail !== undefined && !step.run.trimEnd().endsWith(expected.tail)) {
@@ -965,7 +984,7 @@ function validateCredentialCleanupStep(step, label) {
     // credential, which is what makes the absent helper and absent extraheader
     // below sufficient rather than merely consistent.
     ['exactly one origin URL',
-      '$arrRemoteUrls = @(& git remote get-url --all origin)\n' +
+      '$arrRemoteUrls = @(& $strGitPath remote get-url --all origin)\n' +
       'if ($LASTEXITCODE -ne 0 -or $arrRemoteUrls.Count -ne 1) {'],
     ['a credential-free GitHub HTTPS origin',
       "if ($arrRemoteUrls[0] -notmatch '^https://github\\.com/[^/@]+/[^/@]+(?:\\.git)?$') {"],
@@ -976,12 +995,12 @@ function validateCredentialCleanupStep(step, label) {
       '    $PSNativeCommandUseErrorActionPreference = $false\n' +
       '}'],
     ['no local credential helper',
-      '$arrHelpers = @(& git config --local --get-all credential.helper)\n' +
+      '$arrHelpers = @(& $strGitPath config --local --get-all credential.helper)\n' +
       '$intHelperExit = $LASTEXITCODE\n' +
       '$global:LASTEXITCODE = 0\n' +
       'if (($intHelperExit -ne 0 -and $intHelperExit -ne 1) -or $arrHelpers.Count -ne 0)'],
     ['no persisted HTTP authorization',
-      "$arrAuthorizationKeys = @(& git config --local --name-only --get-regexp '^http\\..*\\.extraheader$')\n" +
+      "$arrAuthorizationKeys = @(& $strGitPath config --local --name-only --get-regexp '^http\\..*\\.extraheader$')\n" +
       '$intAuthorizationExit = $LASTEXITCODE\n' +
       '$global:LASTEXITCODE = 0\n' +
       'if (($intAuthorizationExit -ne 0 -and $intAuthorizationExit -ne 1) -or $arrAuthorizationKeys.Count -ne 0)'],
@@ -1127,7 +1146,7 @@ export function validateMarkdownPolicy(workflow, source) {
   // asserted above, so what it may fetch is fixed and what it accepts back is
   // fixed. It also runs before any repository code, so nothing it could be
   // steered by has executed yet.
-  if (NETWORK_CLIENT.test(validation.run)) {
+  if (NETWORK_CLIENT.test(powerShellCodeOnly(validation.run))) {
     reject('markdown-policy', 'markdown.validate-and-lint adds a network client');
   }
   // The credential scan and the expression ban were added to build.yml's script
@@ -1358,10 +1377,14 @@ const FIXTURE_INVENTORY = Object.freeze([
   // appears first, so a bare anchor silently retargeted this fixture at that
   // step's copy and left the credential step's assertion uncovered. The
   // expectation check is what surfaced it.
-  ['T1-BUILD-041', 'native-command error mapping guard removed', 'build', (source) => replaceOnce(source, '          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n              $PSNativeCommandUseErrorActionPreference = $false\n          }\n          $arrRemoteUrls = @(& git remote get-url --all origin)\n', '          $arrRemoteUrls = @(& git remote get-url --all origin)\n')],
+  // Anchored through the comment that precedes it. The acquire step opens with
+  // an identical guard block and now comes first in the file, and the git path
+  // resolution block sits between this guard and the first git invocation, so
+  // neither a bare anchor nor one spanning to $arrRemoteUrls matches here.
+  ['T1-BUILD-041', 'native-command error mapping guard removed', 'build', (source) => replaceOnce(source, '          # markdownlint.yml disables it.\n          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n              $PSNativeCommandUseErrorActionPreference = $false\n          }\n', '          # markdownlint.yml disables it.\n')],
   ['T1-BUILD-050', 'sequential Git stream reads restored', 'build', (source) => replaceOnce(source, '                  $objCopyTask = $objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)\n                  $objErrorTask = $objProcess.StandardError.ReadToEndAsync()\n                  $objCopyTask.GetAwaiter().GetResult()\n                  $strError = $objErrorTask.GetAwaiter().GetResult()\n', '                  $objProcess.StandardOutput.BaseStream.CopyTo($objOutput)\n                  $strError = $objProcess.StandardError.ReadToEnd()\n')],
   ['T1-BUILD-053', 'credentialed executable resolved through PATH', 'build', (source) => replaceOnce(source, '              $objStartInfo.FileName = $strGitPath\n', '              $arrGitCommands = @(Get-Command git -CommandType Application -ErrorAction Stop)\n              $objStartInfo.FileName = $arrGitCommands[0].Source\n')],
-  ['T1-BUILD-054', 'trusted Git path list widened', 'build', (source) => replaceOnce(source, "@('/usr/bin/git', '/bin/git')", "@($env:RUNNER_TEMP + '/git', '/usr/bin/git')")],
+  ['T1-BUILD-054', 'trusted Git path list widened', 'build', (source) => replaceOnce(source, "@('/usr/bin/git', '/bin/git') | Where-Object { [System.IO.File]::Exists($_) } | Select-Object -First 1\n          if ([string]::IsNullOrEmpty($strResolvedGit)) { throw 'native-tool:", "@($env:RUNNER_TEMP + '/git', '/usr/bin/git') | Where-Object { [System.IO.File]::Exists($_) } | Select-Object -First 1\n          if ([string]::IsNullOrEmpty($strResolvedGit)) { throw 'native-tool:")],
   ['T1-BUILD-061', 'PATH lookup reintroduced beside the pinned path', 'build', (source) => replaceOnce(source, '              $objStartInfo.FileName = $strGitPath\n', '              $arrFallback = @(Get-Command git -CommandType Application -ErrorAction SilentlyContinue)\n              $objStartInfo.FileName = $strGitPath\n')],
   ['T1-MARKDOWN-005', 'install scripts enabled', 'markdown', (source) => replaceOnce(source, 'ci --ignore-scripts --no-audit --no-fund', 'ci --no-audit --no-fund')],
   ['T1-MARKDOWN-006', 'audit enabled during install', 'markdown', (source) => replaceOnce(source, 'ci --ignore-scripts --no-audit --no-fund', 'ci --ignore-scripts --no-fund')],
@@ -1459,7 +1482,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   // Every probe reports by throwing, so an empty handler around them turns each
   // verdict into a no-op while the step still succeeds.
   ['T1-BUILD-105', 'probe failures suppressed by an empty handler', 'build', (source) => replaceOnce(source, '          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }\n', '          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }\n          try {\n          } catch {\n          }\n')],
-  ['T1-BUILD-102', 'origin cardinality check removed from credential cleanup', 'build', (source) => replaceOnce(source, '          $arrRemoteUrls = @(& git remote get-url --all origin)\n          if ($LASTEXITCODE -ne 0 -or $arrRemoteUrls.Count -ne 1) {\n', '          $arrRemoteUrls = @(& git remote get-url --all origin)\n          if ($LASTEXITCODE -ne 0) {\n')],
+  ['T1-BUILD-102', 'origin cardinality check removed from credential cleanup', 'build', (source) => replaceOnce(source, '          $arrRemoteUrls = @(& $strGitPath remote get-url --all origin)\n          if ($LASTEXITCODE -ne 0 -or $arrRemoteUrls.Count -ne 1) {\n', '          $arrRemoteUrls = @(& $strGitPath remote get-url --all origin)\n          if ($LASTEXITCODE -ne 0) {\n')],
   // The step order was previously covered only as a side effect of the fixture
   // that reintroduced the upload into verify; that fixture now trips the
   // no-actions rule instead, so the ordering gets a fixture of its own.
@@ -1477,9 +1500,9 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-112', 'acquire step accepts an arbitrary repository name', 'build', (source) => replaceOnce(source, "          if ($strRepository -cnotmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {\n", '          if ([string]::IsNullOrEmpty($strRepository)) {\n')],
   ['T1-BUILD-113', 'acquire step accepts a ref in place of a commit', 'build', (source) => replaceOnce(source, "          if ($strSha -cnotmatch '^[0-9a-f]{40}$') {\n", '          if ([string]::IsNullOrEmpty($strSha)) {\n')],
   ['T1-BUILD-114', 'acquire step no longer requires an empty workspace', 'build', (source) => replaceOnce(source, '          if (@([System.IO.Directory]::EnumerateFileSystemEntries($PWD.Path)).Count -ne 0) {\n              throw \'acquire: the workspace is not empty\'\n          }\n', '')],
-  ['T1-BUILD-115', 'acquire step fetches a ref rather than the commit', 'build', (source) => replaceOnce(source, '          & git fetch --depth 1 --no-tags --no-recurse-submodules origin $strSha\n', '          & git fetch --depth 1 --no-tags --no-recurse-submodules origin $env:GITHUB_REF\n')],
-  ['T1-BUILD-116', 'acquire step no longer proves which revision it checked out', 'build', (source) => replaceOnce(source, '          $strHead = (& git rev-parse HEAD).Trim()\n          if ($LASTEXITCODE -ne 0 -or $strHead -cne $strSha) {\n', '          $strHead = (& git rev-parse HEAD).Trim()\n          if ([string]::IsNullOrEmpty($strHead)) {\n')],
-  ['T1-BUILD-117', 'credential embedded in the anonymous fetch remote', 'build', (source) => replaceOnce(source, '          & git remote add origin "$strServerUrl/$strRepository"\n', '          & git remote add origin "https://x-access-token:$env:SUPPLIED@github.com/$strRepository"\n')],
+  ['T1-BUILD-115', 'acquire step fetches a ref rather than the commit', 'build', (source) => replaceOnce(source, '          & $strGitPath fetch --depth 1 --no-tags --no-recurse-submodules origin $strSha\n', '          & $strGitPath fetch --depth 1 --no-tags --no-recurse-submodules origin $env:GITHUB_REF\n')],
+  ['T1-BUILD-116', 'acquire step no longer proves which revision it checked out', 'build', (source) => replaceOnce(source, '          $strHead = (& $strGitPath rev-parse HEAD).Trim()\n          if ($LASTEXITCODE -ne 0 -or $strHead -cne $strSha) {\n', '          $strHead = (& $strGitPath rev-parse HEAD).Trim()\n          if ([string]::IsNullOrEmpty($strHead)) {\n')],
+  ['T1-BUILD-117', 'credential embedded in the anonymous fetch remote', 'build', (source) => replaceOnce(source, '          & $strGitPath remote add origin "$strServerUrl/$strRepository"\n', '          & $strGitPath remote add origin "https://x-access-token:$env:SUPPLIED@github.com/$strRepository"\n')],
   ['T1-BUILD-118', 'acquire step drops a native status classification', 'build', (source) => replaceOnce(source, '          if ($LASTEXITCODE -ne 0) { throw "acquire: git init exited $LASTEXITCODE" }\n', "          Write-Host 'acquire: initialized'\n")],
   ['T1-BUILD-119', 'early exit prepended to the acquire step', 'build', (source) => replaceOnce(source, "          $ErrorActionPreference = 'Stop'\n", "          $ErrorActionPreference = 'Stop'\n          exit 0\n")],
   // Satisfies every named acquire assertion and changes the bytes anyway, which
@@ -1511,7 +1534,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-079', 'early exit inserted after the generator', 'build', (source) => replaceOnce(source, '          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }\n', '          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }\n          exit 0\n')],
   ['T1-BUILD-073', 'generator returned to in-session invocation', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          & ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n')],
   ['T1-BUILD-074', 'Git resolved through a shadowable command lookup', 'build', (source) => replaceOnce(source, '              $objStartInfo.FileName = $strGitPath\n', '              $objStartInfo.FileName = @(Get-Command git -CommandType Application -ErrorAction Stop)[0].Source\n')],
-  ['T1-BUILD-075', 'pinned Git path downgraded to a mutable variable', 'build', (source) => replaceOnce(source, '          New-Variable -Name strGitPath -Value $strResolvedGit -Option Constant\n', '          $strGitPath = $strResolvedGit\n')],
+  ['T1-BUILD-075', 'pinned Git path downgraded to a mutable variable', 'build', (source) => replaceOnce(source, "native-tool: Git application was not resolved' }\n          New-Variable -Name strGitPath -Value $strResolvedGit -Option Constant\n", "native-tool: Git application was not resolved' }\n          $strGitPath = $strResolvedGit\n")],
   ['T1-BUILD-076', 'push path added to the read-only workflow', 'build', (source) => replaceOnce(source, "          $objWorking = Invoke-GitRaw @('diff'", "          & git push origin HEAD:refs/heads/main\n          $objWorking = Invoke-GitRaw @('diff'")],
   ['T1-BUILD-077', 'repository mutation added to the read-only workflow', 'build', (source) => replaceOnce(source, "          $objWorking = Invoke-GitRaw @('diff'", "          & git add -A\n          $objWorking = Invoke-GitRaw @('diff'")],
   ['T1-MARKDOWN-021', 'captured lint status reset indirectly through Set-Variable', 'markdown', (source) => replaceOnce(source, '          $intNestedExit = $LASTEXITCODE\n', '          $intNestedExit = $LASTEXITCODE\n          Set-Variable -Name intPolicyExit -Value 0\n')],
@@ -1535,9 +1558,9 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-MARKDOWN-030', 'network client added to the lint step', 'markdown', (source) => replaceOnce(source, '          & $strNpmPath run lint:md\n', '          $objExtra = Invoke-WebRequest -Uri https://example.invalid/rules\n          & $strNpmPath run lint:md\n')],
   // Mutates a line no named assertion covers, so it reaches the backstop
   // rather than being answered by one of the assertions in front of it.
-  ['T1-MARKDOWN-031', 'acquire step edited without re-review', 'markdown', (source) => replaceOnce(source, '          & git init --quiet .\n', '          & git init .\n')],
+  ['T1-MARKDOWN-031', 'acquire step edited without re-review', 'markdown', (source) => replaceOnce(source, '          & $strGitPath init --quiet .\n', '          & $strGitPath init .\n')],
   // A second request fetches bytes the reviewed archive digest never covered.
-  ['T1-MARKDOWN-032', 'second download appended to the acquire step', 'markdown', (source) => replaceOnce(source, '          Write-Host "acquire: revision $strSha and the reviewed Node distribution"\n', '          Write-Host "acquire: revision $strSha and the reviewed Node distribution"\n          & curl --silent --output $strNodeRoot/bin/node https://example.invalid/node\n')],
+  ['T1-MARKDOWN-032', 'second download appended to the acquire step', 'markdown', (source) => replaceOnce(source, '          Write-Host "acquire: revision $strSha and the reviewed Node distribution"\n', '          Write-Host "acquire: revision $strSha and the reviewed Node distribution"\n          & $strCurlPath --silent --output $strNodeRoot/bin/node https://example.invalid/node\n')],
   // And one that needs no network at all, because the checkout is already on
   // disk by the time the extraction finishes.
   ['T1-MARKDOWN-033', 'extracted toolchain overwritten from the checkout', 'markdown', (source) => replaceOnce(source, '          Write-Host "acquire: revision $strSha and the reviewed Node distribution"\n', '          Write-Host "acquire: revision $strSha and the reviewed Node distribution"\n          Copy-Item -LiteralPath ./tools/node -Destination $strNodeRoot/bin/node -Force\n')],
@@ -1934,7 +1957,7 @@ export function validateGeneratorPolicy(source) {
   // Comment lines are stripped first: the rationale above this check in the
   // generator names the unqualified form in prose, and a rule that cannot
   // tell prose from code would forbid explaining itself.
-  const generatorCode = source.split('\n').map((line) => line.replace(/#.*$/u, '')).join('\n');
+  const generatorCode = powerShellCodeOnly(source);
   if (/(?<!Microsoft\.PowerShell\.Core\\)Get-Command/u.test(generatorCode)) {
     reject('supply-policy', 'the generator resolves a command through a shadowable lookup');
   }
