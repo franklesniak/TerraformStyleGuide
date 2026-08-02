@@ -318,7 +318,31 @@ const MARKDOWN_ACQUIRE = Object.freeze({
 // a silent one. This is a review signal rather than a runtime gate -- build.yml
 // does not run this validator, so what actually contains the generator at run
 // time is the process boundary and the byte comparison in that step.
-const REVIEWED_GENERATOR_DIGEST = 'dd62e11eb4e2bb9a7a764febc074901c86811d25bb6fa5b50fa18f54b3bbc342';
+// Round 51. The generator's safety assertions, with the number of times each
+// must appear. Every one of these was deleted or neutered in a measured battery
+// that the policy accepted, because until now only command *resolution* was
+// named here and behaviour was left entirely to the digest -- which the threat
+// model these rules exist for assumes has been re-baselined.
+const REVIEWED_GENERATOR_GUARDS = Object.freeze([
+  // The identity check a previous round asked to be kept. It was deletable.
+  ['Assert-StyleGuideTrackedDestination -DestinationLeaf $strDestinationLeaf', 1],
+  ['if ($intGitExit -ne 0 -or $arrTrackedPath.Count -ne 1 -or $arrTrackedPath[0] -cne $DestinationLeaf) {', 1],
+  // Reparse-point and filesystem-type checks, on the root and on the sibling.
+  ['Assert-StyleGuideOrdinaryPath -LiteralPath $script:strRepositoryRoot -ExpectedType', 2],
+  ['Assert-StyleGuideOrdinaryPath -LiteralPath $strTemporaryPath -ExpectedType', 3],
+  // Whole conditions, not just the comparisons. A fragment naming only the
+  // comparison survives `if ($false -and <comparison>)` -- the check is
+  // disabled and the text is still there. Measured: that spelling passed the
+  // first version of this list and was caught only by the digest.
+  // What makes the written bytes the bytes that were verified.
+  ['if ($strObservedSha256 -cne $strExpectedSha256) {', 1],
+  ['if ($arrObservedBytes -contains 0x0D) {', 1],
+  // The two atomic publish paths: replace an existing artifact, create a
+  // missing one. Neither may be swapped for a non-atomic write.
+  ['[System.IO.File]::Replace($strTemporaryPath, $strExpectedPath, [NullString]::Value)', 1],
+  ['[System.IO.File]::Move($strTemporaryPath, $strExpectedPath)', 1],
+]);
+const REVIEWED_GENERATOR_DIGEST ='dd62e11eb4e2bb9a7a764febc074901c86811d25bb6fa5b50fa18f54b3bbc342';
 
 // The lint phases execute these two files out of the checkout. The rule
 // configuration decides which rules run at all, and the nested-fence helper is
@@ -2695,6 +2719,18 @@ const FIXTURE_INVENTORY = Object.freeze([
   // invoked. Every later & $strGitPath then resolves 'git' the ordinary way.
   ['T1-GENERATOR-011', 'Git path rebound to a bare command name', 'generator', (source) => replaceOnce(source, "    $strGitPath = $arrGitCommands[0].Source", "    $strGitPath = 'git'")],
   ['T1-GENERATOR-012', 'Git path reassigned after the qualified lookup', 'generator', (source) => replaceOnce(source, "    $arrTrackedPath = @(& $strGitPath", "    $strGitPath = 'git'\n    $arrTrackedPath = @(& $strGitPath")],
+  // Round 51, reported: an indirect writer the = count could not see.
+  ['T1-GENERATOR-013', 'Git path rebound through an indirect variable writer', 'generator', (source) => replaceOnce(source, "    $strGitPath = $arrGitCommands[0].Source", "    $strGitPath = $arrGitCommands[0].Source\n    Set-Variable -Name strGitPath -Value 'git'")],
+  // Round 51, reported: exits successfully before defining or running anything,
+  // leaving all four artifacts stale under a green build.
+  ['T1-GENERATOR-014', 'generator returns at the top level before dispatching', 'generator', (source) => replaceOnce(source, "$script:strRepositoryRoot = [System.IO.Path]::GetFullPath(", "return\n$script:strRepositoryRoot = [System.IO.Path]::GetFullPath(")],
+  // Round 51, found by battery rather than reported: the safety assertions had
+  // no named enforcement at all, only the digest.
+  ['T1-GENERATOR-015', 'tracked-destination identity check no longer called', 'generator', (source) => replaceOnce(source, "        Assert-StyleGuideTrackedDestination -DestinationLeaf $strDestinationLeaf\n", "")],
+  ['T1-GENERATOR-016', 'tracked-destination check short-circuited before its lookup', 'generator', (source) => replaceOnce(source, "    $arrGitCommands = @(Microsoft.PowerShell.Core", "    if ($true) { return }\n    $arrGitCommands = @(Microsoft.PowerShell.Core")],
+  ['T1-GENERATOR-017', 'tracked-path comparison case-folded', 'generator', (source) => replaceOnce(source, "$arrTrackedPath[0] -cne $DestinationLeaf", "$arrTrackedPath[0] -ine $DestinationLeaf")],
+  ['T1-GENERATOR-018', 'closed temporary file digest check disabled', 'generator', (source) => replaceOnce(source, "        if ($strObservedSha256 -cne $strExpectedSha256) {", "        if ($false -and $strObservedSha256 -cne $strExpectedSha256) {")],
+  ['T1-GENERATOR-019', 'atomic replace swapped for a non-atomic write', 'generator', (source) => replaceOnce(source, "            [System.IO.File]::Replace($strTemporaryPath, $strExpectedPath, [NullString]::Value)", "            [System.IO.File]::Copy($strTemporaryPath, $strExpectedPath, $true)")],
   ['T1-MARKDOWN-072', 'supply prelude closed twice, shortening the compared region', 'markdown', (source) => replaceOnce(source, "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n", "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n")],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -2877,7 +2913,17 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-018": "markdown-policy: markdown.policy.validate is missing a required phase: @('.npmrc', '../.npmrc', '../../.npmrc')",
   "T1-MARKDOWN-019": "markdown-policy: markdown.policy.validate runs a required phase out of order: $env:T1_EXPECTED_BUILD_DIGEST = (Get-FileHash -LiteralPath ./build.yml -Algorithm SHA256).Hash",
   "T1-GENERATOR-001": "supply-policy: generator does not match its reviewed digest",
-  "T1-GENERATOR-002": "supply-policy: generator does not match its reviewed digest",
+  // Truncation removes the dispatch, so this now reports the specific missing
+  // structure rather than "the bytes moved". T1-GENERATOR-001 still covers the
+  // digest message: it appends a function and trips nothing else.
+  "T1-GENERATOR-002": "supply-policy: the generator does not dispatch exactly the four reviewed artifacts",
+  "T1-GENERATOR-013": "supply-policy: the generator writes a variable through an indirect API",
+  "T1-GENERATOR-014": "supply-policy: the generator returns at the top level",
+  "T1-GENERATOR-015": "supply-policy: the generator no longer performs a reviewed safety check: Assert-StyleGuideTrackedDestination -DestinationLeaf $strDestinationLeaf",
+  "T1-GENERATOR-016": "supply-policy: the generator can reach its Git lookup only after unreviewed statements",
+  "T1-GENERATOR-017": "supply-policy: the generator no longer performs a reviewed safety check: if ($intGitExit -ne 0 -or $arrTrackedPath.Count -ne 1 -or $arrTrackedPath[0] -cne $DestinationLeaf) {",
+  "T1-GENERATOR-018": "supply-policy: the generator no longer performs a reviewed safety check: if ($strObservedSha256 -cne $strExpectedSha256) {",
+  "T1-GENERATOR-019": "supply-policy: the generator no longer performs a reviewed safety check: [System.IO.File]::Replace($strTemporaryPath, $strExpectedPath, [NullString]::Value)",
   "T1-MARKDOWN-020": "markdown-policy: markdown.markdownlint.lint is missing a required phase: supply: lint configuration or helper does not match the reviewed digest",
   "T1-BUILD-086": "isolation-policy: build.verify.upload-generated uses an action",
   "T1-BUILD-087": "policy: build.publish step order differs from the locked policy",
@@ -3256,6 +3302,75 @@ export function validateGeneratorPolicy(source) {
   // spelling would be fixing the instance rather than the class.
   if (/\$ExecutionContext\s*\.\s*InvokeCommand|\.\s*InvokeCommand\s*\.\s*GetCommand|\[\s*(?:System\.)?Management\.Automation\.CommandTypes\s*\]/iu.test(generatorCode)) {
     reject('supply-policy', 'the generator resolves a command through a session-state lookup API');
+  }
+  // Round 51, and a class rather than the two spellings that were reported.
+  //
+  // Everything above this point constrains how the generator *resolves a
+  // command*. Under the threat model every one of these rules assumes -- a
+  // generator edit whose digest is re-baselined -- nothing else about the
+  // script's behaviour was constrained at all. Measured, all accepted: the
+  // tracked-destination identity check deleted outright; its body
+  // short-circuited by an early return while every approved text stayed in
+  // place; the repository-root reparse-point check deleted; the tracked-path
+  // comparison case-folded from -cne to -ine; the closed temporary file's
+  // digest and carriage-return checks disabled; a top-level return before the
+  // dispatch; and $strGitPath rebound through Set-Variable.
+  //
+  // The build workflow's script step already carries most of these rules --
+  // depth-zero return, process termination, indirect variable writers. They
+  // were written for the step that *invokes* the generator and never extended
+  // to the generator itself, which is the same omission round 50 found for the
+  // non-ASCII ban. So they are extended here rather than the two reported
+  // spellings being matched.
+  const arrDispatch = [...generatorCode.matchAll(/\$int\w+Result = New-StyleGuide\w+Version/gu)];
+  if (arrDispatch.length !== 4) {
+    reject('supply-policy', 'the generator does not dispatch exactly the four reviewed artifacts');
+  }
+  // A top-level return exits with the status of what ran before it, which is
+  // success. The generator would then define nothing, write nothing, and exit
+  // zero over a stale worktree -- and the build's drift check compares the
+  // worktree against itself, so it would observe no drift and pass. Depth is
+  // computed on the projection, so a return inside a comment or string is not
+  // one. Exit is refused only before the dispatch, because the reviewed script
+  // ends with exactly one depth-zero `exit 0` and that one is legitimate.
+  const intFirstDispatch = arrDispatch.length > 0 ? arrDispatch[0].index : generatorCode.length;
+  for (const objReturn of generatorCode.matchAll(/\breturn\b/gu)) {
+    if (powerShellBraceDepthAt(generatorCode, objReturn.index) === 0) {
+      reject('supply-policy', 'the generator returns at the top level');
+    }
+  }
+  for (const objExit of generatorCode.matchAll(/\bexit\b|\[\s*(?:System\.)?Environment\s*\]\s*::\s*Exit|SetShouldExit/giu)) {
+    if (objExit.index < intFirstDispatch &&
+        powerShellBraceDepthAt(generatorCode, objExit.index) === 0) {
+      reject('supply-policy', 'the generator can terminate before the reviewed dispatch');
+    }
+  }
+  // The Git-path binding added last round counts `=` assignments, so an
+  // indirect writer left it untouched. Rather than adding Set-Variable to that
+  // count -- which would close one writer and leave Get-Variable, the Variable:
+  // provider and the PSVariable API open -- the capability is removed. None of
+  // these appears in the reviewed generator. [ref] is deliberately not listed:
+  // it appears twice, passed to GetUnresolvedProviderPathFromPSPath, and a
+  // [ref] cannot write anything on its own.
+  if (/\b(?:Set-Variable|New-Variable|Get-Variable|Clear-Variable|Remove-Variable|Set-Item|New-Item)\b|Variable:|PSVariable/iu.test(generatorCode)) {
+    reject('supply-policy', 'the generator writes a variable through an indirect API');
+  }
+  // The safety assertions themselves, by exact count. Each of these was deleted
+  // or disabled in the battery above and the policy still passed, because
+  // nothing named required any of them to be present. Counts rather than mere
+  // presence, so a disabled copy cannot sit beside a live one.
+  for (const [strFragment, intExpected] of REVIEWED_GENERATOR_GUARDS) {
+    const intObserved = generatorCode.split(strFragment).length - 1;
+    if (intObserved !== intExpected) {
+      reject('supply-policy', `the generator no longer performs a reviewed safety check: ${strFragment}`);
+    }
+  }
+  // Counting the lookup is not enough on its own: an early return inside the
+  // function leaves every approved text in place and executes none of it.
+  // Nothing but whitespace -- and comments, which the projection blanks -- may
+  // sit between the end of the parameter block and the qualified lookup.
+  if (!/\)\s*\$arrGitCommands = @\(Microsoft\.PowerShell\.Core\\Get-Command/u.test(generatorCode)) {
+    reject('supply-policy', 'the generator can reach its Git lookup only after unreviewed statements');
   }
   if (createHash('sha256').update(source, 'utf8').digest('hex') !== REVIEWED_GENERATOR_DIGEST) {
     reject('supply-policy', 'generator does not match its reviewed digest');
