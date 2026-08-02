@@ -340,6 +340,20 @@ const REVIEWED_VERIFY_GUARDS = Object.freeze([
   ['$arrArtifacts -cnotcontains $_', 1],
   ['Sort-Object -CaseSensitive', 3],
   ['if ($objDiff.ExitCode -ne 0 -and $objDiff.ExitCode -ne 1) {', 1],
+  // Case-sensitive comparisons that a sweep found unpinned: every -c operator
+  // in all three files was case-folded and measured, and eleven folds were
+  // accepted. Two of these compare *paths*, where case is attacker-chosen and
+  // the filesystem is case-sensitive, so a control-surface path differing only
+  // in case would pass the allowlist. The rest compare same-source hex digests,
+  // where folding is a weakening rather than a demonstrated bypass -- pinned
+  // because they are cheap to pin, not because an exploit was shown.
+  // Stops before the throw message: the projection blanks string content, so a
+  // fragment carrying one can never match it.
+  ['if ($arrObserved -ccontains $strPath) { throw ', 1],
+  ['if ($Allowed -cnotcontains $strPath) { throw ', 1],
+  ['if ([Convert]::ToBase64String($arrRecord) -cne [Convert]::ToBase64String($arrRoundTrip)) {', 1],
+  ['if ((Get-GitControlSurfaceDigest) -cne $strControlSurfaceBefore) {', 1],
+  ['if ((-not $objWorktreeAfter.ContainsKey($strPath)) -or ($objWorktreeAfter[$strPath] -cne $objWorktreeBefore[$strPath])) {', 1],
 ]);
 
 // Round 51. The generator's safety assertions, with the number of times each
@@ -365,6 +379,12 @@ const REVIEWED_GENERATOR_GUARDS = Object.freeze([
   // missing one. Neither may be swapped for a non-atomic write.
   ['[System.IO.File]::Replace($strTemporaryPath, $strExpectedPath, [NullString]::Value)', 1],
   ['[System.IO.File]::Move($strTemporaryPath, $strExpectedPath)', 1],
+  // Same sweep. The provider check is listed for consistency rather than risk:
+  // PowerShell resolves provider names case-insensitively, so folding it
+  // changes nothing at runtime. The rollback verification is the one that
+  // matters here.
+  ['if ($null -eq $objProvider -or $objProvider.Name -cne ', 1],
+  ['if ($objCurrentInfo.Length -ne $intOriginalLength -or $strCurrentSha256 -cne $strOriginalSha256) {', 1],
 ]);
 const REVIEWED_GENERATOR_DIGEST ='dd62e11eb4e2bb9a7a764febc074901c86811d25bb6fa5b50fa18f54b3bbc342';
 
@@ -472,6 +492,12 @@ const MARKDOWN_JOBS = Object.freeze({
       '$env:T1_EXPECTED_MARKDOWN_DIGEST = (Get-FileHash -LiteralPath ./markdownlint.yml -Algorithm SHA256).Hash',
       'validation: package metadata changed after installation',
       'validation: workflow policy validation failed',
+      // Case-sensitive comparisons the round-52 sweep found unpinned. Both
+      // sides are same-source hex, so folding is a weakening rather than a
+      // shown bypass; pinned because the text is already reviewed and the
+      // check costs nothing.
+      'if ($strPackageAfterInstall -cne $strPackageBefore -or $strLockAfterInstall -cne $strLockBefore) {',
+      'if ($strPackageFinal -cne $strPackageBefore -or $strLockFinal -cne $strLockBefore) {',
     ]),
     phases: Object.freeze([
       'supply: package metadata does not match the reviewed supply digest',
@@ -524,6 +550,14 @@ const MARKDOWN_JOBS = Object.freeze({
       'supply: lint configuration or helper changed during installation',
       'validation: package metadata changed after installation or linting',
       'validation: one or more lint phases failed',
+      // Appended last, deliberately. These are case-fold guards; placing them
+      // ahead of the existing fragments would make an unrelated fixture that
+      // deletes a whole gate report through one of these instead of through the
+      // message it was written for.
+      'if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {',
+      'if ($strLintConfigAfterInstall -cne $strReviewedLintConfigHash -or $strLintHelperAfterInstall -cne $strReviewedLintHelperHash) {',
+      'if ($strPackageAfterInstall -cne $strPackageBefore -or $strLockAfterInstall -cne $strLockBefore) {',
+      'if ($strPackageFinal -cne $strPackageBefore -or $strLockFinal -cne $strLockBefore) {',
     ]),
     phases: Object.freeze([
       'supply: package metadata does not match the reviewed supply digest',
