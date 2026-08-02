@@ -145,6 +145,19 @@ const REVIEWED_PARSER = Object.freeze({
 // rather than guessed: markdownlint.acquire makes five distinct calls and
 // verify.acquire three, and this is their union. Lower-cased because
 // PowerShell member lookup is case-insensitive.
+// The invocation allowlist approves a call because its target is *spelled*
+// $strGitPath, $strCurlPath or $strTarPath. Spelling is not provenance: measured
+// with the digest re-baselined, replacing the constant setup with
+// $strCurlPath = './payload' was accepted, as was dropping -Option Constant, as
+// was leaving the binding intact and rebinding the resolution source itself --
+// a variant not reported, and the reason this is pinned at both ends rather
+// than only at the binding. Each reviewed target is therefore tied to the exact
+// constant binding and the exact absolute paths it is reviewed to resolve from.
+const REVIEWED_COMMAND_BINDINGS = Object.freeze({
+  strGitPath: { source: 'strResolvedGit', paths: ['/usr/bin/git', '/bin/git'] },
+  strCurlPath: { source: 'strResolvedCurl', paths: ['/usr/bin/curl', '/bin/curl'] },
+  strTarPath: { source: 'strResolvedTar', paths: ['/usr/bin/tar', '/bin/tar'] },
+});
 const REVIEWED_ACQUIRE_STATIC_CALLS = new Set([
   'system.io.directory::createdirectory',
   'system.io.directory::enumeratefilesystementries',
@@ -1228,6 +1241,45 @@ function validateAcquireStep(step, label, expected) {
       reject('acquire-policy', `${label} calls an unreviewed static member: ${call[1]}::${call[2]}`);
     }
   }
+  // Provenance for every reviewed command variable this step invokes. Only the
+  // targets it actually uses are required, because verify.acquire invokes Git
+  // and never curl or tar.
+  const countOf = (haystack, needle) => haystack.split(needle).length - 1;
+  for (const [strTarget, objBinding] of Object.entries(REVIEWED_COMMAND_BINDINGS)) {
+    if (!stepCode.includes(`$${strTarget}`)) continue;
+    // Exactly once: a second New-Variable for the same name is how a rebind
+    // would be spelled once plain assignment is refused.
+    if (countOf(stepCode, `New-Variable -Name ${strTarget} -Value $${objBinding.source} -Option Constant`) !== 1) {
+      reject('acquire-policy', `${label} does not bind $${strTarget} exactly once as a reviewed constant`);
+    }
+    if (new RegExp(`\\$${strTarget}\\s*=`, 'u').test(stepCode)) {
+      reject('acquire-policy', `${label} assigns $${strTarget} outside its reviewed constant binding`);
+    }
+    // The name may be mentioned unsigilled exactly once -- by the binding
+    // itself. That refuses a second New-Variable, and Set-Variable and
+    // Remove-Variable with it, whether they are spelled with -Name or
+    // positionally. Measured, PowerShell already refuses to rebind a Constant
+    // even with -Force, so this is not the thing standing between the step and
+    // a hijack; it is asserted anyway because the alternative is resting on a
+    // property of the host, which is the posture this step's own comment
+    // rejects when it explains why the Git path is pinned.
+    if ((stepCode.match(new RegExp(`(?<!\\$)\\b${strTarget}\\b`, 'gu')) ?? []).length !== 1) {
+      reject('acquire-policy', `${label} names ${strTarget} outside its reviewed constant binding`);
+    }
+    // Binding to a constant is worth nothing if what it binds *from* is free,
+    // so the resolution is pinned to its reviewed absolute paths. Asserted
+    // against the raw text because the paths are string literals the projection
+    // blanks by design -- the same split the generator's lookup check makes,
+    // and for the same reason. A comment could satisfy this half alone, so the
+    // assignment is also required to exist exactly once as code.
+    const strResolve = `$${objBinding.source} = @(${objBinding.paths.map((p) => `'${p}'`).join(', ')}) | Where-Object { [System.IO.File]::Exists($_) } | Select-Object -First 1`;
+    if (countOf(step.run, strResolve) !== 1) {
+      reject('acquire-policy', `${label} does not resolve $${objBinding.source} from its reviewed absolute paths`);
+    }
+    if (countOf(stepCode, `$${objBinding.source} =`) !== 1) {
+      reject('acquire-policy', `${label} assigns $${objBinding.source} more than once`);
+    }
+  }
   if (/[^\t\n\x20-\x7e]/u.test(step.run)) {
     reject('acquire-policy', `${label} contains a character outside printable ASCII`);
   }
@@ -1964,6 +2016,13 @@ const FIXTURE_INVENTORY = Object.freeze([
   // either. Only the static-call allowlist stands in the way.
   ['T1-MARKDOWN-059', 'validator overwritten through an unreviewed static writer', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          [System.IO.File]::Copy('./payload', './.github/workflows/Validate-WorkflowPolicy.mjs', $true)\n          $strNodeUrl = 'https://nodejs.org")],
   ['T1-MARKDOWN-060', 'static member reached through a computed name', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          [System.IO.File]::$strMethod('./payload', './.github/workflows/Validate-WorkflowPolicy.mjs')\n          $strNodeUrl = 'https://nodejs.org")],
+  // Provenance for the reviewed command variables. Each of these leaves the
+  // invocation allowlist satisfied -- the tail still calls $strCurlPath -- and
+  // changes what that name is bound to.
+  ['T1-MARKDOWN-061', 'constant binding replaced by a plain assignment', 'markdown', (source) => replaceOnce(source, '          New-Variable -Name strCurlPath -Value $strResolvedCurl -Option Constant', "          $strCurlPath = './payload'")],
+  ['T1-MARKDOWN-062', 'reviewed binding kept while its resolution source is rebound', 'markdown', (source) => replaceOnce(source, "$strResolvedCurl = @('/usr/bin/curl', '/bin/curl')", "$strResolvedCurl = @('./payload')")],
+  ['T1-MARKDOWN-063', 'reviewed target rebound by a second New-Variable', 'markdown', (source) => replaceOnce(source, '          New-Variable -Name strCurlPath -Value $strResolvedCurl -Option Constant', "          New-Variable -Name strCurlPath -Value $strResolvedCurl -Option Constant\n          New-Variable -Name strCurlPath -Value './payload' -Force")],
+  ['T1-MARKDOWN-064', 'reviewed target assigned after its constant binding', 'markdown', (source) => replaceOnce(source, '          New-Variable -Name strCurlPath -Value $strResolvedCurl -Option Constant', "          New-Variable -Name strCurlPath -Value $strResolvedCurl -Option Constant\n          $strCurlPath = './payload'")],
   // Round 40. An absent name under RUNNER_TEMP is absent only until the first
   // lint phase creates it, and the second phase then loads it.
   // Round 41. Two constructs the projection introduced one round earlier could
@@ -2247,6 +2306,10 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-058": "acquire-policy: markdown.acquire constructs an object through New-Object",
   "T1-MARKDOWN-059": "acquire-policy: markdown.acquire calls an unreviewed static member: System.IO.File::Copy",
   "T1-MARKDOWN-060": "acquire-policy: markdown.acquire calls a static member through a computed name",
+  "T1-MARKDOWN-061": "acquire-policy: markdown.acquire does not bind $strCurlPath exactly once as a reviewed constant",
+  "T1-MARKDOWN-062": "acquire-policy: markdown.acquire does not resolve $strResolvedCurl from its reviewed absolute paths",
+  "T1-MARKDOWN-063": "acquire-policy: markdown.acquire names strCurlPath outside its reviewed constant binding",
+  "T1-MARKDOWN-064": "acquire-policy: markdown.acquire assigns $strCurlPath outside its reviewed constant binding",
 });
 
 function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource, generatorSource) {
