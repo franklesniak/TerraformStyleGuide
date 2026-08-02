@@ -152,7 +152,7 @@ const NETWORK_CLIENT = /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|i
 // Enumerating the indirect writers (Set-Variable, New-Variable, the Variable:
 // provider, [ref] handles) is the same losing shape, so the whole reviewed
 // script is pinned instead: any edit at all changes this digest.
-const REVIEWED_VALIDATION_STEP_DIGEST = 'e47a500406e3bf06cab5750dd3346560a46c627844809cd389a20abead2d7496';
+const REVIEWED_VALIDATION_STEP_DIGEST = 'a061f2929c789b1e4f5103c365c370b38aaf3bab523691c99d852256f1c2d585';
 
 // The credential-cleanup step's assertions all test for the presence of a
 // sequence, and presence is not execution: an inserted early exit satisfies
@@ -1259,7 +1259,8 @@ export function validateMarkdownPolicy(workflow, source) {
     '$env:npm_config_userconfig =',
     '$env:npm_config_globalconfig =',
     "$env:npm_config_userconfig = '/dev/null'",
-    "$env:npm_config_globalconfig = '/dev/null'",
+    "$env:npm_config_globalconfig = '/etc/npmrc-absent-by-policy'",
+    'supply: the neutralized global npm configuration is not under a root-owned directory',
     'supply: the neutralized npm configuration source is not empty',
     // What the lint does, not only what it runs. Derived from the reviewed
     // constants so the gate and this baseline cannot drift apart silently.
@@ -1375,7 +1376,13 @@ export function validateMarkdownPolicy(workflow, source) {
   // trap does the same for the whole script from wherever it is written. The
   // verify step bounds catch by position because it has one legitimate catch;
   // this step has none, so both are refused outright.
-  if (/\b(?:catch|trap)\b/iu.test(validation.run)) {
+  //
+  // Read from the projection, not the raw text. On the raw text this rule
+  // forbids explaining itself: a comment recording *why* a catch is refused
+  // here trips it, which is the same prose-versus-code confusion the generator
+  // guard hit. The projection blanks comments and string content, so the ban
+  // now applies to catch and trap as constructs rather than as words.
+  if (/\b(?:catch|trap)\b/iu.test(powerShellCodeProjection(validation.run))) {
     reject('markdown-policy', 'markdown.validate-and-lint can suppress a phase failure');
   }
   if (/[^\t\n\x20-\x7e]/u.test(validation.run)) {

@@ -195,15 +195,33 @@ jobs:
           # unprivileged process can make it read as anything else, so the
           # neutralization holds across both phases instead of only until the
           # check that observed it.
+          # npm refuses to load one file at two config levels -- it exits
+          # before config resolution with "double-loading config" -- so the two
+          # settings cannot both name /dev/null. They use the same property by
+          # two routes: a source this job cannot write.
           $env:npm_config_userconfig = '/dev/null'
-          $env:npm_config_globalconfig = '/dev/null'
-          foreach ($strNeutralConfig in @($env:npm_config_userconfig, $env:npm_config_globalconfig)) {
-              if ($strNeutralConfig -cne '/dev/null') {
-                  throw 'supply: the neutralized npm configuration path is not the empty device'
-              }
-              if (-not [string]::IsNullOrEmpty((Get-Content -Raw -LiteralPath $strNeutralConfig -ErrorAction SilentlyContinue))) {
-                  throw 'supply: the neutralized npm configuration source is not empty'
-              }
+          $env:npm_config_globalconfig = '/etc/npmrc-absent-by-policy'
+          if (-not [string]::IsNullOrEmpty((Get-Content -Raw -LiteralPath $env:npm_config_userconfig -ErrorAction SilentlyContinue))) {
+              throw 'supply: the neutralized npm configuration source is not empty'
+          }
+          if (Test-Path -LiteralPath $env:npm_config_globalconfig) {
+              throw 'supply: the neutralized npm configuration path exists'
+          }
+          # What this does and does not establish, stated rather than implied.
+          # The user config is /dev/null, which the kernel guarantees reads
+          # empty and which no unprivileged process can change -- that half is
+          # unconditional. The global path is merely absent, and its absence is
+          # durable only because /etc is root-owned while the hosted runner
+          # executes as a non-root user, so the lint phases cannot create it.
+          # That is a property of the runner rather than of this file. A probe
+          # proving it would need a suppressing catch, which the policy
+          # validator refuses in this step for good reason, so it is written
+          # down as an assumption instead of dressed up as a proof. The job
+          # split recorded on the pull request removes the dependency entirely
+          # by keeping npm out of the validator's job.
+          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)
+          if ($strGlobalConfigDirectory -cne '/etc') {
+              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'
           }
 
           # The reviewed digests above cover what is installed, not what the lint
