@@ -229,6 +229,37 @@ jobs:
           # Emptiness is asserted rather than the absence of named variables.
           New-Variable -Name arrChannelPaths -Value @($env:GITHUB_ENV, $env:GITHUB_PATH) -Option Constant
 
+          # Every Git probe below reports on state the generator can move. It can
+          # stage and commit its own output, which advances HEAD and empties the
+          # working, cached, and untracked sets; it can set the advisory
+          # assume-unchanged bit, which Git documents as "not working as
+          # expected" for exactly this purpose. Either makes a stale artifact
+          # look clean.
+          #
+          # The properties actually needed are about bytes on disk, so they are
+          # measured on disk. If the committed artifacts already equal generator
+          # output, running the generator changes nothing -- so the assertion is
+          # that the generator is a no-op on the working tree. One comparison
+          # covers both "no drift" and "nothing else was touched", and it asks
+          # Git nothing. A map is compared entry by entry rather than by a
+          # combined digest, so there is no encoding to get wrong.
+          function Get-WorktreeFileDigests {
+              $strRoot = $PWD.Path
+              $strGitPrefix = [System.IO.Path]::Combine($strRoot, '.git') + [System.IO.Path]::DirectorySeparatorChar
+              $objMap = [System.Collections.Generic.SortedDictionary[string, string]]::new([System.StringComparer]::Ordinal)
+              $objSha = [System.Security.Cryptography.SHA256]::Create()
+              try {
+                  foreach ($strFile in [System.IO.Directory]::EnumerateFiles($strRoot, '*', [System.IO.SearchOption]::AllDirectories)) {
+                      if (-not $strFile.StartsWith($strGitPrefix, [System.StringComparison]::Ordinal)) {
+                          $strRelative = $strFile.Substring($strRoot.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar)
+                          $objMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash([System.IO.File]::ReadAllBytes($strFile)))
+                      }
+                  }
+              } finally { $objSha.Dispose() }
+              return $objMap
+          }
+          $objWorktreeBefore = Get-WorktreeFileDigests
+
           # The generator runs in its own process, not in this session. In-session
           # it could shadow a cmdlet with a function, reassign a variable in this
           # scope, or prepend a directory to PATH, and every check below would
@@ -247,6 +278,27 @@ jobs:
               if ([System.IO.FileInfo]::new($strChannel).Length -ne 0) {
                   throw 'runner-state: the generator wrote to a runner step communication file'
               }
+          }
+
+          # The authoritative drift and blast-radius gate. The Git probes that
+          # follow are retained for their path-level diagnostics, but this is the
+          # check that decides, because it reads bytes rather than asking Git.
+          $objWorktreeAfter = Get-WorktreeFileDigests
+          $arrChanged = [System.Collections.Generic.List[string]]::new()
+          foreach ($strPath in $objWorktreeBefore.Keys) {
+              if ((-not $objWorktreeAfter.ContainsKey($strPath)) -or ($objWorktreeAfter[$strPath] -cne $objWorktreeBefore[$strPath])) {
+                  $arrChanged.Add($strPath)
+              }
+          }
+          foreach ($strPath in $objWorktreeAfter.Keys) {
+              if (-not $objWorktreeBefore.ContainsKey($strPath)) { $arrChanged.Add($strPath) }
+          }
+          if ($arrChanged.Count -ne 0) {
+              $arrOutside = @($arrChanged | Where-Object { $arrArtifacts -cnotcontains $_ } | Sort-Object -CaseSensitive)
+              if ($arrOutside.Count -ne 0) {
+                  throw "git-state: the generator changed $($arrOutside.Count) path(s) outside the four generated artifacts"
+              }
+              throw 'generated-artifacts: committed artifacts do not match generator output. Run ./.github/workflows/Generate-StyleGuideArtifacts.ps1 and commit the four regenerated files.'
           }
 
           $objWorking = Invoke-GitRaw @('diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--')

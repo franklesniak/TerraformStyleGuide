@@ -161,7 +161,7 @@ const REVIEWED_VALIDATION_STEP_DIGEST = 'e4157f6e13dc2863b2339ba16b8fbe73a380d6c
 // while skipping the probes entirely, and the upload action then publishes
 // artifacts labelled verified. The same backstop the Markdown step and the
 // former push step carry applies here for the same reason.
-const REVIEWED_VERIFY_STEP_DIGEST = 'f86350c0b002fa9411d56a6f471a52d33adb5992e2c274272295fd98bcfa8487';
+const REVIEWED_VERIFY_STEP_DIGEST = '210b9f19233eeb68fc52703685d1b449f081a49727d7cbc8643b4def7a613ffa';
 
 // The generator is repository-controlled code that runs in a job holding a
 // contents-write token, one step ahead of the push. Its version marker is fixed,
@@ -439,6 +439,22 @@ export function validateBuildPolicy(workflow, source) {
       generateStep.run.indexOf('$strControlSurfaceBefore = Get-GitControlSurfaceDigest') > generateStep.run.indexOf('& pwsh -NoProfile') ||
       generateStep.run.indexOf('git-state: the generator changed repository Git configuration or hooks') < generateStep.run.indexOf('& pwsh -NoProfile')) {
     reject('git-policy', 'build.verify does not bracket the generator with a Git control-surface digest');
+  }
+  // Every Git probe in this step reports on state the generator can move: it
+  // can stage and commit its output, advancing HEAD and emptying the working,
+  // cached, and untracked sets, or set the advisory assume-unchanged bit that
+  // Git documents as not working as expected for this purpose. Either makes a
+  // stale artifact look clean. The deciding gate is therefore a byte-level
+  // before/after comparison of the working tree, which asks Git nothing and
+  // covers both drift and blast radius in one assertion.
+  if (!generateStep.run.includes('function Get-WorktreeFileDigests') ||
+      !generateStep.run.includes('$objWorktreeBefore = Get-WorktreeFileDigests') ||
+      !generateStep.run.includes('$objWorktreeAfter = Get-WorktreeFileDigests') ||
+      !generateStep.run.includes('generated-artifacts: committed artifacts do not match generator output') ||
+      !generateStep.run.includes('outside the four generated artifacts') ||
+      generateStep.run.indexOf('$objWorktreeBefore = Get-WorktreeFileDigests') > generateStep.run.indexOf('& pwsh -NoProfile') ||
+      generateStep.run.indexOf('$objWorktreeAfter = Get-WorktreeFileDigests') < generateStep.run.indexOf('& pwsh -NoProfile')) {
+    reject('side-effect-policy', 'build.verify does not bracket the generator with a worktree byte comparison');
   }
   // The digest is only meaningful if its encoding is injective. Concatenating
   // the components raw is not: renaming pre-commit.sample to pre-commit and
@@ -829,6 +845,8 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-GENERATOR-001', 'generator body rewritten under an unchanged version marker', 'generator', (source) => `${source}\nfunction Invoke-Unreviewed { Add-Content -Path $env:GITHUB_PATH -Value '/tmp/hijack' }\n`],
   ['T1-GENERATOR-002', 'generator truncated', 'generator', (source) => source.slice(0, Math.floor(source.length / 2))],
   ['T1-MARKDOWN-020', 'lint asset digest gate removed', 'markdown', (source) => replaceOnce(source, '          if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {\n              throw \'supply: lint configuration or helper does not match the reviewed digest\'\n          }\n', '')],
+  ['T1-BUILD-084', 'worktree byte comparison removed', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigests\n', '')],
+  ['T1-BUILD-085', 'worktree snapshot taken after the generator', 'build', (source) => replaceOnce(source, '          $objWorktreeBefore = Get-WorktreeFileDigests\n', '')],
   ['T1-BUILD-083', 'control-surface digest framing removed', 'build', (source) => replaceOnce(source, "                      $arrLength = [System.BitConverter]::GetBytes([long]$arrComponent.Length)\n", '')],
   ['T1-BUILD-082', 'runner communication file check absent from verify', 'build', (source) => replaceOnce(source, "          foreach ($strChannel in $arrChannelPaths) {\n              if ([string]::IsNullOrEmpty($strChannel)) { throw 'runner-state: a step communication file path is unset' }\n              if ([System.IO.FileInfo]::new($strChannel).Length -ne 0) {\n                  throw 'runner-state: the generator wrote to a runner step communication file'\n              }\n          }\n", '')],
   ['T1-BUILD-081', 'probes reinherit global Git configuration', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_GLOBAL'] = '/dev/null'\n", '')],
