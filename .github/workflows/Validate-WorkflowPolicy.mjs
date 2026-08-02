@@ -873,7 +873,13 @@ function powerShellCodeProjection(text, options) {
       // PowerShell's parser for an escaped space and an escaped tab, and
       // executably -- the command after the semicolon ran in both.
       const previous = index === 0 ? '' : text[index - 1];
-      const previousWasEscaped = index - 1 === lastEscapedIndex;
+      // index > 0 guard: at index 0 the expression index - 1 is -1, which is
+      // also the initial value of lastEscapedIndex, so a # opening the text
+      // would read as escaped and stay code. Caught by the differential below
+      // rather than by a fixture, because no step currently begins with a
+      // comment; it would have surfaced as a spurious rejection the first time
+      // one did.
+      const previousWasEscaped = index > 0 && index - 1 === lastEscapedIndex;
       if (!previousWasEscaped &&
           (previous === '' || previous === ' ' || previous === '\t' ||
            previous === '\n' || previous === '\r')) {
