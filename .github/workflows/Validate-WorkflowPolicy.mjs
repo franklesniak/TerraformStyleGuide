@@ -441,8 +441,86 @@ function allRunSteps(workflow) {
 // is removed as though it were a comment. That cannot hide an executed
 // construct, because such a line is a comment when the here-string is executed
 // as well.
-function powerShellCodeOnly(text) {
-  return text.split('\n').filter((line) => !/^\s*#/u.test(line)).join('\n');
+// One state machine, one idea of what "code" means.
+//
+// This file previously carried two. powerShellBraceDepthAt tracked comments,
+// quoted spans and backtick escapes properly; powerShellCodeOnly dropped whole
+// comment lines and nothing else. Two ideas of the same thing is how a gap
+// survives review: the line filter was found one construct short in three
+// consecutive rounds, and each fix taught it about one more spelling rather
+// than about strings. Patching it a fourth time would repeat the mistake this
+// pull request has made more than any other -- fixing the instance instead of
+// the class -- so it is deleted and every consumer reads this projection.
+//
+// The projection preserves length exactly, so every offset, line number and
+// brace position in the original text remains valid in it. Comment characters
+// and string *contents* become spaces; the quote delimiters survive, so a
+// scanner can still see that a string was there and how long it was. A
+// backtick and the character it escapes both become spaces, which is what
+// stops `{ from counting as a brace.
+//
+// A ban expressed over this projection cannot be satisfied by text in a
+// comment, and cannot be evaded by hiding a construct in a string -- because a
+// construct sitting in a string is inert until something executes it, and the
+// only ways to execute a string are constrained separately.
+//
+// The one thing callers must remember: a rule that needs to read string
+// *content* -- a required throw message, a reviewed digest literal -- must read
+// the raw text, not this. Those are presence assertions, not bans, and the
+// dangerous direction for them is the opposite one.
+function powerShellCodeProjection(text) {
+  const characters = text.split('');
+  const blank = (from, to) => {
+    for (let index = Math.max(from, 0); index < Math.min(to, characters.length); index += 1) {
+      if (characters[index] !== '\n') characters[index] = ' ';
+    }
+  };
+  let index = 0;
+  while (index < text.length) {
+    const character = text[index];
+    // Checked first, because a backtick escapes the comment and quote
+    // introducers too. Reproduced before it was fixed: a bare "`{" in statement
+    // position parses as a command named { and fails, but in argument position
+    //
+    //   Write-Host `{
+    //   return
+    //   Write-Host `}
+    //
+    // prints a literal brace and then returns from the script. A scanner that
+    // counted those braces put that return at depth one and let it through.
+    //
+    // Inside a single-quoted string the backtick is not an escape, which is why
+    // this sits outside the quote handling: the quote branch consumes those
+    // spans whole before this can see them.
+    if (character === '`') { blank(index, index + 2); index += 2; continue; }
+    if (character === '#') {
+      const start = index;
+      while (index < text.length && text[index] !== '\n') index += 1;
+      blank(start, index);
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      const start = index;
+      index += 1;
+      while (index < text.length) {
+        if (character === '"' && text[index] === '`') { index += 2; continue; }
+        if (text[index] === character) {
+          if (text[index + 1] === character) { index += 2; continue; }
+          index += 1;
+          break;
+        }
+        index += 1;
+      }
+      // Both delimiters are kept; only the content between them is blanked. An
+      // unterminated string blanks to the end, which is the fail-closed
+      // direction -- and every governed step is parsed by the PowerShell parser
+      // in CI, so an unterminated string cannot reach here in a passing build.
+      blank(start + 1, index - 1);
+      continue;
+    }
+    index += 1;
+  }
+  return characters.join('');
 }
 
 // For a governed step to report success while skipping a required phase, its
@@ -470,59 +548,18 @@ function powerShellCodeOnly(text) {
 const PROCESS_TERMINATION = /\[\s*(?:System\.)?Environment\s*\]\s*::\s*(?:Exit|FailFast)|\bSetShouldExit\b/iu;
 
 function powerShellBraceDepthAt(text, offset) {
+  const code = powerShellCodeProjection(text);
+  if (offset < 0 || offset > code.length) return null;
+  // A position the projection blanked is inside a comment or a quoted span, so
+  // it has no statement depth. Comparing against the original distinguishes
+  // "blanked" from "was already a space".
+  if (offset < code.length && code[offset] !== text[offset]) return null;
   let depth = 0;
-  let index = 0;
-  while (index < text.length) {
-    if (index === offset) return depth;
-    const character = text[index];
-    // Outside a quoted span the backtick is PowerShell's escape character, so
-    // the character after it is a literal rather than syntax. This is checked
-    // before the comment and quote branches because a backtick escapes those
-    // introducers too.
-    //
-    // Reproduced before fixing, because the obvious spelling does not work: a
-    // bare "`{" in statement position is parsed as a command named { and fails.
-    // In argument position it does work --
-    //
-    //   Write-Host `{
-    //   return
-    //   Write-Host `}
-    //
-    // -- prints a literal brace and then returns from the script. A scanner
-    // that counted those two braces placed that return at depth one and let it
-    // through, and the balanced pair left the generator assertion at depth zero
-    // so nothing else objected either.
-    //
-    // Inside a single-quoted string the backtick is not an escape, which is why
-    // this sits outside the quote handling rather than inside it: the quote
-    // branch consumes those spans whole before this can see them.
-    if (character === '`') { index += 2; continue; }
-    if (character === '#') {
-      const start = index;
-      while (index < text.length && text[index] !== '\n') index += 1;
-      if (offset > start && offset < index) return null;
-      continue;
-    }
-    if (character === "'" || character === '"') {
-      const start = index;
-      index += 1;
-      while (index < text.length) {
-        if (character === '"' && text[index] === '`') { index += 2; continue; }
-        if (text[index] === character) {
-          if (text[index + 1] === character) { index += 2; continue; }
-          index += 1;
-          break;
-        }
-        index += 1;
-      }
-      if (offset > start && offset < index) return null;
-      continue;
-    }
-    if (character === '{') depth += 1;
-    else if (character === '}') depth -= 1;
-    index += 1;
+  for (let index = 0; index < offset; index += 1) {
+    if (code[index] === '{') depth += 1;
+    else if (code[index] === '}') depth -= 1;
   }
-  return offset === text.length ? depth : null;
+  return depth;
 }
 
 export function validateBuildPolicy(workflow, source) {
@@ -592,7 +629,7 @@ export function validateBuildPolicy(workflow, source) {
     // Code, not prose. The rationale for pinning these executables to fixed
     // paths necessarily names curl and wget, and a rule that cannot tell a
     // comment from a call would forbid the comment explaining it.
-    if (NETWORK_CLIENT.test(powerShellCodeOnly(run))) {
+    if (NETWORK_CLIENT.test(powerShellCodeProjection(run))) {
       reject('network-policy', `${jobId}.${id} adds a network client`);
     }
     // Two checks, most specific first, over the whole serialized step rather
@@ -999,7 +1036,7 @@ function validateAcquireStep(step, label, expected) {
   // a trailing `.` argument do not. So the dot branch is anchored the same way
   // the control-flow bans are: line start, or directly after ; { or |, with
   // the target on the same line.
-  const stepCode = powerShellCodeOnly(step.run);
+  const stepCode = powerShellCodeProjection(step.run);
   const arrReviewedTargets = ['$strGitPath', '$strCurlPath', '$strTarPath'];
   for (const call of stepCode.matchAll(/&\s*(\S+)/gu)) {
     if (!arrReviewedTargets.includes(call[1])) {
@@ -1292,7 +1329,7 @@ export function validateMarkdownPolicy(workflow, source) {
   // asserted above, so what it may fetch is fixed and what it accepts back is
   // fixed. It also runs before any repository code, so nothing it could be
   // steered by has executed yet.
-  if (NETWORK_CLIENT.test(powerShellCodeOnly(validation.run))) {
+  if (NETWORK_CLIENT.test(powerShellCodeProjection(validation.run))) {
     reject('markdown-policy', 'markdown.validate-and-lint adds a network client');
   }
   // The credential scan and the expression ban were added to build.yml's script
@@ -2182,15 +2219,26 @@ export function validateGeneratorPolicy(source) {
   // workflow policy already refuses Get-Command in the step that invokes this
   // script; named here so a re-stamp of the digest below cannot quietly
   // reintroduce the unqualified form.
-  // Comment lines are stripped first: the rationale above this check in the
-  // generator names the unqualified form in prose, and a rule that cannot tell
-  // prose from code would forbid explaining itself.
-  const generatorCode = powerShellCodeOnly(source);
-  // Checked against code, not raw source. Against raw source a comment
-  // containing this phrase satisfies the requirement, which would let the
-  // positive half of the guard be met by prose while the generator resolved
-  // git some other way entirely.
-  if (!generatorCode.includes('Microsoft.PowerShell.Core\\Get-Command -Name \'git\'')) {
+  // Projected first: the rationale above this check in the generator names the
+  // unqualified form in prose, and a rule that cannot tell prose from code
+  // would forbid explaining itself.
+  const generatorCode = powerShellCodeProjection(source);
+  // Two halves, deliberately read from two different views.
+  //
+  // The invocation must exist in *code*, so a comment quoting this phrase
+  // cannot satisfy it -- that was the reachable gap when the whole check ran
+  // against raw source. Only the module-qualified name is matched here, not the
+  // -Name argument, because the projection blanks string content by design and
+  // 'git' is a string.
+  //
+  // The argument is therefore asserted against the raw text, which is the right
+  // view for a presence check: the dangerous direction for "this must appear"
+  // is a false negative, and raw text cannot produce one. A comment can satisfy
+  // this half alone, which is exactly why it is not alone.
+  if (!generatorCode.includes('Microsoft.PowerShell.Core\\Get-Command')) {
+    reject('supply-policy', 'the generator does not resolve Git through a module-qualified lookup');
+  }
+  if (!source.includes('Microsoft.PowerShell.Core\\Get-Command -Name \'git\'')) {
     reject('supply-policy', 'the generator does not resolve Git through a module-qualified lookup');
   }
   if (/(?<!Microsoft\.PowerShell\.Core\\)Get-Command/u.test(generatorCode)) {
