@@ -88,6 +88,17 @@ jobs:
               $objStartInfo.UseShellExecute = $false
               $objStartInfo.RedirectStandardOutput = $true
               $objStartInfo.RedirectStandardError = $true
+              # Git loads system, global, and repository-local configuration on
+              # every invocation, and settings such as core.fsmonitor name a
+              # program Git runs to decide which paths changed. The digest taken
+              # across the generator covers the repository-local file only, so
+              # the other two locations are removed rather than inspected: a
+              # generator that writes core.fsmonitor to ~/.gitconfig would
+              # otherwise steer every probe below while .git/config stayed
+              # byte-identical. With local digested and these two neutralised,
+              # all three documented configuration sources are accounted for.
+              $objStartInfo.Environment['GIT_CONFIG_GLOBAL'] = '/dev/null'
+              $objStartInfo.Environment['GIT_CONFIG_NOSYSTEM'] = '1'
               foreach ($strArgument in $Arguments) {
                   [void]$objStartInfo.ArgumentList.Add($strArgument)
               }
