@@ -156,6 +156,39 @@ jobs:
           if ([string]::IsNullOrEmpty($strResolvedGit)) { throw 'native-tool: Git application was not resolved' }
           New-Variable -Name strGitPath -Value $strResolvedGit -Option Constant
 
+          # Pinning the executable does not pin what it will do. Git loads
+          # repository-local configuration on every invocation regardless of
+          # which binary runs, and core.fsmonitor names a program Git executes
+          # to decide which paths changed -- a hostile value makes the probes
+          # below report a clean tree over modified files. Hooks are the same
+          # shape of problem. Rather than enumerate the dangerous keys, the
+          # repository's own control surface is digested and required to be
+          # unchanged: the generator has no legitimate reason to touch .git.
+          function Get-GitControlSurfaceDigest {
+              $strGitDirectory = [System.IO.Path]::Combine($PWD.Path, '.git')
+              if (-not [System.IO.Directory]::Exists($strGitDirectory)) { throw 'git-state: .git is not a directory' }
+              $objSha = [System.Security.Cryptography.SHA256]::Create()
+              try {
+                  $objBuffer = [System.IO.MemoryStream]::new()
+                  $strConfigPath = [System.IO.Path]::Combine($strGitDirectory, 'config')
+                  if ([System.IO.File]::Exists($strConfigPath)) {
+                      $arrConfig = [System.IO.File]::ReadAllBytes($strConfigPath)
+                      $objBuffer.Write($arrConfig, 0, $arrConfig.Length)
+                  }
+                  $strHooksDirectory = [System.IO.Path]::Combine($strGitDirectory, 'hooks')
+                  if ([System.IO.Directory]::Exists($strHooksDirectory)) {
+                      foreach ($strHook in ([System.IO.Directory]::GetFiles($strHooksDirectory) | Sort-Object -CaseSensitive)) {
+                          $arrName = [System.Text.Encoding]::UTF8.GetBytes([System.IO.Path]::GetFileName($strHook))
+                          $objBuffer.Write($arrName, 0, $arrName.Length)
+                          $arrHook = [System.IO.File]::ReadAllBytes($strHook)
+                          $objBuffer.Write($arrHook, 0, $arrHook.Length)
+                      }
+                  }
+                  return [Convert]::ToBase64String($objSha.ComputeHash($objBuffer.ToArray()))
+              } finally { $objSha.Dispose() }
+          }
+          $strControlSurfaceBefore = Get-GitControlSurfaceDigest
+
           # The generator runs in its own process, not in this session. In-session
           # it could shadow a cmdlet with a function, reassign a variable in this
           # scope, or prepend a directory to PATH, and every check below would
@@ -164,6 +197,10 @@ jobs:
           # session's functions, variables, or environment.
           & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1
           if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }
+
+          if ((Get-GitControlSurfaceDigest) -cne $strControlSurfaceBefore) {
+              throw 'git-state: the generator changed repository Git configuration or hooks'
+          }
 
           $objWorking = Invoke-GitRaw @('diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--')
           $objStaged = Invoke-GitRaw @('diff', '--cached', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--')

@@ -155,6 +155,14 @@ const NETWORK_CLIENT = /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|i
 // script is pinned instead: any edit at all changes this digest.
 const REVIEWED_VALIDATION_STEP_DIGEST = 'e4157f6e13dc2863b2339ba16b8fbe73a380d6c2edb0f418c6604aef66aa1c01';
 
+// The verify step runs repository-controlled code and then draws a conclusion
+// from Git probes. Its required fragments and their ordering are asserted
+// individually below, but an inserted early exit satisfies every one of them
+// while skipping the probes entirely, and the upload action then publishes
+// artifacts labelled verified. The same backstop the Markdown step and the
+// former push step carry applies here for the same reason.
+const REVIEWED_VERIFY_STEP_DIGEST = '4a078b7d31993f4ffae74000680a0e3061be4a59bedebdade70b89d52f462351';
+
 // The generator is repository-controlled code that runs in a job holding a
 // contents-write token, one step ahead of the push. Its version marker is fixed,
 // but a version marker constrains a string, not behaviour: the body can be
@@ -419,6 +427,30 @@ export function validateBuildPolicy(workflow, source) {
   }
   if (generateStep.run.indexOf('New-Variable -Name strGitPath') > generateStep.run.indexOf('& pwsh -NoProfile')) {
     reject('git-policy', 'build.verify resolves Git after the generator runs');
+  }
+  // Pinning the executable does not pin what Git will do: repository-local
+  // configuration is loaded on every invocation, and core.fsmonitor names a
+  // program Git runs to decide which paths changed. A hostile value makes every
+  // probe below report a clean tree over modified files. The repository's own
+  // configuration and hook surface is therefore digested across the generator.
+  if (!generateStep.run.includes('function Get-GitControlSurfaceDigest') ||
+      !generateStep.run.includes('$strControlSurfaceBefore = Get-GitControlSurfaceDigest') ||
+      !generateStep.run.includes('git-state: the generator changed repository Git configuration or hooks') ||
+      generateStep.run.indexOf('$strControlSurfaceBefore = Get-GitControlSurfaceDigest') > generateStep.run.indexOf('& pwsh -NoProfile') ||
+      generateStep.run.indexOf('git-state: the generator changed repository Git configuration or hooks') < generateStep.run.indexOf('& pwsh -NoProfile')) {
+    reject('git-policy', 'build.verify does not bracket the generator with a Git control-surface digest');
+  }
+  // An inserted early exit leaves every required fragment and ordering check
+  // intact while skipping every probe below it, and the upload action then
+  // publishes artifacts labelled verified that nothing verified. This script
+  // defines functions, so the tokens are matched in statement position only.
+  if (/^[ \t]*(?:exit|break|continue)\b|[;{][ \t]*(?:exit|break|continue)\b/imu.test(generateStep.run)) {
+    reject('side-effect-policy', 'build.verify adds control flow that can bypass a required probe');
+  }
+  // Closing backstop, mirroring the Markdown validation step. The assertions
+  // above name what changed; this pins everything they do not model.
+  if (createHash('sha256').update(generateStep.run, 'utf8').digest('hex') !== REVIEWED_VERIFY_STEP_DIGEST) {
+    reject('side-effect-policy', 'build.verify script does not match its reviewed digest');
   }
   // Redirected stdout and stderr must be drained concurrently. Reading either to
   // completion before the other deadlocks once the child fills the unread pipe,
@@ -757,6 +789,8 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-GENERATOR-001', 'generator body rewritten under an unchanged version marker', 'generator', (source) => `${source}\nfunction Invoke-Unreviewed { Add-Content -Path $env:GITHUB_PATH -Value '/tmp/hijack' }\n`],
   ['T1-GENERATOR-002', 'generator truncated', 'generator', (source) => source.slice(0, Math.floor(source.length / 2))],
   ['T1-MARKDOWN-020', 'lint asset digest gate removed', 'markdown', (source) => replaceOnce(source, '          if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {\n              throw \'supply: lint configuration or helper does not match the reviewed digest\'\n          }\n', '')],
+  ['T1-BUILD-078', 'Git control-surface digest check removed', 'build', (source) => replaceOnce(source, "          if ((Get-GitControlSurfaceDigest) -cne $strControlSurfaceBefore) {\n              throw 'git-state: the generator changed repository Git configuration or hooks'\n          }\n", '')],
+  ['T1-BUILD-079', 'early exit inserted after the generator', 'build', (source) => replaceOnce(source, '          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }\n', '          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }\n          exit 0\n')],
   ['T1-BUILD-073', 'generator returned to in-session invocation', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          & ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n')],
   ['T1-BUILD-074', 'Git resolved through a shadowable command lookup', 'build', (source) => replaceOnce(source, '              $objStartInfo.FileName = $strGitPath\n', '              $objStartInfo.FileName = @(Get-Command git -CommandType Application -ErrorAction Stop)[0].Source\n')],
   ['T1-BUILD-075', 'pinned Git path downgraded to a mutable variable', 'build', (source) => replaceOnce(source, '          New-Variable -Name strGitPath -Value $strResolvedGit -Option Constant\n', '          $strGitPath = $strResolvedGit\n')],
