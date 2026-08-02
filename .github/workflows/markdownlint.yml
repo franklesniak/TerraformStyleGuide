@@ -179,6 +179,24 @@ jobs:
               }
           }
 
+          # The loop above walks project paths, which is where a committed
+          # .npmrc would sit -- but npm also loads a per-user file at
+          # $HOME/.npmrc and a global one, and neither is under the repository
+          # tree. A script-shell setting in either replaces the interpreter for
+          # every npm run, so both lint phases would exit zero with the command
+          # echoed and no linter executed, leaving installation, asset hashes,
+          # the policy validator and all three captured statuses intact.
+          # Enumerating those paths would be another list to be one entry
+          # short of, so npm is told where to read them from instead: both are
+          # pointed at a path that cannot exist, which npm treats as absent.
+          $env:npm_config_userconfig = [System.IO.Path]::Combine($env:RUNNER_TEMP, 'absent-user-npmrc')
+          $env:npm_config_globalconfig = [System.IO.Path]::Combine($env:RUNNER_TEMP, 'absent-global-npmrc')
+          foreach ($strAbsentConfig in @($env:npm_config_userconfig, $env:npm_config_globalconfig)) {
+              if (Test-Path -LiteralPath $strAbsentConfig) {
+                  throw 'supply: the neutralized npm configuration path exists'
+              }
+          }
+
           # The reviewed digests above cover what is installed, not what the lint
           # actually does. Both lint phases execute from the checkout: the rule
           # configuration decides which rules run at all, and the nested-fence
