@@ -139,9 +139,11 @@ const REVIEWED_PARSER = Object.freeze({
 });
 
 // Naming three cmdlets left every other client open, including Invoke-RestMethod
-// and the .NET networking types, in steps that hold a contents-write token. No
-// governed step performs network I/O, so the denylist covers the client surface
-// rather than a sample of it. Deliberately no /g flag: this is reused with test().
+// and the .NET networking types. That gap was written when a step held a
+// contents-write token; no step holds one now, but the reason to close it did
+// not depend on the token -- the governed steps run repository-controlled code
+// and none of them performs network I/O, so the denylist covers the client
+// surface rather than a sample of it. Deliberately no /g flag: reused with test().
 const NETWORK_CLIENT = /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|Start-BitsTransfer|Net\.WebClient|WebClient|HttpClient|WebRequest|TcpClient|UdpClient|HttpListener|Socket)\b|System\.Net\./iu;
 
 
@@ -163,13 +165,13 @@ const REVIEWED_VALIDATION_STEP_DIGEST = 'e4157f6e13dc2863b2339ba16b8fbe73a380d6c
 // former push step carry applies here for the same reason.
 const REVIEWED_VERIFY_STEP_DIGEST = '1b24d25364b95f5a975671ff6042e0d2cf52067a4ee1852acfb680bec7a131e4';
 
-// The generator is repository-controlled code that runs in a job holding a
-// contents-write token, one step ahead of the push. Its version marker is fixed,
-// but a version marker constrains a string, not behaviour: the body can be
-// rewritten completely while the marker stays put. Pinning the bytes makes any
-// change to it a visible policy failure rather than a silent one. This is a
-// review signal, not a gate on the writer — build.yml does not run this
-// validator, so the containment the push depends on is enforced in that step.
+// The generator is repository-controlled code that the verify job executes. Its
+// version marker is fixed, but a version marker constrains a string, not
+// behaviour: the body can be rewritten completely while the marker stays put.
+// Pinning the bytes makes any change to it a visible policy failure rather than
+// a silent one. This is a review signal rather than a runtime gate -- build.yml
+// does not run this validator, so what actually contains the generator at run
+// time is the process boundary and the byte comparison in that step.
 const REVIEWED_GENERATOR_DIGEST = 'bb8ba306acb130f8f7b5fcc75153f3c6bc69735ac5de4faffa6d38055535783f';
 
 // The lint phases execute these two files out of the checkout. The rule
@@ -699,9 +701,10 @@ export function validateMarkdownPolicy(workflow, source) {
     }
   }
 
-  // Closing backstop, mirroring the temporary writer's push step. The assertions
-  // above are kept because they name what changed; this pins everything they do
-  // not model -- an indirect write to a captured status through Set-Variable,
+  // Closing backstop, the same shape as the one on the verify step. The
+  // assertions above are kept because they name what changed; this pins
+  // everything they do not model -- an indirect write to a captured status
+  // through Set-Variable,
   // New-Variable, the Variable: provider, or a [ref] handle, none of which
   // contain the assignment syntax counted above.
   if (createHash('sha256').update(validation.run, 'utf8').digest('hex') !== REVIEWED_VALIDATION_STEP_DIGEST) {
