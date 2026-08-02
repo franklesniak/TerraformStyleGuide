@@ -427,17 +427,29 @@ export function validateBuildPolicy(workflow, source) {
     // github.token was matched against the wrong string, so nothing caught it.
     // Action steps carry token: ${{ github.token }} legitimately and are not
     // scanned here -- allRunSteps collects only steps with a run string.
-    // Every pattern is case-insensitive. Matching secrets. and GITHUB_TOKEN
-    // case-sensitively meant "${{ SeCrEtS.DEPLOY_KEY }}" satisfied none of the
-    // three. Whether GitHub resolves that spelling is not the deciding point
-    // and is not documented either way here; the point is that this check
-    // exists to refuse secret expansions, and a casing it does not recognise is
-    // a hole in that refusal. Broadening costs nothing: no governed script step
-    // legitimately contains either string in any casing, and action steps are
-    // never scanned here because allRunSteps collects only steps with a run.
+    // No governed script step contains a workflow expression at all -- verified
+    // across all three -- so the whole syntax is refused rather than the
+    // spellings that reference a credential through it. Three consecutive
+    // review rounds found this predicate one spelling short: it scanned run
+    // instead of the whole step, then matched case-sensitively, then missed
+    // github['token'] because it only knew the dot form. Each fix added a
+    // spelling and the next round found another, which is the shape this
+    // workflow has had to abandon everywhere else. A step that needs no
+    // expression is not made safer by an ever-longer list of the expressions it
+    // must not contain; it is made safe by containing none.
+    // Named credentials first, so a recognised one is reported as a credential
+    // rather than as a generic expression. These also answer a question the
+    // expression ban cannot: a literal reference such as $env:GITHUB_TOKEN is
+    // not an expression at all. All three are case-insensitive and all three
+    // scan the whole step. Action steps carry token: ${{ github.token }}
+    // legitimately and are never scanned here -- allRunSteps collects only
+    // steps with a run string.
     const serialized = JSON.stringify(step);
     if (/secrets\./iu.test(serialized) || /GITHUB_TOKEN/iu.test(serialized) || /github\.token/iu.test(serialized)) {
       reject('credential-policy', `${jobId}.${id} expands an unapproved credential`);
+    }
+    if (/\$\{\{/u.test(serialized)) {
+      reject('credential-policy', `${jobId}.${id} contains a workflow expression`);
     }
     // No job in this workflow holds contents: write, so there is no approved
     // push, commit, or staging path anywhere in it. These are flat refusals
@@ -592,6 +604,22 @@ export function validateBuildPolicy(workflow, source) {
   if (/^[ \t]*(?:exit|break|continue)\b|[;{][ \t]*(?:exit|break|continue)\b/imu.test(generateStep.run)) {
     reject('side-effect-policy', 'build.verify adds control flow that can bypass a required probe');
   }
+  // return could not join that list: this script defines five functions and
+  // every one of them ends in a return, so refusing the token outright would
+  // refuse the script itself. Indentation cannot separate the two either --
+  // PowerShell does not care where a statement sits, so a top-level return
+  // could simply be indented to look nested.
+  //
+  // Position separates them exactly. Every function is defined before the
+  // generator runs and every legitimate return is inside one, while everything
+  // after the generator is a probe. A return there is a bypass whatever it
+  // looks like, and the region after the generator is precisely the region
+  // that must not be short-circuited.
+  const generatorIndex = generateStep.run.indexOf('& pwsh -NoProfile');
+  const afterGenerator = generateStep.run.slice(generatorIndex);
+  if (generatorIndex < 0 || /\breturn\b/iu.test(afterGenerator)) {
+    reject('side-effect-policy', 'build.verify returns from the script after the generator runs');
+  }
   // Redirected stdout and stderr must be drained concurrently. Reading either to
   // completion before the other deadlocks once the child fills the unread pipe,
   // which hangs the step until the Actions timeout instead of failing.
@@ -626,23 +654,43 @@ function validateCredentialCleanupStep(step, label) {
     reject('credential-policy', `${label} execution contract changed`);
   }
   const requiredSequences = [
+    // The origin pair was covered only by the digest added alongside it, and a
+    // digest is re-baselined by design on every reviewed edit -- so the one
+    // control protecting them was the one guaranteed to be replaced. Both are
+    // named here, ahead of that digest, with isolating fixtures. Cardinality
+    // first: more than one origin URL means the checks below inspect one remote
+    // while Git could use another. Then the shape: the URL must carry no
+    // credential, which is what makes the absent helper and absent extraheader
+    // below sufficient rather than merely consistent.
+    ['exactly one origin URL',
+      '$arrRemoteUrls = @(& git remote get-url --all origin)\n' +
+      'if ($LASTEXITCODE -ne 0 -or $arrRemoteUrls.Count -ne 1) {'],
+    ['a credential-free GitHub HTTPS origin',
+      "if ($arrRemoteUrls[0] -notmatch '^https://github\\.com/[^/@]+/[^/@]+(?:\\.git)?$') {"],
     // Both accepted absent-key statuses below are only reachable when native
     // commands are not mapped onto $ErrorActionPreference.
-    'if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n' +
+    ['native-command error mapping is disabled',
+      'if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n' +
       '    $PSNativeCommandUseErrorActionPreference = $false\n' +
-      '}',
-    '$arrHelpers = @(& git config --local --get-all credential.helper)\n' +
+      '}'],
+    ['no local credential helper',
+      '$arrHelpers = @(& git config --local --get-all credential.helper)\n' +
       '$intHelperExit = $LASTEXITCODE\n' +
       '$global:LASTEXITCODE = 0\n' +
-      'if (($intHelperExit -ne 0 -and $intHelperExit -ne 1) -or $arrHelpers.Count -ne 0)',
-    "$arrAuthorizationKeys = @(& git config --local --name-only --get-regexp '^http\\..*\\.extraheader$')\n" +
+      'if (($intHelperExit -ne 0 -and $intHelperExit -ne 1) -or $arrHelpers.Count -ne 0)'],
+    ['no persisted HTTP authorization',
+      "$arrAuthorizationKeys = @(& git config --local --name-only --get-regexp '^http\\..*\\.extraheader$')\n" +
       '$intAuthorizationExit = $LASTEXITCODE\n' +
       '$global:LASTEXITCODE = 0\n' +
-      'if (($intAuthorizationExit -ne 0 -and $intAuthorizationExit -ne 1) -or $arrAuthorizationKeys.Count -ne 0)',
+      'if (($intAuthorizationExit -ne 0 -and $intAuthorizationExit -ne 1) -or $arrAuthorizationKeys.Count -ne 0)'],
   ];
-  for (const sequence of requiredSequences) {
+  // Named rather than positional. One shared message for every sequence meant a
+  // fixture could only prove that some required sequence was missing, not which
+  // -- and telling those apart is the whole point of stating what a fixture
+  // expects.
+  for (const [requirement, sequence] of requiredSequences) {
     if (!step.run.includes(sequence)) {
-      reject('credential-policy', `${label} no longer normalizes an accepted absent-setting status`);
+      reject('credential-policy', `${label} no longer asserts ${requirement}`);
     }
   }
   const normalizationCount = step.run.match(/^\$global:LASTEXITCODE = 0$/gmu)?.length ?? 0;
@@ -1000,6 +1048,16 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-097', 'token expanded into a permitted but unpinned step key', 'build', (source) => replaceOnce(source, '      - name: Generate and verify committed artifacts\n', '      - name: Generate and verify ${{ github.token }} committed artifacts\n')],
   // Mixed case on purpose: the point is the casing, not the context name.
   ['T1-BUILD-098', 'secrets context expanded in a casing the scan did not match', 'build', (source) => replaceOnce(source, '      - name: Generate and verify committed artifacts\n', '      - name: Generate and verify ${{ SeCrEtS.DEPLOY_KEY }} committed artifacts\n')],
+  // Index syntax reaches the same token as the dot form. Enumerating spellings
+  // is what produced three rounds of findings, so the expression syntax itself
+  // is refused and this fixture proves the bracket form is covered without the
+  // scan having to know about it.
+  ['T1-BUILD-100', 'credential reached through expression index syntax', 'build', (source) => replaceOnce(source, '      - name: Generate and verify committed artifacts\n', "      - name: Generate and verify ${{ github['token'] }} committed artifacts\n")],
+  // A top-level return exits the script exactly as exit would, and every
+  // fragment and ordering assertion still passes.
+  ['T1-BUILD-101', 'top-level return inserted after the generator', 'build', (source) => replaceOnce(source, '          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }\n', '          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }\n          return\n')],
+  ['T1-BUILD-102', 'origin cardinality check removed from credential cleanup', 'build', (source) => replaceOnce(source, '          $arrRemoteUrls = @(& git remote get-url --all origin)\n          if ($LASTEXITCODE -ne 0 -or $arrRemoteUrls.Count -ne 1) {\n', '          $arrRemoteUrls = @(& git remote get-url --all origin)\n          if ($LASTEXITCODE -ne 0) {\n')],
+  ['T1-BUILD-103', 'credential-free origin URL shape no longer required', 'build', (source) => replaceOnce(source, "          if ($arrRemoteUrls[0] -notmatch '^https://github\\.com/[^/@]+/[^/@]+(?:\\.git)?$') {\n", "          if ($arrRemoteUrls[0] -notmatch '^https://') {\n")],
   // Every assertion on the credential step tests for presence, which an early
   // exit leaves untouched. The control-flow rejection is ordered ahead of that
   // step's digest so this fixture exercises it rather than the backstop.
@@ -1130,11 +1188,11 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-033": "policy: build triggers differs from the locked policy",
   "T1-BUILD-034": "action-policy: build.verify.checkout uses the wrong action repository or SHA",
   "T1-BUILD-035": "action-policy: build.verify.checkout uses the wrong action repository or SHA",
-  "T1-BUILD-036": "credential-policy: build.verify.verify-checkout-credentials no longer normalizes an accepted absent-setting status",
-  "T1-BUILD-037": "credential-policy: build.verify.verify-checkout-credentials no longer normalizes an accepted absent-setting status",
+  "T1-BUILD-036": "credential-policy: build.verify.verify-checkout-credentials no longer asserts no local credential helper",
+  "T1-BUILD-037": "credential-policy: build.verify.verify-checkout-credentials no longer asserts no persisted HTTP authorization",
   "T1-BUILD-038": "credential-policy: verify.generate-and-verify expands an unapproved credential",
   "T1-BUILD-040": "schema: build.verify.generate-and-verify has missing or extra keys",
-  "T1-BUILD-041": "credential-policy: build.verify.verify-checkout-credentials no longer normalizes an accepted absent-setting status",
+  "T1-BUILD-041": "credential-policy: build.verify.verify-checkout-credentials no longer asserts native-command error mapping is disabled",
   "T1-BUILD-050": "git-policy: build.verify no longer drains both Git streams concurrently",
   "T1-BUILD-053": "git-policy: build.verify does not pin the Git executable before repository code runs",
   "T1-BUILD-054": "git-policy: build.verify does not pin the Git executable before repository code runs",
@@ -1171,6 +1229,10 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-089": "policy: build.verify step order differs from the locked policy",
   "T1-BUILD-097": "credential-policy: verify.generate-and-verify expands an unapproved credential",
   "T1-BUILD-098": "credential-policy: verify.generate-and-verify expands an unapproved credential",
+  "T1-BUILD-100": "credential-policy: verify.generate-and-verify contains a workflow expression",
+  "T1-BUILD-101": "side-effect-policy: build.verify returns from the script after the generator runs",
+  "T1-BUILD-102": "credential-policy: build.verify.verify-checkout-credentials no longer asserts exactly one origin URL",
+  "T1-BUILD-103": "credential-policy: build.verify.verify-checkout-credentials no longer asserts a credential-free GitHub HTTPS origin",
   "T1-BUILD-099": "credential-policy: build.verify.verify-checkout-credentials adds control flow that can bypass a required assertion",
   "T1-BUILD-094": "side-effect-policy: build.verify worktree walk lost its FIFO guard or its exact .git exclusion",
   "T1-BUILD-095": "side-effect-policy: build.verify worktree walk lost its FIFO guard or its exact .git exclusion",
@@ -1220,6 +1282,7 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
 
 function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource, generatorSource) {
   const ids = new Set();
+  const consumed = new Set();
   for (const [id, description, kind, fixture] of FIXTURE_INVENTORY) {
     if (ids.has(id)) reject('fixture-harness', `duplicate fixture ID ${id}`);
     ids.add(id);
@@ -1264,6 +1327,7 @@ function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSou
       } else throw error;
     }
     if (!rejected) reject('fixture-harness', `${id} (${description}) was not rejected`);
+    consumed.add(id);
     // Rejection alone proves nothing about which assertion did the rejecting. A
     // mutation that trips an earlier, broader check -- a key-set assertion, a
     // closing digest, the anchor rule ahead of the merge-key rule -- is counted
@@ -1277,6 +1341,19 @@ function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSou
     }
     if (!message.includes(expected)) {
       reject('fixture-harness', `${id} (${description}) was rejected by the wrong assertion: ${message}`);
+    }
+  }
+  // The lookup above only runs for fixtures that exist, so an expectation whose
+  // fixture was deleted or renamed is never examined: coverage falls, the count
+  // falls with it, and nothing objects -- the inventory's append-only contract
+  // is a convention rather than something the harness can see. No fixed count
+  // is enforced either, and pinning one would only move the problem, since the
+  // number is meant to grow. Requiring the two sets to agree exactly is what
+  // makes a lost fixture a failure: every expectation must be consumed, so an
+  // orphan is as loud as a fixture with no expectation.
+  for (const id of Object.keys(FIXTURE_EXPECTATIONS)) {
+    if (!consumed.has(id)) {
+      reject('fixture-harness', `expectation ${id} has no fixture; coverage was removed`);
     }
   }
   return ids.size;
