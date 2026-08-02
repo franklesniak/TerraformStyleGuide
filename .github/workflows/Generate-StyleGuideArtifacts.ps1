@@ -16,7 +16,7 @@ This script reads STYLE_GUIDE.md and creates four derived files:
 
 .NOTES
 This script generates Terraform style guide artifacts for this repository.
-Version: 1.0.20260802.1
+Version: 1.0.20260802.2
 #>
 
 $script:strRepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path -Path $PSScriptRoot -ChildPath '../..'))
@@ -195,21 +195,35 @@ function Write-StyleGuideArtifact {
         # run failed at path-validation and created nothing. So absence is now
         # a state this writer handles rather than a precondition it demands.
         #
-        # FileInfo rather than File.Exists or GetAttributes for the test.
-        # GetAttributes throws on an absent path, and File.Exists answers False
-        # for both an absent path and a dangling symlink -- confirmed on this
-        # runner -- which would let a link pointing outside the repository be
-        # treated as "nothing here". FileInfo.Exists is False only for genuine
-        # absence and LinkTarget is non-null for a link whether or not its
-        # target resolves, so the two together separate the three cases without
-        # throwing.
-        $objOriginalInfo = New-Object System.IO.FileInfo($strExpectedPath)
-        $boolDestinationExists = $objOriginalInfo.Exists
-        if ($null -ne $objOriginalInfo.LinkTarget) {
-            throw [System.IO.IOException]::new('A link or reparse point is not permitted.')
+        # Probed with GetAttributes, not FileInfo.LinkTarget. LinkTarget is
+        # .NET 6 and later, while this script declares #Requires -Version 5.1,
+        # and on Windows PowerShell 5.1 the property does not exist. That is
+        # not a crash: this script sets no Set-StrictMode, and PowerShell
+        # answers a missing property with $null rather than throwing --
+        # confirmed on this runner -- so `$null -ne $objOriginalInfo.LinkTarget`
+        # would have evaluated False for every path on 5.1 and skipped the link
+        # rejection entirely. A guard that silently stops guarding on one
+        # edition is worse than one that fails loudly.
+        #
+        # GetAttributes exists on every supported edition and separates the
+        # three cases on its own -- also confirmed here: it throws
+        # FileNotFoundException (or DirectoryNotFoundException, when a parent
+        # is missing) for an absent path, and for a dangling symlink it
+        # *returns* attributes carrying ReparsePoint rather than throwing. So a
+        # link of either kind reaches Assert-StyleGuideOrdinaryPath below and is
+        # refused there, and only genuine absence is treated as absence.
+        $boolDestinationExists = $true
+        try {
+            $null = [System.IO.File]::GetAttributes($strExpectedPath)
+        } catch [System.IO.FileNotFoundException] {
+            $boolDestinationExists = $false
+        } catch [System.IO.DirectoryNotFoundException] {
+            $boolDestinationExists = $false
         }
+        $objOriginalInfo = $null
         if ($boolDestinationExists) {
             Assert-StyleGuideOrdinaryPath -LiteralPath $strExpectedPath -ExpectedType 'File'
+            $objOriginalInfo = New-Object System.IO.FileInfo($strExpectedPath)
         }
         # Unconditional. git ls-files reads the index, not the working tree, so
         # a deleted artifact is still the one exact tracked path -- confirmed:

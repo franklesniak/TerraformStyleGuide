@@ -318,7 +318,7 @@ const MARKDOWN_ACQUIRE = Object.freeze({
 // a silent one. This is a review signal rather than a runtime gate -- build.yml
 // does not run this validator, so what actually contains the generator at run
 // time is the process boundary and the byte comparison in that step.
-const REVIEWED_GENERATOR_DIGEST = '72af6c4d5caded3fb8c52694d3fd32d1aceccc81605feaacb9bd7fecdc7eb3d2';
+const REVIEWED_GENERATOR_DIGEST = 'c0d7ab8aaa0aff3fc5b4adca5da2707b6ce1b68117f31e7a741fb25144ddb308';
 
 // The lint phases execute these two files out of the checkout. The rule
 // configuration decides which rules run at all, and the nested-fence helper is
@@ -497,7 +497,7 @@ const MARKDOWN_JOBS = Object.freeze({
   }),
 });
 
-const EXPECTED_VERSION = '1.0.20260802.1';
+const EXPECTED_VERSION = '1.0.20260802.2';
 const MAXIMUM_YAML_BYTES = 1024 * 1024;
 const MAXIMUM_NODE_COUNT = 10000;
 const MAXIMUM_DEPTH = 64;
