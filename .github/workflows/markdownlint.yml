@@ -10,10 +10,17 @@ permissions:
   contents: read
 
 jobs:
+  # No scopes, for the same reason build.yml's verify job has none. This job
+  # runs repository-controlled code -- lint-nested-markdown.js, the rule
+  # configuration, and every file the linters read -- and both actions it uses
+  # register post steps that execute after that code has run. checkout's is
+  # unconditional and setup-node's runs on success, and both receive this job's
+  # token as an input. A descendant left behind by anything in the lint phases
+  # can write the runner step communication files after every step has ended,
+  # so the token is given no scopes rather than the channel being defended.
   markdownlint:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    permissions: {}
     steps:
       - name: Check out triggering revision
         id: checkout

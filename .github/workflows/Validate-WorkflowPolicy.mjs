@@ -629,7 +629,10 @@ export function validateMarkdownPolicy(workflow, source) {
   const job = workflow.jobs.markdownlint;
   assertKeys(job, ['runs-on', 'permissions', 'steps'], 'markdown.markdownlint');
   if (job['runs-on'] !== 'ubuntu-latest') reject('policy', 'Markdown runner changed');
-  assertEqual(job.permissions, { contents: 'read' }, 'Markdown job permissions');
+  // Same rule as build.verify. This job runs repository-controlled code, and
+  // both of its actions register post steps that execute afterwards holding
+  // this job's token -- checkout's unconditionally, setup-node's on success.
+  assertEqual(job.permissions, {}, 'Markdown job permissions');
   assertEqual(job.steps.map((step) => step?.id), ['checkout', 'setup-node', 'validate-and-lint'], 'Markdown step order');
   assertActionStep(findStep(job, 'checkout', 'markdown.markdownlint'), 'markdown.checkout', ACTIONS.checkout, CHECKOUT_INPUTS);
   assertActionStep(findStep(job, 'setup-node', 'markdown.markdownlint'), 'markdown.setup-node', ACTIONS.setupNode, SETUP_NODE_INPUTS);
@@ -953,6 +956,10 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-076', 'push path added to the read-only workflow', 'build', (source) => replaceOnce(source, "          $objWorking = Invoke-GitRaw @('diff'", "          & git push origin HEAD:refs/heads/main\n          $objWorking = Invoke-GitRaw @('diff'")],
   ['T1-BUILD-077', 'repository mutation added to the read-only workflow', 'build', (source) => replaceOnce(source, "          $objWorking = Invoke-GitRaw @('diff'", "          & git add -A\n          $objWorking = Invoke-GitRaw @('diff'")],
   ['T1-MARKDOWN-021', 'captured lint status reset indirectly through Set-Variable', 'markdown', (source) => replaceOnce(source, '          $intNestedExit = $LASTEXITCODE\n', '          $intNestedExit = $LASTEXITCODE\n          Set-Variable -Name intPolicyExit -Value 0\n')],
+  // The lint job runs repository-controlled code and both of its actions have
+  // post steps that outlive it, so it must hold no scopes for the same reason
+  // build.verify holds none.
+  ['T1-MARKDOWN-022', 'lint job regains a token scope', 'markdown', (source) => replaceOnce(source, '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions: {}\n', '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n')],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
     'lint-nested-markdown.js': '',
