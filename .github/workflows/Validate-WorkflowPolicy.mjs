@@ -163,7 +163,14 @@ const REVIEWED_VALIDATION_STEP_DIGEST = 'e4157f6e13dc2863b2339ba16b8fbe73a380d6c
 // while skipping the probes entirely, and the upload action then publishes
 // artifacts labelled verified. The same backstop the Markdown step and the
 // former push step carry applies here for the same reason.
-const REVIEWED_VERIFY_STEP_DIGEST = '238b85b3f36cc5bc4a4b8a023342617be23c60cdc36060f083541c7b02f6a360';
+// The credential-cleanup step's assertions all test for the presence of a
+// sequence, and presence is not execution: an inserted early exit satisfies
+// every one of them while returning before either credential check runs. This
+// pins the whole script for the same reason the other two substantive steps
+// are pinned.
+const REVIEWED_CREDENTIAL_STEP_DIGEST = 'cec60ee92660f500987f0b14926e85add62b9879c041bc3e87939472fd1471f5';
+
+const REVIEWED_VERIFY_STEP_DIGEST ='238b85b3f36cc5bc4a4b8a023342617be23c60cdc36060f083541c7b02f6a360';
 
 // The generator is repository-controlled code that the verify job executes. Its
 // version marker is fixed, but a version marker constrains a string, not
@@ -420,8 +427,16 @@ export function validateBuildPolicy(workflow, source) {
     // github.token was matched against the wrong string, so nothing caught it.
     // Action steps carry token: ${{ github.token }} legitimately and are not
     // scanned here -- allRunSteps collects only steps with a run string.
+    // Every pattern is case-insensitive. Matching secrets. and GITHUB_TOKEN
+    // case-sensitively meant "${{ SeCrEtS.DEPLOY_KEY }}" satisfied none of the
+    // three. Whether GitHub resolves that spelling is not the deciding point
+    // and is not documented either way here; the point is that this check
+    // exists to refuse secret expansions, and a casing it does not recognise is
+    // a hole in that refusal. Broadening costs nothing: no governed script step
+    // legitimately contains either string in any casing, and action steps are
+    // never scanned here because allRunSteps collects only steps with a run.
     const serialized = JSON.stringify(step);
-    if (/secrets\./u.test(serialized) || /GITHUB_TOKEN/u.test(serialized) || /github\.token/iu.test(serialized)) {
+    if (/secrets\./iu.test(serialized) || /GITHUB_TOKEN/iu.test(serialized) || /github\.token/iu.test(serialized)) {
       reject('credential-policy', `${jobId}.${id} expands an unapproved credential`);
     }
     // No job in this workflow holds contents: write, so there is no approved
@@ -577,17 +592,25 @@ export function validateBuildPolicy(workflow, source) {
   if (/^[ \t]*(?:exit|break|continue)\b|[;{][ \t]*(?:exit|break|continue)\b/imu.test(generateStep.run)) {
     reject('side-effect-policy', 'build.verify adds control flow that can bypass a required probe');
   }
-  // Closing backstop, mirroring the Markdown validation step. The assertions
-  // above name what changed; this pins everything they do not model.
-  if (createHash('sha256').update(generateStep.run, 'utf8').digest('hex') !== REVIEWED_VERIFY_STEP_DIGEST) {
-    reject('side-effect-policy', 'build.verify script does not match its reviewed digest');
-  }
   // Redirected stdout and stderr must be drained concurrently. Reading either to
   // completion before the other deadlocks once the child fills the unread pipe,
   // which hangs the step until the Actions timeout instead of failing.
+  //
+  // This sits before the closing digest deliberately. Any edit to the step
+  // changes the digest, so a digest placed first rejects every mutation and
+  // the fixture for this assertion was passing on the digest's verdict rather
+  // than on this one -- coverage the fixture count claimed and did not have.
+  // Every named assertion must be reachable ahead of the backstop that would
+  // otherwise answer for it.
   if (!generateStep.run.includes('$objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)') ||
       !generateStep.run.includes('$objProcess.StandardError.ReadToEndAsync()')) {
     reject('git-policy', 'build.verify no longer drains both Git streams concurrently');
+  }
+  // Closing backstop, mirroring the Markdown validation step, and last for the
+  // reason above. The assertions before it name what changed; this pins
+  // everything they do not model.
+  if (createHash('sha256').update(generateStep.run, 'utf8').digest('hex') !== REVIEWED_VERIFY_STEP_DIGEST) {
+    reject('side-effect-policy', 'build.verify script does not match its reviewed digest');
   }
 
   // Two checkouts, one per job: verify checks out to run the generator against
@@ -625,6 +648,19 @@ function validateCredentialCleanupStep(step, label) {
   const normalizationCount = step.run.match(/^\$global:LASTEXITCODE = 0$/gmu)?.length ?? 0;
   if (normalizationCount !== 2) {
     reject('credential-policy', `${label} native-status normalization count changed`);
+  }
+  // Every check above asks whether a sequence is present, and presence is not
+  // execution. Prepending exit 0 leaves all of them satisfied while PowerShell
+  // returns before either credential assertion runs, and this step had neither
+  // of the two controls that answer that elsewhere: a control-flow rejection
+  // and a complete-script digest. It has both now, for the same reason the
+  // generate-and-verify step does. This script defines no functions, so the
+  // tokens are matched anywhere rather than in statement position only.
+  if (/\b(?:exit|break|continue)\b/iu.test(step.run)) {
+    reject('credential-policy', `${label} adds control flow that can bypass a required assertion`);
+  }
+  if (createHash('sha256').update(step.run, 'utf8').digest('hex') !== REVIEWED_CREDENTIAL_STEP_DIGEST) {
+    reject('credential-policy', `${label} script does not match its reviewed digest`);
   }
 }
 
@@ -846,8 +882,20 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-YAML-001', 'duplicate key', 'yaml', 'a: 1\na: 2\n'],
   ['T1-YAML-002', 'directive', 'yaml', '%YAML 1.2\n---\na: 1\n'],
   ['T1-YAML-003', 'anchor', 'yaml', 'a: &x 1\n'],
-  ['T1-YAML-004', 'alias', 'yaml', 'a: &x 1\nb: *x\n'],
-  ['T1-YAML-005', 'merge key', 'yaml', 'a: &x { b: 1 }\nc: { <<: *x }\n'],
+  // This one cannot be made anchor-free the way T1-YAML-005 was, and the reason
+  // is worth recording rather than working around: an alias must reference an
+  // anchor, so any document containing one contains the anchor first, and the
+  // anchor rule fires first. The isAlias branch is therefore unreachable while
+  // anchors are refused -- it is there for the case where that rule is ever
+  // relaxed. What this fixture actually proves is that the pair is rejected,
+  // which is true and worth keeping; its expectation below says so honestly
+  // rather than claiming coverage of the alias branch.
+  ['T1-YAML-004', 'alias behind its required anchor', 'yaml', 'a: &x 1\nb: *x\n'],
+  // Anchor-free on purpose. Written as "a: &x { b: 1 }\nc: { <<: *x }" this
+  // fixture was rejected by the anchor check before traversal ever reached the
+  // merge key, so it proved the anchor rule twice and the merge-key rule not at
+  // all. A merge key does not need an anchor to exist; it only usually has one.
+  ['T1-YAML-005', 'merge key', 'yaml', 'c: { <<: { b: 1 } }\n'],
   ['T1-YAML-006', 'explicit tag', 'yaml', 'a: !!str value\n'],
   ['T1-YAML-007', 'multiple documents', 'yaml', 'a: 1\n---\nb: 2\n'],
   ['T1-YAML-008', 'complex key', 'yaml', '? [a, b]\n: value\n'],
@@ -950,6 +998,12 @@ const FIXTURE_INVENTORY = Object.freeze([
   // only check that can reject it. Verified to pass the validator before the
   // scan was widened from run to the serialized step.
   ['T1-BUILD-097', 'token expanded into a permitted but unpinned step key', 'build', (source) => replaceOnce(source, '      - name: Generate and verify committed artifacts\n', '      - name: Generate and verify ${{ github.token }} committed artifacts\n')],
+  // Mixed case on purpose: the point is the casing, not the context name.
+  ['T1-BUILD-098', 'secrets context expanded in a casing the scan did not match', 'build', (source) => replaceOnce(source, '      - name: Generate and verify committed artifacts\n', '      - name: Generate and verify ${{ SeCrEtS.DEPLOY_KEY }} committed artifacts\n')],
+  // Every assertion on the credential step tests for presence, which an early
+  // exit leaves untouched. The control-flow rejection is ordered ahead of that
+  // step's digest so this fixture exercises it rather than the backstop.
+  ['T1-BUILD-099', 'early exit prepended to the credential cleanup step', 'build', (source) => replaceOnce(source, "          $ErrorActionPreference = 'Stop'\n", "          $ErrorActionPreference = 'Stop'\n          exit 0\n")],
   ['T1-BUILD-094', 'worktree walk loses its FIFO guard', 'build', (source) => replaceOnce(source, '                              if ($objFile.Length -eq 0) {', '                              if ($false) {')],
   ['T1-BUILD-095', 'git exclusion widened to a string prefix', 'build', (source) => replaceOnce(source, '                          if (($objAttributes -band [System.IO.FileAttributes]::Directory) -ne 0) {\n                              if ($strEntry -cne $strGitDirectory) { $objPending.Push($strEntry) }', '                          if (($objAttributes -band [System.IO.FileAttributes]::Directory) -ne 0) {\n                              if (-not $strEntry.StartsWith($strGitPrefix)) { $objPending.Push($strEntry) }')],
   ['T1-BUILD-096', 'generator job regains a token scope', 'build', (source) => replaceOnce(source, '  verify:\n    runs-on: ubuntu-latest\n    permissions: {}\n', '  verify:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n')],
@@ -1030,12 +1084,147 @@ const FIXTURE_INVENTORY = Object.freeze([
   }],
 ]);
 
+// What each fixture must be rejected BY, not merely that it was rejected. A
+// mutation that trips a broader check first -- a key-set assertion, a closing
+// digest, the anchor rule ahead of the merge-key rule -- would otherwise be
+// counted as coverage for an assertion that never ran. Every fixture must
+// appear here; an unlisted one is a harness error rather than a silent pass.
+const FIXTURE_EXPECTATIONS = Object.freeze({
+  "T1-YAML-001": "yaml-syntax: T1-YAML-001 contains a parser error or warning",
+  "T1-YAML-002": "yaml-syntax: T1-YAML-002 contains a directive",
+  "T1-YAML-003": "yaml-syntax: anchors are prohibited",
+  "T1-YAML-004": "yaml-syntax: anchors are prohibited",
+  "T1-YAML-005": "yaml-syntax: merge keys are prohibited",
+  "T1-YAML-006": "yaml-syntax: explicit or custom tags are prohibited",
+  "T1-YAML-007": "yaml-syntax: T1-YAML-007 must contain exactly one document",
+  "T1-YAML-008": "yaml-syntax: mapping keys must be unique strings",
+  "T1-YAML-009": "yaml-syntax: non-finite numbers are prohibited",
+  "T1-YAML-010": "yaml-syntax: anchors are prohibited",
+  "T1-YAML-011": "yaml-syntax: explicit or custom tags are prohibited",
+  "T1-YAML-012": "yaml-syntax: explicit or custom tags are prohibited",
+  "T1-YAML-013": "yaml-syntax: anchors are prohibited",
+  "T1-BUILD-001": "action-policy: build.verify.checkout uses the wrong action repository or SHA",
+  "T1-BUILD-002": "action-policy: build.verify.checkout uses the wrong action repository or SHA",
+  "T1-BUILD-003": "action-policy: build.verify.checkout uses the wrong action repository or SHA",
+  "T1-BUILD-004": "policy: external action multiset differs from the locked policy",
+  "T1-BUILD-005": "policy: build.publish step order differs from the locked policy",
+  "T1-BUILD-006": "schema: build.publish.upload-generated has missing or extra keys",
+  "T1-BUILD-007": "action-policy: build.publish.upload-generated uses the wrong action repository or SHA",
+  "T1-BUILD-008": "policy: build.verify.checkout.with differs from the locked policy",
+  "T1-BUILD-009": "policy: build.verify.checkout.with differs from the locked policy",
+  "T1-BUILD-010": "policy: build.verify.checkout.with differs from the locked policy",
+  "T1-BUILD-011": "policy: build workflow permissions differs from the locked policy",
+  "T1-BUILD-012": "policy: build.verify permissions differs from the locked policy",
+  "T1-BUILD-014": "schema: build jobs has missing or extra keys",
+  "T1-BUILD-015": "schema: build jobs has missing or extra keys",
+  "T1-BUILD-016": "schema: build.verify has missing or extra keys",
+  "T1-BUILD-017": "schema: build.verify has missing or extra keys",
+  "T1-BUILD-018": "schema: build.verify has missing or extra keys",
+  "T1-BUILD-024": "schema: build.verify has missing or extra keys",
+  "T1-BUILD-090": "schema: build.publish.upload-generated has missing or extra keys",
+  "T1-BUILD-027": "policy: build.publish.upload-generated.with differs from the locked policy",
+  "T1-BUILD-028": "policy: build.publish.upload-generated.with differs from the locked policy",
+  "T1-BUILD-029": "policy: build.publish step order differs from the locked policy",
+  "T1-BUILD-031": "policy: build.verify.checkout.with differs from the locked policy",
+  "T1-BUILD-032": "policy: build triggers differs from the locked policy",
+  "T1-BUILD-033": "policy: build triggers differs from the locked policy",
+  "T1-BUILD-034": "action-policy: build.verify.checkout uses the wrong action repository or SHA",
+  "T1-BUILD-035": "action-policy: build.verify.checkout uses the wrong action repository or SHA",
+  "T1-BUILD-036": "credential-policy: build.verify.verify-checkout-credentials no longer normalizes an accepted absent-setting status",
+  "T1-BUILD-037": "credential-policy: build.verify.verify-checkout-credentials no longer normalizes an accepted absent-setting status",
+  "T1-BUILD-038": "credential-policy: verify.generate-and-verify expands an unapproved credential",
+  "T1-BUILD-040": "schema: build.verify.generate-and-verify has missing or extra keys",
+  "T1-BUILD-041": "credential-policy: build.verify.verify-checkout-credentials no longer normalizes an accepted absent-setting status",
+  "T1-BUILD-050": "git-policy: build.verify no longer drains both Git streams concurrently",
+  "T1-BUILD-053": "git-policy: build.verify does not pin the Git executable before repository code runs",
+  "T1-BUILD-054": "git-policy: build.verify does not pin the Git executable before repository code runs",
+  "T1-BUILD-061": "git-policy: build.verify resolves Git through a shadowable command lookup",
+  "T1-MARKDOWN-001": "policy: markdown.setup-node.with differs from the locked policy",
+  "T1-MARKDOWN-002": "policy: markdown.setup-node.with differs from the locked policy",
+  "T1-MARKDOWN-003": "policy: markdown.setup-node.with differs from the locked policy",
+  "T1-MARKDOWN-004": "policy: markdown.setup-node.with differs from the locked policy",
+  "T1-MARKDOWN-005": "markdown-policy: required phase is missing: ci --ignore-scripts --no-audit --no-fund",
+  "T1-MARKDOWN-006": "markdown-policy: required phase is missing: ci --ignore-scripts --no-audit --no-fund",
+  "T1-MARKDOWN-007": "markdown-policy: required phases are out of order at: run lint:md\n",
+  "T1-MARKDOWN-008": "markdown-policy: required phase is missing: run lint:md:nested",
+  "T1-MARKDOWN-009": "markdown-policy: required phase is missing: ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml",
+  "T1-MARKDOWN-010": "schema: markdown.validate-and-lint has missing or extra keys",
+  "T1-MARKDOWN-011": "markdown-policy: required phase is missing: E206CDB3562F0397E8EED7FB2C2586269A1F5335CDFF2906DA8D5E070426321E",
+  "T1-MARKDOWN-012": "markdown-policy: required phase is missing: 277F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062",
+  "T1-MARKDOWN-013": "markdown-policy: required phase is missing: if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash)",
+  "T1-BUILD-042": "credential-policy: verify.generate-and-verify expands an unapproved credential",
+  "T1-MARKDOWN-015": "markdown-policy: validation script adds control flow that can bypass a required phase",
+  "T1-MARKDOWN-016": "markdown-policy: required phases are out of order at: run lint:md\n",
+  "T1-MARKDOWN-014": "markdown-policy: required phase is missing: if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {",
+  "T1-MARKDOWN-017": "markdown-policy: captured phase status intPolicyExit is not assigned exactly once",
+  "T1-DEPENDABOT-001": "policy: Dependabot configuration differs from the locked policy",
+  "T1-DEPENDABOT-002": "policy: Dependabot configuration differs from the locked policy",
+  "T1-DEPENDABOT-003": "policy: Dependabot configuration differs from the locked policy",
+  "T1-MARKDOWN-018": "markdown-policy: required phase is missing: @('.npmrc', '../.npmrc', '../../.npmrc')",
+  "T1-MARKDOWN-019": "markdown-policy: required phases are out of order at: supply: lint configuration or helper does not match the reviewed digest",
+  "T1-GENERATOR-001": "supply-policy: generator does not match its reviewed digest",
+  "T1-GENERATOR-002": "supply-policy: generator does not match its reviewed digest",
+  "T1-MARKDOWN-020": "markdown-policy: required phase is missing: supply: lint configuration or helper does not match the reviewed digest",
+  "T1-BUILD-086": "policy: build.verify step order differs from the locked policy",
+  "T1-BUILD-087": "policy: build.publish step order differs from the locked policy",
+  "T1-BUILD-088": "schema: build.publish has missing or extra keys",
+  "T1-BUILD-089": "policy: build.verify step order differs from the locked policy",
+  "T1-BUILD-097": "credential-policy: verify.generate-and-verify expands an unapproved credential",
+  "T1-BUILD-098": "credential-policy: verify.generate-and-verify expands an unapproved credential",
+  "T1-BUILD-099": "credential-policy: build.verify.verify-checkout-credentials adds control flow that can bypass a required assertion",
+  "T1-BUILD-094": "side-effect-policy: build.verify worktree walk lost its FIFO guard or its exact .git exclusion",
+  "T1-BUILD-095": "side-effect-policy: build.verify worktree walk lost its FIFO guard or its exact .git exclusion",
+  "T1-BUILD-096": "policy: build.verify permissions differs from the locked policy",
+  "T1-BUILD-091": "side-effect-policy: build.verify worktree walk can follow a link or read a file whole",
+  "T1-BUILD-092": "side-effect-policy: build.verify worktree walk can follow a link or read a file whole",
+  "T1-BUILD-093": "side-effect-policy: build.verify worktree walk can follow a link or read a file whole",
+  "T1-BUILD-084": "side-effect-policy: build.verify does not bracket the generator with a worktree byte comparison",
+  "T1-BUILD-085": "side-effect-policy: build.verify does not bracket the generator with a worktree byte comparison",
+  "T1-BUILD-083": "git-policy: the Git control-surface digest does not frame its components unambiguously",
+  "T1-BUILD-082": "side-effect-policy: build.verify does not assert the runner step communication files are empty",
+  "T1-BUILD-081": "git-policy: build.verify probes inherit system or global Git configuration",
+  "T1-BUILD-080": "side-effect-policy: build.verify tolerates generated-artifact drift",
+  "T1-BUILD-078": "git-policy: build.verify does not bracket the generator with a Git control-surface digest",
+  "T1-BUILD-079": "side-effect-policy: build.verify adds control flow that can bypass a required probe",
+  "T1-BUILD-073": "side-effect-policy: the generator no longer runs across a process boundary",
+  "T1-BUILD-074": "git-policy: build.verify does not pin the Git executable before repository code runs",
+  "T1-BUILD-075": "git-policy: build.verify does not pin the Git executable before repository code runs",
+  "T1-BUILD-076": "side-effect-policy: verify.generate-and-verify adds a push path to a read-only workflow",
+  "T1-BUILD-077": "side-effect-policy: verify.generate-and-verify adds a repository mutation to a read-only workflow",
+  "T1-MARKDOWN-021": "markdown-policy: Markdown validation script does not match its reviewed digest",
+  "T1-MARKDOWN-022": "policy: Markdown job permissions differs from the locked policy",
+  "T1-LINTASSET-001": "supply-policy: .markdownlint.jsonc does not match its reviewed digest",
+  "T1-LINTASSET-002": "supply-policy: lint-nested-markdown.js does not match its reviewed digest",
+  "T1-NPMRC-001": "supply-policy: repository-controlled npm configuration is present: .github/workflows/.npmrc",
+  "T1-NPMRC-002": "supply-policy: repository-controlled npm configuration is present: .npmrc",
+  "T1-VERSION-001": "invalid-version: exactly one marker must occur in script help before the first function",
+  "T1-VERSION-002": "invalid-version: exactly one marker must occur in script help before the first function",
+  "T1-VERSION-003": "invalid-version: exactly one marker must occur in script help before the first function",
+  "T1-VERSION-004": "invalid-version: a component has a leading zero",
+  "T1-VERSION-005": "invalid-version: a component is out of range",
+  "T1-VERSION-006": "invalid-version: build is not a real Gregorian date",
+  "T1-VERSION-007": "unexpected-version: valid generator version does not match the trusted reviewed version",
+  "T1-TEXT-001": "text-policy: T1-TEXT-001 is not well-formed UTF-8",
+  "T1-TEXT-002": "text-policy: T1-TEXT-002 is not well-formed UTF-8",
+  "T1-TEXT-003": "text-policy: T1-TEXT-003 is not well-formed UTF-8",
+  "T1-TEXT-004": "text-policy: T1-TEXT-004 is not well-formed UTF-8",
+  "T1-TEXT-005": "text-policy: T1-TEXT-005 has a UTF-8 BOM",
+  "T1-TEXT-006": "text-policy: T1-TEXT-006 contains a carriage return",
+  "T1-PACKAGE-001": "policy: package.json scripts differs from the locked policy",
+  "T1-PACKAGE-002": "policy: package.json devDependencies differs from the locked policy",
+  "T1-PACKAGE-003": "policy: package.json scripts differs from the locked policy",
+  "T1-PACKAGE-004": "supply-policy: package.json does not match its reviewed digest",
+  "T1-PACKAGE-005": "supply-policy: resolved yaml parser integrity is not the reviewed value",
+  "T1-PACKAGE-006": "policy: lockfile root devDependencies differs from the locked policy",
+});
+
 function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource, generatorSource) {
   const ids = new Set();
   for (const [id, description, kind, fixture] of FIXTURE_INVENTORY) {
     if (ids.has(id)) reject('fixture-harness', `duplicate fixture ID ${id}`);
     ids.add(id);
     let rejected = false;
+    let message = '';
     try {
       if (kind === 'yaml') {
         parseStrictYaml(fixture, id);
@@ -1069,10 +1258,26 @@ function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSou
       // replaceOnce anchor gone stale after a refactor. Counting that as a
       // rejection would report full coverage for a fixture that tested nothing
       // and let the assertion it guards regress unnoticed, so it propagates.
-      if (error instanceof PolicyError && error.category !== 'fixture-harness') rejected = true;
-      else throw error;
+      if (error instanceof PolicyError && error.category !== 'fixture-harness') {
+        rejected = true;
+        message = error.message;
+      } else throw error;
     }
     if (!rejected) reject('fixture-harness', `${id} (${description}) was not rejected`);
+    // Rejection alone proves nothing about which assertion did the rejecting. A
+    // mutation that trips an earlier, broader check -- a key-set assertion, a
+    // closing digest, the anchor rule ahead of the merge-key rule -- is counted
+    // as coverage for an assertion that never ran, and the count then overstates
+    // what the suite defends. Three fixtures were in that state when this was
+    // added. Naming the expected rejection makes the claim checkable, and an
+    // unlisted fixture is an error rather than a silent pass.
+    const expected = FIXTURE_EXPECTATIONS[id];
+    if (typeof expected !== 'string') {
+      reject('fixture-harness', `${id} (${description}) declares no expected rejection`);
+    }
+    if (!message.includes(expected)) {
+      reject('fixture-harness', `${id} (${description}) was rejected by the wrong assertion: ${message}`);
+    }
   }
   return ids.size;
 }
