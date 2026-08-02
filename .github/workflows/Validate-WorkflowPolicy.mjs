@@ -318,6 +318,30 @@ const MARKDOWN_ACQUIRE = Object.freeze({
 // a silent one. This is a review signal rather than a runtime gate -- build.yml
 // does not run this validator, so what actually contains the generator at run
 // time is the process boundary and the byte comparison in that step.
+// The same treatment for build.verify, found by running the round-51 battery
+// against it rather than waiting for a report. Its drift check was already
+// pinned as a whole condition and survived; these four neighbours were not, and
+// each was measured accepted with the verify step's digest re-baselined:
+//
+//   if ($false -and $arrOutside.Count -ne 0)                 -- the generator may
+//     then change any path in the repository and the step still passes
+//   $arrArtifacts -inotcontains $_                           -- artifact
+//     membership case-folded, so a path differing only in case counts as one of
+//     the four on a case-sensitive filesystem
+//   Sort-Object without -CaseSensitive
+//   if ($false -and $objDiff.ExitCode -ne 0 -and ... -ne 1)  -- the worst of the
+//     four: with the sanity check gone, a git diff that *fails* has an exit code
+//     that is neither 0 nor 1, falls past the drift branch, and reads as "no
+//     drift"
+//
+// Whole conditions, for the reason recorded on the generator list below.
+const REVIEWED_VERIFY_GUARDS = Object.freeze([
+  ['if ($arrOutside.Count -ne 0) {', 1],
+  ['$arrArtifacts -cnotcontains $_', 1],
+  ['Sort-Object -CaseSensitive', 3],
+  ['if ($objDiff.ExitCode -ne 0 -and $objDiff.ExitCode -ne 1) {', 1],
+]);
+
 // Round 51. The generator's safety assertions, with the number of times each
 // must appear. Every one of these was deleted or neutered in a measured battery
 // that the policy accepted, because until now only command *resolution* was
@@ -1313,6 +1337,22 @@ export function validateBuildPolicy(workflow, source) {
       !generateStep.run.includes('generated-artifacts: committed artifacts do not match generator output')) {
     reject('side-effect-policy', 'build.verify tolerates generated-artifact drift');
   }
+
+  // Guards neighbouring the drift check. The drift check itself pins its whole
+  // condition and survived the battery; these did not, and each was measured
+  // accepted. Counts rather than presence, so a disabled copy cannot sit beside
+  // a live one.
+  // Read from the projection, not the raw run text: the comments around these
+  // guards discuss them by name, and a rule that cannot tell prose from code
+  // would let a comment keep a deleted check "present".
+  const strVerifyCode = powerShellTokenView(generateStep.run);
+  for (const [strFragment, intExpected] of REVIEWED_VERIFY_GUARDS) {
+    const intObserved = strVerifyCode.split(strFragment).length - 1;
+    if (intObserved !== intExpected) {
+      reject('side-effect-policy', `build.verify no longer performs a reviewed drift guard: ${strFragment}`);
+    }
+  }
+
   // An inserted early exit leaves every required fragment and ordering check
   // intact while skipping every probe below it, and the upload action then
   // publishes artifacts labelled verified that nothing verified. This script
@@ -2731,6 +2771,15 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-GENERATOR-017', 'tracked-path comparison case-folded', 'generator', (source) => replaceOnce(source, "$arrTrackedPath[0] -cne $DestinationLeaf", "$arrTrackedPath[0] -ine $DestinationLeaf")],
   ['T1-GENERATOR-018', 'closed temporary file digest check disabled', 'generator', (source) => replaceOnce(source, "        if ($strObservedSha256 -cne $strExpectedSha256) {", "        if ($false -and $strObservedSha256 -cne $strExpectedSha256) {")],
   ['T1-GENERATOR-019', 'atomic replace swapped for a non-atomic write', 'generator', (source) => replaceOnce(source, "            [System.IO.File]::Replace($strTemporaryPath, $strExpectedPath, [NullString]::Value)", "            [System.IO.File]::Copy($strTemporaryPath, $strExpectedPath, $true)")],
+  // Found by running the round-51 battery against build.verify. Its drift check
+  // pins a whole condition and survived; these four neighbours did not.
+  ['T1-BUILD-140', 'generator no longer bounded to the four artifact paths', 'build', (source) => replaceOnce(source, '              if ($arrOutside.Count -ne 0) {', '              if ($false -and $arrOutside.Count -ne 0) {')],
+  ['T1-BUILD-141', 'artifact membership test case-folded', 'build', (source) => replaceOnce(source, '$arrArtifacts -cnotcontains $_', '$arrArtifacts -inotcontains $_')],
+  ['T1-BUILD-142', 'changed-path ordering no longer case-sensitive', 'build', (source) => replaceOnce(source, '| Sort-Object -CaseSensitive)', '| Sort-Object)')],
+  // The worst of the four: without the sanity check a failing git diff has an
+  // exit code that is neither 0 nor 1, falls past the drift branch, and reads
+  // as "no drift".
+  ['T1-BUILD-143', 'diff exit-code sanity check short-circuited', 'build', (source) => replaceOnce(source, '          if ($objDiff.ExitCode -ne 0 -and $objDiff.ExitCode -ne 1) {', '          if ($false -and $objDiff.ExitCode -ne 0 -and $objDiff.ExitCode -ne 1) {')],
   ['T1-MARKDOWN-072', 'supply prelude closed twice, shortening the compared region', 'markdown', (source) => replaceOnce(source, "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n", "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n")],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -2924,6 +2973,10 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-GENERATOR-017": "supply-policy: the generator no longer performs a reviewed safety check: if ($intGitExit -ne 0 -or $arrTrackedPath.Count -ne 1 -or $arrTrackedPath[0] -cne $DestinationLeaf) {",
   "T1-GENERATOR-018": "supply-policy: the generator no longer performs a reviewed safety check: if ($strObservedSha256 -cne $strExpectedSha256) {",
   "T1-GENERATOR-019": "supply-policy: the generator no longer performs a reviewed safety check: [System.IO.File]::Replace($strTemporaryPath, $strExpectedPath, [NullString]::Value)",
+  "T1-BUILD-140": "side-effect-policy: build.verify no longer performs a reviewed drift guard: if ($arrOutside.Count -ne 0) {",
+  "T1-BUILD-141": "side-effect-policy: build.verify no longer performs a reviewed drift guard: $arrArtifacts -cnotcontains $_",
+  "T1-BUILD-142": "side-effect-policy: build.verify no longer performs a reviewed drift guard: Sort-Object -CaseSensitive",
+  "T1-BUILD-143": "side-effect-policy: build.verify no longer performs a reviewed drift guard: if ($objDiff.ExitCode -ne 0 -and $objDiff.ExitCode -ne 1) {",
   "T1-MARKDOWN-020": "markdown-policy: markdown.markdownlint.lint is missing a required phase: supply: lint configuration or helper does not match the reviewed digest",
   "T1-BUILD-086": "isolation-policy: build.verify.upload-generated uses an action",
   "T1-BUILD-087": "policy: build.publish step order differs from the locked policy",
