@@ -141,7 +141,18 @@ const REVIEWED_PARSER = Object.freeze({
 // not depend on the token -- the governed steps run repository-controlled code
 // and none of them performs network I/O, so the denylist covers the client
 // surface rather than a sample of it. Deliberately no /g flag: reused with test().
-const NETWORK_CLIENT = /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|Start-BitsTransfer|Net\.WebClient|WebClient|HttpClient|WebRequest|TcpClient|UdpClient|HttpListener|Socket)\b|System\.Net\./iu;
+// The complete static-call surface of both reviewed acquire steps, measured
+// rather than guessed: markdownlint.acquire makes five distinct calls and
+// verify.acquire three, and this is their union. Lower-cased because
+// PowerShell member lookup is case-insensitive.
+const REVIEWED_ACQUIRE_STATIC_CALLS = new Set([
+  'system.io.directory::createdirectory',
+  'system.io.directory::enumeratefilesystementries',
+  'system.io.file::exists',
+  'system.io.path::combine',
+  'string::isnullorempty',
+]);
+const NETWORK_CLIENT =/\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|Start-BitsTransfer|Net\.WebClient|WebClient|HttpClient|WebRequest|TcpClient|UdpClient|HttpListener|Socket)\b|System\.Net\./iu;
 
 
 // The Markdown validation step captures each phase status into a variable and
@@ -1195,6 +1206,28 @@ function validateAcquireStep(step, label, expected) {
   if (/\bNew-Object\b/iu.test(stepCode)) {
     reject('acquire-policy', `${label} constructs an object through New-Object`);
   }
+  // The .NET static surface, closed the same way as the invocation surface:
+  // by what may be called rather than by what may not. A writer blacklist was
+  // the proposal here, and it is the control that has failed repeatedly --
+  // naming Copy leaves Move, Replace, WriteAllBytes, OpenWrite, and every
+  // stream type behind it. Unlike New-Object the capability cannot simply go:
+  // [System.IO.File]:: is load-bearing in both reviewed acquire steps.
+  //
+  // So it is enumerated positively. Measured across both, the union of every
+  // static call they make is these five, and only CreateDirectory writes
+  // anything -- a directory, not file content. Anything else is a capability
+  // the acquire step has never needed.
+  for (const call of stepCode.matchAll(/\[\s*([^\]\n]*?)\s*\]\s*::\s*([A-Za-z_]\w*)?/gu)) {
+    // A computed member name reaches any method without spelling one, which is
+    // the same evasion the & rule refuses for commands and New-Object for
+    // types. There is no literal to check, so the form itself is refused.
+    if (call[2] === undefined) {
+      reject('acquire-policy', `${label} calls a static member through a computed name`);
+    }
+    if (!REVIEWED_ACQUIRE_STATIC_CALLS.has(`${call[1]}::${call[2]}`.toLowerCase())) {
+      reject('acquire-policy', `${label} calls an unreviewed static member: ${call[1]}::${call[2]}`);
+    }
+  }
   if (/[^\t\n\x20-\x7e]/u.test(step.run)) {
     reject('acquire-policy', `${label} contains a character outside printable ASCII`);
   }
@@ -1925,6 +1958,12 @@ const FIXTURE_INVENTORY = Object.freeze([
   // once the digest is re-baselined in the same edit.
   ['T1-MARKDOWN-057', 'literal network client named in the acquire step', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          $objResponse = Invoke-WebRequest -Uri https://example.invalid/v\n          $strNodeUrl = 'https://nodejs.org")],
   ['T1-MARKDOWN-058', 'network client reached through a computed New-Object type name', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          $objClient = New-Object -TypeName ('System.Net.' + 'WebClient')\n          $objClient.DownloadFile($strA, $strB)\n          $strNodeUrl = 'https://nodejs.org")],
+  // The validator replaced by a file copy rather than a download: no network
+  // client, no assembled command name, and the .mjs target sits inside a
+  // quoted string the projection blanks, so the script-path rule cannot see it
+  // either. Only the static-call allowlist stands in the way.
+  ['T1-MARKDOWN-059', 'validator overwritten through an unreviewed static writer', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          [System.IO.File]::Copy('./payload', './.github/workflows/Validate-WorkflowPolicy.mjs', $true)\n          $strNodeUrl = 'https://nodejs.org")],
+  ['T1-MARKDOWN-060', 'static member reached through a computed name', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          [System.IO.File]::$strMethod('./payload', './.github/workflows/Validate-WorkflowPolicy.mjs')\n          $strNodeUrl = 'https://nodejs.org")],
   // Round 40. An absent name under RUNNER_TEMP is absent only until the first
   // lint phase creates it, and the second phase then loads it.
   // Round 41. Two constructs the projection introduced one round earlier could
@@ -2206,6 +2245,8 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-056": "markdown-policy: markdown.validate-and-lint adds a network client",
   "T1-MARKDOWN-057": "acquire-policy: markdown.acquire adds a network client",
   "T1-MARKDOWN-058": "acquire-policy: markdown.acquire constructs an object through New-Object",
+  "T1-MARKDOWN-059": "acquire-policy: markdown.acquire calls an unreviewed static member: System.IO.File::Copy",
+  "T1-MARKDOWN-060": "acquire-policy: markdown.acquire calls a static member through a computed name",
 });
 
 function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource, generatorSource) {
