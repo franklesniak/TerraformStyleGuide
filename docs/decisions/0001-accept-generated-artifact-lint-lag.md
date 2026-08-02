@@ -2,7 +2,8 @@
 
 ## Status
 
-**Superseded on 2026-08-02.** The `temporary-writer` job was deleted from T1A, so nothing
+**Superseded on 2026-08-02.** The `temporary-writer` job was deleted in T1 itself — the
+change this record accompanies, issue #20 — and not in a later slate issue, so nothing
 commits regenerated artifacts to `main` and the lag this record accepts cannot occur. The
 residual is closed by removal rather than by any of the options scored below.
 

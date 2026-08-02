@@ -2,8 +2,9 @@
 
 ## Status
 
-**Superseded on 2026-08-02.** The `temporary-writer` job was deleted from T1A. No job in
-this repository holds `contents: write`, so there is no token-bearing process for
+**Superseded on 2026-08-02.** The `temporary-writer` job was deleted in T1 itself — the
+change this record accompanies, issue #20 — and not in a later slate issue. No job in this
+repository holds `contents: write`, so there is no token-bearing process for
 repository-controlled code to influence, and the residual this record accepts no longer
 exists.
 
