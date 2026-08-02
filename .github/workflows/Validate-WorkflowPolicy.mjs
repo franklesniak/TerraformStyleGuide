@@ -178,6 +178,14 @@ const BUILD_ACQUIRE = Object.freeze({
   name: 'Acquire triggering revision without an action',
   classifiedStatuses: 5,
   networkClients: 0,
+  // The build acquire step needs a tail constraint for the same reason the
+  // Markdown one does, and its absence was worse: a statement appended after
+  // the revision check can overwrite the generator from another checked-out
+  // file and then set the advisory assume-unchanged bit on it. The verify
+  // step takes its worktree baseline and its Git control-surface digest
+  // afterwards, so the mutation sits inside the baseline and the comparison
+  // reports no drift over a generator that was replaced.
+  tail: '& git init --quiet .\nif ($LASTEXITCODE -ne 0) { throw "acquire: git init exited $LASTEXITCODE" }\n& git remote add origin "$strServerUrl/$strRepository"\nif ($LASTEXITCODE -ne 0) { throw "acquire: git remote add exited $LASTEXITCODE" }\n# Fetching the commit itself, not a ref that names it. No credential\n# is supplied and none is configured, so nothing is persisted for the\n# next step to have to clean up.\n& git fetch --depth 1 --no-tags --no-recurse-submodules origin $strSha\nif ($LASTEXITCODE -ne 0) { throw "acquire: git fetch exited $LASTEXITCODE" }\n& git checkout --quiet --detach FETCH_HEAD\nif ($LASTEXITCODE -ne 0) { throw "acquire: git checkout exited $LASTEXITCODE" }\n$strHead = (& git rev-parse HEAD).Trim()\nif ($LASTEXITCODE -ne 0 -or $strHead -cne $strSha) {\n    throw \'acquire: the checked out revision is not the triggering revision\'\n}\nWrite-Host "acquire: anonymous shallow checkout of $strSha"',
   digest: '0eb96c20d7d2adfd724248f504b2fc5eb1b9306b8f51640ed7a0bafacdc5ff8c',
 });
 
@@ -581,6 +589,16 @@ export function validateBuildPolicy(workflow, source) {
     if (/\btrap\b/iu.test(run)) {
       reject('side-effect-policy', `${jobId}.${id} registers a script-wide error trap`);
     }
+    // PowerShell accepts U+2018/2019/201C/201D as string delimiters, so a smart
+    // quote opens a span the brace scanner does not recognise; it then counts
+    // braces that are inside a string and misplaces the depth of everything
+    // after them. Adding four codepoints to the quote branch would fix the
+    // reported case and leave the class open. Every governed script step is
+    // pure ASCII -- verified across all five -- so anything outside printable
+    // ASCII is refused instead and no confusable can be introduced at all.
+    if (/[^\t\n\x20-\x7e]/u.test(run)) {
+      reject('side-effect-policy', `${jobId}.${id} contains a character outside printable ASCII`);
+    }
     // No job in this workflow holds contents: write, so there is no approved
     // push, commit, or staging path anywhere in it. These are flat refusals
     // rather than exemptions keyed to a step id.
@@ -891,8 +909,18 @@ function validateAcquireStep(step, label, expected) {
   if (classifiedStatuses !== expected.classifiedStatuses) {
     reject('acquire-policy', `${label} native-status classification count changed`);
   }
-  if (/\b(?:exit|break|continue|trap)\b/iu.test(step.run)) {
+  if (/\b(?:exit|return|break|continue|trap)\b/iu.test(step.run)) {
     reject('acquire-policy', `${label} adds control flow that can bypass a required assertion`);
+  }
+  // Every call operator in an acquire step names a literal command. Counting
+  // client names in the text cannot see $strClient = 'cu' + 'rl'; & $strClient,
+  // so the invocation target is constrained rather than the spelling of the
+  // name: an indirect call has no literal to match and is refused here
+  // however the name was assembled.
+  for (const call of step.run.matchAll(/&\s+(\S+)/gu)) {
+    if (!['git', 'curl', 'tar'].includes(call[1])) {
+      reject('acquire-policy', `${label} invokes something other than a reviewed literal command`);
+    }
   }
   // Counted, not merely permitted. The Markdown acquire step is allowed one
   // download and the build one is allowed none, and a second request is how a
@@ -903,6 +931,9 @@ function validateAcquireStep(step, label, expected) {
   }
   if (expected.tail !== undefined && !step.run.trimEnd().endsWith(expected.tail)) {
     reject('acquire-policy', `${label} does not end at the verified extraction`);
+  }
+  if (/[^\t\n\x20-\x7e]/u.test(step.run)) {
+    reject('acquire-policy', `${label} contains a character outside printable ASCII`);
   }
   if (createHash('sha256').update(step.run, 'utf8').digest('hex') !== expected.digest) {
     reject('acquire-policy', `${label} script does not match its reviewed digest`);
@@ -1114,6 +1145,9 @@ export function validateMarkdownPolicy(workflow, source) {
   // this step has none, so both are refused outright.
   if (/\b(?:catch|trap)\b/iu.test(validation.run)) {
     reject('markdown-policy', 'markdown.validate-and-lint can suppress a phase failure');
+  }
+  if (/[^\t\n\x20-\x7e]/u.test(validation.run)) {
+    reject('markdown-policy', 'markdown.validate-and-lint contains a character outside printable ASCII');
   }
   // Each captured phase status must be assigned exactly once, from $LASTEXITCODE.
   // Otherwise a later reassignment such as "$intPolicyExit = 0" leaves every
@@ -1386,6 +1420,16 @@ const FIXTURE_INVENTORY = Object.freeze([
   // while a scanner that counted the escaped braces read the return as
   // depth one and let it through.
   ['T1-BUILD-123', 'top-level return hidden behind escaped braces', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          Write-Host `{\n          return\n          Write-Host `}\n          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n')],
+  // PowerShell reads smart quotes as string delimiters, so the braces here are
+  // inside a string it opens and the scanner does not. Refused as non-ASCII
+  // rather than by teaching the scanner four more codepoints.
+  ['T1-BUILD-124', 'smart quotes introduced into a governed script step', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          Write-Host \u201c{\u201d\n          return\n          Write-Host \u201c}\u201d\n          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n')],
+  // Neither acquire step defines a function, so return has no legitimate use
+  // in one; a top-level return exits zero having skipped the whole tail.
+  ['T1-BUILD-125', 'top-level return in the acquire step', 'build', (source) => replaceOnce(source, "          $strServerUrl = $env:GITHUB_SERVER_URL\n", "          return\n          $strServerUrl = $env:GITHUB_SERVER_URL\n")],
+  // Appended after the revision check: overwrite the generator and hide it
+  // behind the advisory assume-unchanged bit before verify snapshots it.
+  ['T1-BUILD-126', 'statement appended after the build acquire revision check', 'build', (source) => replaceOnce(source, '          Write-Host "acquire: anonymous shallow checkout of $strSha"\n', '          Write-Host "acquire: anonymous shallow checkout of $strSha"\n          Copy-Item -LiteralPath ./tools/gen.ps1 -Destination ./.github/workflows/Generate-StyleGuideArtifacts.ps1 -Force\n')],
   // Inert text satisfies a substring match. This wraps the approved invocation
   // in a single-quoted here-string, so the command appears verbatim in the
   // script and never executes.
@@ -1419,7 +1463,9 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-119', 'early exit prepended to the acquire step', 'build', (source) => replaceOnce(source, "          $ErrorActionPreference = 'Stop'\n", "          $ErrorActionPreference = 'Stop'\n          exit 0\n")],
   // Satisfies every named acquire assertion and changes the bytes anyway, which
   // is the case the closing digest exists for.
-  ['T1-BUILD-120', 'acquire step edited without re-review', 'build', (source) => replaceOnce(source, '          Write-Host "acquire: anonymous shallow checkout of $strSha"\n', '          Write-Host "acquire: checked out $strSha"\n')],
+  // Mutates a line no named assertion covers, so it reaches the backstop
+  // rather than being answered by one of the assertions in front of it.
+  ['T1-BUILD-120', 'acquire step edited without re-review', 'build', (source) => replaceOnce(source, '          $strSha = $env:GITHUB_SHA\n', '          $strSha  = $env:GITHUB_SHA\n')],
   ['T1-BUILD-103', 'credential-free origin URL shape no longer required', 'build', (source) => replaceOnce(source, "          if ($arrRemoteUrls[0] -notmatch '^https://github\\.com/[^/@]+/[^/@]+(?:\\.git)?$') {\n", "          if ($arrRemoteUrls[0] -notmatch '^https://') {\n")],
   // Every assertion on the credential step tests for presence, which an early
   // exit leaves untouched. The control-flow rejection is ordered ahead of that
@@ -1474,6 +1520,8 @@ const FIXTURE_INVENTORY = Object.freeze([
   // And one that needs no network at all, because the checkout is already on
   // disk by the time the extraction finishes.
   ['T1-MARKDOWN-033', 'extracted toolchain overwritten from the checkout', 'markdown', (source) => replaceOnce(source, '          Write-Host "acquire: revision $strSha and the reviewed Node distribution"\n', '          Write-Host "acquire: revision $strSha and the reviewed Node distribution"\n          Copy-Item -LiteralPath ./tools/node -Destination $strNodeRoot/bin/node -Force\n')],
+  // The client name assembled at run time, so no literal to count.
+  ['T1-MARKDOWN-034', 'network client invoked through an assembled name', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          $strClient = 'cu' + 'rl'\n          & $strClient --silent --output ./.github/workflows/Validate-WorkflowPolicy.mjs https://example.invalid/v\n          $strNodeUrl = 'https://nodejs.org")],
   ['T1-MARKDOWN-022', 'lint job regains a token scope', 'markdown', (source) => replaceOnce(source, '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions: {}\n', '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n')],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -1618,6 +1666,9 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-101": "side-effect-policy: build.verify returns from the script at top level",
   "T1-BUILD-122": "side-effect-policy: build.verify returns from the script at top level",
   "T1-BUILD-123": "side-effect-policy: build.verify returns from the script at top level",
+  "T1-BUILD-124": "side-effect-policy: verify.generate-and-verify contains a character outside printable ASCII",
+  "T1-BUILD-125": "acquire-policy: build.verify.acquire adds control flow that can bypass a required assertion",
+  "T1-BUILD-126": "acquire-policy: build.verify.acquire does not end at the verified extraction",
   "T1-BUILD-104": "side-effect-policy: the generator is not invoked exactly once as a statement",
   "T1-BUILD-106": "side-effect-policy: verify.generate-and-verify uses a here-string or block comment",
   "T1-BUILD-105": "side-effect-policy: build.verify can suppress a probe failure after the generator runs",
@@ -1691,6 +1742,7 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-031": "acquire-policy: markdown.acquire script does not match its reviewed digest",
   "T1-MARKDOWN-032": "acquire-policy: markdown.acquire network request count changed",
   "T1-MARKDOWN-033": "acquire-policy: markdown.acquire does not end at the verified extraction",
+  "T1-MARKDOWN-034": "acquire-policy: markdown.acquire invokes something other than a reviewed literal command",
   "T1-PACKAGE-005": "supply-policy: resolved yaml parser integrity is not the reviewed value",
   "T1-PACKAGE-006": "policy: lockfile root devDependencies differs from the locked policy",
 });
