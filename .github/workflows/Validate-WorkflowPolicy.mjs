@@ -411,8 +411,17 @@ export function validateBuildPolicy(workflow, source) {
     if (NETWORK_CLIENT.test(run)) reject('network-policy', `${jobId}.${id} adds a network client`);
     // Scan the whole step, not just run or env values: a credential reaches the
     // script through any step key just as effectively as through script text.
+    // All three patterns test the serialized step. The third tested run alone,
+    // which contradicted the sentence above it, and the gap was reachable
+    // rather than theoretical: the key assertions fix which keys a script step
+    // may carry, but not what the permitted values contain, so
+    // "name: Generate and verify ${{ github.token }} artifacts" satisfied every
+    // other check and passed. GITHUB_TOKEN is matched case-sensitively and
+    // github.token was matched against the wrong string, so nothing caught it.
+    // Action steps carry token: ${{ github.token }} legitimately and are not
+    // scanned here -- allRunSteps collects only steps with a run string.
     const serialized = JSON.stringify(step);
-    if (/secrets\./u.test(serialized) || /GITHUB_TOKEN/u.test(serialized) || /github\.token/iu.test(run)) {
+    if (/secrets\./u.test(serialized) || /GITHUB_TOKEN/u.test(serialized) || /github\.token/iu.test(serialized)) {
       reject('credential-policy', `${jobId}.${id} expands an unapproved credential`);
     }
     // No job in this workflow holds contents: write, so there is no approved
@@ -936,6 +945,11 @@ const FIXTURE_INVENTORY = Object.freeze([
   // of these today, but it is re-baselined whenever a reviewed edit lands, and
   // an invariant that only the digest defends is one a legitimate re-stamp
   // drops without anyone noticing.
+  // Isolating by construction: the token goes in a key the step is allowed to
+  // have, whose value no other assertion pins, so the credential scan is the
+  // only check that can reject it. Verified to pass the validator before the
+  // scan was widened from run to the serialized step.
+  ['T1-BUILD-097', 'token expanded into a permitted but unpinned step key', 'build', (source) => replaceOnce(source, '      - name: Generate and verify committed artifacts\n', '      - name: Generate and verify ${{ github.token }} committed artifacts\n')],
   ['T1-BUILD-094', 'worktree walk loses its FIFO guard', 'build', (source) => replaceOnce(source, '                              if ($objFile.Length -eq 0) {', '                              if ($false) {')],
   ['T1-BUILD-095', 'git exclusion widened to a string prefix', 'build', (source) => replaceOnce(source, '                          if (($objAttributes -band [System.IO.FileAttributes]::Directory) -ne 0) {\n                              if ($strEntry -cne $strGitDirectory) { $objPending.Push($strEntry) }', '                          if (($objAttributes -band [System.IO.FileAttributes]::Directory) -ne 0) {\n                              if (-not $strEntry.StartsWith($strGitPrefix)) { $objPending.Push($strEntry) }')],
   ['T1-BUILD-096', 'generator job regains a token scope', 'build', (source) => replaceOnce(source, '  verify:\n    runs-on: ubuntu-latest\n    permissions: {}\n', '  verify:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n')],
