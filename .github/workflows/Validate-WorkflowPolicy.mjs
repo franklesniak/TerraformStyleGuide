@@ -172,6 +172,12 @@ const REVIEWED_CREDENTIAL_STEP_DIGEST = 'cec60ee92660f500987f0b14926e85add62b987
 // the former push step carry applies here for the same reason.
 const REVIEWED_VERIFY_STEP_DIGEST = '238b85b3f36cc5bc4a4b8a023342617be23c60cdc36060f083541c7b02f6a360';
 
+// The acquire step replaces the pinned checkout action in the one job that runs
+// repository code, so it is held to the same standard as the step that ran
+// before it: its substantive assertions are named individually below, and the
+// whole script is pinned behind them.
+const REVIEWED_ACQUIRE_STEP_DIGEST = '0eb96c20d7d2adfd724248f504b2fc5eb1b9306b8f51640ed7a0bafacdc5ff8c';
+
 // The generator is repository-controlled code that the verify job executes. Its
 // version marker is fixed, but a version marker constrains a string, not
 // behaviour: the body can be rewritten completely while the marker stays put.
@@ -357,6 +363,56 @@ function allRunSteps(workflow) {
   return runs;
 }
 
+// Answers one question about one offset: is this position executable code at
+// the outermost level of the script? It returns the brace nesting depth there,
+// or null when the offset falls inside a comment or a quoted span.
+//
+// This is deliberately not a PowerShell parser. It exists because every other
+// assertion in this file matches text, and a text match cannot tell a statement
+// from a mention of one: $null = { ... }, if ($false) { ... }, and a multi-line
+// single-quoted string all carry an approved command that never runs, and each
+// round of review has produced another member of that list. Rather than name
+// them, the property they all violate is measured directly.
+//
+// Comments and quoted spans are skipped so a brace inside a message cannot move
+// the depth. Here-strings and block comments are refused before this runs, so
+// the remaining span kinds are '...' and "...", both terminated on their own
+// quote, with the doubling escape ('' and "") and the double-quoted backtick
+// escape handled.
+function powerShellBraceDepthAt(text, offset) {
+  let depth = 0;
+  let index = 0;
+  while (index < text.length) {
+    if (index === offset) return depth;
+    const character = text[index];
+    if (character === '#') {
+      const start = index;
+      while (index < text.length && text[index] !== '\n') index += 1;
+      if (offset > start && offset < index) return null;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      const start = index;
+      index += 1;
+      while (index < text.length) {
+        if (character === '"' && text[index] === '`') { index += 2; continue; }
+        if (text[index] === character) {
+          if (text[index + 1] === character) { index += 2; continue; }
+          index += 1;
+          break;
+        }
+        index += 1;
+      }
+      if (offset > start && offset < index) return null;
+      continue;
+    }
+    if (character === '{') depth += 1;
+    else if (character === '}') depth -= 1;
+    index += 1;
+  }
+  return offset === text.length ? depth : null;
+}
+
 export function validateBuildPolicy(workflow, source) {
   assertKeys(workflow, ['name', 'on', 'permissions', 'jobs'], 'build root');
   if (workflow.name !== 'Build Style Guide Artifacts') reject('policy', 'build workflow name is not locked');
@@ -367,20 +423,26 @@ export function validateBuildPolicy(workflow, source) {
   const verify = workflow.jobs.verify;
   assertKeys(verify, ['runs-on', 'permissions', 'steps'], 'build.verify');
   if (verify['runs-on'] !== 'ubuntu-latest') reject('policy', 'build.verify runner changed');
-  // No scopes, not contents: read. This is the job that runs the generator, and
-  // actions/checkout registers an always-running post action that receives the
-  // job token as an input -- a descendant can poison that process through the
-  // step communication files after every in-step assertion has run. The write
-  // cannot be prevented from inside the step, so the token it would capture is
-  // given nothing to capture.
+  // No scopes, not contents: read. This is the job that runs the generator, so
+  // the repository token it would otherwise carry is given nothing to carry.
   assertEqual(verify.permissions, {}, 'build.verify permissions');
+  // And no actions, which the scopes above cannot substitute for. The runner
+  // populates ACTIONS_RUNTIME_TOKEN from the job's system connection rather
+  // than from the permissions map -- NodeScriptActionHandler assigns it before
+  // it decides whether it is running the pre, main, or post script -- so any
+  // JavaScript action here would put a credential this job cannot revoke into
+  // a process that outlives the generator step. The mirror of the publish
+  // rule below: that job runs no script, this job uses no action.
+  for (const step of verify.steps) {
+    if ('uses' in step) reject('isolation-policy', `build.verify.${step.id} uses an action`);
+  }
   const verifyIds = verify.steps.map((step) => step?.id);
   // generate-and-verify is last on purpose. Anything appended after it runs
   // with whatever the generator's surviving descendants left behind, including
   // values they appended to the runner's step communication files once the
   // in-step emptiness assertion could no longer observe them.
-  assertEqual(verifyIds, ['checkout', 'verify-checkout-credentials', 'generate-and-verify'], 'build.verify step order');
-  assertActionStep(findStep(verify, 'checkout', 'build.verify'), 'build.verify.checkout', ACTIONS.checkout, CHECKOUT_INPUTS);
+  assertEqual(verifyIds, ['acquire', 'verify-checkout-credentials', 'generate-and-verify'], 'build.verify step order');
+  validateAcquireStep(findStep(verify, 'acquire', 'build.verify'), 'build.verify.acquire');
   validateCredentialCleanupStep(
     findStep(verify, 'verify-checkout-credentials', 'build.verify'),
     'build.verify.verify-checkout-credentials',
@@ -451,6 +513,14 @@ export function validateBuildPolicy(workflow, source) {
     if (/@['"]|<#/u.test(run)) {
       reject('side-effect-policy', `${jobId}.${id} uses a here-string or block comment`);
     }
+    // A trap is registered for its entire scope, not for the text after it, so
+    // one placed anywhere in a step disarms every throw in that step -- which
+    // is every assertion these steps make. No governed step uses one, and no
+    // position in a step is a safe place for one, so it is refused outright
+    // rather than bounded to a region the way catch is.
+    if (/\btrap\b/iu.test(run)) {
+      reject('side-effect-policy', `${jobId}.${id} registers a script-wide error trap`);
+    }
     // No job in this workflow holds contents: write, so there is no approved
     // push, commit, or staging path anywhere in it. These are flat refusals
     // rather than exemptions keyed to a step id.
@@ -487,6 +557,28 @@ export function validateBuildPolicy(workflow, source) {
   if ((generateStep.run.match(generatorStatement) ?? []).length !== 1) {
     reject('side-effect-policy', 'the generator is not invoked exactly once as a statement');
   }
+  // One notion of where the generator is, computed once and used by every
+  // positional check below. There used to be two: this anchored match, and a
+  // bare indexOf of the invocation's leading substring. They disagree on any
+  // spelling that is not exactly this statement -- an indented copy, a second
+  // occurrence, a mention inside a string -- and where they disagree the
+  // positional checks were deriving "after the generator" from a position the
+  // statement match never approved.
+  const generatorIndex = generateStep.run.search(generatorStatement);
+  const afterGenerator = generateStep.run.slice(generatorIndex);
+  // The statement must also be code. Everything in this file matches text, and
+  // text inside a region that never executes reads exactly like text that does:
+  // a here-string and a block comment are refused outright above, but those two
+  // do not exhaust the ways to write inert PowerShell. $null = { ... } is one,
+  // if ($false) { ... } is another, and there is no end to that list. So the
+  // property is derived rather than enumerated: brace depth is tracked across
+  // the script, ignoring comments and quoted spans, and the invocation is
+  // required to sit at depth zero -- outside every block, whatever introduced
+  // it. Depth zero is where the step's own statements live; every function in
+  // the script is defined inside braces and none of them may contain this.
+  if (powerShellBraceDepthAt(generateStep.run, generatorIndex) !== 0) {
+    reject('side-effect-policy', 'the generator invocation is nested inside a block');
+  }
   // Git is resolved from a fixed candidate list before the generator runs and
   // held in a constant. A PATH lookup or Get-Command call placed after the
   // generator would consult state that code can steer, and an ordinary variable
@@ -499,7 +591,7 @@ export function validateBuildPolicy(workflow, source) {
   if (/Get-Command/u.test(generateStep.run)) {
     reject('git-policy', 'build.verify resolves Git through a shadowable command lookup');
   }
-  if (generateStep.run.indexOf('New-Variable -Name strGitPath') > generateStep.run.indexOf('& pwsh -NoProfile')) {
+  if (generateStep.run.indexOf('New-Variable -Name strGitPath') > generatorIndex) {
     reject('git-policy', 'build.verify resolves Git after the generator runs');
   }
   // Pinning the executable does not pin what Git will do: repository-local
@@ -510,8 +602,8 @@ export function validateBuildPolicy(workflow, source) {
   if (!generateStep.run.includes('function Get-GitControlSurfaceDigest') ||
       !generateStep.run.includes('$strControlSurfaceBefore = Get-GitControlSurfaceDigest') ||
       !generateStep.run.includes('git-state: the generator changed repository Git configuration or hooks') ||
-      generateStep.run.indexOf('$strControlSurfaceBefore = Get-GitControlSurfaceDigest') > generateStep.run.indexOf('& pwsh -NoProfile') ||
-      generateStep.run.indexOf('git-state: the generator changed repository Git configuration or hooks') < generateStep.run.indexOf('& pwsh -NoProfile')) {
+      generateStep.run.indexOf('$strControlSurfaceBefore = Get-GitControlSurfaceDigest') > generatorIndex ||
+      generateStep.run.indexOf('git-state: the generator changed repository Git configuration or hooks') < generatorIndex) {
     reject('git-policy', 'build.verify does not bracket the generator with a Git control-surface digest');
   }
   // Every Git probe in this step reports on state the generator can move: it
@@ -526,8 +618,8 @@ export function validateBuildPolicy(workflow, source) {
       !generateStep.run.includes('$objWorktreeAfter = Get-WorktreeFileDigests') ||
       !generateStep.run.includes('generated-artifacts: committed artifacts do not match generator output') ||
       !generateStep.run.includes('outside the four generated artifacts') ||
-      generateStep.run.indexOf('$objWorktreeBefore = Get-WorktreeFileDigests') > generateStep.run.indexOf('& pwsh -NoProfile') ||
-      generateStep.run.indexOf('$objWorktreeAfter = Get-WorktreeFileDigests') < generateStep.run.indexOf('& pwsh -NoProfile')) {
+      generateStep.run.indexOf('$objWorktreeBefore = Get-WorktreeFileDigests') > generatorIndex ||
+      generateStep.run.indexOf('$objWorktreeAfter = Get-WorktreeFileDigests') < generatorIndex) {
     reject('side-effect-policy', 'build.verify does not bracket the generator with a worktree byte comparison');
   }
   // How the walk reaches the files decides what it can be made to read.
@@ -581,8 +673,8 @@ export function validateBuildPolicy(workflow, source) {
   // from any process, including descendants that outlive the step.
   if (!generateStep.run.includes('New-Variable -Name arrChannelPaths -Value @($env:GITHUB_ENV, $env:GITHUB_PATH) -Option Constant') ||
       !generateStep.run.includes('runner-state: the generator wrote to a runner step communication file') ||
-      generateStep.run.indexOf('New-Variable -Name arrChannelPaths') > generateStep.run.indexOf('& pwsh -NoProfile') ||
-      generateStep.run.indexOf('runner-state: the generator wrote to a runner step communication file') < generateStep.run.indexOf('& pwsh -NoProfile')) {
+      generateStep.run.indexOf('New-Variable -Name arrChannelPaths') > generatorIndex ||
+      generateStep.run.indexOf('runner-state: the generator wrote to a runner step communication file') < generatorIndex) {
     reject('side-effect-policy', 'build.verify does not assert the runner step communication files are empty');
   }
   // The control-surface digest covers repository-local configuration only.
@@ -621,9 +713,7 @@ export function validateBuildPolicy(workflow, source) {
   // after the generator is a probe. A return there is a bypass whatever it
   // looks like, and the region after the generator is precisely the region
   // that must not be short-circuited.
-  const generatorIndex = generateStep.run.search(generatorStatement);
-  const afterGenerator = generateStep.run.slice(generatorIndex);
-  if (generatorIndex < 0 || /\breturn\b/iu.test(afterGenerator)) {
+  if (/\breturn\b/iu.test(afterGenerator)) {
     reject('side-effect-policy', 'build.verify returns from the script after the generator runs');
   }
   // Every probe reports by throwing, so a handler around the governed region
@@ -631,9 +721,15 @@ export function validateBuildPolicy(workflow, source) {
   // nothing. try/finally is used legitimately -- five of them, all disposing a
   // hash or a process -- but every one is inside a function defined before the
   // generator, so the same boundary that separates the returns separates these.
-  // trap is included because it suppresses terminating errors script-wide,
-  // which is the same effect reached by a different keyword.
-  if (/\b(?:catch|trap)\b/iu.test(afterGenerator)) {
+  //
+  // trap used to be checked here alongside catch, and that was wrong: a trap
+  // is registered for its whole scope rather than for the text that follows
+  // it, so one written at the top of the script -- before the generator, in
+  // the region this slice does not cover -- suppresses every throw below it
+  // just the same. Position cannot separate a legitimate trap from a hostile
+  // one because there is no legitimate one, in any governed step, so it is
+  // refused everywhere instead.
+  if (/\bcatch\b/iu.test(afterGenerator)) {
     reject('side-effect-policy', 'build.verify can suppress a probe failure after the generator runs');
   }
   // Redirected stdout and stderr must be drained concurrently. Reading either to
@@ -657,11 +753,72 @@ export function validateBuildPolicy(workflow, source) {
     reject('side-effect-policy', 'build.verify script does not match its reviewed digest');
   }
 
-  // Two checkouts, one per job: verify checks out to run the generator against
-  // the triggering revision, publish checks out to read that revision's bytes
-  // without the generator ever having run on that machine. Counting them is
-  // what keeps a third, unreviewed action from appearing.
-  validateActionMultiset(source, [ACTIONS.checkout, ACTIONS.checkout, ACTIONS.uploadArtifact]);
+  // One checkout, in the publishing job only. verify acquires the triggering
+  // revision itself precisely so that it contains no action, and counting the
+  // uses here is what keeps one from reappearing in either job: the per-step
+  // rejection above says verify declares no uses key, and this says the file
+  // as a whole contains exactly these two.
+  validateActionMultiset(source, [ACTIONS.checkout, ACTIONS.uploadArtifact]);
+}
+
+function validateAcquireStep(step, label) {
+  assertKeys(step, ['name', 'id', 'shell', 'run'], label);
+  if (step.name !== 'Acquire triggering revision without an action' || step.shell !== 'pwsh') {
+    reject('acquire-policy', `${label} execution contract changed`);
+  }
+  // Named, not positional, and each with its own fixture -- the same correction
+  // the credential-cleanup step needed. A single shared message would let a
+  // fixture prove only that some requirement was missing.
+  const requiredSequences = [
+    // Absent-key and no-op statuses are classified explicitly below, which is
+    // only reachable when native commands are not mapped onto the preference.
+    ['native-command error mapping is disabled',
+      'if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n' +
+      '    $PSNativeCommandUseErrorActionPreference = $false\n' +
+      '}'],
+    ['the server the runner named',
+      "if ($strServerUrl -cne 'https://github.com') {"],
+    ['a plain owner/name repository',
+      "if ($strRepository -cnotmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {"],
+    // A ref resolves to whatever it points at when the fetch runs, which for a
+    // push to a busy branch need not be the revision that triggered the run.
+    ['a full commit hash rather than a ref',
+      "if ($strSha -cnotmatch '^[0-9a-f]{40}$') {"],
+    // Proven empty rather than cleaned: cleaning decides what to delete from
+    // state that is already there, and an emptiness assertion has no such input.
+    ['an empty workspace before fetching',
+      'if (@([System.IO.Directory]::EnumerateFileSystemEntries($PWD.Path)).Count -ne 0) {'],
+    ['a fetch of the commit itself',
+      '& git fetch --depth 1 --no-tags --no-recurse-submodules origin $strSha'],
+    // Without this the step would accept whatever FETCH_HEAD happened to be.
+    ['that the checked out revision is the triggering revision',
+      '$strHead = (& git rev-parse HEAD).Trim()\n' +
+      'if ($LASTEXITCODE -ne 0 -or $strHead -cne $strSha) {'],
+  ];
+  for (const [requirement, sequence] of requiredSequences) {
+    if (!step.run.includes(sequence)) {
+      reject('acquire-policy', `${label} no longer asserts ${requirement}`);
+    }
+  }
+  // The whole point of this step is that no credential exists to clean up, so
+  // no mechanism for creating one may appear. checkout's own inputs are not
+  // available here to be got wrong; what is available is a URL with a
+  // credential in it, a helper, or an extraheader, and all three are refused.
+  if (/@github\.com|credential\.helper|extraheader|GIT_ASKPASS|GITHUB_TOKEN/iu.test(step.run)) {
+    reject('acquire-policy', `${label} introduces a credential into an anonymous fetch`);
+  }
+  // Every native status is classified. A missing classification is a step that
+  // proceeds on a failed fetch and then digests whatever is on disk.
+  const classifiedStatuses = step.run.match(/^if \(\$LASTEXITCODE -ne 0/gmu)?.length ?? 0;
+  if (classifiedStatuses !== 5) {
+    reject('acquire-policy', `${label} native-status classification count changed`);
+  }
+  if (/\b(?:exit|break|continue|trap)\b/iu.test(step.run)) {
+    reject('acquire-policy', `${label} adds control flow that can bypass a required assertion`);
+  }
+  if (createHash('sha256').update(step.run, 'utf8').digest('hex') !== REVIEWED_ACQUIRE_STEP_DIGEST) {
+    reject('acquire-policy', `${label} script does not match its reviewed digest`);
+  }
 }
 
 function validateCredentialCleanupStep(step, label) {
@@ -839,6 +996,16 @@ export function validateMarkdownPolicy(workflow, source) {
   }
   if (/@['"]|<#/u.test(validation.run)) {
     reject('markdown-policy', 'markdown.validate-and-lint uses a here-string or block comment');
+  }
+  // Every phase in this step reports by throwing, and the one try in it exists
+  // to restore the caller's CI variable in finally, not to handle anything. A
+  // catch anywhere here turns a failed supply digest, a failed frozen install,
+  // or a failed lint into a step that succeeds having decided nothing, and a
+  // trap does the same for the whole script from wherever it is written. The
+  // verify step bounds catch by position because it has one legitimate catch;
+  // this step has none, so both are refused outright.
+  if (/\b(?:catch|trap)\b/iu.test(validation.run)) {
+    reject('markdown-policy', 'markdown.validate-and-lint can suppress a phase failure');
   }
   // Each captured phase status must be assigned exactly once, from $LASTEXITCODE.
   // Otherwise a later reassignment such as "$intPolicyExit = 0" leaves every
@@ -1022,7 +1189,12 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-037', 'authorization status normalization removed', 'build', (source) => replaceOnce(source, '          $intAuthorizationExit = $LASTEXITCODE\n          $global:LASTEXITCODE = 0\n', '          $intAuthorizationExit = $LASTEXITCODE\n')],
   ['T1-BUILD-038', 'secret in step env', 'build', (source) => replaceOnce(source, '        id: generate-and-verify\n        shell: pwsh', "        id: generate-and-verify\n        env:\n          TOKEN: '${{ secrets.PAT }}'\n        shell: pwsh")],
   ['T1-BUILD-040', 'unreviewed key on a script step', 'build', (source) => replaceOnce(source, '        id: generate-and-verify\n        shell: pwsh\n', '        id: generate-and-verify\n        shell: pwsh\n        working-directory: .\n')],
-  ['T1-BUILD-041', 'native-command error mapping guard removed', 'build', (source) => replaceOnce(source, '          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n              $PSNativeCommandUseErrorActionPreference = $false\n          }\n', '')],
+  // Anchored through the line that follows it, not on the guard alone. The
+  // acquire step disables native-command error mapping for the same reason and
+  // appears first, so a bare anchor silently retargeted this fixture at that
+  // step's copy and left the credential step's assertion uncovered. The
+  // expectation check is what surfaced it.
+  ['T1-BUILD-041', 'native-command error mapping guard removed', 'build', (source) => replaceOnce(source, '          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n              $PSNativeCommandUseErrorActionPreference = $false\n          }\n          $arrRemoteUrls = @(& git remote get-url --all origin)\n', '          $arrRemoteUrls = @(& git remote get-url --all origin)\n')],
   ['T1-BUILD-050', 'sequential Git stream reads restored', 'build', (source) => replaceOnce(source, '                  $objCopyTask = $objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)\n                  $objErrorTask = $objProcess.StandardError.ReadToEndAsync()\n                  $objCopyTask.GetAwaiter().GetResult()\n                  $strError = $objErrorTask.GetAwaiter().GetResult()\n', '                  $objProcess.StandardOutput.BaseStream.CopyTo($objOutput)\n                  $strError = $objProcess.StandardError.ReadToEnd()\n')],
   ['T1-BUILD-053', 'credentialed executable resolved through PATH', 'build', (source) => replaceOnce(source, '              $objStartInfo.FileName = $strGitPath\n', '              $arrGitCommands = @(Get-Command git -CommandType Application -ErrorAction Stop)\n              $objStartInfo.FileName = $arrGitCommands[0].Source\n')],
   ['T1-BUILD-054', 'trusted Git path list widened', 'build', (source) => replaceOnce(source, "@('/usr/bin/git', '/bin/git')", "@($env:RUNNER_TEMP + '/git', '/usr/bin/git')")],
@@ -1102,11 +1274,39 @@ const FIXTURE_INVENTORY = Object.freeze([
   // verdict into a no-op while the step still succeeds.
   ['T1-BUILD-105', 'probe failures suppressed by an empty handler', 'build', (source) => replaceOnce(source, '          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }\n', '          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }\n          try {\n          } catch {\n          }\n')],
   ['T1-BUILD-102', 'origin cardinality check removed from credential cleanup', 'build', (source) => replaceOnce(source, '          $arrRemoteUrls = @(& git remote get-url --all origin)\n          if ($LASTEXITCODE -ne 0 -or $arrRemoteUrls.Count -ne 1) {\n', '          $arrRemoteUrls = @(& git remote get-url --all origin)\n          if ($LASTEXITCODE -ne 0) {\n')],
+  // The step order was previously covered only as a side effect of the fixture
+  // that reintroduced the upload into verify; that fixture now trips the
+  // no-actions rule instead, so the ordering gets a fixture of its own.
+  ['T1-BUILD-107', 'authored step appended after the generator step', 'build', (source) => replaceOnce(source, "          Write-Host 'generated-artifacts: committed bytes match generator output'\n", "          Write-Host 'generated-artifacts: committed bytes match generator output'\n\n      - name: Summarize\n        id: summarize\n        shell: pwsh\n        run: |\n          Write-Host 'done'\n")],
+  // Inert-by-construction, not inert by spelling: the statement is textually
+  // identical to the approved one and sits on its own line at column zero, so
+  // the anchored match and every substring check are satisfied while the
+  // generator never runs. Only the brace depth distinguishes them.
+  ['T1-BUILD-108', 'generator invocation nested inside an unevaluated script block', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          $null = {\n          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n          }\n')],
+  // Written before the generator, where the region slice that catches a handler
+  // does not look, and effective over the whole script regardless.
+  ['T1-BUILD-109', 'script-wide error trap registered ahead of the generator', 'build', (source) => replaceOnce(source, '          $arrArtifacts = @(\n', '          trap { $null = $_ }\n          $arrArtifacts = @(\n')],
+  ['T1-BUILD-110', 'acquire step no longer disables native-command error mapping', 'build', (source) => replaceOnce(source, '          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n              $PSNativeCommandUseErrorActionPreference = $false\n          }\n', '')],
+  ['T1-BUILD-111', 'acquire step accepts an unexpected server', 'build', (source) => replaceOnce(source, "          if ($strServerUrl -cne 'https://github.com') {\n", '          if ([string]::IsNullOrEmpty($strServerUrl)) {\n')],
+  ['T1-BUILD-112', 'acquire step accepts an arbitrary repository name', 'build', (source) => replaceOnce(source, "          if ($strRepository -cnotmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {\n", '          if ([string]::IsNullOrEmpty($strRepository)) {\n')],
+  ['T1-BUILD-113', 'acquire step accepts a ref in place of a commit', 'build', (source) => replaceOnce(source, "          if ($strSha -cnotmatch '^[0-9a-f]{40}$') {\n", '          if ([string]::IsNullOrEmpty($strSha)) {\n')],
+  ['T1-BUILD-114', 'acquire step no longer requires an empty workspace', 'build', (source) => replaceOnce(source, '          if (@([System.IO.Directory]::EnumerateFileSystemEntries($PWD.Path)).Count -ne 0) {\n              throw \'acquire: the workspace is not empty\'\n          }\n', '')],
+  ['T1-BUILD-115', 'acquire step fetches a ref rather than the commit', 'build', (source) => replaceOnce(source, '          & git fetch --depth 1 --no-tags --no-recurse-submodules origin $strSha\n', '          & git fetch --depth 1 --no-tags --no-recurse-submodules origin $env:GITHUB_REF\n')],
+  ['T1-BUILD-116', 'acquire step no longer proves which revision it checked out', 'build', (source) => replaceOnce(source, '          $strHead = (& git rev-parse HEAD).Trim()\n          if ($LASTEXITCODE -ne 0 -or $strHead -cne $strSha) {\n', '          $strHead = (& git rev-parse HEAD).Trim()\n          if ([string]::IsNullOrEmpty($strHead)) {\n')],
+  ['T1-BUILD-117', 'credential embedded in the anonymous fetch remote', 'build', (source) => replaceOnce(source, '          & git remote add origin "$strServerUrl/$strRepository"\n', '          & git remote add origin "https://x-access-token:$env:SUPPLIED@github.com/$strRepository"\n')],
+  ['T1-BUILD-118', 'acquire step drops a native status classification', 'build', (source) => replaceOnce(source, '          if ($LASTEXITCODE -ne 0) { throw "acquire: git init exited $LASTEXITCODE" }\n', "          Write-Host 'acquire: initialized'\n")],
+  ['T1-BUILD-119', 'early exit prepended to the acquire step', 'build', (source) => replaceOnce(source, "          $ErrorActionPreference = 'Stop'\n", "          $ErrorActionPreference = 'Stop'\n          exit 0\n")],
+  // Satisfies every named acquire assertion and changes the bytes anyway, which
+  // is the case the closing digest exists for.
+  ['T1-BUILD-120', 'acquire step edited without re-review', 'build', (source) => replaceOnce(source, '          Write-Host "acquire: anonymous shallow checkout of $strSha"\n', '          Write-Host "acquire: checked out $strSha"\n')],
   ['T1-BUILD-103', 'credential-free origin URL shape no longer required', 'build', (source) => replaceOnce(source, "          if ($arrRemoteUrls[0] -notmatch '^https://github\\.com/[^/@]+/[^/@]+(?:\\.git)?$') {\n", "          if ($arrRemoteUrls[0] -notmatch '^https://') {\n")],
   // Every assertion on the credential step tests for presence, which an early
   // exit leaves untouched. The control-flow rejection is ordered ahead of that
   // step's digest so this fixture exercises it rather than the backstop.
-  ['T1-BUILD-099', 'early exit prepended to the credential cleanup step', 'build', (source) => replaceOnce(source, "          $ErrorActionPreference = 'Stop'\n", "          $ErrorActionPreference = 'Stop'\n          exit 0\n")],
+  // Anchored through the comment that follows it, for the same reason as
+  // T1-BUILD-041: the acquire step opens with the identical preference line and
+  // now comes first in the file.
+  ['T1-BUILD-099', 'early exit prepended to the credential cleanup step', 'build', (source) => replaceOnce(source, "          $ErrorActionPreference = 'Stop'\n          # git config exits 1", "          $ErrorActionPreference = 'Stop'\n          exit 0\n          # git config exits 1")],
   ['T1-BUILD-094', 'worktree walk loses its FIFO guard', 'build', (source) => replaceOnce(source, '                              if ($objFile.Length -eq 0) {', '                              if ($false) {')],
   ['T1-BUILD-095', 'git exclusion widened to a string prefix', 'build', (source) => replaceOnce(source, '                          if (($objAttributes -band [System.IO.FileAttributes]::Directory) -ne 0) {\n                              if ($strEntry -cne $strGitDirectory) { $objPending.Push($strEntry) }', '                          if (($objAttributes -band [System.IO.FileAttributes]::Directory) -ne 0) {\n                              if (-not $strEntry.StartsWith($strGitPrefix)) { $objPending.Push($strEntry) }')],
   ['T1-BUILD-096', 'generator job regains a token scope', 'build', (source) => replaceOnce(source, '  verify:\n    runs-on: ubuntu-latest\n    permissions: {}\n', '  verify:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n')],
@@ -1132,6 +1332,12 @@ const FIXTURE_INVENTORY = Object.freeze([
   // build.verify holds none.
   // The expression ban must hold in both files, not just build.yml.
   ['T1-MARKDOWN-023', 'expression reaching a credential in the lint step name', 'markdown', (source) => replaceOnce(source, '      - name: Install, validate policy, and lint both Markdown surfaces\n', "      - name: Install, validate ${{ github['token'] }} policy, and lint both Markdown surfaces\n")],
+  // The step's one try exists to restore the caller's CI variable in finally.
+  // Adding a catch beside it leaves every required fragment, phase order, and
+  // captured status intact while a failed supply digest, install, or lint stops
+  // deciding anything.
+  ['T1-MARKDOWN-024', 'phase failure suppressed by a handler in the lint step', 'markdown', (source) => replaceOnce(source, '          } finally {\n', '          } catch {\n          } finally {\n')],
+  ['T1-MARKDOWN-025', 'script-wide error trap registered in the lint step', 'markdown', (source) => replaceOnce(source, '          $arrNodeCommands = @(Get-Command node -CommandType Application -ErrorAction Stop)\n', '          trap { $null = $_ }\n          $arrNodeCommands = @(Get-Command node -CommandType Application -ErrorAction Stop)\n')],
   ['T1-MARKDOWN-022', 'lint job regains a token scope', 'markdown', (source) => replaceOnce(source, '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions: {}\n', '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n')],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -1208,16 +1414,16 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-YAML-011": "yaml-syntax: explicit or custom tags are prohibited",
   "T1-YAML-012": "yaml-syntax: explicit or custom tags are prohibited",
   "T1-YAML-013": "yaml-syntax: anchors are prohibited",
-  "T1-BUILD-001": "action-policy: build.verify.checkout uses the wrong action repository or SHA",
-  "T1-BUILD-002": "action-policy: build.verify.checkout uses the wrong action repository or SHA",
-  "T1-BUILD-003": "action-policy: build.verify.checkout uses the wrong action repository or SHA",
+  "T1-BUILD-001": "action-policy: build.publish.checkout uses the wrong action repository or SHA",
+  "T1-BUILD-002": "action-policy: build.publish.checkout uses the wrong action repository or SHA",
+  "T1-BUILD-003": "action-policy: build.publish.checkout uses the wrong action repository or SHA",
   "T1-BUILD-004": "policy: external action multiset differs from the locked policy",
   "T1-BUILD-005": "policy: build.publish step order differs from the locked policy",
   "T1-BUILD-006": "schema: build.publish.upload-generated has missing or extra keys",
   "T1-BUILD-007": "action-policy: build.publish.upload-generated uses the wrong action repository or SHA",
-  "T1-BUILD-008": "policy: build.verify.checkout.with differs from the locked policy",
-  "T1-BUILD-009": "policy: build.verify.checkout.with differs from the locked policy",
-  "T1-BUILD-010": "policy: build.verify.checkout.with differs from the locked policy",
+  "T1-BUILD-008": "policy: build.publish.checkout.with differs from the locked policy",
+  "T1-BUILD-009": "policy: build.publish.checkout.with differs from the locked policy",
+  "T1-BUILD-010": "policy: build.publish.checkout.with differs from the locked policy",
   "T1-BUILD-011": "policy: build workflow permissions differs from the locked policy",
   "T1-BUILD-012": "policy: build.verify permissions differs from the locked policy",
   "T1-BUILD-014": "schema: build jobs has missing or extra keys",
@@ -1230,11 +1436,11 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-027": "policy: build.publish.upload-generated.with differs from the locked policy",
   "T1-BUILD-028": "policy: build.publish.upload-generated.with differs from the locked policy",
   "T1-BUILD-029": "policy: build.publish step order differs from the locked policy",
-  "T1-BUILD-031": "policy: build.verify.checkout.with differs from the locked policy",
+  "T1-BUILD-031": "policy: build.publish.checkout.with differs from the locked policy",
   "T1-BUILD-032": "policy: build triggers differs from the locked policy",
   "T1-BUILD-033": "policy: build triggers differs from the locked policy",
-  "T1-BUILD-034": "action-policy: build.verify.checkout uses the wrong action repository or SHA",
-  "T1-BUILD-035": "action-policy: build.verify.checkout uses the wrong action repository or SHA",
+  "T1-BUILD-034": "action-policy: build.publish.checkout uses the wrong action repository or SHA",
+  "T1-BUILD-035": "action-policy: build.publish.checkout uses the wrong action repository or SHA",
   "T1-BUILD-036": "credential-policy: build.verify.verify-checkout-credentials no longer asserts no local credential helper",
   "T1-BUILD-037": "credential-policy: build.verify.verify-checkout-credentials no longer asserts no persisted HTTP authorization",
   "T1-BUILD-038": "credential-policy: verify.generate-and-verify expands an unapproved credential",
@@ -1270,7 +1476,7 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-GENERATOR-001": "supply-policy: generator does not match its reviewed digest",
   "T1-GENERATOR-002": "supply-policy: generator does not match its reviewed digest",
   "T1-MARKDOWN-020": "markdown-policy: required phase is missing: supply: lint configuration or helper does not match the reviewed digest",
-  "T1-BUILD-086": "policy: build.verify step order differs from the locked policy",
+  "T1-BUILD-086": "isolation-policy: build.verify.upload-generated uses an action",
   "T1-BUILD-087": "policy: build.publish step order differs from the locked policy",
   "T1-BUILD-088": "schema: build.publish has missing or extra keys",
   "T1-BUILD-089": "policy: build.verify step order differs from the locked policy",
@@ -1327,6 +1533,22 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-PACKAGE-002": "policy: package.json devDependencies differs from the locked policy",
   "T1-PACKAGE-003": "policy: package.json scripts differs from the locked policy",
   "T1-PACKAGE-004": "supply-policy: package.json does not match its reviewed digest",
+  "T1-BUILD-107": "policy: build.verify step order differs from the locked policy",
+  "T1-BUILD-108": "side-effect-policy: the generator invocation is nested inside a block",
+  "T1-BUILD-109": "side-effect-policy: verify.generate-and-verify registers a script-wide error trap",
+  "T1-BUILD-110": "acquire-policy: build.verify.acquire no longer asserts native-command error mapping is disabled",
+  "T1-BUILD-111": "acquire-policy: build.verify.acquire no longer asserts the server the runner named",
+  "T1-BUILD-112": "acquire-policy: build.verify.acquire no longer asserts a plain owner/name repository",
+  "T1-BUILD-113": "acquire-policy: build.verify.acquire no longer asserts a full commit hash rather than a ref",
+  "T1-BUILD-114": "acquire-policy: build.verify.acquire no longer asserts an empty workspace before fetching",
+  "T1-BUILD-115": "acquire-policy: build.verify.acquire no longer asserts a fetch of the commit itself",
+  "T1-BUILD-116": "acquire-policy: build.verify.acquire no longer asserts that the checked out revision is the triggering revision",
+  "T1-BUILD-117": "acquire-policy: build.verify.acquire introduces a credential into an anonymous fetch",
+  "T1-BUILD-118": "acquire-policy: build.verify.acquire native-status classification count changed",
+  "T1-BUILD-119": "acquire-policy: build.verify.acquire adds control flow that can bypass a required assertion",
+  "T1-BUILD-120": "acquire-policy: build.verify.acquire script does not match its reviewed digest",
+  "T1-MARKDOWN-024": "markdown-policy: markdown.validate-and-lint can suppress a phase failure",
+  "T1-MARKDOWN-025": "markdown-policy: markdown.validate-and-lint can suppress a phase failure",
   "T1-PACKAGE-005": "supply-policy: resolved yaml parser integrity is not the reviewed value",
   "T1-PACKAGE-006": "policy: lockfile root devDependencies differs from the locked policy",
 });

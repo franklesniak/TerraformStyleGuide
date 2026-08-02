@@ -10,37 +10,105 @@ permissions:
   contents: read
 
 jobs:
-  # This job runs repository-controlled code, so it holds no token scopes at
-  # all. That is not belt and braces for the checkout: actions/checkout
-  # registers a post action, GitHub documents post-if as defaulting to
-  # always(), and the runner applies whatever is in the step communication
-  # files to it -- so a descendant the generator detached can still poison the
-  # environment of a Node process that receives this job's token as an input,
-  # after every in-step assertion has already run. Nothing in this job can
-  # prevent that. What it can do is make the token not worth taking. The
-  # repository is public, so a scope-less token still clones it; if it ever
-  # becomes private this fails at checkout rather than quietly granting the
-  # scope back.
+  # This job runs repository-controlled code, so it uses no actions at all and
+  # holds no token scopes at all. Both halves are load-bearing, and the second
+  # is not sufficient on its own.
+  #
+  # permissions: {} governs the repository token. It does not govern
+  # ACTIONS_RUNTIME_TOKEN, which is the credential for the artifact and cache
+  # services. The runner sets that variable from the job's system connection,
+  # not from the permissions map: NodeScriptActionHandler.RunAsync assigns
+  # Environment["ACTIONS_RUNTIME_TOKEN"] unconditionally, before it decides
+  # whether it is running the action's pre, main, or post script. So every
+  # JavaScript action in a job -- including a post step that post-if defaults
+  # to always() -- runs as a process holding a credential this job cannot
+  # revoke, and actions/checkout's post step runs after the generator step has
+  # ended.
+  #
+  # A descendant the generator detached is still alive then, runs as the same
+  # user, and can read /proc/<pid>/environ of that process; ptrace(2) classes
+  # that read as PTRACE_MODE_READ, which the Yama LSM does not restrict at any
+  # ptrace_scope setting. It can also simply overwrite the action's own
+  # dist/index.js under _actions before the post step starts, because a SHA pin
+  # fixes what was downloaded and not what is on disk when the post step runs.
+  # GitHub's own guidance is that jobs "can interact with (and compromise)"
+  # each other by exactly this class of mechanism, so intra-runner isolation is
+  # not a boundary to build on.
+  #
+  # None of that can be defended from inside a step, and the credential cannot
+  # be scoped away. So the job simply contains nothing that receives it: no
+  # uses:, therefore no JavaScript action, therefore no process in this job
+  # ever holds the runtime token. The same removal closes the step
+  # communication channel for free -- with no post step there is nothing left
+  # in the job to consume a poisoned $GITHUB_ENV.
+  #
+  # The cost is that the checkout is done here rather than by the pinned
+  # action. The repository is public, so the fetch is anonymous and no
+  # credential is created at all, which is strictly less than the action needs;
+  # if the repository ever becomes private this fails loudly at the fetch
+  # rather than quietly restoring a credential. publish still uses the pinned
+  # action, because it runs no repository code.
   verify:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - name: Check out triggering revision
-        id: checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ github.repository }}
-          ref: ${{ github.sha }}
-          token: ${{ github.token }}
-          persist-credentials: false
-          fetch-depth: 1
-          fetch-tags: false
-          show-progress: false
-          lfs: false
-          submodules: false
-          clean: true
-          set-safe-directory: true
-          allow-unsafe-pr-checkout: false
+      - name: Acquire triggering revision without an action
+        id: acquire
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # git reports absent state with a non-zero status in places this step
+          # accepts, so native-command error mapping is disabled the same way
+          # the other governed steps disable it and each status is classified
+          # explicitly instead.
+          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
+              $PSNativeCommandUseErrorActionPreference = $false
+          }
+
+          # Every value below is set by the runner before any repository code
+          # executes, and is read from the environment rather than expanded as
+          # a workflow expression, because no governed script step in this
+          # repository contains an expression at all.
+          $strServerUrl = $env:GITHUB_SERVER_URL
+          $strRepository = $env:GITHUB_REPOSITORY
+          $strSha = $env:GITHUB_SHA
+          if ($strServerUrl -cne 'https://github.com') {
+              throw 'acquire: the runner named an unexpected server'
+          }
+          if ($strRepository -cnotmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {
+              throw 'acquire: the triggering repository is not a plain owner/name pair'
+          }
+          # A full 40-hex commit is required rather than a ref. A ref would let
+          # the fetch resolve to whatever the ref points at when the fetch runs,
+          # which for a push to a busy branch is not necessarily the revision
+          # that triggered this run.
+          if ($strSha -cnotmatch '^[0-9a-f]{40}$') {
+              throw 'acquire: the triggering revision is not a full commit hash'
+          }
+
+          # The workspace is proven empty rather than cleaned. Cleaning would
+          # decide what to delete from state that is already present, while an
+          # emptiness assertion has no such input.
+          if (@([System.IO.Directory]::EnumerateFileSystemEntries($PWD.Path)).Count -ne 0) {
+              throw 'acquire: the workspace is not empty'
+          }
+
+          & git init --quiet .
+          if ($LASTEXITCODE -ne 0) { throw "acquire: git init exited $LASTEXITCODE" }
+          & git remote add origin "$strServerUrl/$strRepository"
+          if ($LASTEXITCODE -ne 0) { throw "acquire: git remote add exited $LASTEXITCODE" }
+          # Fetching the commit itself, not a ref that names it. No credential
+          # is supplied and none is configured, so nothing is persisted for the
+          # next step to have to clean up.
+          & git fetch --depth 1 --no-tags --no-recurse-submodules origin $strSha
+          if ($LASTEXITCODE -ne 0) { throw "acquire: git fetch exited $LASTEXITCODE" }
+          & git checkout --quiet --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw "acquire: git checkout exited $LASTEXITCODE" }
+          $strHead = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $strHead -cne $strSha) {
+              throw 'acquire: the checked out revision is not the triggering revision'
+          }
+          Write-Host "acquire: anonymous shallow checkout of $strSha"
 
       - name: Verify checkout credential cleanup
         id: verify-checkout-credentials
