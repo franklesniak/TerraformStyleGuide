@@ -408,6 +408,36 @@ const REVIEWED_VERIFY_GUARDS = Object.freeze([
   ['if ((-not $objWorktreeAfter.ContainsKey($strPath)) -or ($objWorktreeAfter[$strPath] -cne $objWorktreeBefore[$strPath])) {', [1]],
 ]);
 
+// The generator's command-position surface, enumerated from the reviewed script.
+//
+// The indirect-writer ban below names cmdlets in full, which is the
+// chase-spellings pattern this file criticises everywhere else -- and it was
+// walked through immediately when I attacked it: `sv strGitPath 'git'` and
+// `(gv strGitPath).Value = 'git'` both rebound the Git path and both were
+// accepted, because sv and gv are documented aliases for Set-Variable and
+// Get-Variable and neither name appears in the ban. Enumerating aliases would
+// lose to the next one, so command position is closed positively instead, the
+// way the Markdown steps already are.
+//
+// Mandatory, Heading and Lines are parameter names, not commands; the anchor
+// treats the token after `(` as command position and they are listed rather
+// than the anchor weakened, since narrowing it to exclude `(` would stop it
+// seeing a command inside a subexpression.
+const REVIEWED_GENERATOR_COMMANDS = Object.freeze([
+  'Assert-StyleGuideOrdinaryPath', 'Assert-StyleGuideTrackedDestination',
+  'ForEach-Object', 'Get-Content', 'Get-StyleGuideFileSha256', 'Join-Path',
+  'Measure-Object', 'Microsoft.PowerShell.Core\\Get-Command', 'New-Object',
+  'New-StyleGuideChatVersion', 'New-StyleGuideCopilotVersion',
+  'New-StyleGuideFullVersion', 'New-StyleGuideTerraformInstructionsVersion',
+  'Test-Path', 'Where-Object', 'Write-Error', 'Write-Host', 'Write-Warning',
+  'Write-StyleGuideArtifact',
+  // Control flow and declarations.
+  'break', 'catch', 'continue', 'else', 'elseif', 'exit', 'finally', 'for',
+  'foreach', 'function', 'if', 'param', 'return', 'throw', 'try', 'while',
+  // Parameter names, as above.
+  'Heading', 'Lines', 'Mandatory',
+]);
+
 // Round 52. The generator's dispatch tail, as an ordered sequence of exact
 // statements rather than a wildcard family. Each must appear once, in this
 // order, at brace depth zero, and the terminal exit must follow all of them.
@@ -522,6 +552,10 @@ const MARKDOWN_ENV_WRITE = /\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?[ \t]*\+?=/giu;
 // the same reason -- neither governed step contains any of these today, so this
 // removes a capability rather than narrowing one.
 const MARKDOWN_DYNAMIC_EXECUTION = /\b(?:Invoke-Expression|iex|Invoke-Command|icm|Start-Process|saps)\b|\[\s*(?:System\.)?Management\.Automation\.ScriptBlock\s*\]|\[\s*scriptblock\s*\]\s*::\s*Create|\$ExecutionContext\s*\.\s*InvokeCommand|(?:System\.)?Diagnostics\.Process/iu;
+
+// Command position in the generator. Same anchor as the Markdown steps use,
+// including the exclusion of ${...} interiors added in round 49.
+const GENERATOR_COMMAND_POSITION = /(?:^[ \t]*|(?<!\$)\{[ \t]*|[;}|=(,][ \t]*|&&[ \t]*|\|\|[ \t]*)([A-Za-z_][^\s;{}()]*)/gmu;
 
 // The reviewed shape of each governed step, side by side so the two jobs can be
 // compared at a glance. The preludes are identical and asserted to be; only the
@@ -2903,6 +2937,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   // count stayed exact, the first copy stayed at its reviewed depth, and the
   // third could be made unreachable.
   ['T1-GENERATOR-025', 'a later copy of a reviewed check made unreachable', 'generator', (source) => replaceOnce(source, "                Assert-StyleGuideOrdinaryPath -LiteralPath $strTemporaryPath -ExpectedType 'File'\n                [System.IO.File]::Delete($strTemporaryPath)", "                if ($false) {\n                Assert-StyleGuideOrdinaryPath -LiteralPath $strTemporaryPath -ExpectedType 'File'\n                }\n                [System.IO.File]::Delete($strTemporaryPath)")],
+  ['T1-GENERATOR-026', 'generator edited without re-review', 'generator', (source) => `${source}\n# unreviewed edit\n`],
   ['T1-BUILD-144', 'outside-paths drift guard kept but made unreachable', 'build', (source) => replaceOnce(replaceOnce(source, '              if ($arrOutside.Count -ne 0) {', '              if ($false) { if ($arrOutside.Count -ne 0) {'), '                  throw "git-state: the generator changed $($arrOutside.Count) path(s) outside the four generated artifacts"\n              }\n', '                  throw "git-state: the generator changed $($arrOutside.Count) path(s) outside the four generated artifacts"\n              } }\n')],
   // Balanced deliberately. An unclosed `if ($false) {` shifts the depth of every
   // later gate too, so the suite would report whichever gate happens to come
@@ -3089,7 +3124,12 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-DEPENDABOT-003": "policy: Dependabot configuration differs from the locked policy",
   "T1-MARKDOWN-018": "markdown-policy: markdown.policy.validate is missing a required phase: @('.npmrc', '../.npmrc', '../../.npmrc')",
   "T1-MARKDOWN-019": "markdown-policy: markdown.policy.validate runs a required phase out of order: $env:T1_EXPECTED_BUILD_DIGEST = (Get-FileHash -LiteralPath ./build.yml -Algorithm SHA256).Hash",
-  "T1-GENERATOR-001": "supply-policy: generator does not match its reviewed digest",
+  // Moved onto the command allowlist: its payload calls Add-Content, which is
+  // not a reviewed generator command. T1-GENERATOR-026 replaces the digest
+  // coverage this vacated -- a comment-only edit, which the projection blanks,
+  // so no named rule can see it and only the digest can.
+  "T1-GENERATOR-001": "supply-policy: the generator runs an unreviewed command: Add-Content",
+  "T1-GENERATOR-026": "supply-policy: generator does not match its reviewed digest",
   // Truncation removes the dispatch, so this now reports the specific missing
   // structure rather than "the bytes moved". T1-GENERATOR-001 still covers the
   // digest message: it appends a function and trips nothing else.
@@ -3477,7 +3517,9 @@ export function validateGeneratorPolicy(source) {
   // because a second assignment anywhere would leave the reviewed one intact
   // and still decide what runs -- the same defect, and the same counting fix,
   // as the captured phase statuses in the Markdown steps.
-  const arrGitPathAssignments = generatorCode.match(/\$strGitPath\s*=/gu) ?? [];
+  // Both spellings: PowerShell accepts ${name} as well as $name, and the braced
+  // form rebound the path while this count saw nothing -- measured accepted.
+  const arrGitPathAssignments = generatorCode.match(/\$\{?strGitPath\}?[ \t]*=/gu) ?? [];
   if (arrGitPathAssignments.length !== 1) {
     reject('supply-policy', 'the generator does not assign its Git path exactly once');
   }
@@ -3578,6 +3620,15 @@ export function validateGeneratorPolicy(source) {
   // [ref] cannot write anything on its own.
   if (/\b(?:Set-Variable|New-Variable|Get-Variable|Clear-Variable|Remove-Variable|Set-Item|New-Item)\b|Variable:|PSVariable/iu.test(generatorCode)) {
     reject('supply-policy', 'the generator writes a variable through an indirect API');
+  }
+  // Positive closure of the same surface. The ban above stays because it also
+  // catches the Variable: provider and the PSVariable API, which are not
+  // command-position tokens; this catches every alias and every writer nobody
+  // has thought of, which the ban cannot.
+  for (const objToken of generatorCode.matchAll(GENERATOR_COMMAND_POSITION)) {
+    if (!REVIEWED_GENERATOR_COMMANDS.includes(objToken[1])) {
+      reject('supply-policy', `the generator runs an unreviewed command: ${objToken[1]}`);
+    }
   }
   // The safety assertions themselves, by exact count. Each of these was deleted
   // or disabled in the battery above and the policy still passed, because
