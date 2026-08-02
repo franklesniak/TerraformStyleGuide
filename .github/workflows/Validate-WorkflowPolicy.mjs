@@ -155,6 +155,16 @@ const NETWORK_CLIENT = /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|i
 // intentional edit before then is expected to update this digest deliberately.
 const REVIEWED_PUSH_STEP_DIGEST = 'a06736b81cac51f56b93eb77477cbab4504fed961f4acfa9a04ad79af679cde7';
 
+// The Markdown validation step captures each phase status into a variable and
+// defers the failure decision to a final check. The structural assertions below
+// count direct "$intPolicyExit =" assignments, which a rewrite can satisfy while
+// still zeroing the captured value -- Set-Variable -Name intPolicyExit -Value 0
+// changes the variable without matching the assignment syntax being counted.
+// Enumerating the indirect writers (Set-Variable, New-Variable, the Variable:
+// provider, [ref] handles) is the same losing shape, so the whole reviewed
+// script is pinned instead: any edit at all changes this digest.
+const REVIEWED_VALIDATION_STEP_DIGEST = 'e4157f6e13dc2863b2339ba16b8fbe73a380d6c2edb0f418c6604aef66aa1c01';
+
 // The generator is repository-controlled code that runs in a job holding a
 // contents-write token, one step ahead of the push. Its version marker is fixed,
 // but a version marker constrains a string, not behaviour: the body can be
@@ -728,6 +738,15 @@ export function validateMarkdownPolicy(workflow, source) {
     }
   }
 
+  // Closing backstop, mirroring the temporary writer's push step. The assertions
+  // above are kept because they name what changed; this pins everything they do
+  // not model -- an indirect write to a captured status through Set-Variable,
+  // New-Variable, the Variable: provider, or a [ref] handle, none of which
+  // contain the assignment syntax counted above.
+  if (createHash('sha256').update(validation.run, 'utf8').digest('hex') !== REVIEWED_VALIDATION_STEP_DIGEST) {
+    reject('markdown-policy', 'Markdown validation script does not match its reviewed digest');
+  }
+
   validateActionMultiset(source, [ACTIONS.checkout, ACTIONS.setupNode]);
 }
 
@@ -953,6 +972,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   }],
   ['T1-BUILD-072', 'runner communication file check removed', 'build', (source) => replaceOnce(source, "                  throw 'runner-state: the generator wrote to a runner step communication file'\n", "                  Write-Host 'channel written'\n")],
   ['T1-MARKDOWN-020', 'lint asset digest gate removed', 'markdown', (source) => replaceOnce(source, '          if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {\n              throw \'supply: lint configuration or helper does not match the reviewed digest\'\n          }\n', '')],
+  ['T1-MARKDOWN-021', 'captured lint status reset indirectly through Set-Variable', 'markdown', (source) => replaceOnce(source, '          $intNestedExit = $LASTEXITCODE\n', '          $intNestedExit = $LASTEXITCODE\n          Set-Variable -Name intPolicyExit -Value 0\n')],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
     'lint-nested-markdown.js': '',
