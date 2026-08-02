@@ -161,7 +161,7 @@ const REVIEWED_VALIDATION_STEP_DIGEST = 'e4157f6e13dc2863b2339ba16b8fbe73a380d6c
 // while skipping the probes entirely, and the upload action then publishes
 // artifacts labelled verified. The same backstop the Markdown step and the
 // former push step carry applies here for the same reason.
-const REVIEWED_VERIFY_STEP_DIGEST = '9c05c573b218b87f5eec58f1143aec1b6c0392cd0d7c740ddcc9605f7ef7e13c';
+const REVIEWED_VERIFY_STEP_DIGEST = '4e0b4dffc82da6bcd3d086c9f11f38c4cb39b159bd7ed2814153b293c3c92ae5';
 
 // The generator is repository-controlled code that runs in a job holding a
 // contents-write token, one step ahead of the push. Its version marker is fixed,
@@ -439,6 +439,18 @@ export function validateBuildPolicy(workflow, source) {
       generateStep.run.indexOf('$strControlSurfaceBefore = Get-GitControlSurfaceDigest') > generateStep.run.indexOf('& pwsh -NoProfile') ||
       generateStep.run.indexOf('git-state: the generator changed repository Git configuration or hooks') < generateStep.run.indexOf('& pwsh -NoProfile')) {
     reject('git-policy', 'build.verify does not bracket the generator with a Git control-surface digest');
+  }
+  // upload-generated runs after this step, so anything the generator writes to
+  // the runner step communication files is applied to it. That step is an
+  // action on Node holding the Actions artifact token, and it publishes the
+  // artifact this job labels verified. The generator now runs in a child
+  // process, which closes the in-session channels but not these: they are
+  // files, writable from any process.
+  if (!generateStep.run.includes('New-Variable -Name arrChannelPaths -Value @($env:GITHUB_ENV, $env:GITHUB_PATH) -Option Constant') ||
+      !generateStep.run.includes('runner-state: the generator wrote to a runner step communication file') ||
+      generateStep.run.indexOf('New-Variable -Name arrChannelPaths') > generateStep.run.indexOf('& pwsh -NoProfile') ||
+      generateStep.run.indexOf('runner-state: the generator wrote to a runner step communication file') < generateStep.run.indexOf('& pwsh -NoProfile')) {
+    reject('side-effect-policy', 'build.verify does not assert the runner step communication files are empty');
   }
   // The control-surface digest covers repository-local configuration only.
   // Git also loads system and global configuration on every invocation, and a
@@ -807,6 +819,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-GENERATOR-001', 'generator body rewritten under an unchanged version marker', 'generator', (source) => `${source}\nfunction Invoke-Unreviewed { Add-Content -Path $env:GITHUB_PATH -Value '/tmp/hijack' }\n`],
   ['T1-GENERATOR-002', 'generator truncated', 'generator', (source) => source.slice(0, Math.floor(source.length / 2))],
   ['T1-MARKDOWN-020', 'lint asset digest gate removed', 'markdown', (source) => replaceOnce(source, '          if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {\n              throw \'supply: lint configuration or helper does not match the reviewed digest\'\n          }\n', '')],
+  ['T1-BUILD-082', 'runner communication file check absent from verify', 'build', (source) => replaceOnce(source, "          foreach ($strChannel in $arrChannelPaths) {\n              if ([string]::IsNullOrEmpty($strChannel)) { throw 'runner-state: a step communication file path is unset' }\n              if ([System.IO.FileInfo]::new($strChannel).Length -ne 0) {\n                  throw 'runner-state: the generator wrote to a runner step communication file'\n              }\n          }\n", '')],
   ['T1-BUILD-081', 'probes reinherit global Git configuration', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_GLOBAL'] = '/dev/null'\n", '')],
   ['T1-BUILD-080', 'generated-artifact drift tolerated again', 'build', (source) => replaceOnce(source, "          if ($objDiff.ExitCode -eq 1) {\n              throw 'generated-artifacts: committed artifacts do not match generator output. Run ./.github/workflows/Generate-StyleGuideArtifacts.ps1 and commit the four regenerated files.'\n          }\n", '')],
   ['T1-BUILD-078', 'Git control-surface digest check removed', 'build', (source) => replaceOnce(source, "          if ((Get-GitControlSurfaceDigest) -cne $strControlSurfaceBefore) {\n              throw 'git-state: the generator changed repository Git configuration or hooks'\n          }\n", '')],

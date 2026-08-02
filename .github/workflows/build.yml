@@ -200,6 +200,16 @@ jobs:
           }
           $strControlSurfaceBefore = Get-GitControlSurfaceDigest
 
+          # The runner applies whatever a step writes to these two files to every
+          # later step in the job, and upload-generated runs after this one. It
+          # is an action executing on Node with access to the Actions artifact
+          # API, so a variable such as NODE_OPTIONS projected into it would run
+          # attacker code inside the step that publishes the artifact this job
+          # labels verified. The process boundary does not help: these are files
+          # on disk, and the generator can write them from any process.
+          # Emptiness is asserted rather than the absence of named variables.
+          New-Variable -Name arrChannelPaths -Value @($env:GITHUB_ENV, $env:GITHUB_PATH) -Option Constant
+
           # The generator runs in its own process, not in this session. In-session
           # it could shadow a cmdlet with a function, reassign a variable in this
           # scope, or prepend a directory to PATH, and every check below would
@@ -211,6 +221,13 @@ jobs:
 
           if ((Get-GitControlSurfaceDigest) -cne $strControlSurfaceBefore) {
               throw 'git-state: the generator changed repository Git configuration or hooks'
+          }
+
+          foreach ($strChannel in $arrChannelPaths) {
+              if ([string]::IsNullOrEmpty($strChannel)) { throw 'runner-state: a step communication file path is unset' }
+              if ([System.IO.FileInfo]::new($strChannel).Length -ne 0) {
+                  throw 'runner-state: the generator wrote to a runner step communication file'
+              }
           }
 
           $objWorking = Invoke-GitRaw @('diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--')
