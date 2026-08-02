@@ -442,6 +442,15 @@ export function validateBuildPolicy(workflow, source) {
     if (/\$\{\{/u.test(serialized)) {
       reject('credential-policy', `${jobId}.${id} contains a workflow expression`);
     }
+    // Every assertion in this file matches text, so text that never executes can
+    // satisfy one: a here-string or a block comment carrying an approved command
+    // reads identically to the command itself. Neither governed script step uses
+    // either construct, so both are refused and a match therefore means a
+    // statement. Without this, anchoring the generator invocation to its own
+    // line buys nothing -- here-string content sits at column zero too.
+    if (/@['"]|<#/u.test(run)) {
+      reject('side-effect-policy', `${jobId}.${id} uses a here-string or block comment`);
+    }
     // No job in this workflow holds contents: write, so there is no approved
     // push, commit, or staging path anywhere in it. These are flat refusals
     // rather than exemptions keyed to a step id.
@@ -466,11 +475,17 @@ export function validateBuildPolicy(workflow, source) {
   // directory to PATH -- each of which redirects the checks onto something it
   // chose. A process boundary removes the class instead of naming its members,
   // so the invocation form is policy rather than style.
-  if (!generateStep.run.includes('& pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1')) {
-    reject('side-effect-policy', 'the generator no longer runs across a process boundary');
-  }
   if (/^\s*& \.\/\.github\/workflows\/Generate-StyleGuideArtifacts\.ps1\s*$/mu.test(generateStep.run)) {
     reject('side-effect-policy', 'the generator is invoked in-session');
+  }
+  // Matched as a statement on its own line, not as a substring. A substring is
+  // satisfied by text that never executes -- a comment, or a single-quoted
+  // here-string containing the approved command -- and the positional checks
+  // below anchor on the same match, so inert text would move the "after the
+  // generator" region somewhere harmless while the generator never ran.
+  const generatorStatement = /^& pwsh -NoProfile -NonInteractive -File \.\/\.github\/workflows\/Generate-StyleGuideArtifacts\.ps1$/mu;
+  if ((generateStep.run.match(generatorStatement) ?? []).length !== 1) {
+    reject('side-effect-policy', 'the generator is not invoked exactly once as a statement');
   }
   // Git is resolved from a fixed candidate list before the generator runs and
   // held in a constant. A PATH lookup or Get-Command call placed after the
@@ -606,10 +621,20 @@ export function validateBuildPolicy(workflow, source) {
   // after the generator is a probe. A return there is a bypass whatever it
   // looks like, and the region after the generator is precisely the region
   // that must not be short-circuited.
-  const generatorIndex = generateStep.run.indexOf('& pwsh -NoProfile');
+  const generatorIndex = generateStep.run.search(generatorStatement);
   const afterGenerator = generateStep.run.slice(generatorIndex);
   if (generatorIndex < 0 || /\breturn\b/iu.test(afterGenerator)) {
     reject('side-effect-policy', 'build.verify returns from the script after the generator runs');
+  }
+  // Every probe reports by throwing, so a handler around the governed region
+  // turns each verdict into a no-op and the step succeeds having rejected
+  // nothing. try/finally is used legitimately -- five of them, all disposing a
+  // hash or a process -- but every one is inside a function defined before the
+  // generator, so the same boundary that separates the returns separates these.
+  // trap is included because it suppresses terminating errors script-wide,
+  // which is the same effect reached by a different keyword.
+  if (/\b(?:catch|trap)\b/iu.test(afterGenerator)) {
+    reject('side-effect-policy', 'build.verify can suppress a probe failure after the generator runs');
   }
   // Redirected stdout and stderr must be drained concurrently. Reading either to
   // completion before the other deadlocks once the child fills the unread pipe,
@@ -791,8 +816,29 @@ export function validateMarkdownPolicy(workflow, source) {
       (validation.run.match(/^\s*& \$strNpmPath run lint:md:nested\s*$/gmu) ?? []).length !== 1) {
     reject('markdown-policy', 'each locked lint script must run exactly once');
   }
-  if (/continue-on-error|secrets\./iu.test(source) || NETWORK_CLIENT.test(source)) {
-    reject('markdown-policy', 'Markdown workflow weakens failure, credential, or network policy');
+  if (/continue-on-error/iu.test(source) || NETWORK_CLIENT.test(source)) {
+    reject('markdown-policy', 'Markdown workflow weakens failure or network policy');
+  }
+  // The credential scan and the expression ban were added to build.yml's script
+  // steps and not to this one, so the invariant "no governed script step
+  // contains an expression" held in one file and not the other -- a fix applied
+  // to the instance rather than the class, which is the mistake this pull
+  // request has now made often enough to assert against.
+  //
+  // The step is scanned rather than the file: markdownlint.yml legitimately
+  // carries token: ${{ github.token }} on setup-node, and an action step is not
+  // what this rule governs.
+  const validationSerialized = JSON.stringify(validation);
+  if (/secrets\./iu.test(validationSerialized) ||
+      /GITHUB_TOKEN/iu.test(validationSerialized) ||
+      /github\.token/iu.test(validationSerialized)) {
+    reject('markdown-policy', 'markdown.validate-and-lint expands an unapproved credential');
+  }
+  if (/\$\{\{/u.test(validationSerialized)) {
+    reject('markdown-policy', 'markdown.validate-and-lint contains a workflow expression');
+  }
+  if (/@['"]|<#/u.test(validation.run)) {
+    reject('markdown-policy', 'markdown.validate-and-lint uses a here-string or block comment');
   }
   // Each captured phase status must be assigned exactly once, from $LASTEXITCODE.
   // Otherwise a later reassignment such as "$intPolicyExit = 0" leaves every
@@ -1047,6 +1093,14 @@ const FIXTURE_INVENTORY = Object.freeze([
   // A top-level return exits the script exactly as exit would, and every
   // fragment and ordering assertion still passes.
   ['T1-BUILD-101', 'top-level return inserted after the generator', 'build', (source) => replaceOnce(source, '          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }\n', '          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }\n          return\n')],
+  // Inert text satisfies a substring match. This wraps the approved invocation
+  // in a single-quoted here-string, so the command appears verbatim in the
+  // script and never executes.
+  ['T1-BUILD-104', 'generator invocation present only as inert text', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', "          $strInert = '& pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1'\n          $global:LASTEXITCODE = 0\n")],
+  ['T1-BUILD-106', 'here-string introduced into a governed script step', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', "          $strNote = @'\n          inert\n          '@\n          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n")],
+  // Every probe reports by throwing, so an empty handler around them turns each
+  // verdict into a no-op while the step still succeeds.
+  ['T1-BUILD-105', 'probe failures suppressed by an empty handler', 'build', (source) => replaceOnce(source, '          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }\n', '          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }\n          try {\n          } catch {\n          }\n')],
   ['T1-BUILD-102', 'origin cardinality check removed from credential cleanup', 'build', (source) => replaceOnce(source, '          $arrRemoteUrls = @(& git remote get-url --all origin)\n          if ($LASTEXITCODE -ne 0 -or $arrRemoteUrls.Count -ne 1) {\n', '          $arrRemoteUrls = @(& git remote get-url --all origin)\n          if ($LASTEXITCODE -ne 0) {\n')],
   ['T1-BUILD-103', 'credential-free origin URL shape no longer required', 'build', (source) => replaceOnce(source, "          if ($arrRemoteUrls[0] -notmatch '^https://github\\.com/[^/@]+/[^/@]+(?:\\.git)?$') {\n", "          if ($arrRemoteUrls[0] -notmatch '^https://') {\n")],
   // Every assertion on the credential step tests for presence, which an early
@@ -1076,6 +1130,8 @@ const FIXTURE_INVENTORY = Object.freeze([
   // The lint job runs repository-controlled code and both of its actions have
   // post steps that outlive it, so it must hold no scopes for the same reason
   // build.verify holds none.
+  // The expression ban must hold in both files, not just build.yml.
+  ['T1-MARKDOWN-023', 'expression reaching a credential in the lint step name', 'markdown', (source) => replaceOnce(source, '      - name: Install, validate policy, and lint both Markdown surfaces\n', "      - name: Install, validate ${{ github['token'] }} policy, and lint both Markdown surfaces\n")],
   ['T1-MARKDOWN-022', 'lint job regains a token scope', 'markdown', (source) => replaceOnce(source, '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions: {}\n', '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n')],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -1222,6 +1278,9 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-098": "credential-policy: verify.generate-and-verify expands an unapproved credential",
   "T1-BUILD-100": "credential-policy: verify.generate-and-verify contains a workflow expression",
   "T1-BUILD-101": "side-effect-policy: build.verify returns from the script after the generator runs",
+  "T1-BUILD-104": "side-effect-policy: the generator is not invoked exactly once as a statement",
+  "T1-BUILD-106": "side-effect-policy: verify.generate-and-verify uses a here-string or block comment",
+  "T1-BUILD-105": "side-effect-policy: build.verify can suppress a probe failure after the generator runs",
   "T1-BUILD-102": "credential-policy: build.verify.verify-checkout-credentials no longer asserts exactly one origin URL",
   "T1-BUILD-103": "credential-policy: build.verify.verify-checkout-credentials no longer asserts a credential-free GitHub HTTPS origin",
   "T1-BUILD-099": "credential-policy: build.verify.verify-checkout-credentials adds control flow that can bypass a required assertion",
@@ -1239,12 +1298,13 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-080": "side-effect-policy: build.verify tolerates generated-artifact drift",
   "T1-BUILD-078": "git-policy: build.verify does not bracket the generator with a Git control-surface digest",
   "T1-BUILD-079": "side-effect-policy: build.verify adds control flow that can bypass a required probe",
-  "T1-BUILD-073": "side-effect-policy: the generator no longer runs across a process boundary",
+  "T1-BUILD-073": "side-effect-policy: the generator is invoked in-session",
   "T1-BUILD-074": "git-policy: build.verify does not pin the Git executable before repository code runs",
   "T1-BUILD-075": "git-policy: build.verify does not pin the Git executable before repository code runs",
   "T1-BUILD-076": "side-effect-policy: verify.generate-and-verify adds a push path to a read-only workflow",
   "T1-BUILD-077": "side-effect-policy: verify.generate-and-verify adds a repository mutation to a read-only workflow",
   "T1-MARKDOWN-021": "markdown-policy: Markdown validation script does not match its reviewed digest",
+  "T1-MARKDOWN-023": "markdown-policy: markdown.validate-and-lint contains a workflow expression",
   "T1-MARKDOWN-022": "policy: Markdown job permissions differs from the locked policy",
   "T1-LINTASSET-001": "supply-policy: .markdownlint.jsonc does not match its reviewed digest",
   "T1-LINTASSET-002": "supply-policy: lint-nested-markdown.js does not match its reviewed digest",
