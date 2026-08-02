@@ -10,43 +10,95 @@ permissions:
   contents: read
 
 jobs:
-  # No scopes, for the same reason build.yml's verify job has none. This job
-  # runs repository-controlled code -- lint-nested-markdown.js, the rule
-  # configuration, and every file the linters read -- and both actions it uses
-  # register post steps that execute after that code has run. checkout's is
-  # unconditional and setup-node's runs on success, and both receive this job's
-  # token as an input. A descendant left behind by anything in the lint phases
-  # can write the runner step communication files after every step has ended,
-  # so the token is given no scopes rather than the channel being defended.
+  # No scopes and no actions, for the same reasons build.yml's verify job has
+  # neither, and the second is not optional once the first is understood.
+  #
+  # This job runs repository-controlled code: Validate-WorkflowPolicy.mjs is
+  # executed out of the checkout, so a pull request that rewrites it runs the
+  # rewritten one; lint-nested-markdown.js is the whole of the second lint
+  # phase; and npm installs and executes a hundred-odd packages. Both actions
+  # this job used to declare registered post steps that run after all of that.
+  #
+  # permissions: {} does not reach those post steps. ACTIONS_RUNTIME_TOKEN
+  # comes from the job's system connection rather than the permissions map --
+  # NodeScriptActionHandler assigns it unconditionally, before deciding whether
+  # it is running an action's pre, main or post script -- so any JavaScript
+  # action here is a process holding a credential this job cannot revoke, and a
+  # descendant left behind by the lint phases can read it out of that process
+  # or simply overwrite the post script on disk before it runs.
+  #
+  # Today that dead-ends: this is a separate workflow, so it is a separate run
+  # with its own artifact namespace and no artifacts in it. It stops
+  # dead-ending at #22, which invokes this file through workflow_call from
+  # build.yml -- same run, same artifact namespace, alongside the writer. So it
+  # is removed here rather than left for the change that has to do everything
+  # else.
   markdownlint:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      - name: Check out triggering revision
-        id: checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ github.repository }}
-          ref: ${{ github.sha }}
-          token: ${{ github.token }}
-          persist-credentials: false
-          fetch-depth: 1
-          fetch-tags: false
-          show-progress: false
-          lfs: false
-          submodules: false
-          clean: true
-          set-safe-directory: true
-          allow-unsafe-pr-checkout: false
+      - name: Acquire triggering revision and pinned toolchain without an action
+        id: acquire
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
+              $PSNativeCommandUseErrorActionPreference = $false
+          }
 
-      - name: Set up exact hosted Node.js
-        id: setup-node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '24.18.1'
-          check-latest: false
-          package-manager-cache: false
-          token: ${{ github.token }}
+          # Read from the environment rather than expanded as a workflow
+          # expression, because no governed script step in this repository
+          # contains an expression at all.
+          $strServerUrl = $env:GITHUB_SERVER_URL
+          $strRepository = $env:GITHUB_REPOSITORY
+          $strSha = $env:GITHUB_SHA
+          if ($strServerUrl -cne 'https://github.com') {
+              throw 'acquire: the runner named an unexpected server'
+          }
+          if ($strRepository -cnotmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {
+              throw 'acquire: the triggering repository is not a plain owner/name pair'
+          }
+          if ($strSha -cnotmatch '^[0-9a-f]{40}$') {
+              throw 'acquire: the triggering revision is not a full commit hash'
+          }
+          if (@([System.IO.Directory]::EnumerateFileSystemEntries($PWD.Path)).Count -ne 0) {
+              throw 'acquire: the workspace is not empty'
+          }
+
+          & git init --quiet .
+          if ($LASTEXITCODE -ne 0) { throw "acquire: git init exited $LASTEXITCODE" }
+          & git remote add origin "$strServerUrl/$strRepository"
+          if ($LASTEXITCODE -ne 0) { throw "acquire: git remote add exited $LASTEXITCODE" }
+          & git fetch --depth 1 --no-tags --no-recurse-submodules origin $strSha
+          if ($LASTEXITCODE -ne 0) { throw "acquire: git fetch exited $LASTEXITCODE" }
+          & git checkout --quiet --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw "acquire: git checkout exited $LASTEXITCODE" }
+          $strHead = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $strHead -cne $strSha) {
+              throw 'acquire: the checked out revision is not the triggering revision'
+          }
+
+          # The Node distribution is fetched here rather than by setup-node.
+          # The archive URL and its expected digest are reviewed constants, so
+          # nothing here trusts what the server returns -- which is a stronger
+          # supply assertion than the action carried, since this repository
+          # never verified anything setup-node downloaded. The step already
+          # performs network I/O in any case: npm ci fetches the whole
+          # dependency tree a few lines below.
+          $strNodeUrl = 'https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz'
+          $strReviewedNodeSha256 = 'D6C664DF3F3F61458E8C277585571328522D705166723A7C7823A9253A4D15A0'
+          $strNodeRoot = [System.IO.Path]::Combine($env:RUNNER_TEMP, 'node24')
+          $strArchivePath = [System.IO.Path]::Combine($env:RUNNER_TEMP, 'node24.tar.xz')
+          & curl --silent --show-error --fail --location --proto '=https' --tlsv1.2 --output $strArchivePath $strNodeUrl
+          if ($LASTEXITCODE -ne 0) { throw "acquire: node download exited $LASTEXITCODE" }
+          $strObservedNodeSha256 = (Get-FileHash -LiteralPath $strArchivePath -Algorithm SHA256).Hash
+          if ($strObservedNodeSha256 -cne $strReviewedNodeSha256) {
+              throw 'acquire: the Node archive does not match the reviewed digest'
+          }
+          [void][System.IO.Directory]::CreateDirectory($strNodeRoot)
+          & tar -xJf $strArchivePath -C $strNodeRoot --strip-components=1
+          if ($LASTEXITCODE -ne 0) { throw "acquire: node extraction exited $LASTEXITCODE" }
+          Write-Host "acquire: revision $strSha and the reviewed Node distribution"
 
       - name: Install, validate policy, and lint both Markdown surfaces
         id: validate-and-lint
@@ -58,15 +110,20 @@ jobs:
               $PSNativeCommandUseErrorActionPreference = $false
           }
 
-          $arrNodeCommands = @(Get-Command node -CommandType Application -ErrorAction Stop)
-          $arrNpmCommands = @(Get-Command npm -CommandType Application -ErrorAction Stop)
-          if ($arrNodeCommands.Count -eq 0 -or $arrNpmCommands.Count -eq 0) {
-              throw 'toolchain: node or npm was not resolved as an application'
+          # Fixed paths into the distribution the previous step downloaded and
+          # verified against a reviewed digest, rather than a PATH lookup.
+          # Get-Command consults the command table and PATH, and this is the
+          # step that runs repository-controlled code, so resolving through
+          # either would let that code choose which node runs. The bin
+          # directory is still prepended to PATH because npm's shim resolves
+          # its interpreter through env.
+          $strNodeRoot = [System.IO.Path]::Combine($env:RUNNER_TEMP, 'node24')
+          $strNodePath = [System.IO.Path]::Combine($strNodeRoot, 'bin', 'node')
+          $strNpmPath = [System.IO.Path]::Combine($strNodeRoot, 'bin', 'npm')
+          if (-not [System.IO.File]::Exists($strNodePath) -or -not [System.IO.File]::Exists($strNpmPath)) {
+              throw 'toolchain: the reviewed Node distribution is not present'
           }
-          $objNodeCommand = $arrNodeCommands[0]
-          $objNpmCommand = $arrNpmCommands[0]
-          $strNodePath = $objNodeCommand.Source
-          $strNpmPath = $objNpmCommand.Source
+          $env:PATH = [System.IO.Path]::Combine($strNodeRoot, 'bin') + [System.IO.Path]::PathSeparator + $env:PATH
           $strNodeVersion = (& $strNodePath --version).Trim()
           $intNodeVersionExit = $LASTEXITCODE
           $strNpmVersion = (& $strNpmPath --version).Trim()

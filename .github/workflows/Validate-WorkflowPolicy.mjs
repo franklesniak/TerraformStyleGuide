@@ -15,6 +15,10 @@ const ACTIONS = Object.freeze({
     reference: 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1',
     release: 'v7.0.1',
   }),
+  // Retained without a current use: no job runs this action now that the lint
+  // job acquires its own Node distribution, but #20 still names the pin and
+  // T1B reintroduces the role, so the reviewed identity stays under review
+  // rather than being dropped and re-established later.
   setupNode: Object.freeze({
     reference: 'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020',
     release: 'v7.0.0',
@@ -80,13 +84,6 @@ const CHECKOUT_INPUTS = Object.freeze({
   clean: true,
   'set-safe-directory': true,
   'allow-unsafe-pr-checkout': false,
-});
-
-const SETUP_NODE_INPUTS = Object.freeze({
-  'node-version': '24.18.1',
-  'check-latest': false,
-  'package-manager-cache': false,
-  token: '${{ github.token }}',
 });
 
 const UPLOAD_INPUTS = Object.freeze({
@@ -155,7 +152,7 @@ const NETWORK_CLIENT = /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|i
 // Enumerating the indirect writers (Set-Variable, New-Variable, the Variable:
 // provider, [ref] handles) is the same losing shape, so the whole reviewed
 // script is pinned instead: any edit at all changes this digest.
-const REVIEWED_VALIDATION_STEP_DIGEST = 'e4157f6e13dc2863b2339ba16b8fbe73a380d6c2edb0f418c6604aef66aa1c01';
+const REVIEWED_VALIDATION_STEP_DIGEST = 'd5880b7ecb20dcfa4fc115bfadec92cd8b76129ffd4f4550dc9f785ac61651b7';
 
 // The credential-cleanup step's assertions all test for the presence of a
 // sequence, and presence is not execution: an inserted early exit satisfies
@@ -172,11 +169,38 @@ const REVIEWED_CREDENTIAL_STEP_DIGEST = 'cec60ee92660f500987f0b14926e85add62b987
 // the former push step carry applies here for the same reason.
 const REVIEWED_VERIFY_STEP_DIGEST = '238b85b3f36cc5bc4a4b8a023342617be23c60cdc36060f083541c7b02f6a360';
 
-// The acquire step replaces the pinned checkout action in the one job that runs
-// repository code, so it is held to the same standard as the step that ran
-// before it: its substantive assertions are named individually below, and the
-// whole script is pinned behind them.
-const REVIEWED_ACQUIRE_STEP_DIGEST = '0eb96c20d7d2adfd724248f504b2fc5eb1b9306b8f51640ed7a0bafacdc5ff8c';
+// Both jobs that run repository-controlled code now acquire their own revision
+// instead of using an action to do it, so neither contains a process holding
+// ACTIONS_RUNTIME_TOKEN. Each acquire step is held to the standard the action
+// it replaced was held to: substantive assertions named individually, and the
+// whole script pinned behind them.
+const BUILD_ACQUIRE = Object.freeze({
+  name: 'Acquire triggering revision without an action',
+  classifiedStatuses: 5,
+  digest: '0eb96c20d7d2adfd724248f504b2fc5eb1b9306b8f51640ed7a0bafacdc5ff8c',
+});
+
+// The Markdown job additionally brings the Node distribution setup-node used to
+// supply. The archive and its digest are reviewed constants rather than
+// whatever the server returns, which is a stronger supply assertion than the
+// action carried: nothing in this repository ever verified what setup-node
+// downloaded. The linux-x64 archive digest below was checked against the
+// published SHASUMS256.txt for v24.18.1.
+const REVIEWED_NODE_ARCHIVE_SHA256 = 'D6C664DF3F3F61458E8C277585571328522D705166723A7C7823A9253A4D15A0';
+const MARKDOWN_ACQUIRE = Object.freeze({
+  name: 'Acquire triggering revision and pinned toolchain without an action',
+  classifiedStatuses: 7,
+  digest: '8416025cdcf74b9157bff09d4e931710f904c67c1321235a5e3398c18e6270b6',
+  extraSequences: Object.freeze([
+    ['the exact reviewed Node archive',
+      "$strNodeUrl = 'https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz'"],
+    ['the reviewed Node archive digest',
+      `$strReviewedNodeSha256 = '${REVIEWED_NODE_ARCHIVE_SHA256}'`],
+    ['that the downloaded archive matches that digest before it is used',
+      '$strObservedNodeSha256 = (Get-FileHash -LiteralPath $strArchivePath -Algorithm SHA256).Hash\n' +
+      'if ($strObservedNodeSha256 -cne $strReviewedNodeSha256) {'],
+  ]),
+});
 
 // The generator is repository-controlled code that the verify job executes. Its
 // version marker is fixed, but a version marker constrains a string, not
@@ -442,7 +466,7 @@ export function validateBuildPolicy(workflow, source) {
   // values they appended to the runner's step communication files once the
   // in-step emptiness assertion could no longer observe them.
   assertEqual(verifyIds, ['acquire', 'verify-checkout-credentials', 'generate-and-verify'], 'build.verify step order');
-  validateAcquireStep(findStep(verify, 'acquire', 'build.verify'), 'build.verify.acquire');
+  validateAcquireStep(findStep(verify, 'acquire', 'build.verify'), 'build.verify.acquire', BUILD_ACQUIRE);
   validateCredentialCleanupStep(
     findStep(verify, 'verify-checkout-credentials', 'build.verify'),
     'build.verify.verify-checkout-credentials',
@@ -774,9 +798,14 @@ export function validateBuildPolicy(workflow, source) {
   validateActionMultiset(source, [ACTIONS.checkout, ACTIONS.uploadArtifact]);
 }
 
-function validateAcquireStep(step, label) {
+// Shared by both jobs that run repository-controlled code, because both now
+// acquire their own revision rather than using an action to do it. The two
+// differ only in what else they have to bring: build.verify needs nothing but
+// the tree, and markdown.markdownlint also needs the Node distribution that
+// setup-node used to supply.
+function validateAcquireStep(step, label, expected) {
   assertKeys(step, ['name', 'id', 'shell', 'run'], label);
-  if (step.name !== 'Acquire triggering revision without an action' || step.shell !== 'pwsh') {
+  if (step.name !== expected.name || step.shell !== 'pwsh') {
     reject('acquire-policy', `${label} execution contract changed`);
   }
   // Named, not positional, and each with its own fixture -- the same correction
@@ -808,7 +837,7 @@ function validateAcquireStep(step, label) {
       '$strHead = (& git rev-parse HEAD).Trim()\n' +
       'if ($LASTEXITCODE -ne 0 -or $strHead -cne $strSha) {'],
   ];
-  for (const [requirement, sequence] of requiredSequences) {
+  for (const [requirement, sequence] of [...requiredSequences, ...(expected.extraSequences ?? [])]) {
     if (!step.run.includes(sequence)) {
       reject('acquire-policy', `${label} no longer asserts ${requirement}`);
     }
@@ -823,13 +852,13 @@ function validateAcquireStep(step, label) {
   // Every native status is classified. A missing classification is a step that
   // proceeds on a failed fetch and then digests whatever is on disk.
   const classifiedStatuses = step.run.match(/^if \(\$LASTEXITCODE -ne 0/gmu)?.length ?? 0;
-  if (classifiedStatuses !== 5) {
+  if (classifiedStatuses !== expected.classifiedStatuses) {
     reject('acquire-policy', `${label} native-status classification count changed`);
   }
   if (/\b(?:exit|break|continue|trap)\b/iu.test(step.run)) {
     reject('acquire-policy', `${label} adds control flow that can bypass a required assertion`);
   }
-  if (createHash('sha256').update(step.run, 'utf8').digest('hex') !== REVIEWED_ACQUIRE_STEP_DIGEST) {
+  if (createHash('sha256').update(step.run, 'utf8').digest('hex') !== expected.digest) {
     reject('acquire-policy', `${label} script does not match its reviewed digest`);
   }
 }
@@ -908,13 +937,19 @@ export function validateMarkdownPolicy(workflow, source) {
   const job = workflow.jobs.markdownlint;
   assertKeys(job, ['runs-on', 'permissions', 'steps'], 'markdown.markdownlint');
   if (job['runs-on'] !== 'ubuntu-latest') reject('policy', 'Markdown runner changed');
-  // Same rule as build.verify. This job runs repository-controlled code, and
-  // both of its actions register post steps that execute afterwards holding
-  // this job's token -- checkout's unconditionally, setup-node's on success.
+  // Same two rules as build.verify, and for the same reason in the same order.
+  // No scopes, because this job runs repository-controlled code; and no
+  // actions, because the scopes are not what the exposure runs on. A
+  // JavaScript action receives ACTIONS_RUNTIME_TOKEN from the job's system
+  // connection whatever the permissions map says, and its post step executes
+  // after the lint phases have run repository code. Removing the actions is
+  // what removes the credential from the job.
   assertEqual(job.permissions, {}, 'Markdown job permissions');
-  assertEqual(job.steps.map((step) => step?.id), ['checkout', 'setup-node', 'validate-and-lint'], 'Markdown step order');
-  assertActionStep(findStep(job, 'checkout', 'markdown.markdownlint'), 'markdown.checkout', ACTIONS.checkout, CHECKOUT_INPUTS);
-  assertActionStep(findStep(job, 'setup-node', 'markdown.markdownlint'), 'markdown.setup-node', ACTIONS.setupNode, SETUP_NODE_INPUTS);
+  for (const step of job.steps) {
+    if ('uses' in step) reject('isolation-policy', `markdown.${step.id} uses an action`);
+  }
+  assertEqual(job.steps.map((step) => step?.id), ['acquire', 'validate-and-lint'], 'Markdown step order');
+  validateAcquireStep(findStep(job, 'acquire', 'markdown.markdownlint'), 'markdown.acquire', MARKDOWN_ACQUIRE);
 
   const validation = findStep(job, 'validate-and-lint', 'markdown.markdownlint');
   assertKeys(validation, ['name', 'id', 'shell', 'working-directory', 'run'], 'markdown.validate-and-lint');
@@ -986,8 +1021,22 @@ export function validateMarkdownPolicy(workflow, source) {
       (validation.run.match(/^\s*& \$strNpmPath run lint:md:nested\s*$/gmu) ?? []).length !== 1) {
     reject('markdown-policy', 'each locked lint script must run exactly once');
   }
-  if (/continue-on-error/iu.test(source) || NETWORK_CLIENT.test(source)) {
-    reject('markdown-policy', 'Markdown workflow weakens failure or network policy');
+  if (/continue-on-error/iu.test(source)) {
+    reject('markdown-policy', 'Markdown workflow weakens failure policy');
+  }
+  // The network ban is per step rather than per file, and it always should
+  // have been. Its stated rationale -- that no governed step performs network
+  // I/O -- was already untrue: npm ci fetches the whole dependency tree in the
+  // lint step. What the rule actually protects is that the step running
+  // repository-controlled code has no client of its own, and that is asserted
+  // where it is true. The acquire step is exempt because it downloads the Node
+  // distribution, and the exemption is paired with a replacement rather than
+  // left open: its URL and the expected archive digest are reviewed constants
+  // asserted above, so what it may fetch is fixed and what it accepts back is
+  // fixed. It also runs before any repository code, so nothing it could be
+  // steered by has executed yet.
+  if (NETWORK_CLIENT.test(validation.run)) {
+    reject('markdown-policy', 'markdown.validate-and-lint adds a network client');
   }
   // The credential scan and the expression ban were added to build.yml's script
   // steps and not to this one, so the invariant "no governed script step
@@ -1044,7 +1093,11 @@ export function validateMarkdownPolicy(workflow, source) {
     reject('markdown-policy', 'Markdown validation script does not match its reviewed digest');
   }
 
-  validateActionMultiset(source, [ACTIONS.checkout, ACTIONS.setupNode]);
+  // Zero. This job runs repository code, so it contains no action at all --
+  // the same structural rule build.yml's verify job carries, asserted the same
+  // two ways: no uses key on any step, and no pinned action anywhere in the
+  // file.
+  validateActionMultiset(source, []);
 }
 
 export function validateDependabotPolicy(value) {
@@ -1212,10 +1265,6 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-053', 'credentialed executable resolved through PATH', 'build', (source) => replaceOnce(source, '              $objStartInfo.FileName = $strGitPath\n', '              $arrGitCommands = @(Get-Command git -CommandType Application -ErrorAction Stop)\n              $objStartInfo.FileName = $arrGitCommands[0].Source\n')],
   ['T1-BUILD-054', 'trusted Git path list widened', 'build', (source) => replaceOnce(source, "@('/usr/bin/git', '/bin/git')", "@($env:RUNNER_TEMP + '/git', '/usr/bin/git')")],
   ['T1-BUILD-061', 'PATH lookup reintroduced beside the pinned path', 'build', (source) => replaceOnce(source, '              $objStartInfo.FileName = $strGitPath\n', '              $arrFallback = @(Get-Command git -CommandType Application -ErrorAction SilentlyContinue)\n              $objStartInfo.FileName = $strGitPath\n')],
-  ['T1-MARKDOWN-001', 'floating Node major', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: '24'")],
-  ['T1-MARKDOWN-002', 'latest Node', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: 'latest'")],
-  ['T1-MARKDOWN-003', 'setup cache enabled', 'markdown', (source) => replaceOnce(source, '          package-manager-cache: false', '          package-manager-cache: true')],
-  ['T1-MARKDOWN-004', 'setup input added', 'markdown', (source) => replaceOnce(source, '          check-latest: false', '          check-latest: false\n          cache: npm')],
   ['T1-MARKDOWN-005', 'install scripts enabled', 'markdown', (source) => replaceOnce(source, 'ci --ignore-scripts --no-audit --no-fund', 'ci --no-audit --no-fund')],
   ['T1-MARKDOWN-006', 'audit enabled during install', 'markdown', (source) => replaceOnce(source, 'ci --ignore-scripts --no-audit --no-fund', 'ci --ignore-scripts --no-fund')],
   ['T1-MARKDOWN-007', 'outer lint removed', 'markdown', (source) => replaceOnce(source, 'run lint:md\n', 'run lint:other\n')],
@@ -1232,7 +1281,10 @@ const FIXTURE_INVENTORY = Object.freeze([
     const strNested = '          & $strNpmPath run lint:md:nested\n';
     return replaceOnce(replaceOnce(source, strValidator, ''), strNested, strValidator + strNested);
   }],
-  ['T1-MARKDOWN-014', 'native-command error mapping guard removed', 'markdown', (source) => replaceOnce(source, '          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n              $PSNativeCommandUseErrorActionPreference = $false\n          }\n', '')],
+  // Anchored through the comment that follows it in the lint step. The
+  // acquire step opens with the identical guard and now comes first, so a
+  // bare anchor silently retargeted this fixture at that step's copy.
+  ['T1-MARKDOWN-014', 'native-command error mapping guard removed from the lint step', 'markdown', (source) => replaceOnce(source, '          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n              $PSNativeCommandUseErrorActionPreference = $false\n          }\n\n          # Fixed paths into the distribution', '          # Fixed paths into the distribution')],
   ['T1-MARKDOWN-017', 'captured phase status reset before the final check', 'markdown', (source) => replaceOnce(source, '          $strPackageFinal = (Get-FileHash', '          $intPolicyExit = 0\n          $strPackageFinal = (Get-FileHash')],
   ['T1-DEPENDABOT-001', 'duplicate updates', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n'],
   ['T1-DEPENDABOT-002', 'npm update introduced early', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: npm\n    directory: /.github/workflows\n    schedule: { interval: weekly }\n'],
@@ -1355,7 +1407,15 @@ const FIXTURE_INVENTORY = Object.freeze([
   // captured status intact while a failed supply digest, install, or lint stops
   // deciding anything.
   ['T1-MARKDOWN-024', 'phase failure suppressed by a handler in the lint step', 'markdown', (source) => replaceOnce(source, '          } finally {\n', '          } catch {\n          } finally {\n')],
-  ['T1-MARKDOWN-025', 'script-wide error trap registered in the lint step', 'markdown', (source) => replaceOnce(source, '          $arrNodeCommands = @(Get-Command node -CommandType Application -ErrorAction Stop)\n', '          trap { $null = $_ }\n          $arrNodeCommands = @(Get-Command node -CommandType Application -ErrorAction Stop)\n')],
+  ['T1-MARKDOWN-025', 'script-wide error trap registered in the lint step', 'markdown', (source) => replaceOnce(source, "          $strNodeVersion = (& $strNodePath --version).Trim()\n", "          trap { $null = $_ }\n          $strNodeVersion = (& $strNodePath --version).Trim()\n")],
+  ['T1-MARKDOWN-026', 'action reintroduced into the lint job', 'markdown', (source) => replaceOnce(source, '      - name: Install, validate policy, and lint both Markdown surfaces\n', '      - name: Set up hosted Node.js\n        id: setup-node\n        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0\n        with:\n          node-version: \'24.18.1\'\n\n      - name: Install, validate policy, and lint both Markdown surfaces\n')],
+  ['T1-MARKDOWN-027', 'Node archive fetched from an unreviewed location', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz'\n", "          $strNodeUrl = 'https://example.invalid/node-v24.18.1-linux-x64.tar.xz'\n")],
+  ['T1-MARKDOWN-028', 'reviewed Node archive digest replaced', 'markdown', (source) => replaceOnce(source, "          $strReviewedNodeSha256 = 'D6C664DF3F3F61458E8C277585571328522D705166723A7C7823A9253A4D15A0'\n", "          $strReviewedNodeSha256 = '0000000000000000000000000000000000000000000000000000000000000000'\n")],
+  // The download is only as good as the check on what comes back.
+  ['T1-MARKDOWN-029', 'downloaded Node archive no longer verified before use', 'markdown', (source) => replaceOnce(source, '          $strObservedNodeSha256 = (Get-FileHash -LiteralPath $strArchivePath -Algorithm SHA256).Hash\n          if ($strObservedNodeSha256 -cne $strReviewedNodeSha256) {\n              throw \'acquire: the Node archive does not match the reviewed digest\'\n          }\n', '')],
+  // The network ban moved from the file to the step that runs repository code.
+  ['T1-MARKDOWN-030', 'network client added to the lint step', 'markdown', (source) => replaceOnce(source, '          & $strNpmPath run lint:md\n', '          $objExtra = Invoke-WebRequest -Uri https://example.invalid/rules\n          & $strNpmPath run lint:md\n')],
+  ['T1-MARKDOWN-031', 'acquire step edited without re-review', 'markdown', (source) => replaceOnce(source, '          Write-Host "acquire: revision $strSha and the reviewed Node distribution"\n', '          Write-Host "acquire: revision $strSha"\n')],
   ['T1-MARKDOWN-022', 'lint job regains a token scope', 'markdown', (source) => replaceOnce(source, '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions: {}\n', '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n')],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -1468,10 +1528,6 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-053": "git-policy: build.verify does not pin the Git executable before repository code runs",
   "T1-BUILD-054": "git-policy: build.verify does not pin the Git executable before repository code runs",
   "T1-BUILD-061": "git-policy: build.verify resolves Git through a shadowable command lookup",
-  "T1-MARKDOWN-001": "policy: markdown.setup-node.with differs from the locked policy",
-  "T1-MARKDOWN-002": "policy: markdown.setup-node.with differs from the locked policy",
-  "T1-MARKDOWN-003": "policy: markdown.setup-node.with differs from the locked policy",
-  "T1-MARKDOWN-004": "policy: markdown.setup-node.with differs from the locked policy",
   "T1-MARKDOWN-005": "markdown-policy: required phase is missing: ci --ignore-scripts --no-audit --no-fund",
   "T1-MARKDOWN-006": "markdown-policy: required phase is missing: ci --ignore-scripts --no-audit --no-fund",
   "T1-MARKDOWN-007": "markdown-policy: required phases are out of order at: run lint:md\n",
@@ -1568,6 +1624,12 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-120": "acquire-policy: build.verify.acquire script does not match its reviewed digest",
   "T1-MARKDOWN-024": "markdown-policy: markdown.validate-and-lint can suppress a phase failure",
   "T1-MARKDOWN-025": "markdown-policy: markdown.validate-and-lint can suppress a phase failure",
+  "T1-MARKDOWN-026": "isolation-policy: markdown.setup-node uses an action",
+  "T1-MARKDOWN-027": "acquire-policy: markdown.acquire no longer asserts the exact reviewed Node archive",
+  "T1-MARKDOWN-028": "acquire-policy: markdown.acquire no longer asserts the reviewed Node archive digest",
+  "T1-MARKDOWN-029": "acquire-policy: markdown.acquire no longer asserts that the downloaded archive matches that digest before it is used",
+  "T1-MARKDOWN-030": "markdown-policy: markdown.validate-and-lint adds a network client",
+  "T1-MARKDOWN-031": "acquire-policy: markdown.acquire script does not match its reviewed digest",
   "T1-PACKAGE-005": "supply-policy: resolved yaml parser integrity is not the reviewed value",
   "T1-PACKAGE-006": "policy: lockfile root devDependencies differs from the locked policy",
 });
