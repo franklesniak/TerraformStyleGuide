@@ -2,6 +2,31 @@
 
 ## Status
 
+**Superseded on 2026-08-02.** The `temporary-writer` job was deleted from T1A. No job in
+this repository holds `contents: write`, so there is no token-bearing process for
+repository-controlled code to influence, and the residual this record accepts no longer
+exists.
+
+The record's own review trigger is what forced this. Section 8 said that a third bypass of
+the hardened assertion "would suggest the enumeration is not converging and that option C
+should be reconsidered on its merits." Round 17 produced four more — caller-scope variable
+mutation through `Set-Variable -Scope 1`, PATH redirection of every post-generator Git
+probe, function shadowing of `git` and of the command resolver, and a post-commit hook
+installing a `refs/replace` ref that blinded the committed-path check while the push
+published the real object. The last was reproduced end to end. Option C was reconsidered and
+the analysis selected removal over reconstruction.
+
+The obligation this record placed on issue #22 is **not** discharged by the deletion and
+remains live: #22's writer must not run repository script files in the job holding the
+token. That criterion is already recorded on #22.
+
+The record is retained rather than deleted, and two of its claims are known to have been
+wrong when written — it described the environment channel as closed and the precondition as
+requiring review. Sections 2 and 9 carry both corrections. That history is the point of
+keeping it.
+
+---
+
 Accepted on 2026-08-01 by Frank Lesniak, TerraformStyleGuide repository owner.
 
 Revised on 2026-08-01 after automated review found a bypass in the control this record

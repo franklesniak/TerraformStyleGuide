@@ -2,6 +2,21 @@
 
 ## Status
 
+**Superseded on 2026-08-02.** The `temporary-writer` job was deleted from T1A, so nothing
+commits regenerated artifacts to `main` and the lag this record accepts cannot occur. The
+residual is closed by removal rather than by any of the options scored below.
+
+Promotion is now owned entirely by issue #22, whose design must satisfy the same concern
+from a clean start: if its writer pushes with `GITHUB_TOKEN`, that push begins no workflow
+run, so the promoted bytes need a lint path that does not depend on a `push` trigger. That
+requirement is recorded in section 8 and remains live for #22.
+
+The record is retained rather than deleted. It is the dated reasoning behind a decision that
+was in force, and section 10 documents a correction worth keeping: the trigger behaviour it
+originally relied on was wrong.
+
+---
+
 Accepted on 2026-08-01 by Frank Lesniak, TerraformStyleGuide repository owner.
 
 Revised on 2026-08-01 after automated review established that the trigger behaviour this

