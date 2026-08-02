@@ -161,7 +161,7 @@ const REVIEWED_VALIDATION_STEP_DIGEST = 'e4157f6e13dc2863b2339ba16b8fbe73a380d6c
 // while skipping the probes entirely, and the upload action then publishes
 // artifacts labelled verified. The same backstop the Markdown step and the
 // former push step carry applies here for the same reason.
-const REVIEWED_VERIFY_STEP_DIGEST = '210b9f19233eeb68fc52703685d1b449f081a49727d7cbc8643b4def7a613ffa';
+const REVIEWED_VERIFY_STEP_DIGEST = '4f073beb45abda2eb77461c8151d6077e3ac62eb14cadb5843fe839179ec23a3';
 
 // The generator is repository-controlled code that runs in a job holding a
 // contents-write token, one step ahead of the push. Its version marker is fixed,
@@ -353,25 +353,49 @@ export function validateBuildPolicy(workflow, source) {
   if (workflow.name !== 'Build Style Guide Artifacts') reject('policy', 'build workflow name is not locked');
   assertEqual(workflow.on, EXPECTED_TRIGGER, 'build triggers');
   assertEqual(workflow.permissions, { contents: 'read' }, 'build workflow permissions');
-  assertKeys(workflow.jobs, ['verify'], 'build jobs');
+  assertKeys(workflow.jobs, ['verify', 'publish'], 'build jobs');
 
   const verify = workflow.jobs.verify;
   assertKeys(verify, ['runs-on', 'permissions', 'steps'], 'build.verify');
   if (verify['runs-on'] !== 'ubuntu-latest') reject('policy', 'build.verify runner changed');
   assertEqual(verify.permissions, { contents: 'read' }, 'build.verify permissions');
   const verifyIds = verify.steps.map((step) => step?.id);
-  assertEqual(verifyIds, ['checkout', 'verify-checkout-credentials', 'generate-and-verify', 'upload-generated'], 'build.verify step order');
+  // generate-and-verify is last on purpose. Anything appended after it runs
+  // with whatever the generator's surviving descendants left behind, including
+  // values they appended to the runner's step communication files once the
+  // in-step emptiness assertion could no longer observe them.
+  assertEqual(verifyIds, ['checkout', 'verify-checkout-credentials', 'generate-and-verify'], 'build.verify step order');
   assertActionStep(findStep(verify, 'checkout', 'build.verify'), 'build.verify.checkout', ACTIONS.checkout, CHECKOUT_INPUTS);
   validateCredentialCleanupStep(
     findStep(verify, 'verify-checkout-credentials', 'build.verify'),
     'build.verify.verify-checkout-credentials',
   );
+
+  // The publishing job exists to be the one place that reads artifact bytes
+  // without ever having run the code that produces them. That property is
+  // structural -- it holds because no script runs here at all -- so it is
+  // asserted structurally: exactly two pinned actions, and no run: key
+  // anywhere in the job. A single added script step would put repository
+  // code back in the same job as the upload, which is the arrangement this
+  // separation exists to prevent.
+  const publish = workflow.jobs.publish;
+  assertKeys(publish, ['needs', 'runs-on', 'permissions', 'steps'], 'build.publish');
+  if (publish.needs !== 'verify') reject('policy', 'build.publish does not depend on verify');
+  if (publish['runs-on'] !== 'ubuntu-latest') reject('policy', 'build.publish runner changed');
+  assertEqual(publish.permissions, { contents: 'read' }, 'build.publish permissions');
+  const publishIds = publish.steps.map((step) => step?.id);
+  assertEqual(publishIds, ['checkout', 'upload-generated'], 'build.publish step order');
+  for (const step of publish.steps) {
+    if ('run' in step) reject('isolation-policy', `build.publish.${step.id} runs a script`);
+    if ('shell' in step) reject('isolation-policy', `build.publish.${step.id} declares a shell`);
+    if ('env' in step) reject('isolation-policy', `build.publish.${step.id} sets step environment`);
+  }
+  assertActionStep(findStep(publish, 'checkout', 'build.publish'), 'build.publish.checkout', ACTIONS.checkout, CHECKOUT_INPUTS);
   assertActionStep(
-    findStep(verify, 'upload-generated', 'build.verify'),
-    'build.verify.upload-generated',
+    findStep(publish, 'upload-generated', 'build.publish'),
+    'build.publish.upload-generated',
     ACTIONS.uploadArtifact,
     UPLOAD_INPUTS,
-    '${{ success() }}',
   );
 
   for (const { jobId, id, run, step } of allRunSteps(workflow)) {
@@ -466,12 +490,14 @@ export function validateBuildPolicy(workflow, source) {
       !generateStep.run.includes('$arrCount = [System.BitConverter]::GetBytes([long]$arrComponents.Count)')) {
     reject('git-policy', 'the Git control-surface digest does not frame its components unambiguously');
   }
-  // upload-generated runs after this step, so anything the generator writes to
-  // the runner step communication files is applied to it. That step is an
-  // action on Node holding the Actions artifact token, and it publishes the
-  // artifact this job labels verified. The generator now runs in a child
-  // process, which closes the in-session channels but not these: they are
-  // files, writable from any process.
+  // GitHub applies these files to every subsequent step in the job. There is
+  // no subsequent step today -- the step-order assertion above is what makes
+  // that true -- but the two controls answer different questions and neither
+  // subsumes the other: the order assertion says nothing consumes a poisoned
+  // environment, and this one says the environment was not poisoned while the
+  // step could still see it. The generator runs in a child process, which
+  // closes the in-session channels but not these: they are files, writable
+  // from any process, including descendants that outlive the step.
   if (!generateStep.run.includes('New-Variable -Name arrChannelPaths -Value @($env:GITHUB_ENV, $env:GITHUB_PATH) -Option Constant') ||
       !generateStep.run.includes('runner-state: the generator wrote to a runner step communication file') ||
       generateStep.run.indexOf('New-Variable -Name arrChannelPaths') > generateStep.run.indexOf('& pwsh -NoProfile') ||
@@ -516,7 +542,11 @@ export function validateBuildPolicy(workflow, source) {
     reject('git-policy', 'build.verify no longer drains both Git streams concurrently');
   }
 
-  validateActionMultiset(source, [ACTIONS.checkout, ACTIONS.uploadArtifact]);
+  // Two checkouts, one per job: verify checks out to run the generator against
+  // the triggering revision, publish checks out to read that revision's bytes
+  // without the generator ever having run on that machine. Counting them is
+  // what keeps a third, unreviewed action from appearing.
+  validateActionMultiset(source, [ACTIONS.checkout, ACTIONS.checkout, ACTIONS.uploadArtifact]);
 }
 
 function validateCredentialCleanupStep(step, label) {
@@ -756,7 +786,10 @@ function replaceOnce(source, from, to) {
 
 // Append-only inventory: existing IDs and meanings must never be reused.
 // IDs retired when the temporary writer was deleted are not reissued; gaps in
-// the BUILD sequence are deliberate.
+// the BUILD sequence are deliberate. T1-BUILD-025 and T1-BUILD-026 were retired
+// with them when publishing moved to its own job: both asserted on the upload
+// step's if: ${{ success() }} gate, and the gate is now needs: verify at the job
+// level, which T1-BUILD-088 covers. They are not reissued either.
 const FIXTURE_INVENTORY = Object.freeze([
   ['T1-YAML-001', 'duplicate key', 'yaml', 'a: 1\na: 2\n'],
   ['T1-YAML-002', 'directive', 'yaml', '%YAML 1.2\n---\na: 1\n'],
@@ -789,8 +822,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-017', 'service introduction', 'build', (source) => replaceOnce(source, '  verify:\n    runs-on:', '  verify:\n    services: {}\n    runs-on:')],
   ['T1-BUILD-018', 'remote reusable workflow', 'build', (source) => replaceOnce(source, '  verify:\n    runs-on:', '  verify:\n    uses: example/workflows/.github/workflows/x.yml@main\n    runs-on:')],
   ['T1-BUILD-024', 'job output introduction', 'build', (source) => replaceOnce(source, '  verify:\n    runs-on:', '  verify:\n    outputs: { changed: value }\n    runs-on:')],
-  ['T1-BUILD-025', 'upload condition mutation', 'build', (source) => replaceOnce(source, '        if: ${{ success() }}', '        if: ${{ always() }}')],
-  ['T1-BUILD-026', 'upload continuation', 'build', (source) => replaceOnce(source, '        if: ${{ success() }}\n        uses:', '        if: ${{ success() }}\n        continue-on-error: true\n        uses:')],
+  ['T1-BUILD-090', 'publishing step allowed to continue on error', 'build', (source) => replaceOnce(source, '        id: upload-generated\n        uses:', '        id: upload-generated\n        continue-on-error: true\n        uses:')],
   ['T1-BUILD-027', 'upload path broadening', 'build', (source) => replaceOnce(source, '            copilot-instructions.md', '            *.md')],
   ['T1-BUILD-028', 'upload overwrite', 'build', (source) => replaceOnce(source, '          overwrite: false', '          overwrite: true')],
   ['T1-BUILD-029', 'upload step order', 'build', (source) => replaceOnce(source, '        id: upload-generated', '        id: early-upload')],
@@ -845,6 +877,14 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-GENERATOR-001', 'generator body rewritten under an unchanged version marker', 'generator', (source) => `${source}\nfunction Invoke-Unreviewed { Add-Content -Path $env:GITHUB_PATH -Value '/tmp/hijack' }\n`],
   ['T1-GENERATOR-002', 'generator truncated', 'generator', (source) => source.slice(0, Math.floor(source.length / 2))],
   ['T1-MARKDOWN-020', 'lint asset digest gate removed', 'markdown', (source) => replaceOnce(source, '          if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {\n              throw \'supply: lint configuration or helper does not match the reviewed digest\'\n          }\n', '')],
+  // The generator's descendants outlive the step, so the separation between the
+  // job that runs the generator and the job that publishes bytes is load-bearing
+  // rather than stylistic. Each of these is a way to put repository code back in
+  // the same job as the upload, which is the arrangement the split prevents.
+  ['T1-BUILD-086', 'upload returned to the job that runs the generator', 'build', (source) => replaceOnce(source, "          Write-Host 'generated-artifacts: committed bytes match generator output'\n", "          Write-Host 'generated-artifacts: committed bytes match generator output'\n\n      - name: Upload verified generated artifacts\n        id: upload-generated\n        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          name: style-guide-artifacts\n          path: |\n            copilot-instructions.md\n          if-no-files-found: error\n          retention-days: 7\n          compression-level: 6\n          overwrite: false\n          include-hidden-files: false\n")],
+  ['T1-BUILD-087', 'script step added to the publishing job', 'build', (source) => replaceOnce(source, '      - name: Upload verified generated artifacts\n        id: upload-generated\n', '      - name: Stage\n        id: stage\n        shell: pwsh\n        run: |\n          Write-Host staged\n\n      - name: Upload verified generated artifacts\n        id: upload-generated\n')],
+  ['T1-BUILD-088', 'publishing job no longer waits for verification', 'build', (source) => replaceOnce(source, '  publish:\n    needs: verify\n', '  publish:\n')],
+  ['T1-BUILD-089', 'step appended after the verification step', 'build', (source) => replaceOnce(source, "          Write-Host 'generated-artifacts: committed bytes match generator output'\n", "          Write-Host 'generated-artifacts: committed bytes match generator output'\n\n      - name: Summarize\n        id: summarize\n        shell: pwsh\n        run: |\n          Write-Host done\n")],
   ['T1-BUILD-084', 'worktree byte comparison removed', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigests\n', '')],
   ['T1-BUILD-085', 'worktree snapshot taken after the generator', 'build', (source) => replaceOnce(source, '          $objWorktreeBefore = Get-WorktreeFileDigests\n', '')],
   ['T1-BUILD-083', 'control-surface digest framing removed', 'build', (source) => replaceOnce(source, "                      $arrLength = [System.BitConverter]::GetBytes([long]$arrComponent.Length)\n", '')],

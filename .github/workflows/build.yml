@@ -219,14 +219,17 @@ jobs:
           }
           $strControlSurfaceBefore = Get-GitControlSurfaceDigest
 
-          # The runner applies whatever a step writes to these two files to every
-          # later step in the job, and upload-generated runs after this one. It
-          # is an action executing on Node with access to the Actions artifact
-          # API, so a variable such as NODE_OPTIONS projected into it would run
-          # attacker code inside the step that publishes the artifact this job
-          # labels verified. The process boundary does not help: these are files
-          # on disk, and the generator can write them from any process.
-          # Emptiness is asserted rather than the absence of named variables.
+          # GitHub documents that the step writing these files "does not have
+          # access to the new value, but all subsequent steps in a job will have
+          # access". This is the last step in this job, so today there is no
+          # subsequent step to project a variable such as NODE_OPTIONS into --
+          # that is why publishing was moved to a job that runs no repository
+          # code. The assertion stays because that emptiness is the reason the
+          # step order is safe, and a future step appended here would otherwise
+          # inherit the gap silently. Emptiness is asserted rather than the
+          # absence of named variables, and it is a floor, not a ceiling: the
+          # generator's descendants can write these files after this step exits,
+          # which no in-step check can observe.
           New-Variable -Name arrChannelPaths -Value @($env:GITHUB_ENV, $env:GITHUB_PATH) -Option Constant
 
           # Every Git probe below reports on state the generator can move. It can
@@ -243,6 +246,14 @@ jobs:
           # covers both "no drift" and "nothing else was touched", and it asks
           # Git nothing. A map is compared entry by entry rather than by a
           # combined digest, so there is no encoding to get wrong.
+          #
+          # What this establishes is the state of the tree at the moment the
+          # step ends, and no in-process check can establish more than that: a
+          # descendant the generator detached is still running and can rewrite
+          # any of it afterwards. That is why this job publishes nothing. The
+          # bytes that reach consumers come from the commit, fetched by a job
+          # that never runs the generator, so the window this comparison cannot
+          # cover has nothing downstream to act on.
           function Get-WorktreeFileDigests {
               $strRoot = $PWD.Path
               $strGitPrefix = [System.IO.Path]::Combine($strRoot, '.git') + [System.IO.Path]::DirectorySeparatorChar
@@ -329,9 +340,47 @@ jobs:
           }
           Write-Host 'generated-artifacts: committed bytes match generator output'
 
+  # Publishing lives in its own job because the generator's descendants outlive
+  # the generator. The process boundary makes the call synchronous, not the work:
+  # a detached grandchild that waits for this step to exit sees a verification
+  # that already passed and a worktree it can still write. setsid(2) states that
+  # a process calling it "will be the only process in the new process group and
+  # in the new session", so killing the generator's process group does not reach
+  # a descendant that opts out of it, and the runner's own orphan sweep happens
+  # at the end of the job -- after every step that would consume the bytes.
+  #
+  # So nothing that runs the generator publishes anything. This job runs no
+  # repository code at all: two pinned actions, no run: script anywhere, which
+  # the validator enforces rather than trusts. It gets the artifacts the only
+  # way they cannot be tampered with -- a fresh checkout of the triggering
+  # revision, on a different machine, from an immutable commit. needs: verify
+  # means it only runs once verify proved those committed bytes equal generator
+  # output, so what is published is exactly what was verified.
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out triggering revision
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          token: ${{ github.token }}
+          persist-credentials: false
+          fetch-depth: 1
+          fetch-tags: false
+          show-progress: false
+          lfs: false
+          submodules: false
+          clean: true
+          set-safe-directory: true
+          allow-unsafe-pr-checkout: false
+
       - name: Upload verified generated artifacts
         id: upload-generated
-        if: ${{ success() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: style-guide-artifacts
