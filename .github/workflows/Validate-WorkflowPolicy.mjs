@@ -152,7 +152,7 @@ const NETWORK_CLIENT = /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|i
 // Enumerating the indirect writers (Set-Variable, New-Variable, the Variable:
 // provider, [ref] handles) is the same losing shape, so the whole reviewed
 // script is pinned instead: any edit at all changes this digest.
-const REVIEWED_VALIDATION_STEP_DIGEST = '963e1f8ac82a925339dffc08b819ff3d0e429101961d5e9bec2f6b4f8ee49f8e';
+const REVIEWED_VALIDATION_STEP_DIGEST = '35d03833ba858f70c6e2da4bf2c355660f65a09459887301bdff18a9e2e16551';
 
 // The credential-cleanup step's assertions all test for the presence of a
 // sequence, and presence is not execution: an inserted early exit satisfies
@@ -1036,6 +1036,19 @@ function validateAcquireStep(step, label, expected) {
   if (expected.tail !== undefined && !step.run.trimEnd().endsWith(expected.tail)) {
     reject('acquire-policy', `${label} does not end at the verified extraction`);
   }
+  // The last hole in the closure argument further above. A bare `./tools/x.ps1`
+  // is an invocation by literal name -- no call operator, no banned cmdlet --
+  // so neither operator scan can see it, and the Markdown acquire step has the
+  // checkout on disk by the time it runs. Neither acquire step names a script
+  // file today, so this refuses a construct with no legitimate use here.
+  //
+  // Placed after the tail assertion deliberately: a step that both breaks the
+  // pinned tail and adds a script path should report the broader structural
+  // failure, and several fixtures exercise a script path as the *payload* of a
+  // different violation rather than as the violation itself.
+  if (/\S*\.(?:ps1|psm1|sh|bash|zsh|py|rb|pl|mjs|cjs|js)\b/iu.test(stepCode)) {
+    reject('acquire-policy', `${label} references an executable script path`);
+  }
   if (/[^\t\n\x20-\x7e]/u.test(step.run)) {
     reject('acquire-policy', `${label} contains a character outside printable ASCII`);
   }
@@ -1203,6 +1216,12 @@ export function validateMarkdownPolicy(workflow, source) {
     'supply: repository-controlled npm configuration is present',
     // Must precede the lint phases, which execute both of these files.
     'supply: lint configuration or helper does not match the reviewed digest',
+    // Recorded before installation, so the baseline predates every third-party
+    // package in this job. The validator runs after both lint phases and
+    // compares these against the text it parses, which is the only placement
+    // that leaves no interval for a writer.
+    '$env:T1_EXPECTED_BUILD_DIGEST = (Get-FileHash -LiteralPath ./build.yml -Algorithm SHA256).Hash',
+    '$env:T1_EXPECTED_MARKDOWN_DIGEST = (Get-FileHash -LiteralPath ./markdownlint.yml -Algorithm SHA256).Hash',
     'ci --ignore-scripts --no-audit --no-fund',
     'npm-ci: package metadata changed during frozen installation',
     // Between installation and the phases that read these two files. This
@@ -1699,6 +1718,23 @@ const FIXTURE_INVENTORY = Object.freeze([
   // phase below without matching a statement-position control-flow token.
   ['T1-MARKDOWN-041', 'process terminated successfully before the lint phases', 'markdown', (source) => replaceOnce(source, '          & $strNpmPath run lint:md\n', '          [System.Environment]::Exit(0)\n          & $strNpmPath run lint:md\n')],
   ['T1-MARKDOWN-042', 'step status forced to success through the host', 'markdown', (source) => replaceOnce(source, '          & $strNpmPath run lint:md\n', '          $host.SetShouldExit(0)\n          & $strNpmPath run lint:md\n')],
+  // Round 38, finding F. The validator runs after both lint phases, so the
+  // baseline it compares its parsed text against must be recorded before any
+  // third-party package in this job has executed.
+  ['T1-MARKDOWN-043', 'workflow digest baseline no longer recorded before installation', 'markdown', (source) => replaceOnce(source, '          $env:T1_EXPECTED_BUILD_DIGEST = (Get-FileHash -LiteralPath ./build.yml -Algorithm SHA256).Hash\n', '')],
+  ['T1-MARKDOWN-044', 'workflow digest baseline recorded after the lint phases', 'markdown', (source) => {
+    const strBaseline = '          $env:T1_EXPECTED_MARKDOWN_DIGEST = (Get-FileHash -LiteralPath ./markdownlint.yml -Algorithm SHA256).Hash\n';
+    const strValidator = '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n';
+    return replaceOnce(replaceOnce(source, strBaseline, ''), strValidator, strBaseline + strValidator);
+  }],
+  // Round 38, finding B follow-up: a bare script path is an invocation by
+  // literal name that the call/dot-source scan cannot see.
+  // Written without a leading ./ deliberately. PowerShell executes a bare
+  // relative path -- verified on 7.6.4, `tools/prepare.ps1` ran -- and that
+  // spelling escapes the dot-source scan entirely, since there is no dot at
+  // statement position. It is the form the script-path rule exists for.
+  ['T1-MARKDOWN-045', 'script path invoked bare from the acquire step', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          tools/prepare.ps1\n          $strNodeUrl = 'https://nodejs.org")],
+  ['T1-BUILD-134', 'script path invoked bare from the build acquire step', 'build', (source) => replaceOnce(source, '          $strServerUrl = $env:GITHUB_SERVER_URL\n', '          tools/prepare.ps1\n          $strServerUrl = $env:GITHUB_SERVER_URL\n')],
   ['T1-MARKDOWN-022', 'lint job regains a token scope', 'markdown', (source) => replaceOnce(source, '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions: {}\n', '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n')],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -1834,6 +1870,10 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-132": "credential-policy: build.verify.verify-checkout-credentials adds control flow that can bypass a required assertion",
   "T1-BUILD-133": "acquire-policy: build.verify.acquire adds a dynamic or indirect execution path",
   "T1-GENERATOR-003": "supply-policy: the generator does not resolve Git through a module-qualified lookup",
+  "T1-MARKDOWN-043": "markdown-policy: required phases are out of order at: $env:T1_EXPECTED_BUILD_DIGEST = (Get-FileHash -LiteralPath ./build.yml -Algorithm SHA256).Hash",
+  "T1-MARKDOWN-044": "markdown-policy: required phases are out of order at: ci --ignore-scripts --no-audit --no-fund",
+  "T1-MARKDOWN-045": "acquire-policy: markdown.acquire references an executable script path",
+  "T1-BUILD-134": "acquire-policy: build.verify.acquire references an executable script path",
   "T1-MARKDOWN-014": "markdown-policy: required phase is missing: if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {",
   "T1-MARKDOWN-017": "markdown-policy: captured phase status intPolicyExit is not assigned exactly once",
   "T1-DEPENDABOT-001": "policy: Dependabot configuration differs from the locked policy",
@@ -2121,6 +2161,20 @@ function foldPolicyInput(hash, label, source) {
   hash.update(bytes);
 }
 
+// Case-insensitive on the hex, because Get-FileHash reports upper case and
+// createHash reports lower; length is checked so an empty or truncated value
+// cannot pass as a match.
+function assertExpectedSourceDigest(source, expected, label) {
+  if (expected === undefined || expected === '') return;
+  if (!/^[0-9a-f]{64}$/iu.test(expected)) {
+    reject('input-policy', `the expected digest supplied for ${label} is not a SHA-256 value`);
+  }
+  const observed = createHash('sha256').update(source, 'utf8').digest('hex');
+  if (observed !== expected.toLowerCase()) {
+    reject('input-policy', `${label} changed after the job recorded its digest`);
+  }
+}
+
 export function validateRepositoryPolicy(buildPath, markdownPath) {
   if (basename(buildPath) !== 'build.yml' || basename(markdownPath) !== 'markdownlint.yml') {
     reject('cli', 'arguments must be build.yml then markdownlint.yml');
@@ -2134,6 +2188,22 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
 
   const buildSource = readOrdinaryText(resolve(buildPath), 'build.yml');
   const markdownSource = readOrdinaryText(resolve(markdownPath), 'markdownlint.yml');
+  // Asserted against the text just read, not against a separate stat of the
+  // file. The Markdown job records these digests before npm ci -- before any
+  // third-party code in that job has run -- and the validator now executes
+  // after both lint phases, so a compromised package in the pinned tree gets
+  // the opportunity to rewrite these two files first. Comparing hashes in the
+  // workflow immediately before invoking this script would not close that:
+  // a writer spawned by a linter can act between such a comparison and the
+  // read below. Hashing the parsed text has no interval at all -- a swap
+  // before the read fails here, and a swap afterwards cannot reach content
+  // already held.
+  //
+  // Absent variables skip the check so the script stays runnable by hand; the
+  // Markdown policy separately requires the step to set both, and the step
+  // body is covered by REVIEWED_VALIDATION_STEP_DIGEST.
+  assertExpectedSourceDigest(buildSource, process.env.T1_EXPECTED_BUILD_DIGEST, 'build.yml');
+  assertExpectedSourceDigest(markdownSource, process.env.T1_EXPECTED_MARKDOWN_DIGEST, 'markdownlint.yml');
   validateBuildPolicy(parseStrictYaml(buildSource, 'build.yml'), buildSource);
   validateMarkdownPolicy(parseStrictYaml(markdownSource, 'markdownlint.yml'), markdownSource);
 

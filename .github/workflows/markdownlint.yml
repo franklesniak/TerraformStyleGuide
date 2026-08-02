@@ -192,6 +192,26 @@ jobs:
           if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {
               throw 'supply: lint configuration or helper does not match the reviewed digest'
           }
+
+          # Taken here, before npm ci and therefore before any third-party code
+          # in this job has executed at all. Moving the policy validator below
+          # the lint phases closed one exposure and opened another: the linters
+          # now run first, so a compromised package in the pinned tree could
+          # rewrite the two workflow files before the validator opens them, and
+          # the step digests would not notice -- they cover run: bodies, not
+          # job permissions, uses: keys, or triggers.
+          #
+          # Deliberately not re-compared in PowerShell just before the
+          # validator. That would be the same check/use shape this step was
+          # just corrected for: a writer already spawned by a linter can act
+          # between the comparison and the validator's own read. Instead the
+          # baseline is handed to the validator, which hashes the text it
+          # actually parsed. A swap before its read produces a mismatch; a swap
+          # afterwards cannot reach content it already holds. There is no
+          # interval to exploit rather than a short one.
+          $env:T1_EXPECTED_BUILD_DIGEST = (Get-FileHash -LiteralPath ./build.yml -Algorithm SHA256).Hash
+          $env:T1_EXPECTED_MARKDOWN_DIGEST = (Get-FileHash -LiteralPath ./markdownlint.yml -Algorithm SHA256).Hash
+
           $boolCiExisted = Test-Path Env:CI
           $strPriorCi = $env:CI
           try {
