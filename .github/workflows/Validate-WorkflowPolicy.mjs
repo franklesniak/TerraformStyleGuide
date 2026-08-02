@@ -318,6 +318,34 @@ const MARKDOWN_ACQUIRE = Object.freeze({
 // a silent one. This is a review signal rather than a runtime gate -- build.yml
 // does not run this validator, so what actually contains the generator at run
 // time is the process boundary and the byte comparison in that step.
+// Every occurrence of a reviewed guard, at the depth it was reviewed at. The
+// array length is the count, so one list states both facts and they cannot
+// drift apart.
+//
+// Checking only the first occurrence was the defect this replaced -- found by
+// attacking my own rule rather than by report. With three copies of a guard and
+// only the first one's depth checked, the third could be wrapped in
+// `if ($false) { }`: the count stayed exact, the first stayed at its reviewed
+// depth, and the mutation was accepted. The depths genuinely differ per
+// occurrence (the temporary-path check sits at 2, 2 and 4), so a single
+// expected depth could never have been right either.
+function assertReviewedGuards(strCode, arrGuards, strCategory, fnMessage) {
+  for (const [strFragment, arrDepths] of arrGuards) {
+    const arrObserved = [];
+    for (let at = strCode.indexOf(strFragment); at >= 0; at = strCode.indexOf(strFragment, at + 1)) {
+      arrObserved.push(powerShellBraceDepthAt(strCode, at));
+    }
+    if (arrObserved.length !== arrDepths.length) {
+      reject(strCategory, fnMessage('missing', strFragment));
+    }
+    for (let index = 0; index < arrDepths.length; index += 1) {
+      if (arrObserved[index] !== arrDepths[index]) {
+        reject(strCategory, fnMessage('unreachable', strFragment));
+      }
+    }
+  }
+}
+
 // The governed Markdown steps' supply gates. Their `fragments` lists prove the
 // text is present; nothing proved it could run, so wrapping a gate in
 // `if ($false) { ... }` left the fragment intact and the gate dead -- measured
@@ -329,17 +357,17 @@ const MARKDOWN_ACQUIRE = Object.freeze({
 // is by definition a change in whether they run. Fragments stop before their
 // string literals because the projection blanks string content.
 const REVIEWED_MARKDOWN_GATES = Object.freeze([
-  ['if ($intNodeVersionExit -ne 0 -or $strNodeVersion -cne ', 1, 0],
-  ['if ($intNpmVersionExit -ne 0 -or $strNpmVersion -cne ', 1, 0],
-  ['if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash) {', 1, 0],
-  ['if ($strGlobalConfigDirectory -cne ', 1, 0],
-  ['if ($strPackageAfterInstall -cne $strPackageBefore -or $strLockAfterInstall -cne $strLockBefore) {', 1, 0],
-  ['if ($strPackageFinal -cne $strPackageBefore -or $strLockFinal -cne $strLockBefore) {', 1, 0],
+  ['if ($intNodeVersionExit -ne 0 -or $strNodeVersion -cne ', [0]],
+  ['if ($intNpmVersionExit -ne 0 -or $strNpmVersion -cne ', [0]],
+  ['if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash) {', [0]],
+  ['if ($strGlobalConfigDirectory -cne ', [0]],
+  ['if ($strPackageAfterInstall -cne $strPackageBefore -or $strLockAfterInstall -cne $strLockBefore) {', [0]],
+  ['if ($strPackageFinal -cne $strPackageBefore -or $strLockFinal -cne $strLockBefore) {', [0]],
 ]);
 // The lint job additionally gates the two assets it is about to run.
 const REVIEWED_LINT_GATES = Object.freeze([
-  ['if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {', 1, 0],
-  ['if ($strLintConfigAfterInstall -cne $strReviewedLintConfigHash -or $strLintHelperAfterInstall -cne $strReviewedLintHelperHash) {', 1, 0],
+  ['if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {', [0]],
+  ['if ($strLintConfigAfterInstall -cne $strReviewedLintConfigHash -or $strLintHelperAfterInstall -cne $strReviewedLintHelperHash) {', [0]],
 ]);
 
 // The same treatment for build.verify, found by running the round-51 battery
@@ -360,10 +388,10 @@ const REVIEWED_LINT_GATES = Object.freeze([
 //
 // Whole conditions, for the reason recorded on the generator list below.
 const REVIEWED_VERIFY_GUARDS = Object.freeze([
-  ['if ($arrOutside.Count -ne 0) {', 1, 1],
-  ['$arrArtifacts -cnotcontains $_', 1, 2],
-  ['Sort-Object -CaseSensitive', 3, 1],
-  ['if ($objDiff.ExitCode -ne 0 -and $objDiff.ExitCode -ne 1) {', 1, 0],
+  ['if ($arrOutside.Count -ne 0) {', [1]],
+  ['$arrArtifacts -cnotcontains $_', [2]],
+  ['Sort-Object -CaseSensitive', [1, 2, 1]],
+  ['if ($objDiff.ExitCode -ne 0 -and $objDiff.ExitCode -ne 1) {', [0]],
   // Case-sensitive comparisons that a sweep found unpinned: every -c operator
   // in all three files was case-folded and measured, and eleven folds were
   // accepted. Two of these compare *paths*, where case is attacker-chosen and
@@ -373,11 +401,11 @@ const REVIEWED_VERIFY_GUARDS = Object.freeze([
   // because they are cheap to pin, not because an exploit was shown.
   // Stops before the throw message: the projection blanks string content, so a
   // fragment carrying one can never match it.
-  ['if ($arrObserved -ccontains $strPath) { throw ', 1, 2],
-  ['if ($Allowed -cnotcontains $strPath) { throw ', 1, 2],
-  ['if ([Convert]::ToBase64String($arrRecord) -cne [Convert]::ToBase64String($arrRoundTrip)) {', 1, 2],
-  ['if ((Get-GitControlSurfaceDigest) -cne $strControlSurfaceBefore) {', 1, 0],
-  ['if ((-not $objWorktreeAfter.ContainsKey($strPath)) -or ($objWorktreeAfter[$strPath] -cne $objWorktreeBefore[$strPath])) {', 1, 1],
+  ['if ($arrObserved -ccontains $strPath) { throw ', [2]],
+  ['if ($Allowed -cnotcontains $strPath) { throw ', [2]],
+  ['if ([Convert]::ToBase64String($arrRecord) -cne [Convert]::ToBase64String($arrRoundTrip)) {', [2]],
+  ['if ((Get-GitControlSurfaceDigest) -cne $strControlSurfaceBefore) {', [0]],
+  ['if ((-not $objWorktreeAfter.ContainsKey($strPath)) -or ($objWorktreeAfter[$strPath] -cne $objWorktreeBefore[$strPath])) {', [1]],
 ]);
 
 // Round 52. The generator's dispatch tail, as an ordered sequence of exact
@@ -405,28 +433,28 @@ const REVIEWED_GENERATOR_DISPATCH = Object.freeze([
 // model these rules exist for assumes has been re-baselined.
 const REVIEWED_GENERATOR_GUARDS = Object.freeze([
   // The identity check a previous round asked to be kept. It was deletable.
-  ['Assert-StyleGuideTrackedDestination -DestinationLeaf $strDestinationLeaf', 1, 2],
-  ['if ($intGitExit -ne 0 -or $arrTrackedPath.Count -ne 1 -or $arrTrackedPath[0] -cne $DestinationLeaf) {', 1, 1],
+  ['Assert-StyleGuideTrackedDestination -DestinationLeaf $strDestinationLeaf', [2]],
+  ['if ($intGitExit -ne 0 -or $arrTrackedPath.Count -ne 1 -or $arrTrackedPath[0] -cne $DestinationLeaf) {', [1]],
   // Reparse-point and filesystem-type checks, on the root and on the sibling.
-  ['Assert-StyleGuideOrdinaryPath -LiteralPath $script:strRepositoryRoot -ExpectedType', 2, 2],
-  ['Assert-StyleGuideOrdinaryPath -LiteralPath $strTemporaryPath -ExpectedType', 3, 2],
+  ['Assert-StyleGuideOrdinaryPath -LiteralPath $script:strRepositoryRoot -ExpectedType', [2, 2]],
+  ['Assert-StyleGuideOrdinaryPath -LiteralPath $strTemporaryPath -ExpectedType', [2, 2, 4]],
   // Whole conditions, not just the comparisons. A fragment naming only the
   // comparison survives `if ($false -and <comparison>)` -- the check is
   // disabled and the text is still there. Measured: that spelling passed the
   // first version of this list and was caught only by the digest.
   // What makes the written bytes the bytes that were verified.
-  ['if ($strObservedSha256 -cne $strExpectedSha256) {', 1, 2],
-  ['if ($arrObservedBytes -contains 0x0D) {', 1, 2],
+  ['if ($strObservedSha256 -cne $strExpectedSha256) {', [2]],
+  ['if ($arrObservedBytes -contains 0x0D) {', [2]],
   // The two atomic publish paths: replace an existing artifact, create a
   // missing one. Neither may be swapped for a non-atomic write.
-  ['[System.IO.File]::Replace($strTemporaryPath, $strExpectedPath, [NullString]::Value)', 1, 3],
-  ['[System.IO.File]::Move($strTemporaryPath, $strExpectedPath)', 1, 3],
+  ['[System.IO.File]::Replace($strTemporaryPath, $strExpectedPath, [NullString]::Value)', [3]],
+  ['[System.IO.File]::Move($strTemporaryPath, $strExpectedPath)', [3]],
   // Same sweep. The provider check is listed for consistency rather than risk:
   // PowerShell resolves provider names case-insensitively, so folding it
   // changes nothing at runtime. The rollback verification is the one that
   // matters here.
-  ['if ($null -eq $objProvider -or $objProvider.Name -cne ', 1, 2],
-  ['if ($objCurrentInfo.Length -ne $intOriginalLength -or $strCurrentSha256 -cne $strOriginalSha256) {', 1, 4],
+  ['if ($null -eq $objProvider -or $objProvider.Name -cne ', [2]],
+  ['if ($objCurrentInfo.Length -ne $intOriginalLength -or $strCurrentSha256 -cne $strOriginalSha256) {', [4]],
 ]);
 const REVIEWED_GENERATOR_DIGEST ='dd62e11eb4e2bb9a7a764febc074901c86811d25bb6fa5b50fa18f54b3bbc342';
 
@@ -1422,17 +1450,9 @@ export function validateBuildPolicy(workflow, source) {
   // guards discuss them by name, and a rule that cannot tell prose from code
   // would let a comment keep a deleted check "present".
   const strVerifyCode = powerShellTokenView(generateStep.run);
-  for (const [strFragment, intExpected, intDepth] of REVIEWED_VERIFY_GUARDS) {
-    const intObserved = strVerifyCode.split(strFragment).length - 1;
-    if (intObserved !== intExpected) {
-      reject('side-effect-policy', `build.verify no longer performs a reviewed drift guard: ${strFragment}`);
-    }
-    // As on the generator list: an enclosing dead block keeps the text and the
-    // count while removing the behaviour, so the depth is pinned too.
-    if (powerShellBraceDepthAt(strVerifyCode, strVerifyCode.indexOf(strFragment)) !== intDepth) {
-      reject('side-effect-policy', `a reviewed drift guard is no longer reachable where it was reviewed: ${strFragment}`);
-    }
-  }
+  assertReviewedGuards(strVerifyCode, REVIEWED_VERIFY_GUARDS, 'side-effect-policy', (kind, frag) => kind === 'missing'
+    ? `build.verify no longer performs a reviewed drift guard: ${frag}`
+    : `a reviewed drift guard is no longer reachable where it was reviewed: ${frag}`);
 
   // An inserted early exit leaves every required fragment and ordering check
   // intact while skipping every probe below it, and the upload action then
@@ -2080,14 +2100,9 @@ function assertMarkdownStepSurface(step, label, expected) {
   const arrGates = expected.stepId === 'lint'
     ? [...REVIEWED_MARKDOWN_GATES, ...REVIEWED_LINT_GATES]
     : REVIEWED_MARKDOWN_GATES;
-  for (const [strFragment, intExpected, intDepth] of arrGates) {
-    if (stepCode.split(strFragment).length - 1 !== intExpected) {
-      reject('markdown-policy', `${label} no longer performs a reviewed supply gate: ${strFragment}`);
-    }
-    if (powerShellBraceDepthAt(stepCode, stepCode.indexOf(strFragment)) !== intDepth) {
-      reject('markdown-policy', `${label} supply gate is no longer reachable where it was reviewed: ${strFragment}`);
-    }
-  }
+  assertReviewedGuards(stepCode, arrGates, 'markdown-policy', (kind, frag) => kind === 'missing'
+    ? `${label} no longer performs a reviewed supply gate: ${frag}`
+    : `${label} supply gate is no longer reachable where it was reviewed: ${frag}`);
   // Execution that names no command and uses no operator.
   if (MARKDOWN_DYNAMIC_EXECUTION.test(stepCode)) {
     reject('markdown-policy', `${label} adds a dynamic or indirect execution path`);
@@ -2883,6 +2898,11 @@ const FIXTURE_INVENTORY = Object.freeze([
   // Self-review, not reported: round 52's lesson applied to the guard lists I
   // had just written. Counting a guard does not make it run.
   ['T1-GENERATOR-024', 'tracked-destination check kept but made unreachable', 'generator', (source) => replaceOnce(source, '        Assert-StyleGuideTrackedDestination -DestinationLeaf $strDestinationLeaf\n', '        if ($false) {\n        Assert-StyleGuideTrackedDestination -DestinationLeaf $strDestinationLeaf\n        }\n')],
+  // The LAST of three copies, not the first. Checking only the first
+  // occurrence's depth was the defect this fixture exists to hold closed: the
+  // count stayed exact, the first copy stayed at its reviewed depth, and the
+  // third could be made unreachable.
+  ['T1-GENERATOR-025', 'a later copy of a reviewed check made unreachable', 'generator', (source) => replaceOnce(source, "                Assert-StyleGuideOrdinaryPath -LiteralPath $strTemporaryPath -ExpectedType 'File'\n                [System.IO.File]::Delete($strTemporaryPath)", "                if ($false) {\n                Assert-StyleGuideOrdinaryPath -LiteralPath $strTemporaryPath -ExpectedType 'File'\n                }\n                [System.IO.File]::Delete($strTemporaryPath)")],
   ['T1-BUILD-144', 'outside-paths drift guard kept but made unreachable', 'build', (source) => replaceOnce(replaceOnce(source, '              if ($arrOutside.Count -ne 0) {', '              if ($false) { if ($arrOutside.Count -ne 0) {'), '                  throw "git-state: the generator changed $($arrOutside.Count) path(s) outside the four generated artifacts"\n              }\n', '                  throw "git-state: the generator changed $($arrOutside.Count) path(s) outside the four generated artifacts"\n              } }\n')],
   // Balanced deliberately. An unclosed `if ($false) {` shifts the depth of every
   // later gate too, so the suite would report whichever gate happens to come
@@ -3090,6 +3110,7 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-GENERATOR-022": "supply-policy: the generator can terminate before completing the reviewed dispatch",
   "T1-GENERATOR-023": "supply-policy: the generator dispatch is not reachable at the top level: $intCopilotResult = New-StyleGuideCopilotVersion -SourcePath $strSourceFile -DestinationPath $strCopilotFile",
   "T1-GENERATOR-024": "supply-policy: a reviewed safety check is no longer reachable where it was reviewed: Assert-StyleGuideTrackedDestination -DestinationLeaf $strDestinationLeaf",
+  "T1-GENERATOR-025": "supply-policy: a reviewed safety check is no longer reachable where it was reviewed: Assert-StyleGuideOrdinaryPath -LiteralPath $strTemporaryPath -ExpectedType",
   "T1-BUILD-144": "side-effect-policy: a reviewed drift guard is no longer reachable where it was reviewed: if ($arrOutside.Count -ne 0) {",
   "T1-MARKDOWN-090": "markdown-policy: markdown.markdownlint.lint supply gate is no longer reachable where it was reviewed: if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {",
   "T1-MARKDOWN-020": "markdown-policy: markdown.markdownlint.lint is missing a required phase: supply: lint configuration or helper does not match the reviewed digest",
@@ -3562,21 +3583,9 @@ export function validateGeneratorPolicy(source) {
   // or disabled in the battery above and the policy still passed, because
   // nothing named required any of them to be present. Counts rather than mere
   // presence, so a disabled copy cannot sit beside a live one.
-  for (const [strFragment, intExpected, intDepth] of REVIEWED_GENERATOR_GUARDS) {
-    const intObserved = generatorCode.split(strFragment).length - 1;
-    if (intObserved !== intExpected) {
-      reject('supply-policy', `the generator no longer performs a reviewed safety check: ${strFragment}`);
-    }
-    // Counting a guard does not make it run. Wrapping one in `if ($false) { }`
-    // leaves the text and the count intact -- measured accepted against the
-    // first version of this list, which is the same defect round 52 reported
-    // against the dispatch rule, found here by applying that lesson to my own
-    // new rules rather than waiting for it to be reported again. An enclosing
-    // block changes the brace depth, so the depth is pinned too.
-    if (powerShellBraceDepthAt(generatorCode, generatorCode.indexOf(strFragment)) !== intDepth) {
-      reject('supply-policy', `a reviewed safety check is no longer reachable where it was reviewed: ${strFragment}`);
-    }
-  }
+  assertReviewedGuards(generatorCode, REVIEWED_GENERATOR_GUARDS, 'supply-policy', (kind, frag) => kind === 'missing'
+    ? `the generator no longer performs a reviewed safety check: ${frag}`
+    : `a reviewed safety check is no longer reachable where it was reviewed: ${frag}`);
   // Counting the lookup is not enough on its own: an early return inside the
   // function leaves every approved text in place and executes none of it.
   // Nothing but whitespace -- and comments, which the projection blanks -- may
