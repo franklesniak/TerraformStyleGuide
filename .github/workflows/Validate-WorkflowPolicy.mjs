@@ -361,7 +361,29 @@ const MARKDOWN_STEP_KEYWORDS = Object.freeze([
 // step's dot-source scan is, and for the same reason: without an anchor the
 // names collide with ordinary text. Tokens beginning $ [ @ ' " - or a digit are
 // not command names and are not captured.
-const MARKDOWN_COMMAND_POSITION = /(?:^[ \t]*|[;{}|=(,][ \t]*|&&[ \t]*|\|\|[ \t]*)([A-Za-z_.\/\\][^\s;{}()]*)/gmu;
+//
+// Round 46: an opening brace preceded by $ is excluded, because ${name} is a
+// variable reference and its interior is not command position. Without that
+// exclusion the scan captured `env:NODE_OPTIONS` out of `${env:NODE_OPTIONS} =`
+// and reported a braced *assignment* as a bare command -- which happened to
+// reject the right line for the wrong reason, and would have misreported any
+// legitimate ${strName} the same way. An opening parenthesis is deliberately
+// still an anchor after $, because $(...) is a subexpression and a command
+// inside one is a command.
+const MARKDOWN_COMMAND_POSITION = /(?:^[ \t]*|(?<!\$)\{[ \t]*|[;}|=(,][ \t]*|&&[ \t]*|\|\|[ \t]*)([A-Za-z_.\/\\][^\s;{}()]*)/gmu;
+// Both spellings of an Env: provider write. PowerShell accepts $env:NAME and
+// ${env:NAME}, and resolves the provider name case-insensitively, so the prefix
+// matches either case while the variable name is captured exactly -- the name
+// is what the allowlist compares, and on Linux it is case-sensitive.
+const MARKDOWN_ENV_WRITE = /\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?[ \t]*\+?=/giu;
+// Round 46. Execution APIs reachable without a call operator and without a bare
+// command name, so neither the invocation allowlist nor the command-position
+// scan can see them. Measured: [System.Diagnostics.Process]::Start($strNpmPath,
+// ('run lint:' + 'md')) was accepted, and the assembled argument also slips the
+// raw-text separation rule. The same list the acquire steps already refuse, for
+// the same reason -- neither governed step contains any of these today, so this
+// removes a capability rather than narrowing one.
+const MARKDOWN_DYNAMIC_EXECUTION = /\b(?:Invoke-Expression|iex|Invoke-Command|icm|Start-Process|saps)\b|\[\s*(?:System\.)?Management\.Automation\.ScriptBlock\s*\]|\[\s*scriptblock\s*\]\s*::\s*Create|\$ExecutionContext\s*\.\s*InvokeCommand|(?:System\.)?Diagnostics\.Process/iu;
 
 // The reviewed shape of each governed step, side by side so the two jobs can be
 // compared at a glance. The preludes are identical and asserted to be; only the
@@ -1841,12 +1863,16 @@ function assertMarkdownStepSurface(step, label, expected) {
     if (MARKDOWN_STEP_COMMANDS.includes(token)) continue;
     reject('markdown-policy', `${label} runs an unreviewed bare command: ${token}`);
   }
-  // Environment writes. Read from the projection so a variable name inside a
-  // throw message is not mistaken for an assignment.
-  for (const write of stepCode.matchAll(/\$env:([A-Za-z_][A-Za-z0-9_]*)[ \t]*\+?=/gu)) {
+  // Environment writes, in either spelling. Read from the projection so a
+  // variable name inside a throw message is not mistaken for an assignment.
+  for (const write of stepCode.matchAll(MARKDOWN_ENV_WRITE)) {
     if (!expected.envWrites.includes(write[1])) {
       reject('markdown-policy', `${label} assigns an unreviewed environment variable: ${write[1]}`);
     }
+  }
+  // Execution that names no command and uses no operator.
+  if (MARKDOWN_DYNAMIC_EXECUTION.test(stepCode)) {
+    reject('markdown-policy', `${label} adds a dynamic or indirect execution path`);
   }
   // $env:NAME is the only spelling the scan above can see. The computed forms
   // reach the same variables without ever writing the name, so -- as in the
@@ -2576,6 +2602,19 @@ const FIXTURE_INVENTORY = Object.freeze([
   // computed, which that scan cannot see and which the capability ban catches.
   ['T1-MARKDOWN-081', 'environment written through a computed name in the policy job', 'markdown', (source) => replaceOnce(source, '          $boolCiExisted = Test-Path Env:CI\n', "          [System.Environment]::SetEnvironmentVariable('NODE_' + 'OPTIONS', '--require=./payload.cjs')\n          $boolCiExisted = Test-Path Env:CI\n")],
   ['T1-MARKDOWN-082', 'policy-only environment baseline assigned in the lint job', 'markdown', (source) => replaceLast(source, '          $boolCiExisted = Test-Path Env:CI\n', '          $env:T1_EXPECTED_BUILD_DIGEST = (Get-FileHash -LiteralPath ./build.yml -Algorithm SHA256).Hash\n          $boolCiExisted = Test-Path Env:CI\n')],
+  // Round 46. The braced spelling of the same write. Before the command-position
+  // anchor was corrected this was rejected, but as a bare command named
+  // env:NODE_OPTIONS -- the right outcome reported as the wrong rule.
+  ['T1-MARKDOWN-083', 'Node preload configured through the braced Env spelling', 'markdown', (source) => replaceOnce(source, '          $boolCiExisted = Test-Path Env:CI\n', "          ${env:NODE_OPTIONS} = '--require=./payload.cjs'\n          $boolCiExisted = Test-Path Env:CI\n")],
+  ['T1-MARKDOWN-084', 'braced Env spelling in the lint job', 'markdown', (source) => replaceLast(source, '          $boolCiExisted = Test-Path Env:CI\n', "          ${env:NODE_OPTIONS} = '--require=./payload.cjs'\n          $boolCiExisted = Test-Path Env:CI\n")],
+  // Names no command at command position and uses no call operator, so both the
+  // allowlist and the bare-command scan are structurally blind to it. The
+  // assembled argument also defeats the raw-text separation rule.
+  ['T1-MARKDOWN-085', 'package script launched through the process API in the policy job', 'markdown', (source) => replaceOnce(source, '          $boolCiExisted = Test-Path Env:CI\n', "          [System.Diagnostics.Process]::Start($strNpmPath, ('run lint:' + 'md')).WaitForExit()\n          $boolCiExisted = Test-Path Env:CI\n")],
+  // Deliberately not `Invoke-Expression …` at statement start: that names a
+  // command at command position and the allowlist catches it first, correctly.
+  // This is the form that names nothing there, which is what this rule is for.
+  ['T1-MARKDOWN-086', 'command string executed through a script block in the lint job', 'markdown', (source) => replaceLast(source, '          $boolCiExisted = Test-Path Env:CI\n', "          [scriptblock]::Create('npm run lint:' + 'md').Invoke()\n          $boolCiExisted = Test-Path Env:CI\n")],
   ['T1-MARKDOWN-072', 'supply prelude closed twice, shortening the compared region', 'markdown', (source) => replaceOnce(source, "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n", "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n")],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -2814,6 +2853,10 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   // the difference is enforced per job rather than pooled: a name the policy
   // step may legitimately assign is refused in the lint step.
   "T1-MARKDOWN-082": "markdown-policy: markdown.markdownlint.lint assigns an unreviewed environment variable: T1_EXPECTED_BUILD_DIGEST",
+  "T1-MARKDOWN-083": "markdown-policy: markdown.policy.validate assigns an unreviewed environment variable: NODE_OPTIONS",
+  "T1-MARKDOWN-084": "markdown-policy: markdown.markdownlint.lint assigns an unreviewed environment variable: NODE_OPTIONS",
+  "T1-MARKDOWN-085": "markdown-policy: markdown.policy.validate adds a dynamic or indirect execution path",
+  "T1-MARKDOWN-086": "markdown-policy: markdown.markdownlint.lint adds a dynamic or indirect execution path",
   "T1-MARKDOWN-023": "markdown-policy: markdown.markdownlint.lint contains a workflow expression",
   "T1-MARKDOWN-022": "policy: markdown.markdownlint job permissions differs from the locked policy",
   "T1-LINTASSET-001": "supply-policy: .markdownlint.jsonc does not match its reviewed digest",
