@@ -157,20 +157,20 @@ const NETWORK_CLIENT = /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|i
 // script is pinned instead: any edit at all changes this digest.
 const REVIEWED_VALIDATION_STEP_DIGEST = 'e4157f6e13dc2863b2339ba16b8fbe73a380d6c2edb0f418c6604aef66aa1c01';
 
-// The verify step runs repository-controlled code and then draws a conclusion
-// from Git probes. Its required fragments and their ordering are asserted
-// individually below, but an inserted early exit satisfies every one of them
-// while skipping the probes entirely, and the upload action then publishes
-// artifacts labelled verified. The same backstop the Markdown step and the
-// former push step carry applies here for the same reason.
 // The credential-cleanup step's assertions all test for the presence of a
 // sequence, and presence is not execution: an inserted early exit satisfies
 // every one of them while returning before either credential check runs. This
 // pins the whole script for the same reason the other two substantive steps
-// are pinned.
+// are pinned. It is a backstop and not a substitute: the assertions it stands
+// behind are named individually so a re-baseline cannot quietly drop them.
 const REVIEWED_CREDENTIAL_STEP_DIGEST = 'cec60ee92660f500987f0b14926e85add62b9879c041bc3e87939472fd1471f5';
 
-const REVIEWED_VERIFY_STEP_DIGEST ='238b85b3f36cc5bc4a4b8a023342617be23c60cdc36060f083541c7b02f6a360';
+// The verify step runs repository-controlled code and then draws a conclusion
+// from Git probes. Its required fragments and their ordering are asserted
+// individually below, but an inserted early exit satisfies every one of them
+// while skipping the probes entirely. The same backstop the Markdown step and
+// the former push step carry applies here for the same reason.
+const REVIEWED_VERIFY_STEP_DIGEST = '238b85b3f36cc5bc4a4b8a023342617be23c60cdc36060f083541c7b02f6a360';
 
 // The generator is repository-controlled code that the verify job executes. Its
 // version marker is fixed, but a version marker constrains a string, not
@@ -416,34 +416,25 @@ export function validateBuildPolicy(workflow, source) {
   for (const { jobId, id, run, step } of allRunSteps(workflow)) {
     if ('continue-on-error' in step) reject('failure-policy', `${jobId}.${id} sets continue-on-error`);
     if (NETWORK_CLIENT.test(run)) reject('network-policy', `${jobId}.${id} adds a network client`);
-    // Scan the whole step, not just run or env values: a credential reaches the
-    // script through any step key just as effectively as through script text.
-    // All three patterns test the serialized step. The third tested run alone,
-    // which contradicted the sentence above it, and the gap was reachable
-    // rather than theoretical: the key assertions fix which keys a script step
-    // may carry, but not what the permitted values contain, so
-    // "name: Generate and verify ${{ github.token }} artifacts" satisfied every
-    // other check and passed. GITHUB_TOKEN is matched case-sensitively and
-    // github.token was matched against the wrong string, so nothing caught it.
-    // Action steps carry token: ${{ github.token }} legitimately and are not
-    // scanned here -- allRunSteps collects only steps with a run string.
-    // No governed script step contains a workflow expression at all -- verified
-    // across all three -- so the whole syntax is refused rather than the
-    // spellings that reference a credential through it. Three consecutive
-    // review rounds found this predicate one spelling short: it scanned run
-    // instead of the whole step, then matched case-sensitively, then missed
-    // github['token'] because it only knew the dot form. Each fix added a
-    // spelling and the next round found another, which is the shape this
-    // workflow has had to abandon everywhere else. A step that needs no
-    // expression is not made safer by an ever-longer list of the expressions it
-    // must not contain; it is made safe by containing none.
-    // Named credentials first, so a recognised one is reported as a credential
-    // rather than as a generic expression. These also answer a question the
-    // expression ban cannot: a literal reference such as $env:GITHUB_TOKEN is
-    // not an expression at all. All three are case-insensitive and all three
-    // scan the whole step. Action steps carry token: ${{ github.token }}
-    // legitimately and are never scanned here -- allRunSteps collects only
-    // steps with a run string.
+    // Two checks, most specific first, over the whole serialized step rather
+    // than over run alone -- a credential reaches the script through any step
+    // key just as effectively as through script text.
+    //
+    // The named patterns come first so a recognised credential is reported as a
+    // credential rather than as a generic expression, and because they catch
+    // what the expression ban cannot: $env:GITHUB_TOKEN is a literal, not an
+    // expression. All three are case-insensitive.
+    //
+    // The expression ban is what stops this predicate needing a fourth fix.
+    // Three consecutive rounds found it one spelling short -- it scanned run
+    // instead of the whole step, then matched case-sensitively, then knew only
+    // the dot form and missed github['token'] -- and each fix added the
+    // spelling just found. No governed script step contains an expression at
+    // all, verified across all three, so the syntax itself is refused and the
+    // spellings stop mattering.
+    //
+    // Action steps carry token: ${{ github.token }} legitimately and are never
+    // scanned here: allRunSteps collects only steps with a run string.
     const serialized = JSON.stringify(step);
     if (/secrets\./iu.test(serialized) || /GITHUB_TOKEN/iu.test(serialized) || /github\.token/iu.test(serialized)) {
       reject('credential-policy', `${jobId}.${id} expands an unapproved credential`);
