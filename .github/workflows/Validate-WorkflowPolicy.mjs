@@ -163,7 +163,7 @@ const REVIEWED_VALIDATION_STEP_DIGEST = 'e4157f6e13dc2863b2339ba16b8fbe73a380d6c
 // while skipping the probes entirely, and the upload action then publishes
 // artifacts labelled verified. The same backstop the Markdown step and the
 // former push step carry applies here for the same reason.
-const REVIEWED_VERIFY_STEP_DIGEST = '1b24d25364b95f5a975671ff6042e0d2cf52067a4ee1852acfb680bec7a131e4';
+const REVIEWED_VERIFY_STEP_DIGEST = '238b85b3f36cc5bc4a4b8a023342617be23c60cdc36060f083541c7b02f6a360';
 
 // The generator is repository-controlled code that the verify job executes. Its
 // version marker is fixed, but a version marker constrains a string, not
@@ -360,7 +360,13 @@ export function validateBuildPolicy(workflow, source) {
   const verify = workflow.jobs.verify;
   assertKeys(verify, ['runs-on', 'permissions', 'steps'], 'build.verify');
   if (verify['runs-on'] !== 'ubuntu-latest') reject('policy', 'build.verify runner changed');
-  assertEqual(verify.permissions, { contents: 'read' }, 'build.verify permissions');
+  // No scopes, not contents: read. This is the job that runs the generator, and
+  // actions/checkout registers an always-running post action that receives the
+  // job token as an input -- a descendant can poison that process through the
+  // step communication files after every in-step assertion has run. The write
+  // cannot be prevented from inside the step, so the token it would capture is
+  // given nothing to capture.
+  assertEqual(verify.permissions, {}, 'build.verify permissions');
   const verifyIds = verify.steps.map((step) => step?.id);
   // generate-and-verify is last on purpose. Anything appended after it runs
   // with whatever the generator's surviving descendants left behind, including
@@ -498,6 +504,20 @@ export function validateBuildPolicy(workflow, source) {
       !generateStep.run.includes('$objSha.ComputeHash($objStream)') ||
       generateStep.run.includes('[System.IO.File]::ReadAllBytes($strEntry)')) {
     reject('side-effect-policy', 'build.verify worktree walk can follow a link or read a file whole');
+  }
+  // Both remaining branches of the walk are named here rather than left to the
+  // closing digest, because the digest is re-baselined by design whenever a
+  // reviewed edit lands: an invariant only that digest protects is an invariant
+  // that a legitimate re-stamp silently drops.
+  //
+  // The exclusion must compare the path to .git itself. A prefix test on the
+  // string ".git" also matches .github and .gitattributes, which would drop the
+  // workflows and the text policy out of both maps -- the generator could then
+  // rewrite them with the comparison reporting no change at all.
+  if (!generateStep.run.includes('$objFile.Length -eq 0') ||
+      !generateStep.run.includes('if ($strEntry -cne $strGitDirectory) { $objPending.Push($strEntry) }') ||
+      generateStep.run.includes('$strGitPrefix')) {
+    reject('side-effect-policy', 'build.verify worktree walk lost its FIFO guard or its exact .git exclusion');
   }
   // The digest is only meaningful if its encoding is injective. Concatenating
   // the components raw is not: renaming pre-commit.sample to pre-commit and
@@ -835,7 +855,9 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-009', 'extra checkout input', 'build', (source) => replaceOnce(source, '          lfs: false\n', '          lfs: false\n          path: alternate\n')],
   ['T1-BUILD-010', 'credential persistence', 'build', (source) => replaceOnce(source, '          persist-credentials: false', '          persist-credentials: true')],
   ['T1-BUILD-011', 'workflow write permission', 'build', (source) => replaceOnce(source, 'permissions:\n  contents: read', 'permissions:\n  contents: write')],
-  ['T1-BUILD-012', 'verify write permission', 'build', (source) => replaceOnce(source, '  verify:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read', '  verify:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: write')],
+  // Same meaning as when it was written -- verify must not hold a write scope.
+  // Only the anchor moved, because verify now declares no scopes at all.
+  ['T1-BUILD-012', 'verify write permission', 'build', (source) => replaceOnce(source, '  verify:\n    runs-on: ubuntu-latest\n    permissions: {}', '  verify:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: write')],
   ['T1-BUILD-014', 'missing verify job', 'build', (source) => replaceOnce(source, '  verify:', '  renamed-verify:')],
   ['T1-BUILD-015', 'extra job', 'build', (source) => `${source}\n  extra:\n    runs-on: ubuntu-latest\n    steps: []\n`],
   ['T1-BUILD-016', 'matrix introduction', 'build', (source) => replaceOnce(source, '  verify:\n    runs-on:', '  verify:\n    strategy:\n      matrix: { os: [ubuntu-latest] }\n    runs-on:')],
@@ -907,6 +929,13 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-089', 'step appended after the verification step', 'build', (source) => replaceOnce(source, "          Write-Host 'generated-artifacts: committed bytes match generator output'\n", "          Write-Host 'generated-artifacts: committed bytes match generator output'\n\n      - name: Summarize\n        id: summarize\n        shell: pwsh\n        run: |\n          Write-Host done\n")],
   // The walk decides what the verification can be made to read, so each way of
   // loosening it is a fixture rather than a comment.
+  // Every branch of the walk gets a fixture. The closing digest would catch all
+  // of these today, but it is re-baselined whenever a reviewed edit lands, and
+  // an invariant that only the digest defends is one a legitimate re-stamp
+  // drops without anyone noticing.
+  ['T1-BUILD-094', 'worktree walk loses its FIFO guard', 'build', (source) => replaceOnce(source, '                              if ($objFile.Length -eq 0) {', '                              if ($false) {')],
+  ['T1-BUILD-095', 'git exclusion widened to a string prefix', 'build', (source) => replaceOnce(source, '                          if (($objAttributes -band [System.IO.FileAttributes]::Directory) -ne 0) {\n                              if ($strEntry -cne $strGitDirectory) { $objPending.Push($strEntry) }', '                          if (($objAttributes -band [System.IO.FileAttributes]::Directory) -ne 0) {\n                              if (-not $strEntry.StartsWith($strGitPrefix)) { $objPending.Push($strEntry) }')],
+  ['T1-BUILD-096', 'generator job regains a token scope', 'build', (source) => replaceOnce(source, '  verify:\n    runs-on: ubuntu-latest\n    permissions: {}\n', '  verify:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n')],
   ['T1-BUILD-091', 'worktree walk follows links again', 'build', (source) => replaceOnce(source, "                          if (($objAttributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {\n                              throw 'worktree: the working tree contains a link'\n                          }\n", '')],
   ['T1-BUILD-092', 'worktree walk recurses with AllDirectories', 'build', (source) => replaceOnce(source, '[System.IO.Directory]::EnumerateFileSystemEntries($objPending.Pop())', '[System.IO.Directory]::EnumerateFiles($objPending.Pop(), \'*\', [System.IO.SearchOption]::AllDirectories)')],
   ['T1-BUILD-093', 'worktree walk loads each file whole', 'build', (source) => replaceOnce(source, '                                  $objMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash($objStream))\n', '                                  $objMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash([System.IO.File]::ReadAllBytes($strEntry)))\n')],

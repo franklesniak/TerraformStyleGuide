@@ -10,10 +10,20 @@ permissions:
   contents: read
 
 jobs:
+  # This job runs repository-controlled code, so it holds no token scopes at
+  # all. That is not belt and braces for the checkout: actions/checkout
+  # registers a post action, GitHub documents post-if as defaulting to
+  # always(), and the runner applies whatever is in the step communication
+  # files to it -- so a descendant the generator detached can still poison the
+  # environment of a Node process that receives this job's token as an input,
+  # after every in-step assertion has already run. Nothing in this job can
+  # prevent that. What it can do is make the token not worth taking. The
+  # repository is public, so a scope-less token still clones it; if it ever
+  # becomes private this fails at checkout rather than quietly granting the
+  # scope back.
   verify:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    permissions: {}
     steps:
       - name: Check out triggering revision
         id: checkout
@@ -221,15 +231,21 @@ jobs:
 
           # GitHub documents that the step writing these files "does not have
           # access to the new value, but all subsequent steps in a job will have
-          # access". This is the last step in this job, so today there is no
-          # subsequent step to project a variable such as NODE_OPTIONS into --
-          # that is why publishing was moved to a job that runs no repository
-          # code. The assertion stays because that emptiness is the reason the
-          # step order is safe, and a future step appended here would otherwise
-          # inherit the gap silently. Emptiness is asserted rather than the
-          # absence of named variables, and it is a floor, not a ceiling: the
-          # generator's descendants can write these files after this step exits,
-          # which no in-step check can observe.
+          # access". This is the last authored step, which is why publishing
+          # moved to a job that runs no repository code -- but it is not the
+          # last thing that executes. actions/checkout registers a post action
+          # and post-if defaults to always(), so a Node process runs at the end
+          # of this job holding the checkout inputs, and a descendant that
+          # writes these files after this step exits reaches it. That is why
+          # this job carries no token scopes: the channel cannot be closed from
+          # inside the step, so the credential on the other end of it is made
+          # worthless instead.
+          #
+          # The assertion below is a floor, not a ceiling. It catches a
+          # generator that writes during its own run, and it is why appending
+          # an authored step here would be unsafe -- the validator asserts the
+          # step order for that reason. It cannot catch a write that happens
+          # after the step ends, and it does not claim to.
           New-Variable -Name arrChannelPaths -Value @($env:GITHUB_ENV, $env:GITHUB_PATH) -Option Constant
 
           # Every Git probe below reports on state the generator can move. It can
