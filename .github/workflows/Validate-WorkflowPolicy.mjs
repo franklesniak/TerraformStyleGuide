@@ -182,15 +182,35 @@ const REVIEWED_ACQUIRE_STATIC_CALLS = new Set([
 const NETWORK_CLIENT =/\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|Start-BitsTransfer|Net\.WebClient|WebClient|HttpClient|WebRequest|TcpClient|UdpClient|HttpListener|Socket)\b|System\.Net\./iu;
 
 
-// The Markdown validation step captures each phase status into a variable and
-// defers the failure decision to a final check. The structural assertions below
+// The Markdown governed steps capture each phase status into a variable and
+// defer the failure decision to a final check. The structural assertions below
 // count direct "$intPolicyExit =" assignments, which a rewrite can satisfy while
 // still zeroing the captured value -- Set-Variable -Name intPolicyExit -Value 0
 // changes the variable without matching the assignment syntax being counted.
 // Enumerating the indirect writers (Set-Variable, New-Variable, the Variable:
 // provider, [ref] handles) is the same losing shape, so the whole reviewed
 // script is pinned instead: any edit at all changes this digest.
-const REVIEWED_VALIDATION_STEP_DIGEST = 'a061f2929c789b1e4f5103c365c370b38aaf3bab523691c99d852256f1c2d585';
+//
+// There are two of them because there are now two jobs. The validator and the
+// linters each read something the other can write -- the extracted toolchain in
+// one direction, the rule configuration and the nested-fence helper in the
+// other -- so whichever ran second in a single job was exposed to the first.
+// Both orders were tried here and each one's fix was the other one's defect.
+// Separate jobs are separate runners with separate filesystems, which removes
+// the choice rather than making it.
+const REVIEWED_POLICY_STEP_DIGEST = '0014b712b89fd6ae059238ee0fcdb6a5bd2f528b6659da9bafd36ea07f6119d0';
+const REVIEWED_LINT_STEP_DIGEST = 'acde5c2450673e744a8acc058eeb214d9fcf1de7c9677c4639880a9f76ab9f72';
+
+// Both governed steps have to establish the same supply position before they
+// diverge: the pinned toolchain, the reviewed package metadata, and npm's
+// configuration sources. Splitting one step into two created a second place for
+// that to be written, and therefore a second place for it to drift -- so the
+// prelude is required to be byte-identical rather than merely to satisfy the
+// same fragment list twice. This anchor is its last statement; everything from
+// the start of each step through the end of it must match exactly.
+const MARKDOWN_PRELUDE_END = "if ($strGlobalConfigDirectory -cne '/etc') {\n" +
+  "    throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n" +
+  '}\n';
 
 // The credential-cleanup step's assertions all test for the presence of a
 // sequence, and presence is not execution: an inserted early exit satisfies
@@ -280,6 +300,85 @@ const REVIEWED_GENERATOR_DIGEST = 'a0a447c09d6923b3d8519520521d30dc2f4a28f4ae42f
 const REVIEWED_LINT_DIGESTS = Object.freeze({
   '.markdownlint.jsonc': '5eb07bf7f30829e0091e82f235a96fdba21be1ef1160ca1e22cdbe8d82da5300',
   'lint-nested-markdown.js': '4eefec7afba1c79809d916365b2eb3e2ea17aa482593338492a10d6dda5e2031',
+});
+
+// The reviewed shape of each governed step, side by side so the two jobs can be
+// compared at a glance. The preludes are identical and asserted to be; only the
+// tails differ, and each tail is asserted to contain neither the other job's
+// program nor the other job's phases. That is the split: the policy job runs
+// the validator and no linter, the lint job runs both linters and no validator,
+// and neither can reach the bytes the other reads.
+const MARKDOWN_JOBS = Object.freeze({
+  policy: Object.freeze({
+    stepId: 'validate',
+    name: 'Install without executing packages and validate workflow policy',
+    digest: REVIEWED_POLICY_STEP_DIGEST,
+    capturedStatuses: Object.freeze(['intNodeVersionExit', 'intNpmVersionExit', 'intInstallExit', 'intPolicyExit']),
+    fragments: Object.freeze([
+      './Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml',
+      '$env:T1_EXPECTED_BUILD_DIGEST = (Get-FileHash -LiteralPath ./build.yml -Algorithm SHA256).Hash',
+      '$env:T1_EXPECTED_MARKDOWN_DIGEST = (Get-FileHash -LiteralPath ./markdownlint.yml -Algorithm SHA256).Hash',
+      'validation: package metadata changed after installation',
+      'validation: workflow policy validation failed',
+    ]),
+    phases: Object.freeze([
+      'supply: package metadata does not match the reviewed supply digest',
+      // Must precede installation: npm reads .npmrc before it runs any command.
+      'supply: repository-controlled npm configuration is present',
+      // Recorded before installation, so the baseline predates every file npm
+      // unpacks into this job. Handed to the validator rather than re-compared
+      // here, because a comparison immediately before the invocation is a
+      // check/use pair with an interval in it while hashing the parsed text has
+      // none.
+      '$env:T1_EXPECTED_BUILD_DIGEST = (Get-FileHash -LiteralPath ./build.yml -Algorithm SHA256).Hash',
+      '$env:T1_EXPECTED_MARKDOWN_DIGEST = (Get-FileHash -LiteralPath ./markdownlint.yml -Algorithm SHA256).Hash',
+      'ci --ignore-scripts --no-audit --no-fund',
+      'npm-ci: package metadata changed during frozen installation',
+      // --ignore-scripts unpacks the dependency tree without executing any of
+      // it, and this job contains no lint phase, so nothing has run here that
+      // could have replaced the extracted toolchain or the validator's bytes.
+      './Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml',
+      'validation: package metadata changed after installation',
+      'validation: workflow policy validation failed',
+    ]),
+  }),
+  markdownlint: Object.freeze({
+    stepId: 'lint',
+    name: 'Install and lint both Markdown surfaces',
+    digest: REVIEWED_LINT_STEP_DIGEST,
+    capturedStatuses: Object.freeze(['intNodeVersionExit', 'intNpmVersionExit', 'intInstallExit', 'intOuterExit', 'intNestedExit']),
+    fragments: Object.freeze([
+      'run lint:md',
+      'run lint:md:nested',
+      // What the lint does, not only what it runs. Derived from the reviewed
+      // constants so the gate and this baseline cannot drift apart silently.
+      REVIEWED_LINT_DIGESTS['.markdownlint.jsonc'].toUpperCase(),
+      REVIEWED_LINT_DIGESTS['lint-nested-markdown.js'].toUpperCase(),
+      'Get-FileHash -LiteralPath .markdownlint.jsonc -Algorithm SHA256',
+      'Get-FileHash -LiteralPath lint-nested-markdown.js -Algorithm SHA256',
+      'supply: lint configuration or helper does not match the reviewed digest',
+      'supply: lint configuration or helper changed during installation',
+      'validation: package metadata changed after installation or linting',
+      'validation: one or more lint phases failed',
+    ]),
+    phases: Object.freeze([
+      'supply: package metadata does not match the reviewed supply digest',
+      'supply: repository-controlled npm configuration is present',
+      // Must precede the lint phases, which execute both of these files.
+      'supply: lint configuration or helper does not match the reviewed digest',
+      'ci --ignore-scripts --no-audit --no-fund',
+      'npm-ci: package metadata changed during frozen installation',
+      // Between installation and the phases that read these two files, with
+      // nothing repository-controlled in between: npm ci unpacks with
+      // --ignore-scripts, and the validator that used to run in this job now
+      // runs on a different machine entirely.
+      'supply: lint configuration or helper changed during installation',
+      'run lint:md\n',
+      'run lint:md:nested',
+      'validation: package metadata changed after installation or linting',
+      'validation: one or more lint phases failed',
+    ]),
+  }),
 });
 
 const EXPECTED_VERSION = '1.0.20260802.0';
@@ -1382,43 +1481,20 @@ function validateCredentialCleanupStep(step, label) {
   }
 }
 
-export function validateMarkdownPolicy(workflow, source) {
-  assertKeys(workflow, ['name', 'on', 'permissions', 'jobs'], 'markdown root');
-  if (workflow.name !== 'Markdown Lint') reject('policy', 'Markdown workflow name is not locked');
-  assertEqual(workflow.on, EXPECTED_TRIGGER, 'Markdown triggers');
-  assertEqual(workflow.permissions, { contents: 'read' }, 'Markdown workflow permissions');
-  assertKeys(workflow.jobs, ['markdownlint'], 'Markdown jobs');
-
-  const job = workflow.jobs.markdownlint;
-  assertKeys(job, ['runs-on', 'permissions', 'steps'], 'markdown.markdownlint');
-  if (job['runs-on'] !== 'ubuntu-latest') reject('policy', 'Markdown runner changed');
-  // Same two rules as build.verify, and for the same reason in the same order.
-  // No scopes, because this job runs repository-controlled code; and no
-  // actions, because the scopes are not what the exposure runs on. A
-  // JavaScript action receives ACTIONS_RUNTIME_TOKEN from the job's system
-  // connection whatever the permissions map says, and its post step executes
-  // after the lint phases have run repository code. Removing the actions is
-  // what removes the credential from the job.
-  assertEqual(job.permissions, {}, 'Markdown job permissions');
-  for (const step of job.steps) {
-    if ('uses' in step) reject('isolation-policy', `markdown.${step.id} uses an action`);
-  }
-  assertEqual(job.steps.map((step) => step?.id), ['acquire', 'validate-and-lint'], 'Markdown step order');
-  validateAcquireStep(findStep(job, 'acquire', 'markdown.markdownlint'), 'markdown.acquire', MARKDOWN_ACQUIRE);
-
-  const validation = findStep(job, 'validate-and-lint', 'markdown.markdownlint');
-  assertKeys(validation, ['name', 'id', 'shell', 'working-directory', 'run'], 'markdown.validate-and-lint');
-  if (validation.shell !== 'pwsh' || validation['working-directory'] !== '.github/workflows') {
-    reject('policy', 'Markdown validation execution context changed');
+// Every assertion that holds for both governed steps, so the two jobs cannot
+// diverge in what is checked of them. The tails differ and the preludes do not:
+// each step establishes the same supply position, and then one runs the
+// validator and the other runs the linters.
+function validateMarkdownGovernedStep(step, label, expected) {
+  assertKeys(step, ['name', 'id', 'shell', 'working-directory', 'run'], label);
+  if (step.name !== expected.name || step.shell !== 'pwsh' || step['working-directory'] !== '.github/workflows') {
+    reject('policy', `${label} execution context changed`);
   }
   const requiredFragments = [
     "-cne 'v24.18.1'",
     "-cne '11.16.0'",
     'if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {',
     'ci --ignore-scripts --no-audit --no-fund',
-    './Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml',
-    'run lint:md',
-    'run lint:md:nested',
     'Get-FileHash -LiteralPath package.json -Algorithm SHA256',
     'Get-FileHash -LiteralPath package-lock.json -Algorithm SHA256',
     // Derived from the reviewed constants so the pre-install gate in the
@@ -1427,6 +1503,7 @@ export function validateMarkdownPolicy(workflow, source) {
     REVIEWED_PACKAGE_DIGESTS['package-lock.json'].toUpperCase(),
     'if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash)',
     'supply: package metadata does not match the reviewed supply digest',
+    'npm-ci: package metadata changed during frozen installation',
     // Neither reviewed digest covers .npmrc, and no governed YAML mentions it,
     // so script-shell there is a lint bypass that leaves every other check green.
     "@('.npmrc', '../.npmrc', '../../.npmrc')",
@@ -1439,163 +1516,215 @@ export function validateMarkdownPolicy(workflow, source) {
     "$env:npm_config_globalconfig = '/etc/npmrc-absent-by-policy'",
     'supply: the neutralized global npm configuration is not under a root-owned directory',
     'supply: the neutralized npm configuration source is not empty',
-    // What the lint does, not only what it runs. Derived from the reviewed
-    // constants so the gate and this baseline cannot drift apart silently.
-    REVIEWED_LINT_DIGESTS['.markdownlint.jsonc'].toUpperCase(),
-    REVIEWED_LINT_DIGESTS['lint-nested-markdown.js'].toUpperCase(),
-    'Get-FileHash -LiteralPath .markdownlint.jsonc -Algorithm SHA256',
-    'Get-FileHash -LiteralPath lint-nested-markdown.js -Algorithm SHA256',
-    'supply: lint configuration or helper does not match the reviewed digest',
-    // Taken again after the validator, which is itself repository-controlled
-    // and runs before both lint phases.
-    'supply: lint configuration or helper changed after policy validation',
   ];
-  for (const fragment of requiredFragments) {
-    if (!validation.run.includes(fragment)) reject('markdown-policy', `required phase is missing: ${fragment}`);
+  for (const fragment of [...requiredFragments, ...expected.fragments]) {
+    if (!step.run.includes(fragment)) reject('markdown-policy', `${label} is missing a required phase: ${fragment}`);
   }
   // Token presence alone cannot prove a phase runs. An inserted early exit
   // leaves every required fragment in place while skipping the phases below it,
   // so the step would report success without linting or re-checking metadata.
-  // This script defines no functions, so these tokens have no legitimate use.
+  // Neither script defines a function, so these tokens have no legitimate use.
   // Matched only in statement position — at the start of a line or directly
   // after ; or { — so the word "exit" inside a throw message is not a hit.
-  if (/^[ \t]*(?:exit|return|break|continue)\b|[;{][ \t]*(?:exit|return|break|continue)\b/imu.test(validation.run)) {
-    reject('markdown-policy', 'validation script adds control flow that can bypass a required phase');
+  if (/^[ \t]*(?:exit|return|break|continue)\b|[;{][ \t]*(?:exit|return|break|continue)\b/imu.test(step.run)) {
+    reject('markdown-policy', `${label} adds control flow that can bypass a required phase`);
   }
   // Statement position cannot see [Environment]::Exit(0), because the token
-  // follows :: rather than starting a statement. This step also restores
+  // follows :: rather than starting a statement. These steps also restore
   // $env:CI in a finally block, which that call would skip. See
   // PROCESS_TERMINATION for the enumeration and why it closes.
-  if (PROCESS_TERMINATION.test(validation.run)) {
-    reject('markdown-policy', 'validation script adds a process-termination path that can bypass a required phase');
+  if (PROCESS_TERMINATION.test(step.run)) {
+    reject('markdown-policy', `${label} adds a process-termination path that can bypass a required phase`);
   }
   // Presence is order-independent; the phases must also run in the reviewed
   // sequence, so a later phase cannot be hoisted above the gate that guards it.
   let cursor = -1;
-  for (const phase of [
-    'supply: package metadata does not match the reviewed supply digest',
-    // Must precede installation: npm reads .npmrc before it runs any command.
-    'supply: repository-controlled npm configuration is present',
-    // Must precede the lint phases, which execute both of these files.
-    'supply: lint configuration or helper does not match the reviewed digest',
-    // Recorded before installation, so the baseline predates every third-party
-    // package in this job. The validator runs after both lint phases and
-    // compares these against the text it parses, which is the only placement
-    // that leaves no interval for a writer.
-    '$env:T1_EXPECTED_BUILD_DIGEST = (Get-FileHash -LiteralPath ./build.yml -Algorithm SHA256).Hash',
-    '$env:T1_EXPECTED_MARKDOWN_DIGEST = (Get-FileHash -LiteralPath ./markdownlint.yml -Algorithm SHA256).Hash',
-    'ci --ignore-scripts --no-audit --no-fund',
-    'npm-ci: package metadata changed during frozen installation',
-    // Between installation and the phases that read these two files. This
-    // ordering is load-bearing and the reason the validator moved below the
-    // linters: a hash taken before a repository-controlled program runs cannot
-    // describe what a later reader sees, because that program can leave a
-    // writer behind and choose when it writes (CWE-367). Nothing
-    // repository-controlled may sit between this check and the lint phases.
-    'supply: lint configuration or helper changed after policy validation',
-    'run lint:md\n',
-    'run lint:md:nested',
-    // After both consumers, so it has no later reader left to poison.
-    './Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml',
-    'validation: package metadata changed after installation or linting',
-    'validation: one or more policy or lint phases failed',
-  ]) {
-    const at = validation.run.indexOf(phase, cursor + 1);
-    if (at <= cursor) reject('markdown-policy', `required phases are out of order at: ${phase}`);
+  for (const phase of expected.phases) {
+    const at = step.run.indexOf(phase, cursor + 1);
+    if (at <= cursor) reject('markdown-policy', `${label} runs a required phase out of order: ${phase}`);
     cursor = at;
-  }
-  if ((validation.run.match(/^\s*& \$strNpmPath run lint:md\s*$/gmu) ?? []).length !== 1 ||
-      (validation.run.match(/^\s*& \$strNpmPath run lint:md:nested\s*$/gmu) ?? []).length !== 1) {
-    reject('markdown-policy', 'each locked lint script must run exactly once');
-  }
-  if (/continue-on-error/iu.test(source)) {
-    reject('markdown-policy', 'Markdown workflow weakens failure policy');
   }
   // The network ban is per step rather than per file, and it always should
   // have been. Its stated rationale -- that no governed step performs network
-  // I/O -- was already untrue: npm ci fetches the whole dependency tree in the
-  // lint step. What the rule actually protects is that the step running
-  // repository-controlled code has no client of its own, and that is asserted
-  // where it is true. The acquire step is exempt because it downloads the Node
-  // distribution, and the exemption is paired with a replacement rather than
-  // left open: its URL and the expected archive digest are reviewed constants
-  // asserted above, so what it may fetch is fixed and what it accepts back is
-  // fixed. It also runs before any repository code, so nothing it could be
-  // steered by has executed yet.
-  if (NETWORK_CLIENT.test(powerShellTokenView(validation.run))) {
-    reject('markdown-policy', 'markdown.validate-and-lint adds a network client');
+  // I/O -- was already untrue: npm ci fetches the whole dependency tree in both
+  // of these. What the rule actually protects is that the steps running
+  // repository-controlled code have no client of their own, and that is
+  // asserted where it is true. The acquire step is exempt because it downloads
+  // the Node distribution, and the exemption is paired with a replacement
+  // rather than left open: its URL and the expected archive digest are reviewed
+  // constants asserted above, so what it may fetch is fixed and what it accepts
+  // back is fixed. It also runs before any repository code, so nothing it could
+  // be steered by has executed yet.
+  if (NETWORK_CLIENT.test(powerShellTokenView(step.run))) {
+    reject('markdown-policy', `${label} adds a network client`);
   }
   // The credential scan and the expression ban were added to build.yml's script
   // steps and not to this one, so the invariant "no governed script step
   // contains an expression" held in one file and not the other -- a fix applied
   // to the instance rather than the class, which is the mistake this pull
   // request has now made often enough to assert against.
-  //
-  // The step is scanned rather than the file: markdownlint.yml legitimately
-  // carries token: ${{ github.token }} on setup-node, and an action step is not
-  // what this rule governs.
-  const validationSerialized = JSON.stringify(validation);
-  if (/secrets\./iu.test(validationSerialized) ||
-      /GITHUB_TOKEN/iu.test(validationSerialized) ||
-      /github\.token/iu.test(validationSerialized)) {
-    reject('markdown-policy', 'markdown.validate-and-lint expands an unapproved credential');
+  const serialized = JSON.stringify(step);
+  if (/secrets\./iu.test(serialized) ||
+      /GITHUB_TOKEN/iu.test(serialized) ||
+      /github\.token/iu.test(serialized)) {
+    reject('markdown-policy', `${label} expands an unapproved credential`);
   }
-  if (/\$\{\{/u.test(validationSerialized)) {
-    reject('markdown-policy', 'markdown.validate-and-lint contains a workflow expression');
+  if (/\$\{\{/u.test(serialized)) {
+    reject('markdown-policy', `${label} contains a workflow expression`);
   }
-  if (/@['"]|<#/u.test(validation.run)) {
-    reject('markdown-policy', 'markdown.validate-and-lint uses a here-string or block comment');
+  if (/@['"]|<#/u.test(step.run)) {
+    reject('markdown-policy', `${label} uses a here-string or block comment`);
   }
-  // Every phase in this step reports by throwing, and the one try in it exists
-  // to restore the caller's CI variable in finally, not to handle anything. A
-  // catch anywhere here turns a failed supply digest, a failed frozen install,
-  // or a failed lint into a step that succeeds having decided nothing, and a
-  // trap does the same for the whole script from wherever it is written. The
-  // verify step bounds catch by position because it has one legitimate catch;
-  // this step has none, so both are refused outright.
+  // Every phase in these steps reports by throwing, and the one try in each
+  // exists to restore the caller's CI variable in finally, not to handle
+  // anything. A catch anywhere here turns a failed supply digest, a failed
+  // frozen install, a failed policy run or a failed lint into a step that
+  // succeeds having decided nothing, and a trap does the same for the whole
+  // script from wherever it is written. The verify step bounds catch by
+  // position because it has one legitimate catch; these have none, so both are
+  // refused outright.
   //
   // Read from the projection, not the raw text. On the raw text this rule
   // forbids explaining itself: a comment recording *why* a catch is refused
   // here trips it, which is the same prose-versus-code confusion the generator
   // guard hit. The projection blanks comments and string content, so the ban
   // now applies to catch and trap as constructs rather than as words.
-  if (/\b(?:catch|trap)\b/iu.test(powerShellCodeProjection(validation.run))) {
-    reject('markdown-policy', 'markdown.validate-and-lint can suppress a phase failure');
+  if (/\b(?:catch|trap)\b/iu.test(powerShellCodeProjection(step.run))) {
+    reject('markdown-policy', `${label} can suppress a phase failure`);
   }
-  if (/[^\t\n\x20-\x7e]/u.test(validation.run)) {
-    reject('markdown-policy', 'markdown.validate-and-lint contains a character outside printable ASCII');
+  if (/[^\t\n\x20-\x7e]/u.test(step.run)) {
+    reject('markdown-policy', `${label} contains a character outside printable ASCII`);
   }
-  if (/--%/u.test(validation.run)) {
-    reject('markdown-policy', 'markdown.validate-and-lint uses the stop-parsing token');
+  if (/--%/u.test(step.run)) {
+    reject('markdown-policy', `${label} uses the stop-parsing token`);
   }
   // Each captured phase status must be assigned exactly once, from $LASTEXITCODE.
   // Otherwise a later reassignment such as "$intPolicyExit = 0" leaves every
   // fragment, ordering, and command count intact while the deferred final check
   // sees only zeros and reports success over a failed phase.
-  for (const strName of ['intNodeVersionExit', 'intNpmVersionExit', 'intInstallExit', 'intPolicyExit', 'intOuterExit', 'intNestedExit']) {
-    const arrAssignments = validation.run.match(new RegExp(`\\$${strName}\\s*=`, 'gu')) ?? [];
+  for (const strName of expected.capturedStatuses) {
+    const arrAssignments = step.run.match(new RegExp(`\\$${strName}\\s*=`, 'gu')) ?? [];
     if (arrAssignments.length !== 1) {
-      reject('markdown-policy', `captured phase status ${strName} is not assigned exactly once`);
+      reject('markdown-policy', `${label} captured phase status ${strName} is not assigned exactly once`);
     }
-    if (!validation.run.includes(`$${strName} = $LASTEXITCODE`)) {
-      reject('markdown-policy', `captured phase status ${strName} is not taken from $LASTEXITCODE`);
+    if (!step.run.includes(`$${strName} = $LASTEXITCODE`)) {
+      reject('markdown-policy', `${label} captured phase status ${strName} is not taken from $LASTEXITCODE`);
     }
   }
+}
 
-  // Closing backstop, the same shape as the one on the verify step. The
-  // assertions above are kept because they name what changed; this pins
-  // everything they do not model -- an indirect write to a captured status
-  // through Set-Variable,
-  // New-Variable, the Variable: provider, or a [ref] handle, none of which
-  // contain the assignment syntax counted above.
-  if (createHash('sha256').update(validation.run, 'utf8').digest('hex') !== REVIEWED_VALIDATION_STEP_DIGEST) {
-    reject('markdown-policy', 'Markdown validation script does not match its reviewed digest');
+// Closing backstop, the same shape as the one on the verify step. The named
+// assertions are kept because they say what changed; this pins everything they
+// do not model -- an indirect write to a captured status through Set-Variable,
+// New-Variable, the Variable: provider, or a [ref] handle, none of which
+// contain the assignment syntax counted above.
+//
+// Split out of the assertions it stands behind and run after the cross-job
+// structure below, because a digest taken first answers every mutation with
+// "the bytes moved" and no fixture can then isolate the rule it targets. That
+// is the masking defect this suite already corrects for elsewhere, and adding
+// a second governed step would have reintroduced it for every cross-job rule.
+function assertMarkdownStepDigest(step, label, expected) {
+  if (createHash('sha256').update(step.run, 'utf8').digest('hex') !== expected.digest) {
+    reject('markdown-policy', `${label} does not match its reviewed digest`);
+  }
+}
+
+export function validateMarkdownPolicy(workflow, source) {
+  assertKeys(workflow, ['name', 'on', 'permissions', 'jobs'], 'markdown root');
+  if (workflow.name !== 'Markdown Lint') reject('policy', 'Markdown workflow name is not locked');
+  assertEqual(workflow.on, EXPECTED_TRIGGER, 'Markdown triggers');
+  assertEqual(workflow.permissions, { contents: 'read' }, 'Markdown workflow permissions');
+  // Two jobs, and exactly two. Merging them back into one would reintroduce the
+  // ordering choice the split exists to remove, and a third job would be an
+  // unreviewed program on the same commit.
+  assertKeys(workflow.jobs, ['policy', 'markdownlint'], 'Markdown jobs');
+
+  const governed = {};
+  for (const [jobId, expected] of Object.entries(MARKDOWN_JOBS)) {
+    const label = `markdown.${jobId}`;
+    const job = workflow.jobs[jobId];
+    // The key set is what refuses a needs: edge. These are independent
+    // assertions about one commit and neither is a precondition of the other,
+    // so an edge between them would buy nothing and would let the first
+    // failure hide the second. It is refused structurally rather than by a
+    // named rule because every other job key is refused the same way.
+    assertKeys(job, ['runs-on', 'permissions', 'steps'], label);
+    if (job['runs-on'] !== 'ubuntu-latest') reject('policy', `${label} runner changed`);
+    // Same two rules as build.verify, and for the same reason in the same
+    // order. No scopes, because these jobs run repository-controlled code; and
+    // no actions, because the scopes are not what the exposure runs on. A
+    // JavaScript action receives ACTIONS_RUNTIME_TOKEN from the job's system
+    // connection whatever the permissions map says, and its post step executes
+    // after the job has run repository code. Removing the actions is what
+    // removes the credential from the job.
+    assertEqual(job.permissions, {}, `${label} job permissions`);
+    for (const step of job.steps) {
+      if ('uses' in step) reject('isolation-policy', `${label}.${step.id} uses an action`);
+    }
+    assertEqual(job.steps.map((step) => step?.id), ['acquire', expected.stepId], `${label} step order`);
+    // Asserted once per job rather than once per file. Each job is a separate
+    // runner with a separate empty workspace, so each has to fetch the
+    // triggering revision and the pinned toolchain for itself -- and each is
+    // held to the same reviewed digest, which is what makes the two copies
+    // provably identical rather than merely similar.
+    validateAcquireStep(findStep(job, 'acquire', label), `${label}.acquire`, MARKDOWN_ACQUIRE);
+    governed[jobId] = findStep(job, expected.stepId, label);
+  }
+  for (const [jobId, expected] of Object.entries(MARKDOWN_JOBS)) {
+    validateMarkdownGovernedStep(governed[jobId], `markdown.${jobId}.${expected.stepId}`, expected);
   }
 
-  // Zero. This job runs repository code, so it contains no action at all --
-  // the same structural rule build.yml's verify job carries, asserted the same
-  // two ways: no uses key on any step, and no pinned action anywhere in the
-  // file.
+  // The supply prelude is required to be byte-identical across the two jobs,
+  // not merely to satisfy the same fragment list twice. Splitting one step into
+  // two created a second copy of the toolchain pin, the reviewed package gate
+  // and the npm configuration neutralization, and a second copy is a second
+  // place to drift: a weakening applied to one job only would leave every
+  // fragment assertion above satisfied in both.
+  const preludeOf = (step, label) => {
+    const at = step.run.indexOf(MARKDOWN_PRELUDE_END);
+    if (at < 0 || step.run.indexOf(MARKDOWN_PRELUDE_END, at + 1) >= 0) {
+      reject('markdown-policy', `${label} does not close its supply prelude exactly once`);
+    }
+    return step.run.slice(0, at + MARKDOWN_PRELUDE_END.length);
+  };
+  if (preludeOf(governed.policy, 'markdown.policy.validate') !==
+      preludeOf(governed.markdownlint, 'markdown.markdownlint.lint')) {
+    reject('markdown-policy', 'the two governed steps do not share one byte-identical supply prelude');
+  }
+
+  // Only in the lint job, which is the only job that runs them. A second
+  // invocation of either script is how a re-baselined step would lint a
+  // narrower surface and then lint the reviewed one to produce a clean log.
+  if ((governed.markdownlint.run.match(/^\s*& \$strNpmPath run lint:md\s*$/gmu) ?? []).length !== 1 ||
+      (governed.markdownlint.run.match(/^\s*& \$strNpmPath run lint:md:nested\s*$/gmu) ?? []).length !== 1) {
+    reject('markdown-policy', 'markdown.markdownlint.lint must run each locked lint script exactly once');
+  }
+  // The validator runs in exactly one job, and it is the job with no linter in
+  // it. An invocation added to the lint job would put it back on a runner where
+  // package code has executed, which is the whole exposure the split closes.
+  if (governed.markdownlint.run.includes('Validate-WorkflowPolicy.mjs')) {
+    reject('markdown-policy', 'markdown.markdownlint.lint invokes the policy validator');
+  }
+  // And the linters run in exactly one job, which is the job the validator is
+  // not in. A lint phase added to the policy job would execute package code on
+  // the runner that then validates policy -- the other direction of the same
+  // exposure.
+  if (/run lint:md/u.test(governed.policy.run)) {
+    reject('markdown-policy', 'markdown.policy.validate runs a lint phase');
+  }
+  // Last of all, so every rule above can be isolated by a fixture.
+  for (const [jobId, expected] of Object.entries(MARKDOWN_JOBS)) {
+    assertMarkdownStepDigest(governed[jobId], `markdown.${jobId}.${expected.stepId}`, expected);
+  }
+
+  if (/continue-on-error/iu.test(source)) {
+    reject('markdown-policy', 'Markdown workflow weakens failure policy');
+  }
+  // Zero. These jobs run repository code, so the file contains no action at all
+  // -- the same structural rule build.yml's verify job carries, asserted the
+  // same two ways: no uses key on any step, and no pinned action anywhere in
+  // the file.
   validateActionMultiset(source, []);
 }
 
@@ -1689,6 +1818,21 @@ function replaceOnce(source, from, to) {
   return source.replace(from, to);
 }
 
+// The two Markdown jobs share a byte-identical acquire step and supply prelude,
+// so most anchors now match twice and replaceOnce silently takes the first --
+// the policy job. That is the right target for most fixtures and the wrong one
+// for any fixture whose recorded meaning names the lint step, and it would also
+// leave the lint job's call site of every shared assertion unexercised. This
+// takes the second occurrence, and refuses to build the mutation if there is no
+// second occurrence to take, so a fixture cannot quietly become a duplicate of
+// its policy-job twin.
+function replaceLast(source, from, to) {
+  const at = source.lastIndexOf(from);
+  if (at < 0) reject('fixture-harness', `fixture source token is absent: ${from}`);
+  if (source.indexOf(from) === at) reject('fixture-harness', `fixture source token occurs only once: ${from}`);
+  return source.slice(0, at) + to + source.slice(at + from.length);
+}
+
 // Append-only inventory: existing IDs and meanings must never be reused.
 // IDs retired when the temporary writer was deleted are not reissued; gaps in
 // the BUILD sequence are deliberate. T1-BUILD-025 and T1-BUILD-026 were retired
@@ -1779,15 +1923,19 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-MARKDOWN-013', 'pre-install supply gate neutralized', 'markdown', (source) => replaceOnce(source, 'if ($strPackageBefore -cne $strReviewedPackageHash -or', 'if ($false -and $strPackageBefore -cne $strReviewedPackageHash -or')],
   ['T1-BUILD-042', 'workflow token referenced outside the approved push step', 'build', (source) => replaceOnce(source, "          $ErrorActionPreference = 'Stop'\n          $arrArtifacts", "          $ErrorActionPreference = 'Stop'\n          $strToken = '${{ github.token }}'\n          $arrArtifacts")],
   ['T1-MARKDOWN-015', 'early exit before the remaining required phases', 'markdown', (source) => replaceOnce(source, '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n', '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n          exit 0\n')],
+  // Reordered inside the policy step, since the linters it used to be hoisted
+  // over are no longer in the same job. Moving the validator above the frozen
+  // install leaves every required fragment present and every captured status
+  // assigned once, so only the ordering rule can reject it.
   ['T1-MARKDOWN-016', 'required phases reordered', 'markdown', (source) => {
     const strValidator = '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n';
-    const strNested = '          & $strNpmPath run lint:md:nested\n';
-    return replaceOnce(replaceOnce(source, strValidator, ''), strNested, strValidator + strNested);
+    const strInstall = '          $boolCiExisted = Test-Path Env:CI\n';
+    return replaceOnce(replaceOnce(source, strValidator, ''), strInstall, strValidator + strInstall);
   }],
   // Anchored through the comment that follows it in the lint step. The
   // acquire step opens with the identical guard and now comes first, so a
   // bare anchor silently retargeted this fixture at that step's copy.
-  ['T1-MARKDOWN-014', 'native-command error mapping guard removed from the lint step', 'markdown', (source) => replaceOnce(source, '          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n              $PSNativeCommandUseErrorActionPreference = $false\n          }\n\n          # Fixed paths into the distribution', '          # Fixed paths into the distribution')],
+  ['T1-MARKDOWN-014', 'native-command error mapping guard removed from the lint step', 'markdown', (source) => replaceLast(source, '          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n              $PSNativeCommandUseErrorActionPreference = $false\n          }\n\n          # Fixed paths into the distribution', '          # Fixed paths into the distribution')],
   ['T1-MARKDOWN-017', 'captured phase status reset before the final check', 'markdown', (source) => replaceOnce(source, '          $strPackageFinal = (Get-FileHash', '          $intPolicyExit = 0\n          $strPackageFinal = (Get-FileHash')],
   ['T1-DEPENDABOT-001', 'duplicate updates', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n  - package-ecosystem: github-actions\n    directory: /\n    schedule: { interval: weekly }\n'],
   ['T1-DEPENDABOT-002', 'npm update introduced early', 'dependabot', 'version: 2\nupdates:\n  - package-ecosystem: npm\n    directory: /.github/workflows\n    schedule: { interval: weekly }\n'],
@@ -1944,14 +2092,22 @@ const FIXTURE_INVENTORY = Object.freeze([
   // post steps that outlive it, so it must hold no scopes for the same reason
   // build.verify holds none.
   // The expression ban must hold in both files, not just build.yml.
-  ['T1-MARKDOWN-023', 'expression reaching a credential in the lint step name', 'markdown', (source) => replaceOnce(source, '      - name: Install, validate policy, and lint both Markdown surfaces\n', "      - name: Install, validate ${{ github['token'] }} policy, and lint both Markdown surfaces\n")],
+  // Moved off the step name, which is now pinned outright rather than merely
+  // permitted -- the governed steps assert every key they carry, so the
+  // permitted-but-unpinned value this fixture used to exploit no longer exists
+  // and a name mutation is answered by the name assertion instead. The run body
+  // is where the ban is still the only thing standing in the way: the fragment
+  // list requires text to be present and does not forbid text being added, and
+  // the runner expands ${{ }} in a run body before any shell sees it, comment
+  // or not.
+  ['T1-MARKDOWN-023', 'expression reaching a credential in the lint step', 'markdown', (source) => replaceOnce(source, '          & $strNpmPath run lint:md\n', "          $strAudit = '${{ github['token'] }}'\n          & $strNpmPath run lint:md\n")],
   // The step's one try exists to restore the caller's CI variable in finally.
   // Adding a catch beside it leaves every required fragment, phase order, and
   // captured status intact while a failed supply digest, install, or lint stops
   // deciding anything.
-  ['T1-MARKDOWN-024', 'phase failure suppressed by a handler in the lint step', 'markdown', (source) => replaceOnce(source, '          } finally {\n', '          } catch {\n          } finally {\n')],
-  ['T1-MARKDOWN-025', 'script-wide error trap registered in the lint step', 'markdown', (source) => replaceOnce(source, "          $strNodeVersion = (& $strNodePath --version).Trim()\n", "          trap { $null = $_ }\n          $strNodeVersion = (& $strNodePath --version).Trim()\n")],
-  ['T1-MARKDOWN-026', 'action reintroduced into the lint job', 'markdown', (source) => replaceOnce(source, '      - name: Install, validate policy, and lint both Markdown surfaces\n', '      - name: Set up hosted Node.js\n        id: setup-node\n        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0\n        with:\n          node-version: \'24.18.1\'\n\n      - name: Install, validate policy, and lint both Markdown surfaces\n')],
+  ['T1-MARKDOWN-024', 'phase failure suppressed by a handler in the lint step', 'markdown', (source) => replaceLast(source, '          } finally {\n', '          } catch {\n          } finally {\n')],
+  ['T1-MARKDOWN-025', 'script-wide error trap registered in the lint step', 'markdown', (source) => replaceLast(source, "          $strNodeVersion = (& $strNodePath --version).Trim()\n", "          trap { $null = $_ }\n          $strNodeVersion = (& $strNodePath --version).Trim()\n")],
+  ['T1-MARKDOWN-026', 'action reintroduced into the lint job', 'markdown', (source) => replaceOnce(source, '      - name: Install and lint both Markdown surfaces\n', '      - name: Set up hosted Node.js\n        id: setup-node\n        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0\n        with:\n          node-version: \'24.18.1\'\n\n      - name: Install and lint both Markdown surfaces\n')],
   ['T1-MARKDOWN-027', 'Node archive fetched from an unreviewed location', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz'\n", "          $strNodeUrl = 'https://example.invalid/node-v24.18.1-linux-x64.tar.xz'\n")],
   ['T1-MARKDOWN-028', 'reviewed Node archive digest replaced', 'markdown', (source) => replaceOnce(source, "          $strReviewedNodeSha256 = 'D6C664DF3F3F61458E8C277585571328522D705166723A7C7823A9253A4D15A0'\n", "          $strReviewedNodeSha256 = '0000000000000000000000000000000000000000000000000000000000000000'\n")],
   // The download is only as good as the check on what comes back.
@@ -1973,15 +2129,21 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-MARKDOWN-035', 'call operator applied to a parenthesised expression', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          &('cu' + 'rl') --output ./Validate-WorkflowPolicy.mjs https://example.invalid/v\n          $strNodeUrl = 'https://nodejs.org")],
   // The lint assets must be re-verified after installation, immediately before
   // the phases that read them.
-  ['T1-MARKDOWN-036', 'lint assets no longer re-verified after policy validation', 'markdown', (source) => replaceOnce(source, "          $strLintConfigAfterPolicy = (Get-FileHash -LiteralPath .markdownlint.jsonc -Algorithm SHA256).Hash\n          $strLintHelperAfterPolicy = (Get-FileHash -LiteralPath lint-nested-markdown.js -Algorithm SHA256).Hash\n          if ($strLintConfigAfterPolicy -cne $strReviewedLintConfigHash -or $strLintHelperAfterPolicy -cne $strReviewedLintHelperHash) {\n              throw 'supply: lint configuration or helper changed after policy validation'\n          }\n", '')],
-  // Round 37, finding A. The validator is repository-controlled, so running it
-  // before the linters lets an edited copy leave a writer behind that rewrites
-  // the rule configuration after it was hashed and before a linter reads it --
-  // a check/use race no re-hash can close. It must run after both consumers.
-  ['T1-MARKDOWN-037', 'policy validator hoisted back above the lint phases', 'markdown', (source) => {
-    const strPolicy = '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n          $intPolicyExit = $LASTEXITCODE\n          Write-Host "workflow-policy native exit: $intPolicyExit"\n';
+  // The re-check spans installation and is named for it. It was previously
+  // named for a policy validation that ran later in the same job, which the
+  // split moved to another machine; the assertion is the one it always was.
+  ['T1-MARKDOWN-036', 'lint assets no longer re-verified after installation', 'markdown', (source) => replaceOnce(source, "          $strLintConfigAfterInstall = (Get-FileHash -LiteralPath .markdownlint.jsonc -Algorithm SHA256).Hash\n          $strLintHelperAfterInstall = (Get-FileHash -LiteralPath lint-nested-markdown.js -Algorithm SHA256).Hash\n          if ($strLintConfigAfterInstall -cne $strReviewedLintConfigHash -or $strLintHelperAfterInstall -cne $strReviewedLintHelperHash) {\n              throw 'supply: lint configuration or helper changed during installation'\n          }\n", '')],
+  // Round 37, finding A, under the control that finally closed it. Ordering the
+  // validator against the linters inside one job could only ever trade one
+  // exposure for the other, so the fix is that they are not in one job: the
+  // validator runs where no package code has executed. This fixture no longer
+  // moves it -- a move is caught upstream by the policy step missing its own
+  // required phase, which proves nothing about this rule -- it adds a second
+  // invocation to the lint job, leaving the policy job intact so that the only
+  // thing wrong with the file is the one thing under test.
+  ['T1-MARKDOWN-037', 'policy validator also invoked in the job that runs the linters', 'markdown', (source) => {
     const strOuter = '          & $strNpmPath run lint:md\n';
-    return replaceOnce(replaceOnce(source, strPolicy, ''), strOuter, strPolicy + strOuter);
+    return replaceOnce(source, strOuter, '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n' + strOuter);
   }],
   // Round 37, finding B. Dynamic execution reaches a command without a call
   // operator and without a contiguous client name, so neither the invocation
@@ -2075,6 +2237,52 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-MARKDOWN-052', 'runner communication file reached through a computed name', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          $strComm = [Environment]::GetEnvironmentVariable('GITHUB_' + 'ENV')\n          $strNodeUrl = 'https://nodejs.org")],
   ['T1-MARKDOWN-053', 'text written outside the reviewed native tools', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          [System.IO.File]::AppendAllText($strTargetPath, 'NODE_OPTIONS=--require=./x')\n          $strNodeUrl = 'https://nodejs.org")],
   ['T1-MARKDOWN-022', 'lint job regains a token scope', 'markdown', (source) => replaceOnce(source, '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions: {}\n', '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n')],
+  // Round 43, finding X: the job split. Each of these removes exactly one part
+  // of the structure the split rests on, and each is checked to be rejected by
+  // the rule that part belongs to rather than by a digest -- which is why the
+  // two step digests were moved behind the cross-job rules.
+  //
+  // The whole-job deletions come first. They are the coarsest possible failure
+  // and are listed anyway, because the split is a claim about which programs
+  // run on which runner, and a file with one job satisfies every per-step
+  // assertion in this validator while making that claim false.
+  ['T1-MARKDOWN-066', 'policy job deleted, leaving the validator unrun', 'markdown', (source) => {
+    const at = source.indexOf('  markdownlint:\n');
+    if (at < 0) reject('fixture-harness', 'fixture source token is absent: the lint job');
+    return source.slice(0, source.indexOf('  policy:\n')) + source.slice(at);
+  }],
+  ['T1-MARKDOWN-067', 'lint job deleted, leaving both Markdown surfaces unlinted', 'markdown', (source) => source.slice(0, source.indexOf('  markdownlint:\n'))],
+  // A needs: edge is refused by the job key set rather than by a rule of its
+  // own, for the same reason every other unreviewed job key is. The two jobs
+  // are independent assertions about one commit; sequencing them would only let
+  // the first failure hide the second.
+  ['T1-MARKDOWN-068', 'lint job made to depend on the policy job', 'markdown', (source) => replaceOnce(source, '  markdownlint:\n    runs-on: ubuntu-latest\n', '  markdownlint:\n    needs: policy\n    runs-on: ubuntu-latest\n')],
+  // The two directions of the exposure the split closes, one fixture each.
+  // Both leave the rest of the file correct, so nothing but the rule under test
+  // can reject them.
+  ['T1-MARKDOWN-069', 'lint phase added to the job that validates policy', 'markdown', (source) => replaceOnce(source, '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n', '          & $strNpmPath run lint:md\n          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n')],
+  // Each job fetches the triggering revision for itself, because each is a
+  // separate runner with a separate empty workspace. Deleting one job's acquire
+  // step leaves the other job's intact, so the file still contains a
+  // digest-matching acquire step and only the per-job assertion can see it.
+  ['T1-MARKDOWN-070', 'lint job stops acquiring its own revision', 'markdown', (source) => {
+    const at = source.lastIndexOf('      - name: Acquire triggering revision and pinned toolchain without an action\n');
+    if (at < 0 || at === source.indexOf('      - name: Acquire triggering revision and pinned toolchain without an action\n')) {
+      reject('fixture-harness', 'fixture source token is absent: a second acquire step');
+    }
+    return source.slice(0, at) + source.slice(source.indexOf('      - name: Install and lint both Markdown surfaces\n'));
+  }],
+  // The preludes are required to be byte-identical, not merely to satisfy the
+  // same fragment list twice. This edits a comment in the lint job's copy: every
+  // fragment, phase order and captured status stays exactly as reviewed in both
+  // steps, so the only thing left that can reject it is the identity rule.
+  ['T1-MARKDOWN-071', 'supply prelude diverged between the two jobs', 'markdown', (source) => replaceLast(source, '          # Reviewed baseline. The before/after comparison further below proves\n', '          # Reviewed baseline.\n')],
+  // The identity comparison slices at the first occurrence of the closing
+  // statement, so a second copy of it would end the compared region early and
+  // leave everything between the two copies outside the comparison entirely --
+  // which is where divergent text would then go. Requiring exactly one is what
+  // keeps "the preludes are identical" a statement about the whole prelude.
+  ['T1-MARKDOWN-072', 'supply prelude closed twice, shortening the compared region', 'markdown', (source) => replaceOnce(source, "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n", "          $strGlobalConfigDirectory = [System.IO.Path]::GetDirectoryName($env:npm_config_globalconfig)\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n          if ($strGlobalConfigDirectory -cne '/etc') {\n              throw 'supply: the neutralized global npm configuration is not under a root-owned directory'\n          }\n")],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
     'lint-nested-markdown.js': '',
@@ -2186,58 +2394,58 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-053": "git-policy: build.verify does not pin the Git executable before repository code runs",
   "T1-BUILD-054": "git-policy: build.verify does not pin the Git executable before repository code runs",
   "T1-BUILD-061": "git-policy: build.verify resolves Git through a shadowable command lookup",
-  "T1-MARKDOWN-005": "markdown-policy: required phase is missing: ci --ignore-scripts --no-audit --no-fund",
-  "T1-MARKDOWN-006": "markdown-policy: required phase is missing: ci --ignore-scripts --no-audit --no-fund",
-  "T1-MARKDOWN-007": "markdown-policy: required phases are out of order at: run lint:md\n",
-  "T1-MARKDOWN-008": "markdown-policy: required phase is missing: run lint:md:nested",
-  "T1-MARKDOWN-009": "markdown-policy: required phase is missing: ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml",
-  "T1-MARKDOWN-010": "schema: markdown.validate-and-lint has missing or extra keys",
-  "T1-MARKDOWN-011": "markdown-policy: required phase is missing: E206CDB3562F0397E8EED7FB2C2586269A1F5335CDFF2906DA8D5E070426321E",
-  "T1-MARKDOWN-012": "markdown-policy: required phase is missing: 277F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062",
-  "T1-MARKDOWN-013": "markdown-policy: required phase is missing: if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash)",
+  "T1-MARKDOWN-005": "markdown-policy: markdown.policy.validate is missing a required phase: ci --ignore-scripts --no-audit --no-fund",
+  "T1-MARKDOWN-006": "markdown-policy: markdown.policy.validate is missing a required phase: ci --ignore-scripts --no-audit --no-fund",
+  "T1-MARKDOWN-007": "markdown-policy: markdown.markdownlint.lint runs a required phase out of order: run lint:md\n",
+  "T1-MARKDOWN-008": "markdown-policy: markdown.markdownlint.lint is missing a required phase: run lint:md:nested",
+  "T1-MARKDOWN-009": "markdown-policy: markdown.policy.validate is missing a required phase: ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml",
+  "T1-MARKDOWN-010": "schema: markdown.policy.validate has missing or extra keys",
+  "T1-MARKDOWN-011": "markdown-policy: markdown.policy.validate is missing a required phase: E206CDB3562F0397E8EED7FB2C2586269A1F5335CDFF2906DA8D5E070426321E",
+  "T1-MARKDOWN-012": "markdown-policy: markdown.policy.validate is missing a required phase: 277F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062",
+  "T1-MARKDOWN-013": "markdown-policy: markdown.policy.validate is missing a required phase: if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash)",
   "T1-BUILD-042": "credential-policy: verify.generate-and-verify expands an unapproved credential",
-  "T1-MARKDOWN-015": "markdown-policy: validation script adds control flow that can bypass a required phase",
-  "T1-MARKDOWN-016": "markdown-policy: required phases are out of order at: ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml",
-  "T1-MARKDOWN-037": "markdown-policy: required phases are out of order at: ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml",
-  "T1-MARKDOWN-038": "acquire-policy: markdown.acquire adds a dynamic or indirect execution path",
-  "T1-MARKDOWN-039": "acquire-policy: markdown.acquire dot-sources something other than a reviewed literal command",
-  "T1-MARKDOWN-040": "acquire-policy: markdown.acquire adds a dynamic or indirect execution path",
-  "T1-MARKDOWN-041": "markdown-policy: validation script adds a process-termination path that can bypass a required phase",
-  "T1-MARKDOWN-042": "markdown-policy: validation script adds a process-termination path that can bypass a required phase",
+  "T1-MARKDOWN-015": "markdown-policy: markdown.policy.validate adds control flow that can bypass a required phase",
+  "T1-MARKDOWN-016": "markdown-policy: markdown.policy.validate runs a required phase out of order: ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml",
+  "T1-MARKDOWN-037": "markdown-policy: markdown.markdownlint.lint invokes the policy validator",
+  "T1-MARKDOWN-038": "acquire-policy: markdown.policy.acquire adds a dynamic or indirect execution path",
+  "T1-MARKDOWN-039": "acquire-policy: markdown.policy.acquire dot-sources something other than a reviewed literal command",
+  "T1-MARKDOWN-040": "acquire-policy: markdown.policy.acquire adds a dynamic or indirect execution path",
+  "T1-MARKDOWN-041": "markdown-policy: markdown.markdownlint.lint adds a process-termination path that can bypass a required phase",
+  "T1-MARKDOWN-042": "markdown-policy: markdown.markdownlint.lint adds a process-termination path that can bypass a required phase",
   "T1-BUILD-130": "side-effect-policy: build.verify adds a process-termination path that can bypass a required probe",
   "T1-BUILD-131": "side-effect-policy: build.verify adds a process-termination path that can bypass a required probe",
   "T1-BUILD-132": "credential-policy: build.verify.verify-checkout-credentials adds control flow that can bypass a required assertion",
   "T1-BUILD-133": "acquire-policy: build.verify.acquire adds a dynamic or indirect execution path",
   "T1-GENERATOR-003": "supply-policy: the generator does not resolve Git through a module-qualified lookup",
-  "T1-MARKDOWN-043": "markdown-policy: required phases are out of order at: $env:T1_EXPECTED_BUILD_DIGEST = (Get-FileHash -LiteralPath ./build.yml -Algorithm SHA256).Hash",
-  "T1-MARKDOWN-044": "markdown-policy: required phases are out of order at: ci --ignore-scripts --no-audit --no-fund",
-  "T1-MARKDOWN-045": "acquire-policy: markdown.acquire references an executable script path",
+  "T1-MARKDOWN-043": "markdown-policy: markdown.policy.validate is missing a required phase: $env:T1_EXPECTED_BUILD_DIGEST = (Get-FileHash -LiteralPath ./build.yml -Algorithm SHA256).Hash",
+  "T1-MARKDOWN-044": "markdown-policy: markdown.policy.validate runs a required phase out of order: ci --ignore-scripts --no-audit --no-fund",
+  "T1-MARKDOWN-045": "acquire-policy: markdown.policy.acquire references an executable script path",
   "T1-BUILD-134": "acquire-policy: build.verify.acquire references an executable script path",
-  "T1-MARKDOWN-046": "acquire-policy: markdown.acquire dot-sources something other than a reviewed literal command",
-  "T1-MARKDOWN-047": "acquire-policy: markdown.acquire invokes a native interpreter",
+  "T1-MARKDOWN-046": "acquire-policy: markdown.policy.acquire dot-sources something other than a reviewed literal command",
+  "T1-MARKDOWN-047": "acquire-policy: markdown.policy.acquire invokes a native interpreter",
   "T1-BUILD-135": "acquire-policy: build.verify.acquire invokes a native interpreter",
-  "T1-MARKDOWN-048": "acquire-policy: markdown.acquire writes a runner step communication file",
+  "T1-MARKDOWN-048": "acquire-policy: markdown.policy.acquire writes a runner step communication file",
   "T1-BUILD-136": "acquire-policy: build.verify.acquire writes a runner step communication file",
   // Reached the digest only because nothing semantic saw its tail; the client
   // ban now catches it earlier and more specifically. T1-MARKDOWN-055 still
   // covers the digest itself.
-  "T1-MARKDOWN-054": "acquire-policy: markdown.acquire adds a network client",
-  "T1-MARKDOWN-055": "acquire-policy: markdown.acquire adds a network client",
-  "T1-MARKDOWN-050": "markdown-policy: required phase is missing: $env:npm_config_userconfig = '/dev/null'",
-  "T1-MARKDOWN-051": "acquire-policy: markdown.acquire invokes something other than a reviewed literal command",
-  "T1-MARKDOWN-052": "acquire-policy: markdown.acquire resolves an environment variable through a computed name",
-  "T1-MARKDOWN-053": "acquire-policy: markdown.acquire writes a file outside the reviewed native tools",
-  "T1-MARKDOWN-049": "markdown-policy: required phase is missing: $env:npm_config_userconfig =",
-  "T1-MARKDOWN-014": "markdown-policy: required phase is missing: if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {",
-  "T1-MARKDOWN-017": "markdown-policy: captured phase status intPolicyExit is not assigned exactly once",
+  "T1-MARKDOWN-054": "acquire-policy: markdown.policy.acquire adds a network client",
+  "T1-MARKDOWN-055": "acquire-policy: markdown.policy.acquire adds a network client",
+  "T1-MARKDOWN-050": "markdown-policy: markdown.policy.validate is missing a required phase: $env:npm_config_userconfig = '/dev/null'",
+  "T1-MARKDOWN-051": "acquire-policy: markdown.policy.acquire invokes something other than a reviewed literal command",
+  "T1-MARKDOWN-052": "acquire-policy: markdown.policy.acquire resolves an environment variable through a computed name",
+  "T1-MARKDOWN-053": "acquire-policy: markdown.policy.acquire writes a file outside the reviewed native tools",
+  "T1-MARKDOWN-049": "markdown-policy: markdown.policy.validate is missing a required phase: $env:npm_config_userconfig =",
+  "T1-MARKDOWN-014": "markdown-policy: markdown.markdownlint.lint is missing a required phase: if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {",
+  "T1-MARKDOWN-017": "markdown-policy: markdown.policy.validate captured phase status intPolicyExit is not assigned exactly once",
   "T1-DEPENDABOT-001": "policy: Dependabot configuration differs from the locked policy",
   "T1-DEPENDABOT-002": "policy: Dependabot configuration differs from the locked policy",
   "T1-DEPENDABOT-003": "policy: Dependabot configuration differs from the locked policy",
-  "T1-MARKDOWN-018": "markdown-policy: required phase is missing: @('.npmrc', '../.npmrc', '../../.npmrc')",
-  "T1-MARKDOWN-019": "markdown-policy: required phases are out of order at: supply: lint configuration or helper does not match the reviewed digest",
+  "T1-MARKDOWN-018": "markdown-policy: markdown.policy.validate is missing a required phase: @('.npmrc', '../.npmrc', '../../.npmrc')",
+  "T1-MARKDOWN-019": "markdown-policy: markdown.policy.validate runs a required phase out of order: $env:T1_EXPECTED_BUILD_DIGEST = (Get-FileHash -LiteralPath ./build.yml -Algorithm SHA256).Hash",
   "T1-GENERATOR-001": "supply-policy: generator does not match its reviewed digest",
   "T1-GENERATOR-002": "supply-policy: generator does not match its reviewed digest",
-  "T1-MARKDOWN-020": "markdown-policy: required phase is missing: supply: lint configuration or helper does not match the reviewed digest",
+  "T1-MARKDOWN-020": "markdown-policy: markdown.markdownlint.lint is missing a required phase: supply: lint configuration or helper does not match the reviewed digest",
   "T1-BUILD-086": "isolation-policy: build.verify.upload-generated uses an action",
   "T1-BUILD-087": "policy: build.publish step order differs from the locked policy",
   "T1-BUILD-088": "schema: build.publish has missing or extra keys",
@@ -2277,9 +2485,9 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-075": "git-policy: build.verify does not pin the Git executable before repository code runs",
   "T1-BUILD-076": "side-effect-policy: verify.generate-and-verify adds a push path to a read-only workflow",
   "T1-BUILD-077": "side-effect-policy: verify.generate-and-verify adds a repository mutation to a read-only workflow",
-  "T1-MARKDOWN-021": "markdown-policy: Markdown validation script does not match its reviewed digest",
-  "T1-MARKDOWN-023": "markdown-policy: markdown.validate-and-lint contains a workflow expression",
-  "T1-MARKDOWN-022": "policy: Markdown job permissions differs from the locked policy",
+  "T1-MARKDOWN-021": "markdown-policy: markdown.markdownlint.lint does not match its reviewed digest",
+  "T1-MARKDOWN-023": "markdown-policy: markdown.markdownlint.lint contains a workflow expression",
+  "T1-MARKDOWN-022": "policy: markdown.markdownlint job permissions differs from the locked policy",
   "T1-LINTASSET-001": "supply-policy: .markdownlint.jsonc does not match its reviewed digest",
   "T1-LINTASSET-002": "supply-policy: lint-nested-markdown.js does not match its reviewed digest",
   "T1-NPMRC-001": "supply-policy: repository-controlled npm configuration is present: .github/workflows/.npmrc",
@@ -2315,33 +2523,40 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-118": "acquire-policy: build.verify.acquire native-status classification count changed",
   "T1-BUILD-119": "acquire-policy: build.verify.acquire adds control flow that can bypass a required assertion",
   "T1-BUILD-120": "acquire-policy: build.verify.acquire script does not match its reviewed digest",
-  "T1-MARKDOWN-024": "markdown-policy: markdown.validate-and-lint can suppress a phase failure",
-  "T1-MARKDOWN-025": "markdown-policy: markdown.validate-and-lint can suppress a phase failure",
-  "T1-MARKDOWN-026": "isolation-policy: markdown.setup-node uses an action",
-  "T1-MARKDOWN-027": "acquire-policy: markdown.acquire no longer asserts the exact reviewed Node archive",
-  "T1-MARKDOWN-028": "acquire-policy: markdown.acquire no longer asserts the reviewed Node archive digest",
-  "T1-MARKDOWN-029": "acquire-policy: markdown.acquire no longer asserts the download, its verification, and the extraction as one uninterrupted block",
-  "T1-MARKDOWN-030": "markdown-policy: markdown.validate-and-lint adds a network client",
-  "T1-MARKDOWN-031": "acquire-policy: markdown.acquire script does not match its reviewed digest",
-  "T1-MARKDOWN-032": "acquire-policy: markdown.acquire network request count changed",
-  "T1-MARKDOWN-033": "acquire-policy: markdown.acquire does not end at the verified extraction",
-  "T1-MARKDOWN-034": "acquire-policy: markdown.acquire invokes something other than a reviewed literal command",
-  "T1-MARKDOWN-035": "acquire-policy: markdown.acquire invokes something other than a reviewed literal command",
-  "T1-MARKDOWN-036": "markdown-policy: required phase is missing: supply: lint configuration or helper changed after policy validation",
+  "T1-MARKDOWN-024": "markdown-policy: markdown.markdownlint.lint can suppress a phase failure",
+  "T1-MARKDOWN-025": "markdown-policy: markdown.markdownlint.lint can suppress a phase failure",
+  "T1-MARKDOWN-026": "isolation-policy: markdown.markdownlint.setup-node uses an action",
+  "T1-MARKDOWN-027": "acquire-policy: markdown.policy.acquire no longer asserts the exact reviewed Node archive",
+  "T1-MARKDOWN-028": "acquire-policy: markdown.policy.acquire no longer asserts the reviewed Node archive digest",
+  "T1-MARKDOWN-029": "acquire-policy: markdown.policy.acquire no longer asserts the download, its verification, and the extraction as one uninterrupted block",
+  "T1-MARKDOWN-030": "markdown-policy: markdown.markdownlint.lint adds a network client",
+  "T1-MARKDOWN-031": "acquire-policy: markdown.policy.acquire script does not match its reviewed digest",
+  "T1-MARKDOWN-032": "acquire-policy: markdown.policy.acquire network request count changed",
+  "T1-MARKDOWN-033": "acquire-policy: markdown.policy.acquire does not end at the verified extraction",
+  "T1-MARKDOWN-034": "acquire-policy: markdown.policy.acquire invokes something other than a reviewed literal command",
+  "T1-MARKDOWN-035": "acquire-policy: markdown.policy.acquire invokes something other than a reviewed literal command",
+  "T1-MARKDOWN-036": "markdown-policy: markdown.markdownlint.lint is missing a required phase: supply: lint configuration or helper changed during installation",
   "T1-PACKAGE-005": "supply-policy: resolved yaml parser integrity is not the reviewed value",
   "T1-PACKAGE-006": "policy: lockfile root devDependencies differs from the locked policy",
   "T1-GENERATOR-004": "supply-policy: the generator resolves a command through a shadowable lookup",
-  "T1-MARKDOWN-056": "markdown-policy: markdown.validate-and-lint adds a network client",
-  "T1-MARKDOWN-057": "acquire-policy: markdown.acquire adds a network client",
-  "T1-MARKDOWN-058": "acquire-policy: markdown.acquire constructs an object through New-Object",
-  "T1-MARKDOWN-059": "acquire-policy: markdown.acquire calls an unreviewed static member: System.IO.File::Copy",
-  "T1-MARKDOWN-060": "acquire-policy: markdown.acquire calls a static member through a computed name",
-  "T1-MARKDOWN-065": "acquire-policy: markdown.acquire invokes an unreviewed cmdlet: Copy-Item",
+  "T1-MARKDOWN-056": "markdown-policy: markdown.markdownlint.lint adds a network client",
+  "T1-MARKDOWN-057": "acquire-policy: markdown.policy.acquire adds a network client",
+  "T1-MARKDOWN-058": "acquire-policy: markdown.policy.acquire constructs an object through New-Object",
+  "T1-MARKDOWN-059": "acquire-policy: markdown.policy.acquire calls an unreviewed static member: System.IO.File::Copy",
+  "T1-MARKDOWN-060": "acquire-policy: markdown.policy.acquire calls a static member through a computed name",
+  "T1-MARKDOWN-065": "acquire-policy: markdown.policy.acquire invokes an unreviewed cmdlet: Copy-Item",
   "T1-BUILD-137": "credential-policy: build.verify.verify-checkout-credentials adds control flow that can bypass a required assertion",
-  "T1-MARKDOWN-061": "acquire-policy: markdown.acquire does not bind $strCurlPath exactly once as a reviewed constant",
-  "T1-MARKDOWN-062": "acquire-policy: markdown.acquire does not resolve $strResolvedCurl from its reviewed absolute paths",
-  "T1-MARKDOWN-063": "acquire-policy: markdown.acquire names strCurlPath outside its reviewed constant binding",
-  "T1-MARKDOWN-064": "acquire-policy: markdown.acquire assigns $strCurlPath outside its reviewed constant binding",
+  "T1-MARKDOWN-061": "acquire-policy: markdown.policy.acquire does not bind $strCurlPath exactly once as a reviewed constant",
+  "T1-MARKDOWN-062": "acquire-policy: markdown.policy.acquire does not resolve $strResolvedCurl from its reviewed absolute paths",
+  "T1-MARKDOWN-063": "acquire-policy: markdown.policy.acquire names strCurlPath outside its reviewed constant binding",
+  "T1-MARKDOWN-064": "acquire-policy: markdown.policy.acquire assigns $strCurlPath outside its reviewed constant binding",
+  "T1-MARKDOWN-066": "schema: Markdown jobs has missing or extra keys",
+  "T1-MARKDOWN-067": "schema: Markdown jobs has missing or extra keys",
+  "T1-MARKDOWN-068": "schema: markdown.markdownlint has missing or extra keys",
+  "T1-MARKDOWN-069": "markdown-policy: markdown.policy.validate runs a lint phase",
+  "T1-MARKDOWN-070": "policy: markdown.markdownlint step order differs from the locked policy",
+  "T1-MARKDOWN-071": "markdown-policy: the two governed steps do not share one byte-identical supply prelude",
+  "T1-MARKDOWN-072": "markdown-policy: markdown.policy.validate does not close its supply prelude exactly once",
 });
 
 function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource, generatorSource) {
