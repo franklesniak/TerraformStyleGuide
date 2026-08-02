@@ -178,25 +178,44 @@ jobs:
           function Get-GitControlSurfaceDigest {
               $strGitDirectory = [System.IO.Path]::Combine($PWD.Path, '.git')
               if (-not [System.IO.Directory]::Exists($strGitDirectory)) { throw 'git-state: .git is not a directory' }
-              $objSha = [System.Security.Cryptography.SHA256]::Create()
-              try {
-                  $objBuffer = [System.IO.MemoryStream]::new()
-                  $strConfigPath = [System.IO.Path]::Combine($strGitDirectory, 'config')
-                  if ([System.IO.File]::Exists($strConfigPath)) {
-                      $arrConfig = [System.IO.File]::ReadAllBytes($strConfigPath)
-                      $objBuffer.Write($arrConfig, 0, $arrConfig.Length)
+              # Components are collected first, then written length-prefixed.
+              # Concatenating them raw would not be injective: renaming
+              # pre-commit.sample to pre-commit and prepending '.sample' to its
+              # content produces the identical byte stream, turning an inert
+              # sample into an active hook with the digest unchanged. Framing
+              # each component with its length removes the boundary ambiguity,
+              # so the encoding determines the contents uniquely.
+              $arrComponents = [System.Collections.Generic.List[byte[]]]::new()
+              $strConfigPath = [System.IO.Path]::Combine($strGitDirectory, 'config')
+              if ([System.IO.File]::Exists($strConfigPath)) {
+                  $arrComponents.Add([System.IO.File]::ReadAllBytes($strConfigPath))
+              } else {
+                  $arrComponents.Add([byte[]]::new(0))
+              }
+              $strHooksDirectory = [System.IO.Path]::Combine($strGitDirectory, 'hooks')
+              if ([System.IO.Directory]::Exists($strHooksDirectory)) {
+                  foreach ($strHook in ([System.IO.Directory]::GetFiles($strHooksDirectory) | Sort-Object -CaseSensitive)) {
+                      $arrComponents.Add([System.Text.Encoding]::UTF8.GetBytes([System.IO.Path]::GetFileName($strHook)))
+                      $arrComponents.Add([System.IO.File]::ReadAllBytes($strHook))
                   }
-                  $strHooksDirectory = [System.IO.Path]::Combine($strGitDirectory, 'hooks')
-                  if ([System.IO.Directory]::Exists($strHooksDirectory)) {
-                      foreach ($strHook in ([System.IO.Directory]::GetFiles($strHooksDirectory) | Sort-Object -CaseSensitive)) {
-                          $arrName = [System.Text.Encoding]::UTF8.GetBytes([System.IO.Path]::GetFileName($strHook))
-                          $objBuffer.Write($arrName, 0, $arrName.Length)
-                          $arrHook = [System.IO.File]::ReadAllBytes($strHook)
-                          $objBuffer.Write($arrHook, 0, $arrHook.Length)
-                      }
+              }
+              $objSha = [System.Security.Cryptography.SHA256]::Create()
+              $objBuffer = [System.IO.MemoryStream]::new()
+              try {
+                  $arrCount = [System.BitConverter]::GetBytes([long]$arrComponents.Count)
+                  if ([System.BitConverter]::IsLittleEndian) { [System.Array]::Reverse($arrCount) }
+                  $objBuffer.Write($arrCount, 0, $arrCount.Length)
+                  foreach ($arrComponent in $arrComponents) {
+                      $arrLength = [System.BitConverter]::GetBytes([long]$arrComponent.Length)
+                      if ([System.BitConverter]::IsLittleEndian) { [System.Array]::Reverse($arrLength) }
+                      $objBuffer.Write($arrLength, 0, $arrLength.Length)
+                      $objBuffer.Write($arrComponent, 0, $arrComponent.Length)
                   }
                   return [Convert]::ToBase64String($objSha.ComputeHash($objBuffer.ToArray()))
-              } finally { $objSha.Dispose() }
+              } finally {
+                  $objBuffer.Dispose()
+                  $objSha.Dispose()
+              }
           }
           $strControlSurfaceBefore = Get-GitControlSurfaceDigest
 

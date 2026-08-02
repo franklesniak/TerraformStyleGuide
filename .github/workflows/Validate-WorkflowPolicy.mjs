@@ -161,7 +161,7 @@ const REVIEWED_VALIDATION_STEP_DIGEST = 'e4157f6e13dc2863b2339ba16b8fbe73a380d6c
 // while skipping the probes entirely, and the upload action then publishes
 // artifacts labelled verified. The same backstop the Markdown step and the
 // former push step carry applies here for the same reason.
-const REVIEWED_VERIFY_STEP_DIGEST = '4e0b4dffc82da6bcd3d086c9f11f38c4cb39b159bd7ed2814153b293c3c92ae5';
+const REVIEWED_VERIFY_STEP_DIGEST = 'f86350c0b002fa9411d56a6f471a52d33adb5992e2c274272295fd98bcfa8487';
 
 // The generator is repository-controlled code that runs in a job holding a
 // contents-write token, one step ahead of the push. Its version marker is fixed,
@@ -439,6 +439,16 @@ export function validateBuildPolicy(workflow, source) {
       generateStep.run.indexOf('$strControlSurfaceBefore = Get-GitControlSurfaceDigest') > generateStep.run.indexOf('& pwsh -NoProfile') ||
       generateStep.run.indexOf('git-state: the generator changed repository Git configuration or hooks') < generateStep.run.indexOf('& pwsh -NoProfile')) {
     reject('git-policy', 'build.verify does not bracket the generator with a Git control-surface digest');
+  }
+  // The digest is only meaningful if its encoding is injective. Concatenating
+  // the components raw is not: renaming pre-commit.sample to pre-commit and
+  // prepending '.sample' to its content yields the identical byte stream while
+  // converting an inert sample into an active hook. Each component is therefore
+  // length-prefixed, and the component count is written first.
+  if (!generateStep.run.includes('$arrComponents = [System.Collections.Generic.List[byte[]]]::new()') ||
+      !generateStep.run.includes('$arrLength = [System.BitConverter]::GetBytes([long]$arrComponent.Length)') ||
+      !generateStep.run.includes('$arrCount = [System.BitConverter]::GetBytes([long]$arrComponents.Count)')) {
+    reject('git-policy', 'the Git control-surface digest does not frame its components unambiguously');
   }
   // upload-generated runs after this step, so anything the generator writes to
   // the runner step communication files is applied to it. That step is an
@@ -819,6 +829,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-GENERATOR-001', 'generator body rewritten under an unchanged version marker', 'generator', (source) => `${source}\nfunction Invoke-Unreviewed { Add-Content -Path $env:GITHUB_PATH -Value '/tmp/hijack' }\n`],
   ['T1-GENERATOR-002', 'generator truncated', 'generator', (source) => source.slice(0, Math.floor(source.length / 2))],
   ['T1-MARKDOWN-020', 'lint asset digest gate removed', 'markdown', (source) => replaceOnce(source, '          if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {\n              throw \'supply: lint configuration or helper does not match the reviewed digest\'\n          }\n', '')],
+  ['T1-BUILD-083', 'control-surface digest framing removed', 'build', (source) => replaceOnce(source, "                      $arrLength = [System.BitConverter]::GetBytes([long]$arrComponent.Length)\n", '')],
   ['T1-BUILD-082', 'runner communication file check absent from verify', 'build', (source) => replaceOnce(source, "          foreach ($strChannel in $arrChannelPaths) {\n              if ([string]::IsNullOrEmpty($strChannel)) { throw 'runner-state: a step communication file path is unset' }\n              if ([System.IO.FileInfo]::new($strChannel).Length -ne 0) {\n                  throw 'runner-state: the generator wrote to a runner step communication file'\n              }\n          }\n", '')],
   ['T1-BUILD-081', 'probes reinherit global Git configuration', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_GLOBAL'] = '/dev/null'\n", '')],
   ['T1-BUILD-080', 'generated-artifact drift tolerated again', 'build', (source) => replaceOnce(source, "          if ($objDiff.ExitCode -eq 1) {\n              throw 'generated-artifacts: committed artifacts do not match generator output. Run ./.github/workflows/Generate-StyleGuideArtifacts.ps1 and commit the four regenerated files.'\n          }\n", '')],
