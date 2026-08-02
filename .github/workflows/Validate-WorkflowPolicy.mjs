@@ -152,7 +152,7 @@ const NETWORK_CLIENT = /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|i
 // Enumerating the indirect writers (Set-Variable, New-Variable, the Variable:
 // provider, [ref] handles) is the same losing shape, so the whole reviewed
 // script is pinned instead: any edit at all changes this digest.
-const REVIEWED_VALIDATION_STEP_DIGEST = 'c8bf608a85ef9d60f792a043f0301f9628176b32076674df8673b67994c829b0';
+const REVIEWED_VALIDATION_STEP_DIGEST = 'e47a500406e3bf06cab5750dd3346560a46c627844809cd389a20abead2d7496';
 
 // The credential-cleanup step's assertions all test for the presence of a
 // sequence, and presence is not execution: an inserted early exit satisfies
@@ -1063,7 +1063,7 @@ function validateAcquireStep(step, label, expected) {
   // that anchor the names collide with ordinary prose: "acquire: node download
   // exited ..." inside a throw message is not an invocation, and four such
   // strings tripped this rule the first time it was written.
-  if (/(?:^[ \t]*|[;{|=(][ \t]*)(?:\/(?:usr\/)?bin\/)?(?:bash|sh|dash|ksh|zsh|csh|tcsh|python[0-9.]*|perl|ruby|node|pwsh|powershell|env|xargs|awk|eval|nohup|setsid|timeout)\b/imu.test(stepCode)) {
+  if (/(?:^[ \t]*|[;{|=(][ \t]*|&&[ \t]*)(?:\/(?:usr\/)?bin\/)?(?:bash|sh|dash|ksh|zsh|csh|tcsh|python[0-9.]*|perl|ruby|node|pwsh|powershell|env|xargs|awk|eval|nohup|setsid|timeout)\b/imu.test(stepCode)) {
     reject('acquire-policy', `${label} invokes a native interpreter`);
   }
   // The runner applies $GITHUB_ENV and $GITHUB_PATH to every subsequent step,
@@ -1074,6 +1074,19 @@ function validateAcquireStep(step, label, expected) {
   // must not write them either.
   if (/GITHUB_ENV|GITHUB_PATH|GITHUB_OUTPUT|GITHUB_STATE|GITHUB_STEP_SUMMARY/u.test(step.run)) {
     reject('acquire-policy', `${label} writes a runner step communication file`);
+  }
+  // Matching those five names is necessary and not sufficient: 'GITHUB_' + 'ENV'
+  // resolved through [Environment]::GetEnvironmentVariable contains no listed
+  // token at all. Rather than chase spellings -- the pattern that has lost
+  // every time on this branch -- the *capability* is removed. An acquire step
+  // reads the environment through $env: literals and writes files only through
+  // the three reviewed native tools, so a computed environment lookup and every
+  // text-write API are refused outright. Neither acquire step uses either.
+  if (/GetEnvironmentVariable|SetEnvironmentVariable/iu.test(stepCode)) {
+    reject('acquire-policy', `${label} resolves an environment variable through a computed name`);
+  }
+  if (/\b(?:AppendAllText|AppendAllLines|WriteAllText|WriteAllLines|AppendText|CreateText|Add-Content|Set-Content|Out-File|New-Item|Tee-Object)\b|>>?[^\S\n]*\$/iu.test(stepCode)) {
+    reject('acquire-policy', `${label} writes a file outside the reviewed native tools`);
   }
   // Named literals that run a string as a command. Microsoft documents
   // Invoke-Expression as evaluating "a specified string as a command" and notes
@@ -1245,7 +1258,9 @@ export function validateMarkdownPolicy(workflow, source) {
     // tree; script-shell in either replaces the interpreter for every npm run.
     '$env:npm_config_userconfig =',
     '$env:npm_config_globalconfig =',
-    'supply: the neutralized npm configuration path exists',
+    "$env:npm_config_userconfig = '/dev/null'",
+    "$env:npm_config_globalconfig = '/dev/null'",
+    'supply: the neutralized npm configuration source is not empty',
     // What the lint does, not only what it runs. Derived from the reviewed
     // constants so the gate and this baseline cannot drift apart silently.
     REVIEWED_LINT_DIGESTS['.markdownlint.jsonc'].toUpperCase(),
@@ -1819,7 +1834,17 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-136', 'build acquire step exports options to later steps', 'build', (source) => replaceOnce(source, '          $strServerUrl = $env:GITHUB_SERVER_URL\n', "          Add-Content -Path $env:GITHUB_PATH -Value '/tmp/hijack'\n          $strServerUrl = $env:GITHUB_SERVER_URL\n")],
   // npm reads a per-user and a global config outside the repository tree, so
   // script-shell in either replaces the interpreter for both lint phases.
-  ['T1-MARKDOWN-049', 'npm user and global configuration no longer neutralized', 'markdown', (source) => replaceOnce(source, "          $env:npm_config_userconfig = [System.IO.Path]::Combine($env:RUNNER_TEMP, 'absent-user-npmrc')\n", '')],
+  ['T1-MARKDOWN-049', 'npm user and global configuration no longer neutralized', 'markdown', (source) => replaceOnce(source, "          $env:npm_config_userconfig = '/dev/null'\n", '')],
+  // Round 40. An absent name under RUNNER_TEMP is absent only until the first
+  // lint phase creates it, and the second phase then loads it.
+  ['T1-MARKDOWN-050', 'npm configuration pointed back at a writable absent path', 'markdown', (source) => replaceOnce(source, "          $env:npm_config_userconfig = '/dev/null'\n", "          $env:npm_config_userconfig = [System.IO.Path]::Combine($env:RUNNER_TEMP, 'absent-user-npmrc')\n")],
+  // Round 40. && was missing from the interpreter anchor, though the adjacent
+  // dot-source scan already carried both pipeline-chain operators.
+  ['T1-MARKDOWN-051', 'interpreter reached through a pipeline-chain operator', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          & $strGitPath status && /bin/bash -c $strPayload\n          $strNodeUrl = 'https://nodejs.org")],
+  // Round 40. The five literal names are necessary and not sufficient:
+  // 'GITHUB_' + 'ENV' contains none of them.
+  ['T1-MARKDOWN-052', 'runner communication file reached through a computed name', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          $strComm = [Environment]::GetEnvironmentVariable('GITHUB_' + 'ENV')\n          $strNodeUrl = 'https://nodejs.org")],
+  ['T1-MARKDOWN-053', 'text written outside the reviewed native tools', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          [System.IO.File]::AppendAllText($strTargetPath, 'NODE_OPTIONS=--require=./x')\n          $strNodeUrl = 'https://nodejs.org")],
   ['T1-MARKDOWN-022', 'lint job regains a token scope', 'markdown', (source) => replaceOnce(source, '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions: {}\n', '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n')],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -1964,6 +1989,10 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-BUILD-135": "acquire-policy: build.verify.acquire invokes a native interpreter",
   "T1-MARKDOWN-048": "acquire-policy: markdown.acquire writes a runner step communication file",
   "T1-BUILD-136": "acquire-policy: build.verify.acquire writes a runner step communication file",
+  "T1-MARKDOWN-050": "markdown-policy: required phase is missing: $env:npm_config_userconfig = '/dev/null'",
+  "T1-MARKDOWN-051": "acquire-policy: markdown.acquire invokes something other than a reviewed literal command",
+  "T1-MARKDOWN-052": "acquire-policy: markdown.acquire resolves an environment variable through a computed name",
+  "T1-MARKDOWN-053": "acquire-policy: markdown.acquire writes a file outside the reviewed native tools",
   "T1-MARKDOWN-049": "markdown-policy: required phase is missing: $env:npm_config_userconfig =",
   "T1-MARKDOWN-014": "markdown-policy: required phase is missing: if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {",
   "T1-MARKDOWN-017": "markdown-policy: captured phase status intPolicyExit is not assigned exactly once",

@@ -187,13 +187,22 @@ jobs:
           # echoed and no linter executed, leaving installation, asset hashes,
           # the policy validator and all three captured statuses intact.
           # Enumerating those paths would be another list to be one entry
-          # short of, so npm is told where to read them from instead: both are
-          # pointed at a path that cannot exist, which npm treats as absent.
-          $env:npm_config_userconfig = [System.IO.Path]::Combine($env:RUNNER_TEMP, 'absent-user-npmrc')
-          $env:npm_config_globalconfig = [System.IO.Path]::Combine($env:RUNNER_TEMP, 'absent-global-npmrc')
-          foreach ($strAbsentConfig in @($env:npm_config_userconfig, $env:npm_config_globalconfig)) {
-              if (Test-Path -LiteralPath $strAbsentConfig) {
-                  throw 'supply: the neutralized npm configuration path exists'
+          # short of, so npm is told where to read them from instead. Both are
+          # pointed at /dev/null rather than at an absent name: an absent name
+          # under RUNNER_TEMP is absent only until something creates it, and the
+          # first lint phase is repository-adjacent code that runs before the
+          # second one reads the file. /dev/null always reads as empty and no
+          # unprivileged process can make it read as anything else, so the
+          # neutralization holds across both phases instead of only until the
+          # check that observed it.
+          $env:npm_config_userconfig = '/dev/null'
+          $env:npm_config_globalconfig = '/dev/null'
+          foreach ($strNeutralConfig in @($env:npm_config_userconfig, $env:npm_config_globalconfig)) {
+              if ($strNeutralConfig -cne '/dev/null') {
+                  throw 'supply: the neutralized npm configuration path is not the empty device'
+              }
+              if (-not [string]::IsNullOrEmpty((Get-Content -Raw -LiteralPath $strNeutralConfig -ErrorAction SilentlyContinue))) {
+                  throw 'supply: the neutralized npm configuration source is not empty'
               }
           }
 
