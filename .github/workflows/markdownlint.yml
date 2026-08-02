@@ -213,19 +213,17 @@ jobs:
               throw 'npm-ci: package metadata changed during frozen installation'
           }
 
-          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml
-          $intPolicyExit = $LASTEXITCODE
-          Write-Host "workflow-policy native exit: $intPolicyExit"
-
-          # The validator is repository-controlled and it runs before both lint
-          # phases, so the digests taken further above no longer describe what
-          # the linters are about to read. A pull request that edits the
-          # validator can have it rewrite the rule configuration and the
-          # nested-fence helper after those digests were checked, then exit
-          # zero; both phases would then report success over rules that were
-          # disabled and a helper that checks nothing. The assets are
-          # re-verified here, between the validator and the phases that consume
-          # them, so nothing that ran in between can change what they read.
+          # Re-taken after installation and before the phases that read them.
+          # This asserts one specific thing and no more: that npm ci did not
+          # disturb the two lint assets between the gate further above and the
+          # linters below. It is not a boundary against a concurrent writer --
+          # Get-FileHash reads and closes, so any process still running could
+          # write the file after the hash and before the linter opens it. The
+          # boundary is established by ordering instead: no repository-controlled
+          # program runs between the gate and the linters. npm ci installs the
+          # lockfile-pinned tree with --ignore-scripts, and the policy validator,
+          # which is repository-controlled and could otherwise leave a writer
+          # behind, now runs after both phases rather than before them.
           $strLintConfigAfterPolicy = (Get-FileHash -LiteralPath .markdownlint.jsonc -Algorithm SHA256).Hash
           $strLintHelperAfterPolicy = (Get-FileHash -LiteralPath lint-nested-markdown.js -Algorithm SHA256).Hash
           if ($strLintConfigAfterPolicy -cne $strReviewedLintConfigHash -or $strLintHelperAfterPolicy -cne $strReviewedLintHelperHash) {
@@ -239,6 +237,18 @@ jobs:
           & $strNpmPath run lint:md:nested
           $intNestedExit = $LASTEXITCODE
           Write-Host "nested-markdown native exit: $intNestedExit"
+
+          # Last, deliberately. Placed before the linters, a hostile edit to this
+          # repository-controlled script could spawn a process that outlives it
+          # and rewrite the rule configuration or the nested-fence helper after
+          # they were hashed but before the linters read them -- a check/use race
+          # (CWE-367) that no re-hash can close, because the attacker chooses when
+          # to write. Running it here leaves it no later reader to poison: its
+          # only output is the status captured below, which the final check
+          # asserts, and it could misreport that from any position in the step.
+          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml
+          $intPolicyExit = $LASTEXITCODE
+          Write-Host "workflow-policy native exit: $intPolicyExit"
 
           $strPackageFinal = (Get-FileHash -LiteralPath package.json -Algorithm SHA256).Hash
           $strLockFinal = (Get-FileHash -LiteralPath package-lock.json -Algorithm SHA256).Hash

