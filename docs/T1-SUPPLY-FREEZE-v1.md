@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `a745387054eb89781cdd951c5864d106f9bf0cf79a1aa13362ea8fdd57907324` | script `script.sha256` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `b97d1a3e4e1478672c2a9c428b0a34453ec9ed1e3b9266870d8f5103adf50e2c` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` / `x64` | script `toolchain.platform`, `toolchain.arch` |
@@ -142,6 +142,27 @@ exact equality.
 | File permissions | `{"644":2157,"755":20}` | full modes are machine state |
 | Directory permissions | `{"755":336}`, `node_modules` itself `755` | full modes are machine state |
 | Policy decision | `T1-ADVISORY-DISPOSITION-v1`, bounded through issue #24 | no artifact exists to compare against |
+| Scrubbed trust variables | `auditEnvironmentScrubbed`, e.g. `[]` or `["NODE_OPTIONS"]` | describes the machine the audit ran on, not the registry's answer |
+
+**`auditEnvironmentScrubbed` lists names only, never values.** A `NODE_EXTRA_CA_CERTS` path or a
+proxy URL can carry a hostname, a username, or a token, and this record is published. An empty
+list is the ordinary result. A non-empty one is not an error: it says the ambient environment
+carried something that could have steered the audit at a trust boundary, and that the answer
+recorded below was taken with that variable removed rather than under it. It is deliberately not
+folded into `auditSha256` — the advisory posture is a statement about what the registry said,
+while this is a statement about the machine that asked.
+
+The candidates are the inputs that can redirect or disable TLS trust for the process that asks:
+`NODE_EXTRA_CA_CERTS`, `NODE_USE_SYSTEM_CA`, `NODE_TLS_REJECT_UNAUTHORIZED`, `SSL_CERT_FILE`,
+`SSL_CERT_DIR`, the proxy variables, any `npm_config_*` naming a transport setting pinned to
+null — and `NODE_OPTIONS`, which is removed **whole** rather than filtered. Earlier revisions
+stripped named CA flags out of it and were incomplete twice running; `--use-system-ca=true` and
+four other accepted spellings survived a filter written for `--use-system-ca`. The deeper reason
+to drop it is that no list of trust flags could have been sufficient, because `--require` and
+`--import` preload arbitrary code into the very process that produces the audit answer. The cost
+is that an ambient `--max-old-space-size` does not reach the audit child; when that happens the
+name appears in this field rather than passing silently. This applies to the audit child only —
+a run under `--any-toolchain` uses its own transport and says so in `notFreezeRecordBecause`.
 
 **The policy decision was a compared field and should not have been.** `T1-ADVISORY-DISPOSITION-v1`
 names a decision, not a value: no committed artifact carries that identifier, the recorder emits
@@ -289,13 +310,18 @@ exit 1 with `double-loading config "/dev/null" as "global", previously loaded as
 the install starts. Any single path used twice fails the same way — `/dev/null` is not special,
 and the rule is about path identity rather than the file's contents.
 
+**Both spellings must be unset.** Environment variable names are case-sensitive on POSIX, npm
+reads either casing, and tooling commonly exports the upper-case form — so clearing only
+`npm_config_bin_links` leaves `NPM_CONFIG_BIN_LINKS` in force while looking as though the
+environment were clean.
+
 **This isolates configuration files, not the environment.** Measured: with
 `npm_config_bin_links=false` exported, the command above still installs 0 symlinks, because an
 `npm_config_*` environment variable outranks the empty files. Scrub the environment as well when
 that matters:
 
 ```bash
-env -u npm_config_bin_links npm ci --ignore-scripts --no-audit --no-fund
+env -u npm_config_bin_links -u NPM_CONFIG_BIN_LINKS npm ci --ignore-scripts --no-audit --no-fund
 ```
 
 The script's configuration guard is what catches both, and it is the reason this is a loud
@@ -327,7 +353,7 @@ row, rather than leaving it to a sentence that has already been wrong once.
 | `5` | Audit response is not a report | **no** | registry unreachable, or an endpoint error returned as JSON |
 | `6` | Install- or trust-shaping npm configuration | yes | `bin-links`, `omit`, `package-lock-only`, `umask`, `omit-lockfile-registry-resolved`, and the transport settings `proxy`, `https-proxy`, `noproxy`, `ca`, `cafile`, `strict-ssl` … from an `.npmrc` or the environment |
 | `7` | Root missing or not a directory | **no** | `node_modules` absent, or present as a file or a symlink to one |
-| `7` | Tree does not satisfy the lockfile | yes | `node_modules` incomplete, or never installed |
+| `7` | Tree does not satisfy the lockfile | yes | `node_modules` incomplete or never installed; or `npm ls` answered about a tree other than this one. The refusal names which |
 | `8` | Unreviewed process umask | yes | recording shell is not at `0022` |
 | `9` | Unreviewed advisory registry | yes | `registry` points at a mirror or proxy |
 | `10` | Recorded inputs changed while recording | **no** | something wrote to `node_modules` or a manifest during the run |
@@ -450,7 +476,7 @@ is what makes the encoding injective.
 
 | Entry kind | Tag | Fields folded, in order |
 | --- | --- | --- |
-| The `node_modules` root | `R` | its normalized execute bits (`mode & 0o111`); then, **only if it is not a directory**, tag `K`, the kind letter, and for a symlink its raw target bytes |
+| The `node_modules` root | `R` | the normalized execute bits (`mode & 0o111`) of the directory **the walk actually traverses**, resolved through a symlink if the root is one; then, **only if the root itself is not a directory**, tag `K`, the kind letter, and for a symlink its raw target bytes |
 | File | `F` | relative path, normalized **read and execute** bits (`mode & 0o555`), content |
 | Directory | `D` | relative path, normalized execute bits (`mode & 0o111`), then its entries |
 | Symlink | `L` | relative path, raw target bytes |
@@ -464,6 +490,15 @@ controls listing, which does not affect whether code beneath it loads.
 
 **Write bits are folded for nothing.** They do not affect loadability and are the most
 machine-variable of the three.
+
+**The root's bits are read through the symlink, not off it.** A reviewed run never reaches this
+case — a symlinked root refuses with exit `7` — but `--any-toolchain` folds one anyway, and the
+measurement it produces has to be honest. Taking the mode off the link records `0777`, which is
+what every symlink on Linux carries, so the traversed directory's permissions went unmeasured:
+changing the target from `0755` to `0700`, locking every other user out of the whole tree, left
+the digest and both histograms byte-identical. Resolving first fixes that and cannot move the
+frozen digest, because for a root that is an ordinary directory the two reads return the same
+mode.
 
 The **normalized permission bits** rather than the full mode. node-tar applies the
 process umask when it extracts, so the read and write bits are a property of the extracting
@@ -605,6 +640,20 @@ resolved graph the lockfile determines rather than the bytes on disk. Since the 
 SHA-256 is already recorded above, that digest restated an existing field while appearing to
 measure a new one.
 
+**`npm ls` is still run, and its exit code alone is not trusted.** It answers one question the
+byte fold cannot — whether the tree on disk satisfies the lockfile — but *which* tree it answers
+about is steered by ambient configuration, and four separate settings have been found doing
+exactly that. `omit` made it pass against a tree that was missing entirely; `package-lock-only`
+made it read the lockfile's virtual tree instead of the disk; `depth=0` made it check direct
+dependencies only; and `global` and `link` respectively pointed it at the host's global tree and
+reduced it to the root alone. Each was found only after the previous one was closed, so naming
+flags is treated as necessary and not sufficient. All of them are pinned on the command line, and
+then the **answer** is checked: `--long` makes npm report the absolute path of the tree it walked,
+which must resolve to this directory, and the top-level dependency names it reports must equal
+the set `package.json` declares. A future setting that redirects the tree fails the first check;
+one that empties it fails the second; and `treeSatisfiesLockfile` is only ever recorded as true
+when both hold.
+
 The fold is verified to move for each of these, and to return exactly to baseline afterwards:
 
 | Mutation | Digest moves |
@@ -621,6 +670,7 @@ The fold is verified to move for each of these, and to return exactly to baselin
 | A file's read bit cleared for group and other (`0644` → `0600`) | yes |
 | `node_modules` replaced by a symlink to a byte-identical tree | yes, and a reviewed run refuses with exit `7` |
 | The `node_modules` root's own execute bits changed | yes |
+| `node_modules` is a symlink and the **target directory's** execute bits change (`0755` → `0700`) | yes — measured `59799ca3…` → `48dac79b…` under `--any-toolchain` |
 
 ### Advisory posture
 

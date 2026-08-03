@@ -166,8 +166,20 @@ function transportFlags() {
 // standard proxy variables; both are fixed when this process starts and were
 // covered by the pre-audit check, but removing them from the child makes the
 // binding explicit rather than inherited.
+// Names only, never values. A scrubbed NODE_EXTRA_CA_CERTS path or proxy URL
+// can carry a hostname, a username, or a token, and this record is published.
+// Recorded, not compared: a non-empty list tells the reader the ambient
+// environment tried to steer the audit, and that the answer below was taken
+// with those overrides removed rather than under them.
+const arrScrubbedTrustVariables = [];
+
 function transportEnvironment() {
   const objEnv = { ...process.env };
+  const dropTrustVariable = (strName) => {
+    if (!Object.hasOwn(objEnv, strName)) return;
+    delete objEnv[strName];
+    if (!arrScrubbedTrustVariables.includes(strName)) arrScrubbedTrustVariables.push(strName);
+  };
   // Round 21, reported. NODE_EXTRA_CA_CERTS is a Node-level trust root, invisible
   // to `npm config list` -- which keeps reporting ca: null and strict-ssl: true --
   // so an interceptor whose certificate chains to it could return a filtered,
@@ -179,26 +191,45 @@ function transportEnvironment() {
   // enterprise or interceptor CA can authenticate a filtered response while npm
   // still reports ca: null and strict-ssl: true. SSL_CERT_FILE and SSL_CERT_DIR
   // are the OpenSSL half of the same thing.
-  delete objEnv.NODE_EXTRA_CA_CERTS;
-  delete objEnv.NODE_USE_SYSTEM_CA;
-  delete objEnv.SSL_CERT_FILE;
-  delete objEnv.SSL_CERT_DIR;
-  if (typeof objEnv.NODE_OPTIONS === 'string') {
-    const strScrubbed = objEnv.NODE_OPTIONS
-      .split(/\s+/u)
-      .filter((strOption) => strOption !== '--use-system-ca' && strOption !== '--use-openssl-ca')
-      .join(' ')
-      .trim();
-    if (strScrubbed) objEnv.NODE_OPTIONS = strScrubbed;
-    else delete objEnv.NODE_OPTIONS;
-  }
+  dropTrustVariable('NODE_EXTRA_CA_CERTS');
+  dropTrustVariable('NODE_USE_SYSTEM_CA');
+  dropTrustVariable('SSL_CERT_FILE');
+  dropTrustVariable('SSL_CERT_DIR');
+  // Round 24, reported. NODE_TLS_REJECT_UNAUTHORIZED was the one Node trust
+  // override never scrubbed, and it does not redirect the trust store -- it
+  // switches verification off. Measured here against a self-signed HTTPS
+  // server: with the variable set to 0 a default request is ACCEPTED, while a
+  // request carrying an explicit rejectUnauthorized: true is still REJECTED
+  // with DEPTH_ZERO_SELF_SIGNED_CERT. npm 10.9.7 does pass it explicitly, but
+  // only on one branch -- make-fetch-happen/lib/options.js reads the variable
+  // itself whenever strictSSL arrives undefined or null. Relying on a bundled
+  // transitive dependency to keep taking the other branch is the same kind of
+  // version-dependent incidental protection this script declined to rely on
+  // for the symlinked root.
+  dropTrustVariable('NODE_TLS_REJECT_UNAUTHORIZED');
+  // Round 24, reported. The previous version removed two exact tokens from
+  // NODE_OPTIONS. Measured on Node v22.22.2, every one of these spellings is
+  // accepted and none of them matched: --use-openssl-ca=true, --use-openssl-ca=1,
+  // --use-system-ca=true, --use-system-ca=TRUE, --no-use-system-ca,
+  // --use-bundled-ca=false. That is the second consecutive round in which this
+  // filter was extended and still incomplete, which is the argument against
+  // extending it a third time.
+  //
+  // The variable is dropped entirely instead. A caller who can set NODE_OPTIONS
+  // does not need a CA flag to subvert the answer at all: --require and --import
+  // preload arbitrary code into the very process that produces the audit report,
+  // so no list of trust-related tokens could ever have been sufficient. Dropping
+  // also retires the previous round's quoting hazard -- nothing is parsed here,
+  // so nothing can be corrupted -- at the cost of an ambient --max-old-space-size
+  // not reaching the audit child. The name is recorded when that happens.
+  dropTrustVariable('NODE_OPTIONS');
   for (const strKey of Object.keys(objEnv)) {
     const strLower = strKey.toLowerCase();
     if (strLower === 'http_proxy' || strLower === 'https_proxy' || strLower === 'no_proxy'
       || Object.keys(REVIEWED_NPM_TRANSPORT).some(
         (strConfig) => strLower === `npm_config_${strConfig.replace(/-/gu, '_')}`)) {
       if (REVIEWED_NPM_TRANSPORT[strLower.replace(/^npm_config_/u, '').replace(/_/gu, '-')] === null
-        || strLower.endsWith('_proxy')) delete objEnv[strKey];
+        || strLower.endsWith('_proxy')) dropTrustVariable(strKey);
     }
   }
   return objEnv;
@@ -643,7 +674,18 @@ function foldInstalledTree(strRoot) {
   // whose total does not match the count beside it is a diagnostic that costs
   // the reader time to reconcile.
   const objRootStats = lstatSync(strRoot);
-  const intRootMode = objRootStats.mode;
+  // Round 24, reported and measured. The mode folded here came from lstat, which
+  // for a symlinked root describes the LINK -- 0777 on Linux, always -- and never
+  // the directory `walk` actually traverses. With node_modules symlinked to a real
+  // tree under --any-toolchain, flipping the target from 0755 to 0700, which locks
+  // every other user out of the entire tree, left the digest, the counts, and both
+  // histograms byte-identical at 59799ca3...
+  //
+  // stat follows, so the traversed directory is the one measured. For a root that
+  // is a real directory lstat and stat agree and the frozen digest does not move.
+  // Neither call can throw: boolRootWalkable already refused, before this runs and
+  // regardless of --any-toolchain, any root stat cannot resolve to a directory.
+  const intRootMode = statSync(strRoot).mode;
   objHash.update('R', 'utf8');
   hashField(objHash, (intRootMode & 0o111).toString(8).padStart(3, '0'));
   // Round 12, reported. lstat sees the root itself, but only its execute mask
@@ -734,6 +776,14 @@ function newestChangeTime(strRoot, arrExtraPaths) {
     }
   };
   consider(strRoot, 'node_modules');
+  // Round 24, reported. The same gap as the root mode fold, one function over:
+  // this lstats the LINK while walk() reads through it, so a chmod or a rename on
+  // the followed directory moved that directory's ctime and nothing the sweep
+  // looked at. realpath is safe here for the reason stat is safe in the fold -- a
+  // root that does not resolve to a directory was refused before either ran.
+  if (lstatSync(strRoot).isSymbolicLink()) {
+    consider(realpathSync(strRoot), 'node_modules (symlink target)');
+  }
   walk(strRoot, '');
   for (const strPath of arrExtraPaths) consider(strPath, strPath.split('/').pop());
   return { ctimeMs: intNewest, path: strNewestPath };
@@ -800,17 +850,38 @@ function normalizeAudit(objAudit) {
     for (const objVia of objVulnerability.via ?? []) {
       // A `via` entry that is a bare string names another package in the chain
       // rather than an advisory; the chain is already covered by the tree.
-      if (typeof objVia !== 'object' || objVia === null) continue;
+      if (typeof objVia === 'string') continue;
+      // Round 24, reported. The round-22 fix validated the CONTAINER and left
+      // its MEMBERS unchecked, so `via: [null]` and `via: [7]` both fell through
+      // the old combined test onto `continue` -- no advisory, no throw, and the
+      // package relabelled as inherited in a record that looks complete. Only
+      // the two documented member shapes are accepted now; an array is excluded
+      // explicitly because typeof [] is 'object' and it has none of the fields
+      // read below.
+      if (typeof objVia !== 'object' || objVia === null || Array.isArray(objVia)) {
+        throw new TypeError(
+          `vulnerability ${strName} has a via member that is neither a package name`
+          + ` nor an advisory object (got ${objVia === null ? 'null' : typeof objVia})`);
+      }
       const strUrl = typeof objVia.url === 'string' ? objVia.url : '';
       const objMatch = strUrl.match(/GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}/u);
       arrAdvisories.push({
         id: objMatch ? objMatch[0] : `npm-source-${objVia.source ?? 'unknown'}`,
         severity: objVia.severity ?? null,
         cwe: (() => {
-          if (!Array.isArray(objVia.cwe ?? [])) {
+          const arrCwe = objVia.cwe ?? [];
+          if (!Array.isArray(arrCwe)) {
             throw new TypeError(`advisory in ${strName} has a non-array cwe`);
           }
-          return [...(objVia.cwe ?? [])].sort();
+          // Round 24, swept rather than reported: the same container-checked,
+          // members-unchecked defect as `via`, one field over. `[null, 7]` is an
+          // array, sorts without complaint, and writes those members straight
+          // into a digest this record asserts is stable. cwe is the only other
+          // parsed-JSON array this script iterates or spreads.
+          if (arrCwe.some((objEntry) => typeof objEntry !== 'string')) {
+            throw new TypeError(`advisory in ${strName} has a non-string cwe entry`);
+          }
+          return [...arrCwe].sort();
         })(),
         cvssScore: objVia.cvss?.score ?? null,
         cvssVector: objVia.cvss?.vectorString ?? null,
@@ -1021,6 +1092,7 @@ if (!boolAnyToolchain && !objRecord.matchesReviewedManifest) {
 // it exits non-zero when the installed tree does not satisfy the lockfile, which
 // is the one question it answers that the byte fold cannot.
 const strTreeRoot = join(strWorkflowDirectory, 'node_modules');
+let strTreeCheckDetail = '';
 try {
   // Round 19, reported. This reloaded `omit` from whatever .npmrc exists when it
   // starts, and every root dependency here is a dev dependency -- so `omit=dev`
@@ -1036,11 +1108,54 @@ try {
   // Round 22, reported. `--all` does not survive an ambient `depth=0`: npm then
   // checks direct dependencies only and exits 0 with a transitive package
   // missing, recording treeSatisfiesLockfile true. Depth is pinned explicitly.
-  runNpm(['ls', '--all', '--json', '--package-lock-only=false', '--depth=4294967295',
-    '--include=dev', '--include=optional', '--include=peer']);
+  // Round 24, reported and measured. Two more ambient escapes, and they escape
+  // by different mechanisms, which is why one property was never going to catch
+  // both. In a directory with an EMPTY but present node_modules, the pinned
+  // command exited 1 as it should; with NPM_CONFIG_GLOBAL=true it exited 0 and
+  // reported path=/opt/node22/lib -- the host's global tree, a different tree
+  // entirely -- and with NPM_CONFIG_LINK=true it exited 0 having reported the
+  // root and zero dependencies. Either would have recorded
+  // treeSatisfiesLockfile: true for a tree containing nothing.
+  const strLsOutput = runNpm(['ls', '--all', '--json', '--long',
+    '--package-lock-only=false', '--depth=4294967295',
+    '--include=dev', '--include=optional', '--include=peer',
+    '--global=false', '--link=false']);
+  // The exit code alone has now been wrong four times, in rounds 19, 20, 22 and
+  // 24, each time because a different ambient input changed which tree npm was
+  // describing. Naming one more flag would close this instance and leave the
+  // class open, so the ANSWER is checked rather than only the inputs: --long
+  // makes npm report the absolute path of the tree it actually walked, and the
+  // dependency set says whether that tree was filtered on the way out. A future
+  // flag that redirects the tree fails the first check; one that empties it
+  // fails the second, whatever the flag turns out to be called.
+  const objLs = JSON.parse(strLsOutput);
+  if (typeof objLs.path !== 'string') {
+    throw new TypeError('npm ls did not report the path of the tree it examined');
+  }
+  if (realpathSync(objLs.path) !== realpathSync(strWorkflowDirectory)) {
+    throw new Error(`npm ls examined ${objLs.path}, not ${strWorkflowDirectory}`);
+  }
+  const objManifest = JSON.parse(strPackageBefore);
+  const arrDeclared = [...new Set([
+    ...Object.keys(objManifest.dependencies ?? {}),
+    ...Object.keys(objManifest.devDependencies ?? {}),
+    ...Object.keys(objManifest.optionalDependencies ?? {}),
+    ...Object.keys(objManifest.peerDependencies ?? {}),
+  ])].sort();
+  const arrReported = Object.keys(objLs.dependencies ?? {}).sort();
+  if (JSON.stringify(arrDeclared) !== JSON.stringify(arrReported)) {
+    throw new Error(
+      `npm ls reported [${arrReported}] at the top level, declared [${arrDeclared}]`);
+  }
   objRecord.treeSatisfiesLockfile = true;
-} catch {
+} catch (objError) {
   objRecord.treeSatisfiesLockfile = false;
+  // The reason used to be discarded, which left every failure looking identical
+  // in the refusal below -- "satisfies lockfile false" and nothing else. The two
+  // checks above fail for reasons an operator cannot guess from that line.
+  strTreeCheckDetail = objError?.status !== undefined
+    ? `npm ls exited ${objError.status}: the tree does not satisfy the lockfile`
+    : String(objError?.message ?? objError).split('\n')[0].slice(0, 200);
 }
 
 // Round 3. Carried across from the package-lock-only finding rather than
@@ -1090,6 +1205,7 @@ if (!boolAnyToolchain && (!existsSync(strTreeRoot) || !objRecord.treeSatisfiesLo
     'supply-freeze: refusing to record digests for a tree that is not the installed tree.\n' +
     `  node_modules       ${existsSync(strTreeRoot) ? 'present' : 'MISSING'}\n` +
     `  satisfies lockfile ${objRecord.treeSatisfiesLockfile}\n` +
+    (strTreeCheckDetail ? `  because            ${strTreeCheckDetail}\n` : '') +
     '  install first with the documented command, then record:\n' +
     '    npm ci --ignore-scripts --no-audit --no-fund\n' +
     '  note that package-lock-only=true makes npm ci a no-op that reports success.\n');
@@ -1190,6 +1306,10 @@ if (!boolAnyToolchain && objTree.specials > 0) {
 
 if (boolSkipAudit) {
   objRecord.auditSha256 = null;
+  // No audit child ran, so nothing was scrubbed. Emitted anyway so the field is
+  // present on every record shape and a reader never has to distinguish "absent
+  // because nothing was scrubbed" from "absent because this build is older".
+  objRecord.auditEnvironmentScrubbed = [];
 } else {
   // The advisory posture is a snapshot of whatever registry answers the audit
   // request, and nothing else in this script constrains which one that is.
@@ -1363,6 +1483,11 @@ if (boolSkipAudit) {
     process.exit(5);
   }
   objRecord.auditSha256 = sha256(canonicalize(objNormalizedAudit));
+  // Sorted so two runs that scrubbed the same set produce the same list. Not
+  // folded into auditSha256: the advisory posture is a statement about the
+  // registry's answer, and which local variables had to be removed to reach the
+  // registry cleanly is a statement about this machine.
+  objRecord.auditEnvironmentScrubbed = [...arrScrubbedTrustVariables].sort();
   objRecord.auditCounts = objNormalizedAudit.counts;
   objRecord.auditPackages = Object.fromEntries(
     Object.entries(objNormalizedAudit.packages).map(([strName, objValue]) => [
