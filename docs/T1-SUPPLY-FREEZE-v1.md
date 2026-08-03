@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `5d08fd636299529af7cfd76ba717d85f169e146c8ae277b0a7e119e5d8885ecd` | script `script.sha256` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `3732cf4d1f9f96c3f7ed100fe8f0e6a21c02d713d0ed3097b1aea35063607c3a` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` / `x64` | script `toolchain.platform`, `toolchain.arch` |
@@ -154,8 +154,20 @@ while this is a statement about the machine that asked.
 
 The candidates are the inputs that can redirect or disable TLS trust for the process that asks:
 `NODE_EXTRA_CA_CERTS`, `NODE_USE_SYSTEM_CA`, `NODE_TLS_REJECT_UNAUTHORIZED`, `SSL_CERT_FILE`,
-`SSL_CERT_DIR`, the proxy variables, any `npm_config_*` naming a transport setting pinned to
-null — and `NODE_OPTIONS`, which is removed **whole** rather than filtered. Earlier revisions
+`SSL_CERT_DIR`, `OPENSSL_CONF`, `OPENSSL_MODULES`, `OPENSSL_ENGINES`, the proxy variables, any
+`npm_config_*` naming a transport setting pinned to null — and `NODE_OPTIONS`, which is removed
+**whole** rather than filtered.
+
+The three `OPENSSL_*` names were swept for rather than reported, and are listed with their
+evidence rather than beyond it. Node **does** read `OPENSSL_CONF` — measured, a malformed file
+makes it exit with `node: OpenSSL configuration error` before any script runs — and OpenSSL finds
+providers and engines through the other two, an activated provider being able to supply the
+primitives that verify signatures. What was **not** demonstrated is that the file can steer this
+process's TLS: a config setting `MinProtocol` to `TLSv1.3` left a TLSv1.2 handshake negotiating
+TLSv1.2 unchanged, through both the `system_default` and `nodejs_conf` sections, because Node
+sets its TLS parameters programmatically and those take precedence. Loading a hostile provider
+was not attempted. They are scrubbed anyway because removing them costs three lines, and the
+alternative is depending on Node continuing to override a file it demonstrably parses. Earlier revisions
 stripped named CA flags out of it and were incomplete twice running; `--use-system-ca=true` and
 four other accepted spellings survived a filter written for `--use-system-ca`. The deeper reason
 to drop it is that no list of trust flags could have been sufficient, because `--require` and

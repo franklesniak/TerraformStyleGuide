@@ -207,6 +207,32 @@ function transportEnvironment() {
   // version-dependent incidental protection this script declined to rely on
   // for the symlinked root.
   dropTrustVariable('NODE_TLS_REJECT_UNAUTHORIZED');
+  // Round 27, swept rather than reported, and reported here with its limits.
+  // The list above is a denylist, and this script's own history says denylists
+  // over this surface come up short, so the siblings were looked for rather
+  // than waited for. OpenSSL takes its configuration from OPENSSL_CONF and
+  // finds providers and engines through OPENSSL_MODULES and OPENSSL_ENGINES,
+  // and an activated provider supplies the primitives that verify signatures --
+  // which would subvert the audit's transport more completely than any CA
+  // override.
+  //
+  // What was MEASURED is narrower than that, and the difference matters.
+  // Proven: Node reads OPENSSL_CONF, because a malformed file makes it exit
+  // with `node: OpenSSL configuration error` before running any script.
+  // NOT proven: that the file can steer this process's TLS. An OPENSSL_CONF
+  // setting MinProtocol to TLSv1.3 left a TLSv1.2 handshake negotiating
+  // TLSv1.2 unchanged -- twice, once through the `system_default` section and
+  // once through the `nodejs_conf` section with --openssl-shared-config --
+  // because Node sets its TLS parameters programmatically and those win.
+  // Loading a hostile provider was not attempted; building one is far outside
+  // what this verification can do.
+  //
+  // Scrubbed regardless, for the reason NODE_TLS_REJECT_UNAUTHORIZED is: the
+  // cost is three lines, and the alternative is relying on Node continuing to
+  // override a configuration file it demonstrably parses.
+  dropTrustVariable('OPENSSL_CONF');
+  dropTrustVariable('OPENSSL_MODULES');
+  dropTrustVariable('OPENSSL_ENGINES');
   // Round 24, reported. The previous version removed two exact tokens from
   // NODE_OPTIONS. Measured on Node v22.22.2, every one of these spellings is
   // accepted and none of them matched: --use-openssl-ca=true, --use-openssl-ca=1,
