@@ -720,8 +720,27 @@ function normalizeAudit(objAudit) {
 
 const strPackagePath = join(strWorkflowDirectory, 'package.json');
 const strLockPath = join(strWorkflowDirectory, 'package-lock.json');
-const strPackageBefore = readFileSync(strPackagePath, 'utf8');
-const strLockBefore = readFileSync(strLockPath, 'utf8');
+// Round 17, reported, and the previous round's fix caught half-done. The
+// RE-reads were routed through a refusal; these initial snapshot reads were left
+// bare, so a manifest missing or unreadable before the recorder starts threw an
+// uncaught filesystem error and exited 1 -- ahead of the exit-4 guard that
+// exists to name exactly this, and contradicting the record's claim that every
+// refusal names its values on stderr.
+function snapshotOrRefuse(strPath) {
+  try {
+    return readFileSync(strPath, 'utf8');
+  } catch (objError) {
+    process.stderr.write(
+      'supply-freeze: refusing to record digests for an unreviewed manifest.\n' +
+      `  ${strPath.split('/').pop().padEnd(18)} could not be read\n` +
+      `  error              ${objError.code ?? 'unknown'} at ${objError.path ?? strPath}\n` +
+      '  the reviewed manifest must be present and readable before anything is recorded.\n');
+    process.exit(4);
+  }
+}
+
+const strPackageBefore = snapshotOrRefuse(strPackagePath);
+const strLockBefore = snapshotOrRefuse(strLockPath);
 
 const strNodeVersion = process.version;
 const strNpmVersion = runNpm(['--version']).trim();
@@ -1115,7 +1134,15 @@ if (boolSkipAudit) {
   if (!Number.isInteger(objAudit.auditReportVersion)
     || !isPlainObject(objAudit.vulnerabilities)
     || !isPlainObject(objCounts)
-    || !SEVERITY_ORDER.every((strSeverity) => Number.isInteger(objCounts[strSeverity]))) {
+    || !SEVERITY_ORDER.every((strSeverity) => Number.isInteger(objCounts[strSeverity]))
+    // Round 17, reported. The guard validated the top level and stopped there,
+    // so `vulnerabilities: {"x": null}` with correct counts passed -- and
+    // normalizeAudit then dereferenced that null and threw a TypeError, exit 1,
+    // where exit 5 exists to say "not an audit report". Each entry is checked
+    // here, and the normalization itself is wrapped below, because validating
+    // the shapes I thought of and trusting the rest is the mistake this guard
+    // has now been widened for four times.
+    || !Object.values(objAudit.vulnerabilities).every(isPlainObject)) {
     process.stderr.write(
       'supply-freeze: npm audit did not return an audit report.\n' +
       `  npm said: ${typeof objAudit.message === 'string' ? objAudit.message : JSON.stringify(objAudit).slice(0, 300)}\n` +
@@ -1123,7 +1150,17 @@ if (boolSkipAudit) {
       '  pass --no-audit to record the lockfile-derived fields alone.\n');
     process.exit(5);
   }
-  const objNormalizedAudit = normalizeAudit(objAudit);
+  let objNormalizedAudit;
+  try {
+    objNormalizedAudit = normalizeAudit(objAudit);
+  } catch (objError) {
+    process.stderr.write(
+      'supply-freeze: npm audit did not return an audit report.\n' +
+      `  the report could not be normalized: ${objError.message}\n` +
+      '  this is a format failure, not an advisory posture; nothing is recorded.\n' +
+      '  pass --no-audit to record the lockfile-derived fields alone.\n');
+    process.exit(5);
+  }
   objRecord.auditSha256 = sha256(canonicalize(objNormalizedAudit));
   objRecord.auditCounts = objNormalizedAudit.counts;
   objRecord.auditPackages = Object.fromEntries(
