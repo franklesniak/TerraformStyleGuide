@@ -115,6 +115,15 @@ function sha256(strText) {
   return createHash('sha256').update(strText, 'utf8').digest('hex');
 }
 
+// "A JSON object", as distinct from everything else `typeof x === 'object'`
+// admits. Both `null` and an array answer 'object', and each of those has now
+// been reported as a hole in the audit shape guard -- null in round 2, arrays
+// in round 6. One predicate, used everywhere, rather than a conjunction
+// rewritten at each call site and wrong in a different way each time.
+function isPlainObject(objValue) {
+  return typeof objValue === 'object' && objValue !== null && !Array.isArray(objValue);
+}
+
 // A Git blob identity is SHA-1 over `blob <byteLength>\0<content>`. Implemented
 // rather than shelled out to `git`, so the check works in an exported tree with
 // no repository and cannot be confused by the working directory.
@@ -428,10 +437,11 @@ if (!boolAnyToolchain) {
 // This reads the umask of the RECORDING process, which is a proxy for the one
 // the install ran under -- the same install-time/measure-time gap the
 // package-lock-only guard has. It catches the common case, where one shell does
-// both. For the case where it cannot see the cause, the group-readable census
-// recorded below is the backstop: under umask 022 every installed file carries
-// group read, and under umask 077 none of them do, so a reader whose digest
-// mismatches can tell the two apart from the record alone.
+// both. For the case where it cannot see the cause, the permission-bit
+// histogram recorded below is the backstop: it records the observed modes
+// themselves, so umask 022 (644/755), 027 (640/750) and 077 (600/700) are all
+// distinguishable from the record alone -- as is any other umask, which a
+// predicate over a single chosen bit could not manage.
 if (!boolAnyToolchain && process.umask() !== REVIEWED_UMASK) {
   process.stderr.write(
     'supply-freeze: refusing to record digests under an unreviewed umask.\n' +
@@ -582,11 +592,21 @@ if (boolSkipAudit) {
   // Strengthened past the reported fix: the severity counts must each be an
   // integer. That refuses null, an empty object, and a shape change, rather
   // than only the one value that was reported.
+  //
+  // Round 6, reported by Copilot: that strengthening still was not the class.
+  // `typeof [] === 'object'` too, so an ARRAY passed both tests -- measured,
+  // `vulnerabilities: []` and an array-shaped `metadata.vulnerabilities` were
+  // both accepted. Round 2 closed `null` and left `[]` open, which is the same
+  // "fixed the reported value, not the predicate" mistake one step over.
+  //
+  // Both tests now route through isPlainObject rather than repeating a
+  // hand-written conjunction, so the two halves cannot drift apart again --
+  // that asymmetry is what admitted `null` in the first place.
   const objCounts = objAudit.metadata?.vulnerabilities;
   const arrSeverities = ['info', 'low', 'moderate', 'high', 'critical', 'total'];
   if (!Number.isInteger(objAudit.auditReportVersion)
-    || typeof objAudit.vulnerabilities !== 'object' || objAudit.vulnerabilities === null
-    || typeof objCounts !== 'object' || objCounts === null
+    || !isPlainObject(objAudit.vulnerabilities)
+    || !isPlainObject(objCounts)
     || !arrSeverities.every((strSeverity) => Number.isInteger(objCounts[strSeverity]))) {
     process.stderr.write(
       'supply-freeze: npm audit did not return an audit report.\n' +
@@ -634,7 +654,7 @@ if (boolJson) {
     `  tree satisfies lock  ${objRecord.treeSatisfiesLockfile}\n` +
     `  installed tree       ${objRecord.installedTreeSha256}\n` +
     `    (${objRecord.installedTreeFiles} files, ${objRecord.installedTreeSymlinks} symlinks, ${objRecord.installedTreeDirectories} directories on disk)\n` +
-    `    (file permissions ${JSON.stringify(objRecord.installedTreeModes)}; a different shape means the install ran under a different umask)\n` +
+    `    (file permissions ${JSON.stringify(objRecord.installedTreeModes)}; a different shape is consistent with a different install umask, or with modes changed after install)\n` +
     (objRecord.auditSha256
       ? `  registry             ${objRecord.registry}\n` +
         `  advisory posture     ${objRecord.auditSha256}\n` +

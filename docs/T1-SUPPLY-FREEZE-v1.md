@@ -53,7 +53,7 @@ Run on the reviewed toolchain against the merge commit.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `d8213bbcf4232d4ee8b3c57795ae7de0a32b8928b6cfb69ba4991bb3d0e52eba` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `756d918d5b2d122796c75e96b2f65ea0c8db58822236fcda379abf7d4abfe428` |
 | Node | `v24.18.1` |
 | npm | `11.16.0` |
 | Platform | `linux` / `x64` |
@@ -91,8 +91,13 @@ introduces this document. Reproduce from a revision that contains it, which carr
 
 ```bash
 git checkout main            # or any revision containing Get-SupplyFreezeDigest.mjs
-cd .github/workflows
+
+# <rev>:<path> is always resolved from the repository root, never the current
+# directory, so this runs before the cd and keeps the path unambiguous.
 git rev-parse HEAD:.github/workflows/package.json          # must equal the recorded blob
+git rev-parse HEAD:.github/workflows/package-lock.json     # must equal the recorded blob
+
+cd .github/workflows
 umask 0022                   # the recorded tree was installed under this
 npm ci --ignore-scripts --no-audit --no-fund
 node Get-SupplyFreezeDigest.mjs
@@ -121,6 +126,12 @@ a predicate over them:
 | `022` — reviewed | `{"644":2157,"755":20}` | `4cdc37a7…` |
 | `027` | `{"640":2157,"750":20}` | `62eddc28…` |
 | `077` | `{"600":2157,"700":20}` | `0a215132…` |
+
+The histogram is a **diagnostic hint, not a proof**. Any change to a file's mode moves it —
+measured, a single `chmod g-r` under the reviewed umask turns `{"644":2157,"755":20}` into
+`{"604":1,"644":2156,"755":20}`. A shape that differs from the record is therefore *consistent
+with* a different install umask, and equally consistent with modes altered after the install;
+it narrows the search rather than settling it.
 
 An earlier draft counted **group-readable files** instead, and that was too weak to be a
 backstop. `umask 027` clears `0o027`, which leaves group read set — `0o644` becomes `0o640` and
