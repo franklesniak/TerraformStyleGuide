@@ -62,7 +62,7 @@ Every value here is derived by the script from the inputs, and must match exactl
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `f8fb546e096d841ab2478b11024a724bb1380a21efcd636e695ce94f0dde0916` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `66fd32bca7ebf8dc0f9359cf7d7bdf09f985a1fe9eb0df1b33b0b01ff94fb594` |
 | Node | `v24.18.1` |
 | npm | `11.16.0` |
 | Platform | `linux` / `x64` |
@@ -246,6 +246,13 @@ of them and marks the output as explicitly not a freeze record.
 | `7` | Tree is not the installed tree | `node_modules` absent, incomplete, or never installed |
 | `8` | Unreviewed umask | recording shell is not at `0022` |
 | `9` | Unreviewed advisory registry | `registry` points at a mirror or proxy |
+| `10` | Installed tree changed while recording | something wrote to `node_modules` during the run |
+
+Exit `10` is the counterpart to exit `3` for the tree rather than the manifests: the tree is
+folded once before `npm audit` and again after it, and a mismatch between the two means the
+bytes moved while the record was being taken. The audit is a network round trip — measured at
+about 2.0s against a 0.1s fold — so that window is wide enough to matter, and re-folding
+brackets it rather than merely narrowing it.
 
 Exit `9` applies only when the audit runs. The registry does not shape the installed tree —
 every package in the lockfile carries an `integrity` hash and `npm ci` verifies each tarball

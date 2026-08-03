@@ -247,9 +247,32 @@ function foldInstalledTree(strRoot) {
   const walk = (strDirectory, strRelative) => {
     const arrEntries = [...readdirSync(strDirectory, { withFileTypes: true })]
       .sort((objLeft, objRight) => (objLeft.name < objRight.name ? -1 : objLeft.name > objRight.name ? 1 : 0));
-    for (const objEntry of arrEntries) {
-      const strPath = join(strDirectory, objEntry.name);
-      const strChild = strRelative ? `${strRelative}/${objEntry.name}` : objEntry.name;
+    for (const objEntryHint of arrEntries) {
+      const strPath = join(strDirectory, objEntryHint.name);
+      const strChild = strRelative ? `${strRelative}/${objEntryHint.name}` : objEntryHint.name;
+      // Round 8, reported. `readdir` may answer DT_UNKNOWN for an entry -- some
+      // NFS and FUSE mounts do -- and a Dirent carrying that hint returns false
+      // from isFile(), isDirectory() AND isSymbolicLink() alike. Every such
+      // entry would fall through to the `?` branch below, which records a tag
+      // and a path and NOTHING else: no content, no target, and no recursion
+      // into a directory's children. A tree on such a filesystem would fold to
+      // a digest that silently omits most of it while still reporting
+      // freezeRecord: true.
+      //
+      // lstatSync answers from the inode rather than the directory hint, and
+      // Stats exposes the same predicates as Dirent, so it substitutes cleanly.
+      // It must be lstat rather than stat: stat would follow symlinks and
+      // reclassify each of the 8 `.bin` entries as the file it points at.
+      //
+      // Only consulted when the hint is inconclusive, so the common path costs
+      // nothing. Not reproducible here -- every filesystem on this host reports
+      // real types, checked across /proc, /sys, /dev, /run and /tmp -- so the
+      // trigger is taken from the readdir contract while the consequence is
+      // measured: an entry that answers false to both predicates does take the
+      // content-free `?` branch.
+      const objEntry = (objEntryHint.isFile() || objEntryHint.isDirectory() || objEntryHint.isSymbolicLink())
+        ? objEntryHint
+        : lstatSync(strPath);
       if (objEntry.isSymbolicLink()) {
         intSymbolicLinks += 1;
         objHash.update('L', 'utf8');
@@ -636,6 +659,36 @@ if (readFileSync(strPackagePath, 'utf8') !== strPackageBefore
   || readFileSync(strLockPath, 'utf8') !== strLockBefore) {
   process.stderr.write('supply-freeze: package metadata changed while reading it; refusing to report\n');
   process.exit(3);
+}
+
+// Round 8, reported. The assertion above covers the two manifest files and
+// nothing else, so `node_modules` was read exactly once and never looked at
+// again. Between that fold and this point sits `npm audit` -- a network round
+// trip measured at ~2.0s against a ~0.1s fold -- and anything that edited an
+// already-hashed file during that window left installedTreeSha256 describing a
+// tree that no longer existed, under a freezeRecord: true heading.
+//
+// Re-folding BRACKETS the slow operation rather than narrowing the window:
+// reordering the audit earlier would have made the race less likely and still
+// undetectable, and "less likely" is not a property a freeze record can rest
+// on. The second fold is the same code over the same tree, so a mismatch means
+// the bytes moved underneath it.
+//
+// Done unconditionally, including under --no-audit where the window is only
+// microseconds wide. A guarantee that holds except in the case nobody thought
+// about is the defect this review found five times over; the cost is one extra
+// pass at roughly 0.1s.
+const objTreeAfter = foldInstalledTree(strTreeRoot);
+if (objTreeAfter.sha256 !== objTree.sha256) {
+  process.stderr.write(
+    'supply-freeze: the installed tree changed while recording; refusing to report.\n' +
+    `  first fold         ${objTree.sha256}\n` +
+    `  second fold        ${objTreeAfter.sha256}\n` +
+    `  counts             ${objTree.files}/${objTree.symlinks}/${objTree.directories}` +
+      ` then ${objTreeAfter.files}/${objTreeAfter.symlinks}/${objTreeAfter.directories}` +
+      ' (files/symlinks/directories)\n' +
+    '  something wrote to node_modules while this ran. record against a quiescent tree.\n');
+  process.exit(10);
 }
 
 // Round 7, reported. `--any-toolchain` promised output that is "explicitly not
