@@ -660,6 +660,10 @@ function foldInstalledTree(strRoot) {
   // Round 38. Collected rather than thrown so the refusal can name every
   // escaping link at once, matching how special files are reported.
   const arrEscapingLinks = [];
+  // Round 39. Links whose resolution FAILED, which is a different diagnosis from
+  // a link that resolved somewhere it should not have and is reported separately
+  // so the two do not read as one problem.
+  const arrUnresolvedLinks = [];
   const strRealRoot = realpathSync(strRoot);
   // Round 4 backstop, corrected in round 5. The umask guard reads the RECORDING
   // process, so it cannot see a tree installed under a different umask in an
@@ -747,14 +751,51 @@ function foldInstalledTree(strRoot) {
         //
         // Resolved with realpathSync against the RESOLVED root, so a chain that
         // leaves the tree in two hops is caught and a legitimately symlinked
-        // node_modules root does not read as an escape. A dangling link resolves
-        // to nothing and is left to the sweep that already refuses it.
+        // node_modules root does not read as an escape.
+        //
+        // Round 39, reported by Codex. The previous version swallowed a failed
+        // resolution on the claim that "the quiescence sweep refuses it as a
+        // changed input". That claim was false, and the sentence writing it down
+        // is what made it look answered: the sweep lstat()s tree entries, and
+        // lstat reports the LINK's own inode, so a target that appears and
+        // disappears outside the tree never moves anything the sweep reads.
+        //
+        // Measured, with node_modules/eastasianwidth/vendor-helper.js pointing at
+        // an absent external path:
+        //   record run  (target absent)  -> exit 0, digest aa1d1b71c280, 0 refusals
+        //   build window (target present) -> the external file loads via require
+        //   verify run  (target absent)  -> exit 0, digest aa1d1b71c280
+        // `npm ls` reported the lockfile satisfied throughout, because the link
+        // is nested rather than a top-level package. Both a recording run and a
+        // verifying run agree at exit 0 while the code that actually loaded came
+        // from outside the digest.
+        //
+        // So a failed resolution refuses. Not only ENOENT: when resolution fails
+        // for ANY reason this fold cannot establish containment, and containment
+        // is the entire claim this guard makes. Refusing an unproven claim is the
+        // conservative reading, and it is the reading that does not have to be
+        // revisited when a new errno shows up.
         try {
           const strResolved = realpathSync(strPath);
           if (strResolved !== strRealRoot && !strResolved.startsWith(`${strRealRoot}/`)) {
-            arrEscapingLinks.push({ path: strChild, resolved: strResolved });
+            // Round 39, reported by Codex. The resolved target is NOT retained.
+            // It is chosen by whoever wrote the link, unbounded in length, and
+            // can carry a username, internal layout or a path-borne token into a
+            // CI log that outlives the run. The in-tree name is what an operator
+            // needs to act; `ls -l` on the tree answers "where did it point".
+            //
+            // Dropped at the point of COLLECTION rather than at the point of
+            // printing, which is the part that matters: rounds 35 through 38 were
+            // each a leak of a value that some earlier round had redacted at one
+            // print site while leaving it live in a variable. A value that was
+            // never stored cannot be printed by a later edit.
+            arrEscapingLinks.push({ path: strChild });
           }
-        } catch { /* dangling: the quiescence sweep refuses it as a changed input */ }
+        } catch (objError) {
+          // errno codes are a closed OS-defined set, so naming the code is safe
+          // in a way that naming the target is not.
+          arrUnresolvedLinks.push({ path: strChild, code: objError?.code ?? 'unknown' });
+        }
         continue;
       }
       if (objEntry.isDirectory()) {
@@ -935,6 +976,7 @@ function foldInstalledTree(strRoot) {
     specials: intSpecials,
     specialPaths: arrSpecialPaths,
     escapingLinks: arrEscapingLinks,
+    unresolvedLinks: arrUnresolvedLinks,
     modes: sortHistogram(objModeHistogram),
     directoryModes: sortHistogram(objDirectoryModeHistogram),
     rootMode: (intRootMode & 0o777).toString(8).padStart(3, '0'),
@@ -1821,13 +1863,38 @@ if (!boolAnyToolchain && objTree.escapingLinks.length > 0) {
     'supply-freeze: refusing to record digests for a tree whose links leave it.\n' +
     `  escaping links     ${objTree.escapingLinks.length} (expected 0)\n` +
     `${objTree.escapingLinks.slice(0, 10).map((objLink) =>
-      `    node_modules/${objLink.path} -> ${objLink.resolved}\n`).join('')}` +
+      `    node_modules/${objLink.path}\n`).join('')}` +
     (objTree.escapingLinks.length > 10
       ? `    ... and ${objTree.escapingLinks.length - 10} more\n` : '') +
+    '  each link above resolves to a path outside the tree root. the target is not\n' +
+    '  printed: it is chosen by whoever wrote the link and CI logs are retained, so\n' +
+    '  a target carrying a username, internal layout or a path-borne token would\n' +
+    '  outlive this run. run `ls -l` on the names above to see where they point.\n' +
     '  the fold hashes a link\'s target text, not the bytes behind it, so a target\n' +
     '  outside node_modules is code this digest does not cover and cannot detect\n' +
     '  changes to. npm ci installs package contents in place; a package directory\n' +
     '  that is a link to somewhere else did not come from the install.\n');
+  process.exit(11);
+}
+
+// Round 39, reported by Codex. A link this fold could not resolve is refused
+// rather than skipped. Containment is what the guard above asserts, and a link
+// whose resolution failed is one whose containment was never established --
+// including the case where the target is absent for exactly as long as this
+// script is looking at it, which is invisible to the lstat-based sweep.
+if (!boolAnyToolchain && objTree.unresolvedLinks.length > 0) {
+  process.stderr.write(
+    'supply-freeze: refusing to record digests for a tree with links it cannot resolve.\n' +
+    `  unresolved links   ${objTree.unresolvedLinks.length} (expected 0)\n` +
+    `${objTree.unresolvedLinks.slice(0, 10).map((objLink) =>
+      `    node_modules/${objLink.path} (${objLink.code})\n`).join('')}` +
+    (objTree.unresolvedLinks.length > 10
+      ? `    ... and ${objTree.unresolvedLinks.length - 10} more\n` : '') +
+    '  resolution failing means this fold could not establish that the link stays\n' +
+    '  inside the tree, so the containment the digest depends on is unproven rather\n' +
+    '  than satisfied. a target that is absent while this runs and restored after it\n' +
+    '  leaves the link text -- and therefore the digest -- completely unchanged.\n' +
+    '  reinstall with npm ci; npm ci does not create links it cannot resolve.\n');
   process.exit(11);
 }
 

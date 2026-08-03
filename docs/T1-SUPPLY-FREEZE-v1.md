@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `187c21db6b1e6b50a6358ab4f5b43224aa5624296ecd062be65aa99a3665ed24` | script `script.sha256` |
+| Freeze script SHA-256 | `2a83bc66cbf818de8098286df713ed74b65bb3485318b2e684ebbec4dc045540` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` | script `toolchain.platform` |
@@ -446,6 +446,7 @@ row, rather than leaving it to a sentence that has already been wrong once.
 | `10` | Recorded inputs changed while recording | **no** | something wrote to `node_modules` or a manifest during the run |
 | `11` | Tree contains special files | yes | a FIFO, socket or device node under `node_modules` |
 | `11` | Tree contains links that leave it | yes | a symlink under `node_modules` resolving outside it — typically a package directory replaced by a link to an external tree |
+| `11` | Tree contains links it cannot resolve | yes | a symlink under `node_modules` whose resolution fails for any reason, so containment is unproven rather than satisfied |
 
 A bypassed run marks its own output as explicitly not a freeze record — `freezeRecord: false`
 with the reasons listed — in both output formats.
@@ -593,6 +594,26 @@ exit `11`.
 The boundary is *where the link reaches*, not that it is a link, and it is checked against the
 fully resolved root so that a chain leaving in two hops is caught and a legitimately symlinked
 `node_modules` root is not mistaken for an escape.
+
+The refusal names the link's in-tree path and **not** its resolved target. The target is chosen by
+whoever wrote the link, is unbounded in length, and can carry a username, an internal directory
+layout or a path-borne token into a CI log that outlives the run — the same names-only rule this
+document states for the trust variables and the advisory registry. The target is dropped where it
+is *collected* rather than where it is printed, so no later edit to the refusal can reintroduce it.
+An operator with access to the tree recovers the target with `ls -l` on the name reported.
+
+**A symlink under `node_modules` whose resolution fails is refused, not skipped.** Containment is
+the claim the rule above makes, and a link that cannot be resolved is one whose containment was
+never established; an unproven claim is refused rather than assumed. This is deliberately *any*
+failure and not only a missing target, because the defect it replaces was precisely the assumption
+that one error class was harmless. Measured, with a nested link pointing at an absent external
+path: `npm ls` reports the lockfile satisfied — the link is nested, so the top-level dependency set
+still matches — both folds complete, and the run recorded a digest at exit `0` with no refusal. The
+target could then be created for exactly as long as the code needed to load and removed again, and
+a second run agreed at exit `0` with a byte-identical digest, because a link's *text* does not
+change when the thing it points at appears and disappears. The `lstat`-based quiescence sweep
+cannot see this: `lstat` reports the link's own inode and never the target's. Both such links are
+now refused with exit `11`, reporting the in-tree name and the `errno` code only.
 
 **The quiescence sweep follows a manifest's whole symlink chain, but not symlinked directory
 components.** Where a manifest resolves through several links — `package.json` → `mid` → `real` —
