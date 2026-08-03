@@ -119,6 +119,19 @@ const REVIEWED_NPM_CONFIG = Object.freeze({
   // that removes real coverage of a file npm writes and tools read, to dodge a
   // configuration problem the guard should simply catch.
   'omit-lockfile-registry-resolved': false,
+  // Round 19, reported. Pinning the registry URL pins where the request is
+  // ADDRESSED, not where it goes or who it trusts. npm honours `proxy`,
+  // `https-proxy` and the standard proxy environment variables for outgoing
+  // HTTPS, and `ca`, `cafile` and `strict-ssl` decide which certificates count
+  // -- so a TLS-intercepting proxy with a trusted custom CA can return a
+  // filtered, schema-valid audit while this script records the posture as having
+  // come from the public registry. The URL was checked and the transport was not.
+  proxy: null,
+  'https-proxy': null,
+  noproxy: [],
+  ca: null,
+  cafile: null,
+  'strict-ssl': true,
 });
 
 // The process umask the recorded tree was installed under.
@@ -296,7 +309,14 @@ function runNpmAllowingFailure(arrNpmArguments) {
     if (typeof objError.stdout === 'string' && objError.stdout.trim().startsWith('{')) {
       return objError.stdout;
     }
-    throw objError;
+    // Round 19, reported. Anything else was rethrown, so an audit terminated or
+    // failing before it wrote any JSON -- stderr only -- surfaced as exit 1 and a
+    // stack trace, while the refusal table calls an unreachable registry exit 5.
+    // Returning the failure text lets the parse guard classify it as what it is:
+    // not an audit report.
+    return typeof objError.stderr === 'string' && objError.stderr.trim()
+      ? objError.stderr
+      : `npm audit failed without output (${objError.code ?? 'unknown'})`;
   }
 }
 
@@ -744,6 +764,14 @@ function snapshotOrRefuse(strPath) {
   }
 }
 
+// Round 19, reported. This ceiling used to be captured after the snapshots and
+// after `npm ls`, so a manifest replaced after the snapshot and restored before
+// the ceiling escaped every check: the byte comparisons matched the restored
+// file, the sweep ignored a ctime that predated the ceiling, and `npm ls` had
+// validated the tree against the temporary lockfile in between. Captured before
+// the first read of anything recorded, the window closes.
+const intRecordingStartedAt = Date.now();
+
 const strPackageBefore = snapshotOrRefuse(strPackagePath);
 const strLockBefore = snapshotOrRefuse(strLockPath);
 
@@ -886,7 +914,13 @@ if (!boolAnyToolchain && !objRecord.matchesReviewedManifest) {
 // is the one question it answers that the byte fold cannot.
 const strTreeRoot = join(strWorkflowDirectory, 'node_modules');
 try {
-  runNpm(['ls', '--all', '--json']);
+  // Round 19, reported. This reloaded `omit` from whatever .npmrc exists when it
+  // starts, and every root dependency here is a dev dependency -- so `omit=dev`
+  // makes `npm ls` exit 0 against a tree that is missing entirely. Measured: no
+  // node_modules exits 1 plain, 0 under omit=dev, and 1 again with the inclusion
+  // named on the command line. Without this, an incomplete tree could be
+  // recorded with treeSatisfiesLockfile true.
+  runNpm(['ls', '--all', '--json', '--include=dev', '--include=optional', '--include=peer']);
   objRecord.treeSatisfiesLockfile = true;
 } catch {
   objRecord.treeSatisfiesLockfile = false;
@@ -944,10 +978,6 @@ if (!boolAnyToolchain && (!existsSync(strTreeRoot) || !objRecord.treeSatisfiesLo
     '  note that package-lock-only=true makes npm ci a no-op that reports success.\n');
   process.exit(7);
 }
-
-// Captured before anything under the tree is read, so it is a ceiling the
-// quiescence check below can compare every inode-change time against.
-const intRecordingStartedAt = Date.now();
 
 // Round 15, reported and confirmed. Both scans read the tree entry by entry, so
 // a concurrent delete between a readdir and the read that follows it raises
@@ -1150,6 +1180,17 @@ if (boolSkipAudit) {
   // Both tests now route through isPlainObject rather than repeating a
   // hand-written conjunction, so the two halves cannot drift apart again --
   // that asymmetry is what admitted `null` in the first place.
+  // Round 19, reported. Valid JSON whose root is `null` reached this line and
+  // threw before the shape refusal below could speak. The root is checked first
+  // now, with the same predicate every other shape test uses.
+  if (!isPlainObject(objAudit)) {
+    process.stderr.write(
+      'supply-freeze: npm audit did not return an audit report.\n' +
+      `  the report root is ${objAudit === null ? 'null' : typeof objAudit}, not an object\n` +
+      '  this is an endpoint or format failure, not an advisory posture; nothing is recorded.\n' +
+      '  pass --no-audit to record the lockfile-derived fields alone.\n');
+    process.exit(5);
+  }
   const objCounts = objAudit.metadata?.vulnerabilities;
   if (!Number.isInteger(objAudit.auditReportVersion)
     || !isPlainObject(objAudit.vulnerabilities)
