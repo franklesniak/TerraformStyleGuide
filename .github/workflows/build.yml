@@ -2,65 +2,525 @@ name: Build Style Guide Artifacts
 
 on:
   push:
-    branches:
-      - main
-    paths:
-      - 'STYLE_GUIDE.md'
-      - 'STYLE_GUIDE_RATIONALE.md'
+    branches: [main]
   pull_request:
-    branches:
-      - main
-    paths:
-      - 'STYLE_GUIDE.md'
-      - 'STYLE_GUIDE_RATIONALE.md'
+    branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
+  # This job runs repository-controlled code, so it uses no actions at all and
+  # holds no token scopes at all. Both halves are load-bearing, and the second
+  # is not sufficient on its own.
+  #
+  # permissions: {} governs the repository token. It does not govern
+  # ACTIONS_RUNTIME_TOKEN, which is the credential for the artifact and cache
+  # services. The runner sets that variable from the job's system connection,
+  # not from the permissions map: NodeScriptActionHandler.RunAsync assigns
+  # Environment["ACTIONS_RUNTIME_TOKEN"] unconditionally, before it decides
+  # whether it is running the action's pre, main, or post script. So every
+  # JavaScript action in a job -- including a post step that post-if defaults
+  # to always() -- runs as a process holding a credential this job cannot
+  # revoke, and actions/checkout's post step runs after the generator step has
+  # ended.
+  #
+  # A descendant the generator detached is still alive then, runs as the same
+  # user, and can read /proc/<pid>/environ of that process; ptrace(2) classes
+  # that read as PTRACE_MODE_READ, which the Yama LSM does not restrict at any
+  # ptrace_scope setting. It can also simply overwrite the action's own
+  # dist/index.js under _actions before the post step starts, because a SHA pin
+  # fixes what was downloaded and not what is on disk when the post step runs.
+  # GitHub's own guidance is that jobs "can interact with (and compromise)"
+  # each other by exactly this class of mechanism, so intra-runner isolation is
+  # not a boundary to build on.
+  #
+  # None of that can be defended from inside a step, and the credential cannot
+  # be scoped away. So the job simply contains nothing that receives it: no
+  # uses:, therefore no JavaScript action, therefore no process in this job
+  # ever holds the runtime token. The same removal closes the step
+  # communication channel for free -- with no post step there is nothing left
+  # in the job to consume a poisoned $GITHUB_ENV.
+  #
+  # The cost is that the checkout is done here rather than by the pinned
+  # action. The repository is public, so the fetch is anonymous and no
+  # credential is created at all, which is strictly less than the action needs;
+  # if the repository ever becomes private this fails loudly at the fetch
+  # rather than quietly restoring a credential. publish still uses the pinned
+  # action, because it runs no repository code.
+  verify:
     runs-on: ubuntu-latest
-    
+    permissions: {}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Generate style guide artifacts
+      - name: Acquire triggering revision without an action
+        id: acquire
         shell: pwsh
         run: |
-          ./.github/workflows/Generate-StyleGuideArtifacts.ps1
-      
-      - name: Check for changes
-        id: check_changes
-        shell: pwsh
-        run: |
-          $boolHasChanges = $false
-          $arrChangedFiles = @(git status --porcelain)
-          
-          if ($arrChangedFiles.Count -gt 0) {
-              $boolHasChanges = $true
-              Write-Host "Changes detected:"
-              git status --short
-          } else {
-              Write-Host "No changes detected"
+          $ErrorActionPreference = 'Stop'
+          # git reports absent state with a non-zero status in places this step
+          # accepts, so native-command error mapping is disabled the same way
+          # the other governed steps disable it and each status is classified
+          # explicitly instead.
+          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
+              $PSNativeCommandUseErrorActionPreference = $false
           }
-          
-          # Output for GitHub Actions
-          "has_changes=$($boolHasChanges.ToString().ToLower())" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-      
-      - name: Commit and push changes
-        if: github.event_name == 'push' && steps.check_changes.outputs.has_changes == 'true'
+
+          # Every value below is set by the runner before any repository code
+          # executes, and is read from the environment rather than expanded as
+          # a workflow expression, because no governed script step in this
+          # repository contains an expression at all.
+          $strServerUrl = $env:GITHUB_SERVER_URL
+          $strRepository = $env:GITHUB_REPOSITORY
+          $strSha = $env:GITHUB_SHA
+          if ($strServerUrl -cne 'https://github.com') {
+              throw 'acquire: the runner named an unexpected server'
+          }
+          if ($strRepository -cnotmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {
+              throw 'acquire: the triggering repository is not a plain owner/name pair'
+          }
+          # A full 40-hex commit is required rather than a ref. A ref would let
+          # the fetch resolve to whatever the ref points at when the fetch runs,
+          # which for a push to a busy branch is not necessarily the revision
+          # that triggered this run.
+          if ($strSha -cnotmatch '^[0-9a-f]{40}$') {
+              throw 'acquire: the triggering revision is not a full commit hash'
+          }
+
+          # The workspace is proven empty rather than cleaned. Cleaning would
+          # decide what to delete from state that is already present, while an
+          # emptiness assertion has no such input.
+          if (@([System.IO.Directory]::EnumerateFileSystemEntries($PWD.Path)).Count -ne 0) {
+              throw 'acquire: the workspace is not empty'
+          }
+
+          # Resolved from a fixed candidate list rather than by name. Nothing has
+          # executed in this step yet, so name resolution is not attacker-
+          # influenced here -- but PowerShell aliases curl and wget to
+          # Invoke-WebRequest on the Desktop edition, this repository already
+          # pins the Git executable this way in the verify step, and relying on
+          # an alias being absent is a property of the host rather than
+          # something this file asserts. Constant, so nothing later can rebind
+          # it.
+          $strResolvedGit = @('/usr/bin/git', '/bin/git') | Where-Object { [System.IO.File]::Exists($_) } | Select-Object -First 1
+          if ([string]::IsNullOrEmpty($strResolvedGit)) { throw 'acquire: Git was not resolved as an application' }
+          New-Variable -Name strGitPath -Value $strResolvedGit -Option Constant
+
+          & $strGitPath init --quiet .
+          if ($LASTEXITCODE -ne 0) { throw "acquire: git init exited $LASTEXITCODE" }
+          & $strGitPath remote add origin "$strServerUrl/$strRepository"
+          if ($LASTEXITCODE -ne 0) { throw "acquire: git remote add exited $LASTEXITCODE" }
+          # Fetching the commit itself, not a ref that names it. No credential
+          # is supplied and none is configured, so nothing is persisted for the
+          # next step to have to clean up.
+          & $strGitPath fetch --depth 1 --no-tags --no-recurse-submodules origin $strSha
+          if ($LASTEXITCODE -ne 0) { throw "acquire: git fetch exited $LASTEXITCODE" }
+          & $strGitPath checkout --quiet --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw "acquire: git checkout exited $LASTEXITCODE" }
+          $strHead = (& $strGitPath rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $strHead -cne $strSha) {
+              throw 'acquire: the checked out revision is not the triggering revision'
+          }
+          Write-Host "acquire: anonymous shallow checkout of $strSha"
+
+      - name: Verify checkout credential cleanup
+        id: verify-checkout-credentials
+        shell: pwsh
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add copilot-instructions.md terraform.instructions.md STYLE_GUIDE_CHAT.md STYLE_GUIDE_FULL.md
-          git commit -m "chore: update generated style guide artifacts [skip ci]"
-          git push
-      
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+          $ErrorActionPreference = 'Stop'
+          # git config exits 1 when a queried key is absent, which is the secure
+          # expected state this step asserts. If the runner enables native-command
+          # error mapping, that accepted status would terminate the step before the
+          # explicit capture below runs, so it is disabled the same way
+          # markdownlint.yml disables it.
+          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
+              $PSNativeCommandUseErrorActionPreference = $false
+          }
+          # Resolved here too. Constants do not cross step boundaries, and this
+          # step asserts a credential property, so the executable it asks must
+          # not be chosen by name resolution either.
+          $strResolvedGit = @('/usr/bin/git', '/bin/git') | Where-Object { [System.IO.File]::Exists($_) } | Select-Object -First 1
+          if ([string]::IsNullOrEmpty($strResolvedGit)) { throw 'credential-policy: Git was not resolved as an application' }
+          New-Variable -Name strGitPath -Value $strResolvedGit -Option Constant
+          $arrRemoteUrls = @(& $strGitPath remote get-url --all origin)
+          if ($LASTEXITCODE -ne 0 -or $arrRemoteUrls.Count -ne 1) {
+              throw 'credential-policy: unable to resolve exactly one origin URL'
+          }
+          if ($arrRemoteUrls[0] -notmatch '^https://github\.com/[^/@]+/[^/@]+(?:\.git)?$') {
+              throw 'credential-policy: origin is not a credential-free GitHub HTTPS URL'
+          }
+          $arrHelpers = @(& $strGitPath config --local --get-all credential.helper)
+          $intHelperExit = $LASTEXITCODE
+          $global:LASTEXITCODE = 0
+          if (($intHelperExit -ne 0 -and $intHelperExit -ne 1) -or $arrHelpers.Count -ne 0) {
+              throw 'credential-policy: a local credential helper is configured'
+          }
+          $arrAuthorizationKeys = @(& $strGitPath config --local --name-only --get-regexp '^http\..*\.extraheader$')
+          $intAuthorizationExit = $LASTEXITCODE
+          $global:LASTEXITCODE = 0
+          if (($intAuthorizationExit -ne 0 -and $intAuthorizationExit -ne 1) -or $arrAuthorizationKeys.Count -ne 0) {
+              throw 'credential-policy: persisted HTTP authorization is configured'
+          }
+
+      - name: Generate and verify committed artifacts
+        id: generate-and-verify
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $arrArtifacts = @(
+              'STYLE_GUIDE_CHAT.md'
+              'STYLE_GUIDE_FULL.md'
+              'copilot-instructions.md'
+              'terraform.instructions.md'
+          )
+
+          function Invoke-GitRaw {
+              param([string[]]$Arguments)
+              $objStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+              # Resolved once before the generator ran, and held in a constant.
+              # Resolving here instead would consult PATH and the command table
+              # after repository code has executed, and both are things that
+              # code can steer. See the resolution below.
+              $objStartInfo.FileName = $strGitPath
+              $objStartInfo.UseShellExecute = $false
+              $objStartInfo.RedirectStandardOutput = $true
+              $objStartInfo.RedirectStandardError = $true
+              # Git loads system, global, and repository-local configuration on
+              # every invocation, and settings such as core.fsmonitor name a
+              # program Git runs to decide which paths changed. The digest taken
+              # across the generator covers the repository-local file only, so
+              # the other two locations are removed rather than inspected: a
+              # generator that writes core.fsmonitor to ~/.gitconfig would
+              # otherwise steer every probe below while .git/config stayed
+              # byte-identical. With local digested and these two neutralised,
+              # all three documented configuration sources are accounted for.
+              $objStartInfo.Environment['GIT_CONFIG_GLOBAL'] = '/dev/null'
+              $objStartInfo.Environment['GIT_CONFIG_NOSYSTEM'] = '1'
+              foreach ($strArgument in $Arguments) {
+                  [void]$objStartInfo.ArgumentList.Add($strArgument)
+              }
+              $objProcess = [System.Diagnostics.Process]::new()
+              $objProcess.StartInfo = $objStartInfo
+              $objOutput = [System.IO.MemoryStream]::new()
+              try {
+                  if (-not $objProcess.Start()) { throw 'native-tool: Git did not start' }
+                  # Both redirected pipes must drain concurrently. Reading one to
+                  # completion first deadlocks when the child fills the other.
+                  $objCopyTask = $objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)
+                  $objErrorTask = $objProcess.StandardError.ReadToEndAsync()
+                  $objCopyTask.GetAwaiter().GetResult()
+                  $strError = $objErrorTask.GetAwaiter().GetResult()
+                  $objProcess.WaitForExit()
+                  return [pscustomobject]@{ ExitCode = $objProcess.ExitCode; Bytes = $objOutput.ToArray(); Error = $strError }
+              } finally {
+                  $objOutput.Dispose()
+                  $objProcess.Dispose()
+              }
+          }
+
+          function ConvertFrom-NulRecords {
+              param([byte[]]$Bytes)
+              if ($Bytes.Length -eq 0) { return @() }
+              if ($Bytes[$Bytes.Length - 1] -ne 0) { throw 'git-paths: missing final NUL' }
+              $arrRecords = @()
+              $intStart = 0
+              for ($intIndex = 0; $intIndex -lt $Bytes.Length; $intIndex++) {
+                  if ($Bytes[$intIndex] -eq 0) {
+                      if ($intIndex -eq $intStart) { throw 'git-paths: empty or duplicate record' }
+                      $arrRecord = [byte[]]::new($intIndex - $intStart)
+                      [System.Array]::Copy($Bytes, $intStart, $arrRecord, 0, $arrRecord.Length)
+                      $arrRecords += ,$arrRecord
+                      $intStart = $intIndex + 1
+                  }
+              }
+              return $arrRecords
+          }
+
+          function Assert-AllowedPaths {
+              param([byte[][]]$Records, [string[]]$Allowed, [string]$Surface)
+              $objUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
+              $arrObserved = @()
+              foreach ($arrRecord in $Records) {
+                  try { $strPath = $objUtf8.GetString($arrRecord) } catch { throw "git-paths: undecodable $Surface record" }
+                  $arrRoundTrip = $objUtf8.GetBytes($strPath)
+                  if ([Convert]::ToBase64String($arrRecord) -cne [Convert]::ToBase64String($arrRoundTrip)) {
+                      throw "git-paths: ambiguous $Surface record"
+                  }
+                  if ($arrObserved -ccontains $strPath) { throw "git-paths: duplicate $Surface record" }
+                  if ($Allowed -cnotcontains $strPath) { throw "git-paths: unexpected $Surface path" }
+                  $arrObserved += $strPath
+              }
+              return @($arrObserved | Sort-Object -CaseSensitive)
+          }
+
+          # Everything below this line runs after repository-controlled code, so
+          # the tool it uses is fixed before that code runs. A fixed candidate
+          # list rather than a PATH lookup, because PATH is writable by anything
+          # that executes first; Constant rather than an ordinary variable,
+          # because a script invoked with the call operator runs in a child
+          # scope whose parent is this block and can therefore reassign an
+          # ordinary variable here through Set-Variable -Scope 1.
+          $strResolvedGit = @('/usr/bin/git', '/bin/git') | Where-Object { [System.IO.File]::Exists($_) } | Select-Object -First 1
+          if ([string]::IsNullOrEmpty($strResolvedGit)) { throw 'native-tool: Git application was not resolved' }
+          New-Variable -Name strGitPath -Value $strResolvedGit -Option Constant
+
+          # Pinning the executable does not pin what it will do. Git loads
+          # repository-local configuration on every invocation regardless of
+          # which binary runs, and core.fsmonitor names a program Git executes
+          # to decide which paths changed -- a hostile value makes the probes
+          # below report a clean tree over modified files. Hooks are the same
+          # shape of problem. Rather than enumerate the dangerous keys, the
+          # repository's own control surface is digested and required to be
+          # unchanged: the generator has no legitimate reason to touch .git.
+          function Get-GitControlSurfaceDigest {
+              $strGitDirectory = [System.IO.Path]::Combine($PWD.Path, '.git')
+              if (-not [System.IO.Directory]::Exists($strGitDirectory)) { throw 'git-state: .git is not a directory' }
+              # Components are collected first, then written length-prefixed.
+              # Concatenating them raw would not be injective: renaming
+              # pre-commit.sample to pre-commit and prepending '.sample' to its
+              # content produces the identical byte stream, turning an inert
+              # sample into an active hook with the digest unchanged. Framing
+              # each component with its length removes the boundary ambiguity,
+              # so the encoding determines the contents uniquely.
+              $arrComponents = [System.Collections.Generic.List[byte[]]]::new()
+              $strConfigPath = [System.IO.Path]::Combine($strGitDirectory, 'config')
+              if ([System.IO.File]::Exists($strConfigPath)) {
+                  $arrComponents.Add([System.IO.File]::ReadAllBytes($strConfigPath))
+              } else {
+                  $arrComponents.Add([byte[]]::new(0))
+              }
+              $strHooksDirectory = [System.IO.Path]::Combine($strGitDirectory, 'hooks')
+              if ([System.IO.Directory]::Exists($strHooksDirectory)) {
+                  foreach ($strHook in ([System.IO.Directory]::GetFiles($strHooksDirectory) | Sort-Object -CaseSensitive)) {
+                      $arrComponents.Add([System.Text.Encoding]::UTF8.GetBytes([System.IO.Path]::GetFileName($strHook)))
+                      $arrComponents.Add([System.IO.File]::ReadAllBytes($strHook))
+                  }
+              }
+              $objSha = [System.Security.Cryptography.SHA256]::Create()
+              $objBuffer = [System.IO.MemoryStream]::new()
+              try {
+                  $arrCount = [System.BitConverter]::GetBytes([long]$arrComponents.Count)
+                  if ([System.BitConverter]::IsLittleEndian) { [System.Array]::Reverse($arrCount) }
+                  $objBuffer.Write($arrCount, 0, $arrCount.Length)
+                  foreach ($arrComponent in $arrComponents) {
+                      $arrLength = [System.BitConverter]::GetBytes([long]$arrComponent.Length)
+                      if ([System.BitConverter]::IsLittleEndian) { [System.Array]::Reverse($arrLength) }
+                      $objBuffer.Write($arrLength, 0, $arrLength.Length)
+                      $objBuffer.Write($arrComponent, 0, $arrComponent.Length)
+                  }
+                  return [Convert]::ToBase64String($objSha.ComputeHash($objBuffer.ToArray()))
+              } finally {
+                  $objBuffer.Dispose()
+                  $objSha.Dispose()
+              }
+          }
+          $strControlSurfaceBefore = Get-GitControlSurfaceDigest
+
+          # GitHub documents that the step writing these files "does not have
+          # access to the new value, but all subsequent steps in a job will have
+          # access". This is the last authored step, which is why publishing
+          # moved to a job that runs no repository code -- but it is not the
+          # last thing that executes. actions/checkout registers a post action
+          # and post-if defaults to always(), so a Node process runs at the end
+          # of this job holding the checkout inputs, and a descendant that
+          # writes these files after this step exits reaches it. That is why
+          # this job carries no token scopes: the channel cannot be closed from
+          # inside the step, so the credential on the other end of it is made
+          # worthless instead.
+          #
+          # The assertion below is a floor, not a ceiling. It catches a
+          # generator that writes during its own run, and it is why appending
+          # an authored step here would be unsafe -- the validator asserts the
+          # step order for that reason. It cannot catch a write that happens
+          # after the step ends, and it does not claim to.
+          New-Variable -Name arrChannelPaths -Value @($env:GITHUB_ENV, $env:GITHUB_PATH) -Option Constant
+
+          # Every Git probe below reports on state the generator can move. It can
+          # stage and commit its own output, which advances HEAD and empties the
+          # working, cached, and untracked sets; it can set the advisory
+          # assume-unchanged bit, which Git documents as "not working as
+          # expected" for exactly this purpose. Either makes a stale artifact
+          # look clean.
+          #
+          # The properties actually needed are about bytes on disk, so they are
+          # measured on disk. If the committed artifacts already equal generator
+          # output, running the generator changes nothing -- so the assertion is
+          # that the generator is a no-op on the working tree. One comparison
+          # covers both "no drift" and "nothing else was touched", and it asks
+          # Git nothing. A map is compared entry by entry rather than by a
+          # combined digest, so there is no encoding to get wrong.
+          #
+          # What this establishes is the state of the tree at the moment the
+          # step ends, and no in-process check can establish more than that: a
+          # descendant the generator detached is still running and can rewrite
+          # any of it afterwards. That is why this job publishes nothing. The
+          # bytes that reach consumers come from the commit, fetched by a job
+          # that never runs the generator, so the window this comparison cannot
+          # cover has nothing downstream to act on.
+          # The walk descends one directory at a time rather than calling
+          # EnumerateFiles with AllDirectories, because that overload reports
+          # files and never the directories it passed through: given a link to
+          # somewhere outside the workspace it happily yields the files behind
+          # it, and there is no entry to refuse. Holding the frontier here means
+          # a link is seen before anything is read through it.
+          #
+          # A link is refused rather than skipped. Skipping drops it from both
+          # maps, so a generator that creates one leaves the comparison looking
+          # exactly like a generator that did nothing; refusing keeps the signal.
+          # The repository tracks no links, so this cannot fire on honest input.
+          function Get-WorktreeFileDigests {
+              $strRoot = $PWD.Path
+              $strGitDirectory = [System.IO.Path]::Combine($strRoot, '.git')
+              $objMap = [System.Collections.Generic.SortedDictionary[string, string]]::new([System.StringComparer]::Ordinal)
+              $objSha = [System.Security.Cryptography.SHA256]::Create()
+              $objPending = [System.Collections.Generic.Stack[string]]::new()
+              $objPending.Push($strRoot)
+              try {
+                  while ($objPending.Count -ne 0) {
+                      foreach ($strEntry in [System.IO.Directory]::EnumerateFileSystemEntries($objPending.Pop())) {
+                          $objAttributes = [System.IO.File]::GetAttributes($strEntry)
+                          if (($objAttributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                              throw 'worktree: the working tree contains a link'
+                          }
+                          if (($objAttributes -band [System.IO.FileAttributes]::Directory) -ne 0) {
+                              if ($strEntry -cne $strGitDirectory) { $objPending.Push($strEntry) }
+                          } else {
+                              $strRelative = $strEntry.Substring($strRoot.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar)
+                              # Length comes from stat, which answers for a FIFO
+                              # immediately, while reading one never returns at
+                              # all. Both an empty regular file and a FIFO digest
+                              # as empty: correct for the first, and it turns the
+                              # second from a step that hangs to the job timeout
+                              # into a mismatch against a non-empty artifact.
+                              # Content is streamed rather than loaded whole, so
+                              # a large file costs a buffer instead of its size.
+                              $objFile = [System.IO.FileInfo]::new($strEntry)
+                              if ($objFile.Length -eq 0) {
+                                  $objMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash([byte[]]::new(0)))
+                              } else {
+                                  $objStream = [System.IO.File]::OpenRead($strEntry)
+                                  try {
+                                      $objMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash($objStream))
+                                  } finally { $objStream.Dispose() }
+                              }
+                          }
+                      }
+                  }
+              } finally { $objSha.Dispose() }
+              return $objMap
+          }
+          $objWorktreeBefore = Get-WorktreeFileDigests
+
+          # The generator runs in its own process, not in this session. In-session
+          # it could shadow a cmdlet with a function, reassign a variable in this
+          # scope, or prepend a directory to PATH, and every check below would
+          # then be reading what it chose. A process boundary removes the class
+          # rather than naming its members: a child process cannot reach this
+          # session's functions, variables, or environment.
+          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1
+          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }
+
+          if ((Get-GitControlSurfaceDigest) -cne $strControlSurfaceBefore) {
+              throw 'git-state: the generator changed repository Git configuration or hooks'
+          }
+
+          foreach ($strChannel in $arrChannelPaths) {
+              if ([string]::IsNullOrEmpty($strChannel)) { throw 'runner-state: a step communication file path is unset' }
+              if ([System.IO.FileInfo]::new($strChannel).Length -ne 0) {
+                  throw 'runner-state: the generator wrote to a runner step communication file'
+              }
+          }
+
+          # The authoritative drift and blast-radius gate. The Git probes that
+          # follow are retained for their path-level diagnostics, but this is the
+          # check that decides, because it reads bytes rather than asking Git.
+          $objWorktreeAfter = Get-WorktreeFileDigests
+          $arrChanged = [System.Collections.Generic.List[string]]::new()
+          foreach ($strPath in $objWorktreeBefore.Keys) {
+              if ((-not $objWorktreeAfter.ContainsKey($strPath)) -or ($objWorktreeAfter[$strPath] -cne $objWorktreeBefore[$strPath])) {
+                  $arrChanged.Add($strPath)
+              }
+          }
+          foreach ($strPath in $objWorktreeAfter.Keys) {
+              if (-not $objWorktreeBefore.ContainsKey($strPath)) { $arrChanged.Add($strPath) }
+          }
+          if ($arrChanged.Count -ne 0) {
+              $arrOutside = @($arrChanged | Where-Object { $arrArtifacts -cnotcontains $_ } | Sort-Object -CaseSensitive)
+              if ($arrOutside.Count -ne 0) {
+                  throw "git-state: the generator changed $($arrOutside.Count) path(s) outside the four generated artifacts"
+              }
+              throw 'generated-artifacts: committed artifacts do not match generator output. Run ./.github/workflows/Generate-StyleGuideArtifacts.ps1 and commit the four regenerated files.'
+          }
+
+          $objWorking = Invoke-GitRaw @('diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--')
+          $objStaged = Invoke-GitRaw @('diff', '--cached', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--')
+          $objUntracked = Invoke-GitRaw @('ls-files', '--others', '--exclude-standard', '-z', '--')
+          foreach ($objResult in @($objWorking, $objStaged, $objUntracked)) {
+              if ($objResult.ExitCode -ne 0) { throw "native-tool: Git path query failed with exit $($objResult.ExitCode)" }
+          }
+          $arrWorking = Assert-AllowedPaths (ConvertFrom-NulRecords $objWorking.Bytes) $arrArtifacts 'working'
+          $arrStaged = Assert-AllowedPaths (ConvertFrom-NulRecords $objStaged.Bytes) @() 'staged'
+          $arrUntracked = Assert-AllowedPaths (ConvertFrom-NulRecords $objUntracked.Bytes) @() 'untracked'
+          if ($arrStaged.Count -ne 0 -or $arrUntracked.Count -ne 0) { throw 'git-paths: checkout is not clean' }
+
+          $objDiff = Invoke-GitRaw (@('diff', '--no-ext-diff', '--no-textconv', '--quiet', '--') + $arrArtifacts)
+          if ($objDiff.ExitCode -ne 0 -and $objDiff.ExitCode -ne 1) {
+              throw "native-tool: git diff failed with exit $($objDiff.ExitCode)"
+          }
+          # Status 1 means the committed artifacts differ from what the generator
+          # produces. While a promotion writer existed, recording that and
+          # continuing was coherent: the writer committed the regenerated bytes,
+          # and failing here would have skipped it, blocking the very promotion
+          # that resolved the drift. Nothing commits them now. Tolerating status 1
+          # would leave the repository permanently stale behind a green check,
+          # which is worse than having no check at all -- it reports that the
+          # committed artifacts were verified when they were only inspected.
+          if ($objDiff.ExitCode -eq 1) {
+              throw 'generated-artifacts: committed artifacts do not match generator output. Run ./.github/workflows/Generate-StyleGuideArtifacts.ps1 and commit the four regenerated files.'
+          }
+          Write-Host 'generated-artifacts: committed bytes match generator output'
+
+  # Publishing lives in its own job because the generator's descendants outlive
+  # the generator. The process boundary makes the call synchronous, not the work:
+  # a detached grandchild that waits for this step to exit sees a verification
+  # that already passed and a worktree it can still write. setsid(2) states that
+  # a process calling it "will be the only process in the new process group and
+  # in the new session", so killing the generator's process group does not reach
+  # a descendant that opts out of it, and the runner's own orphan sweep happens
+  # at the end of the job -- after every step that would consume the bytes.
+  #
+  # So nothing that runs the generator publishes anything. This job runs no
+  # repository code at all: two pinned actions, no run: script anywhere, which
+  # the validator enforces rather than trusts. It gets the artifacts the only
+  # way they cannot be tampered with -- a fresh checkout of the triggering
+  # revision, on a different machine, from an immutable commit. needs: verify
+  # means it only runs once verify proved those committed bytes equal generator
+  # output, so what is published is exactly what was verified.
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out triggering revision
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          token: ${{ github.token }}
+          persist-credentials: false
+          fetch-depth: 1
+          fetch-tags: false
+          show-progress: false
+          lfs: false
+          submodules: false
+          clean: true
+          set-safe-directory: true
+          allow-unsafe-pr-checkout: false
+
+      - name: Upload verified generated artifacts
+        id: upload-generated
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: style-guide-artifacts
           path: |
@@ -68,3 +528,8 @@ jobs:
             terraform.instructions.md
             STYLE_GUIDE_CHAT.md
             STYLE_GUIDE_FULL.md
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 6
+          overwrite: false
+          include-hidden-files: false

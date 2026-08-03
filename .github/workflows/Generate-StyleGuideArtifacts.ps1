@@ -16,7 +16,384 @@ This script reads STYLE_GUIDE.md and creates four derived files:
 
 .NOTES
 This script generates Terraform style guide artifacts for this repository.
+Version: 1.0.20260802.3
 #>
+
+$script:strRepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path -Path $PSScriptRoot -ChildPath '../..'))
+function Get-StyleGuideFileSha256 {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$LiteralPath
+    )
+
+    $objStream = $null
+    $objSha256 = $null
+    try {
+        $objStream = New-Object System.IO.FileStream(
+            $LiteralPath,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::Read
+        )
+        $objSha256 = [System.Security.Cryptography.SHA256]::Create()
+        return ([System.BitConverter]::ToString($objSha256.ComputeHash($objStream))).Replace('-', '').ToLowerInvariant()
+    } finally {
+        if ($null -ne $objSha256) {
+            $objSha256.Dispose()
+        }
+        if ($null -ne $objStream) {
+            $objStream.Dispose()
+        }
+    }
+}
+
+function Assert-StyleGuideOrdinaryPath {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$LiteralPath,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Directory', 'File')]
+        [string]$ExpectedType
+    )
+
+    $objAttributes = [System.IO.File]::GetAttributes($LiteralPath)
+    if (($objAttributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw [System.IO.IOException]::new('A link or reparse point is not permitted.')
+    }
+
+    $boolIsDirectory = (($objAttributes -band [System.IO.FileAttributes]::Directory) -ne 0)
+    if (($ExpectedType -eq 'Directory' -and -not $boolIsDirectory) -or
+        ($ExpectedType -eq 'File' -and $boolIsDirectory)) {
+        throw [System.IO.IOException]::new('The path has an unexpected filesystem type.')
+    }
+}
+
+function Assert-StyleGuideTrackedDestination {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationLeaf
+    )
+
+    # Module-qualified. PowerShell resolves functions ahead of cmdlets, so an
+    # unqualified Get-Command is itself interceptable by a function of that
+    # name -- confirmed: with one defined, the unqualified call returned a
+    # chosen path while the qualified call returned /usr/bin/git. CI is not
+    # exposed, because the workflow starts this script with pwsh -NoProfile
+    # -File in a fresh process, but a contributor running it inside an
+    # existing session is. The workflow policy already refuses Get-Command in
+    # the step that invokes this script, and the script it invokes should not
+    # be doing what that rule forbids.
+    $arrGitCommands = @(Microsoft.PowerShell.Core\Get-Command -Name 'git' -CommandType Application -ErrorAction Stop)
+    if ($arrGitCommands.Count -eq 0) {
+        throw [System.IO.IOException]::new('Git could not be resolved as an application.')
+    }
+    $strGitPath = $arrGitCommands[0].Source
+    $arrTrackedPath = @(& $strGitPath --no-optional-locks -C $script:strRepositoryRoot ls-files --error-unmatch -- $DestinationLeaf 2>$null)
+    $intGitExit = $LASTEXITCODE
+    if ($intGitExit -ne 0 -or $arrTrackedPath.Count -ne 1 -or $arrTrackedPath[0] -cne $DestinationLeaf) {
+        throw [System.IO.IOException]::new('The destination is not the one exact tracked path.')
+    }
+}
+
+function Write-StyleGuideArtifact {
+    param (
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('copilot', 'terraform-instructions', 'chat', 'full')]
+        [string]$ArtifactId,
+
+        [Parameter(Mandatory = $true)]
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$DestinationPath,
+
+        [Parameter(Mandatory = $true)]
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Content
+    )
+
+    $hashtableArtifactLeaves = @{
+        'copilot'                = 'copilot-instructions.md'
+        'terraform-instructions' = 'terraform.instructions.md'
+        'chat'                   = 'STYLE_GUIDE_CHAT.md'
+        'full'                   = 'STYLE_GUIDE_FULL.md'
+    }
+
+    $strDestinationLeaf = $hashtableArtifactLeaves[$ArtifactId]
+    $strExpectedPath = [System.IO.Path]::GetFullPath((Join-Path -Path $script:strRepositoryRoot -ChildPath $strDestinationLeaf))
+    $strPhase = 'path-validation'
+    $strTemporaryPath = $null
+    $objTemporaryStream = $null
+    $boolTemporaryCreated = $false
+    $boolReplaceReturned = $false
+    $boolDestinationExists = $false
+    $intOriginalLength = $null
+    $strOriginalSha256 = $null
+
+    try {
+        if ($null -eq $DestinationPath) {
+            throw [System.ArgumentNullException]::new('DestinationPath')
+        }
+        if ($DestinationPath.Length -eq 0) {
+            throw [System.ArgumentException]::new('The destination path is empty.')
+        }
+        if ($DestinationPath.Trim().Length -eq 0) {
+            throw [System.ArgumentException]::new('The destination path is whitespace-only.')
+        }
+        foreach ($chrPath in $DestinationPath.ToCharArray()) {
+            if ([char]::IsControl($chrPath) -or ([System.IO.Path]::GetInvalidPathChars() -contains $chrPath)) {
+                throw [System.ArgumentException]::new('The destination path contains a control or malformed character.')
+            }
+        }
+        if ([System.Management.Automation.WildcardPattern]::ContainsWildcardCharacters($DestinationPath)) {
+            throw [System.ArgumentException]::new('Wildcard syntax is not permitted.')
+        }
+
+        $boolIsWindows = ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT)
+        $boolIsWindowsDrivePath = ($DestinationPath -match '^[A-Za-z]:[\\/]')
+        if ($DestinationPath -match '^[^:]+::' -or
+            (($DestinationPath -match '^[A-Za-z][A-Za-z0-9_-]*:') -and -not $boolIsWindowsDrivePath)) {
+            throw [System.ArgumentException]::new('Provider-qualified syntax is not permitted.')
+        }
+        if (($boolIsWindows -and -not ($boolIsWindowsDrivePath -or $DestinationPath -match '^\\\\')) -or
+            (-not $boolIsWindows -and -not $DestinationPath.StartsWith('/'))) {
+            throw [System.ArgumentException]::new('The destination path is not fully qualified.')
+        }
+
+        $objProvider = $null
+        $objDrive = $null
+        $strResolvedPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+            $DestinationPath,
+            [ref]$objProvider,
+            [ref]$objDrive
+        )
+        if ($null -eq $objProvider -or $objProvider.Name -cne 'FileSystem') {
+            throw [System.ArgumentException]::new('Only the FileSystem provider is permitted.')
+        }
+
+        $strResolvedPath = [System.IO.Path]::GetFullPath($strResolvedPath)
+        $objPathComparison = if ($boolIsWindows) {
+            [System.StringComparison]::OrdinalIgnoreCase
+        } else {
+            [System.StringComparison]::Ordinal
+        }
+        if (-not [string]::Equals($strResolvedPath, $strExpectedPath, $objPathComparison)) {
+            throw [System.ArgumentException]::new('The artifact ID and destination path do not match.')
+        }
+        if ($null -eq $Content) {
+            throw [System.ArgumentNullException]::new('Content')
+        }
+
+        Assert-StyleGuideOrdinaryPath -LiteralPath $script:strRepositoryRoot -ExpectedType 'Directory'
+
+        # A tracked artifact that has been deleted from the working tree is an
+        # ordinary state -- a bad merge, a stray clean -- and the build
+        # workflow's drift failure tells contributors to repair it by running
+        # this generator. Asserting the destination is an existing ordinary file
+        # before anything is written made that instruction unfollowable: the
+        # run failed at path-validation and created nothing. So absence is now
+        # a state this writer handles rather than a precondition it demands.
+        #
+        # Probed with GetAttributes, not FileInfo.LinkTarget. LinkTarget is
+        # .NET 6 and later, while this script declares #Requires -Version 5.1,
+        # and on Windows PowerShell 5.1 the property does not exist. That is
+        # not a crash: this script sets no Set-StrictMode, and PowerShell
+        # answers a missing property with $null rather than throwing --
+        # confirmed on this runner -- so `$null -ne $objOriginalInfo.LinkTarget`
+        # would have evaluated False for every path on 5.1 and skipped the link
+        # rejection entirely. A guard that silently stops guarding on one
+        # edition is worse than one that fails loudly.
+        #
+        # GetAttributes exists on every supported edition and separates the
+        # three cases on its own -- also confirmed here: it throws
+        # FileNotFoundException (or DirectoryNotFoundException, when a parent
+        # is missing) for an absent path, and for a dangling symlink it
+        # *returns* attributes carrying ReparsePoint rather than throwing. So a
+        # link of either kind reaches Assert-StyleGuideOrdinaryPath below and is
+        # refused there, and only genuine absence is treated as absence.
+        $boolDestinationExists = $true
+        try {
+            $null = [System.IO.File]::GetAttributes($strExpectedPath)
+        } catch [System.IO.FileNotFoundException] {
+            $boolDestinationExists = $false
+        } catch [System.IO.DirectoryNotFoundException] {
+            $boolDestinationExists = $false
+        }
+        $objOriginalInfo = $null
+        if ($boolDestinationExists) {
+            Assert-StyleGuideOrdinaryPath -LiteralPath $strExpectedPath -ExpectedType 'File'
+            $objOriginalInfo = New-Object System.IO.FileInfo($strExpectedPath)
+        }
+        # Unconditional. git ls-files reads the index, not the working tree, so
+        # a deleted artifact is still the one exact tracked path -- confirmed:
+        # --error-unmatch exits 0 and returns the leaf for a deleted file. The
+        # identity check the previous round added is therefore not weakened by
+        # admitting absence; a path that was never tracked is still refused.
+        Assert-StyleGuideTrackedDestination -DestinationLeaf $strDestinationLeaf
+        $intOriginalLength = if ($boolDestinationExists) { $objOriginalInfo.Length } else { $null }
+        $strOriginalSha256 = if ($boolDestinationExists) {
+            Get-StyleGuideFileSha256 -LiteralPath $strExpectedPath
+        } else {
+            $null
+        }
+
+        $objUtf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        $arrExpectedBytes = $objUtf8NoBom.GetBytes($Content)
+        $objExpectedSha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $strExpectedSha256 = ([System.BitConverter]::ToString($objExpectedSha256.ComputeHash($arrExpectedBytes))).Replace('-', '').ToLowerInvariant()
+        } finally {
+            $objExpectedSha256.Dispose()
+        }
+
+        $strPhase = 'create'
+        $intMaximumCreateAttempts = 16
+        for ($intAttempt = 1; $intAttempt -le $intMaximumCreateAttempts; $intAttempt++) {
+            $strRandomLeaf = '.style-guide-' + $ArtifactId + '-' + [System.IO.Path]::GetRandomFileName() + '.tmp'
+            $strTemporaryPath = Join-Path -Path $script:strRepositoryRoot -ChildPath $strRandomLeaf
+            try {
+                $objTemporaryStream = New-Object System.IO.FileStream(
+                    $strTemporaryPath,
+                    [System.IO.FileMode]::CreateNew,
+                    [System.IO.FileAccess]::Write,
+                    [System.IO.FileShare]::None
+                )
+                $boolTemporaryCreated = $true
+                break
+            } catch [System.IO.IOException] {
+                if (-not [System.IO.File]::Exists($strTemporaryPath) -or $intAttempt -eq $intMaximumCreateAttempts) {
+                    throw
+                }
+                $strTemporaryPath = $null
+            }
+        }
+        if ($null -eq $objTemporaryStream) {
+            throw [System.IO.IOException]::new('Unable to reserve a temporary sibling.')
+        }
+
+        $strPhase = 'write-flush'
+        try {
+            $objTemporaryStream.Write($arrExpectedBytes, 0, $arrExpectedBytes.Length)
+            $objTemporaryStream.Flush($true)
+        } finally {
+            $objTemporaryStream.Dispose()
+            $objTemporaryStream = $null
+        }
+
+        $strPhase = 'verify'
+        Assert-StyleGuideOrdinaryPath -LiteralPath $strTemporaryPath -ExpectedType 'File'
+        $arrObservedBytes = [System.IO.File]::ReadAllBytes($strTemporaryPath)
+        if ($arrObservedBytes.Length -ne $arrExpectedBytes.Length) {
+            throw [System.IO.IOException]::new('The closed temporary file length does not match.')
+        }
+        for ($intByte = 0; $intByte -lt $arrExpectedBytes.Length; $intByte++) {
+            if ($arrObservedBytes[$intByte] -ne $arrExpectedBytes[$intByte]) {
+                throw [System.IO.IOException]::new('The closed temporary file bytes do not match.')
+            }
+        }
+        if ($arrObservedBytes.Length -ge 3 -and
+            $arrObservedBytes[0] -eq 0xEF -and
+            $arrObservedBytes[1] -eq 0xBB -and
+            $arrObservedBytes[2] -eq 0xBF) {
+            throw [System.IO.IOException]::new('A UTF-8 byte-order mark is not permitted.')
+        }
+        if ($arrObservedBytes -contains 0x0D) {
+            throw [System.IO.IOException]::new('A carriage-return byte is not permitted.')
+        }
+        $strObservedSha256 = Get-StyleGuideFileSha256 -LiteralPath $strTemporaryPath
+        if ($strObservedSha256 -cne $strExpectedSha256) {
+            throw [System.IO.IOException]::new('The closed temporary file digest does not match.')
+        }
+
+        Assert-StyleGuideOrdinaryPath -LiteralPath $script:strRepositoryRoot -ExpectedType 'Directory'
+        if ($boolDestinationExists) {
+            Assert-StyleGuideOrdinaryPath -LiteralPath $strExpectedPath -ExpectedType 'File'
+        }
+        Assert-StyleGuideOrdinaryPath -LiteralPath $strTemporaryPath -ExpectedType 'File'
+
+        $strPhase = 'replace'
+        if ($boolDestinationExists) {
+            # NullString is the PowerShell 5.1-safe representation of a true null
+            # reference for the optional File.Replace backup path.
+            [System.IO.File]::Replace($strTemporaryPath, $strExpectedPath, [NullString]::Value)
+        } else {
+            # File.Replace requires an existing destination, so a first
+            # appearance commits through Move instead. Move is the same
+            # publish-by-rename and it refuses rather than overwrites when the
+            # destination is occupied, so the interval between the absence test
+            # far above and this call is closed by the call itself rather than
+            # by a second check -- including against a dangling symlink, which
+            # Move reports as already existing rather than writing through to
+            # its target. Confirmed on this runner.
+            [System.IO.File]::Move($strTemporaryPath, $strExpectedPath)
+        }
+        $boolReplaceReturned = $true
+        $strTemporaryPath = $null
+        return
+    } catch {
+        $objFailure = $_.Exception
+        while ($null -ne $objFailure.InnerException -and
+            $objFailure -is [System.Management.Automation.RuntimeException]) {
+            $objFailure = $objFailure.InnerException
+        }
+        if ($boolReplaceReturned) {
+            return
+        }
+
+        $strFailurePhase = $strPhase
+        $strCategory = if ($objFailure -is [System.UnauthorizedAccessException]) {
+            'access-denied'
+        } elseif ($objFailure -is [System.NotSupportedException]) {
+            'unsupported'
+        } elseif ($objFailure -is [System.ArgumentException]) {
+            'invalid-input'
+        } elseif ($objFailure -is [System.IO.IOException]) {
+            'io-failure'
+        } else {
+            'unexpected-failure'
+        }
+
+        if ($null -ne $objTemporaryStream) {
+            try {
+                $objTemporaryStream.Dispose()
+            } catch {
+                $strCategory = 'cleanup-failure'
+            }
+            $objTemporaryStream = $null
+        }
+
+        if ($boolTemporaryCreated -and $null -ne $strTemporaryPath -and [System.IO.File]::Exists($strTemporaryPath)) {
+            try {
+                Assert-StyleGuideOrdinaryPath -LiteralPath $strTemporaryPath -ExpectedType 'File'
+                [System.IO.File]::Delete($strTemporaryPath)
+                if ([System.IO.File]::Exists($strTemporaryPath)) {
+                    throw [System.IO.IOException]::new('The temporary sibling remains after cleanup.')
+                }
+            } catch {
+                $strCategory = 'cleanup-failure'
+            }
+        }
+
+        if ($null -ne $strOriginalSha256 -and [System.IO.File]::Exists($strExpectedPath)) {
+            try {
+                $objCurrentInfo = New-Object System.IO.FileInfo($strExpectedPath)
+                $strCurrentSha256 = Get-StyleGuideFileSha256 -LiteralPath $strExpectedPath
+                if ($objCurrentInfo.Length -ne $intOriginalLength -or $strCurrentSha256 -cne $strOriginalSha256) {
+                    $strCategory = 'replacement-state-uncertain'
+                }
+            } catch {
+                $strCategory = 'replacement-state-uncertain'
+            }
+        } elseif ($null -ne $strOriginalSha256) {
+            $strCategory = 'replacement-state-uncertain'
+        }
+
+        throw [System.InvalidOperationException]::new(
+            "artifact=$ArtifactId; destination=$strDestinationLeaf; phase=$strFailurePhase; category=$strCategory"
+        )
+    }
+}
 
 function New-StyleGuideCopilotVersion {
     <#
@@ -41,12 +418,18 @@ function New-StyleGuideCopilotVersion {
     )
 
     try {
-        $strContent = Get-Content -Path $SourcePath -Raw -Encoding UTF8
-        Set-Content -Path $DestinationPath -Value $strContent -Encoding UTF8 -NoNewline
+        $strContent = Get-Content -LiteralPath $SourcePath -Raw -Encoding UTF8
+        $strNormalizedContent = $strContent -replace "`r`n?", "`n"
+        Write-StyleGuideArtifact -ArtifactId 'copilot' -DestinationPath $DestinationPath -Content $strNormalizedContent
         Write-Host "Successfully created $DestinationPath"
         return 0
     } catch {
-        Write-Error "Failed to create copilot-instructions.md: $_"
+        $strFailure = if ($_.Exception.Message -match '^artifact=') {
+            $_.Exception.Message
+        } else {
+            'artifact=copilot; destination=copilot-instructions.md; phase=transform; category=unexpected-failure'
+        }
+        Write-Error $strFailure
         return 1
     }
 }
@@ -79,7 +462,7 @@ function New-StyleGuideTerraformInstructionsVersion {
     )
 
     try {
-        $strContent = Get-Content -Path $SourcePath -Raw -Encoding UTF8
+        $strContent = Get-Content -LiteralPath $SourcePath -Raw -Encoding UTF8
         
         # Define the YAML frontmatter with LF newlines so regenerated files stay
         # stable across Windows and POSIX runners.
@@ -95,11 +478,17 @@ function New-StyleGuideTerraformInstructionsVersion {
         # Prepend frontmatter to content
         $strFullContent = $strFrontmatter + $strContent
         
-        Set-Content -Path $DestinationPath -Value $strFullContent -Encoding UTF8 -NoNewline
+        $strNormalizedContent = $strFullContent -replace "`r`n?", "`n"
+        Write-StyleGuideArtifact -ArtifactId 'terraform-instructions' -DestinationPath $DestinationPath -Content $strNormalizedContent
         Write-Host "Successfully created $DestinationPath"
         return 0
     } catch {
-        Write-Error "Failed to create terraform.instructions.md: $_"
+        $strFailure = if ($_.Exception.Message -match '^artifact=') {
+            $_.Exception.Message
+        } else {
+            'artifact=terraform-instructions; destination=terraform.instructions.md; phase=transform; category=unexpected-failure'
+        }
+        Write-Error $strFailure
         return 1
     }
 }
@@ -134,7 +523,7 @@ function New-StyleGuideChatVersion {
     )
 
     try {
-        $strContent = Get-Content -Path $SourcePath -Raw -Encoding UTF8
+        $strContent = Get-Content -LiteralPath $SourcePath -Raw -Encoding UTF8
         
         # Trim trailing blank line from content before adding closing fence
         # This ensures the closing fence appears immediately after the last line of content
@@ -161,11 +550,17 @@ function New-StyleGuideChatVersion {
         # Add trailing newline after closing fence to satisfy MD047 (single-trailing-newline)
         $strWrappedContent = "# Terraform Writing Style Guide - Formatted for Copy-Paste Into LLM Chat`n`n$strOuterFence" + "markdown`n$strContent`n$strOuterFence`n"
         
-        Set-Content -Path $DestinationPath -Value $strWrappedContent -Encoding UTF8 -NoNewline
+        $strNormalizedContent = $strWrappedContent -replace "`r`n?", "`n"
+        Write-StyleGuideArtifact -ArtifactId 'chat' -DestinationPath $DestinationPath -Content $strNormalizedContent
         Write-Host "Successfully created $DestinationPath (using $intOuterFenceLength backticks for outer fence)"
         return 0
     } catch {
-        Write-Error "Failed to create STYLE_GUIDE_CHAT.md: $_"
+        $strFailure = if ($_.Exception.Message -match '^artifact=') {
+            $_.Exception.Message
+        } else {
+            'artifact=chat; destination=STYLE_GUIDE_CHAT.md; phase=transform; category=unexpected-failure'
+        }
+        Write-Error $strFailure
         return 1
     }
 }
@@ -208,8 +603,8 @@ function New-StyleGuideFullVersion {
     )
 
     try {
-        $strGuideContent = Get-Content -Path $SourcePath -Raw -Encoding UTF8
-        $strRationaleContent = Get-Content -Path $RationalePath -Raw -Encoding UTF8
+        $strGuideContent = Get-Content -LiteralPath $SourcePath -Raw -Encoding UTF8
+        $strRationaleContent = Get-Content -LiteralPath $RationalePath -Raw -Encoding UTF8
 
         # Parse rationale file into sections keyed by markdown anchor.
         # Only ### headings are collected (these are the leaf sections that map to
@@ -236,16 +631,16 @@ function New-StyleGuideFullVersion {
                 $strAnchor = $strAnchor -replace '-+', '-' -replace '^-|-$', ''
 
                 if ($intLevel -eq 3) {
-                    # This is a leaf section — collect its body
+                    # This is a leaf section -- collect its body
                     $strCurrentAnchor = $strAnchor
                     $intCurrentLevel = 3
                     $arrCurrentBody = [System.Collections.Generic.List[string]]::new()
                 } elseif ($intLevel -eq 2) {
-                    # Grouping header — reset tracking but do not collect
+                    # Grouping header -- reset tracking but do not collect
                     $strCurrentAnchor = $null
                     $intCurrentLevel = 2
                 } else {
-                    # #### sub-heading inside a ### section — include as body content
+                    # #### sub-heading inside a ### section -- include as body content
                     if ($null -ne $strCurrentAnchor -and $intCurrentLevel -eq 3) {
                         $arrCurrentBody.Add($strLine)
                     }
@@ -331,7 +726,7 @@ function New-StyleGuideFullVersion {
         for ($intIndex = 0; $intIndex -lt $arrGuideLines.Count; $intIndex++) {
             $strLine = $arrGuideLines[$intIndex]
 
-            # Skip placeholder lines — the rationale content replaces them
+            # Skip placeholder lines -- the rationale content replaces them
             if ($strLine.Trim() -eq $strPlaceholder) {
                 continue
             }
@@ -512,27 +907,40 @@ function New-StyleGuideFullVersion {
         # Ensure single trailing newline
         $strOutput = $strOutput.TrimEnd("`n") + "`n"
 
-        Set-Content -Path $DestinationPath -Value $strOutput -Encoding UTF8 -NoNewline
+        $strNormalizedContent = $strOutput -replace "`r`n?", "`n"
+        Write-StyleGuideArtifact -ArtifactId 'full' -DestinationPath $DestinationPath -Content $strNormalizedContent
         Write-Host "Successfully created $DestinationPath"
         return 0
     } catch {
-        Write-Error "Failed to create STYLE_GUIDE_FULL.md: $_"
+        $strFailure = if ($_.Exception.Message -match '^artifact=') {
+            $_.Exception.Message
+        } else {
+            'artifact=full; destination=STYLE_GUIDE_FULL.md; phase=transform; category=unexpected-failure'
+        }
+        Write-Error $strFailure
         return 1
     }
 }
 
 
 # Main execution
-$strSourceFile = "STYLE_GUIDE.md"
-$strRationaleFile = "STYLE_GUIDE_RATIONALE.md"
-$strCopilotFile = "copilot-instructions.md"
-$strTerraformInstructionsFile = "terraform.instructions.md"
-$strChatFile = "STYLE_GUIDE_CHAT.md"
-$strFullFile = "STYLE_GUIDE_FULL.md"
+$strSourceFile = Join-Path -Path $script:strRepositoryRoot -ChildPath 'STYLE_GUIDE.md'
+$strRationaleFile = Join-Path -Path $script:strRepositoryRoot -ChildPath 'STYLE_GUIDE_RATIONALE.md'
+$strCopilotFile = Join-Path -Path $script:strRepositoryRoot -ChildPath 'copilot-instructions.md'
+$strTerraformInstructionsFile = Join-Path -Path $script:strRepositoryRoot -ChildPath 'terraform.instructions.md'
+$strChatFile = Join-Path -Path $script:strRepositoryRoot -ChildPath 'STYLE_GUIDE_CHAT.md'
+$strFullFile = Join-Path -Path $script:strRepositoryRoot -ChildPath 'STYLE_GUIDE_FULL.md'
 
-# Verify source files exist
-if (-not (Test-Path -Path $strSourceFile)) {
-    Write-Error "Source file $strSourceFile not found"
+# Verify both fixed sources are ordinary files before any destination mutation.
+try {
+    foreach ($strRequiredSource in @($strSourceFile, $strRationaleFile)) {
+        if (-not (Test-Path -LiteralPath $strRequiredSource -PathType Leaf)) {
+            throw [System.IO.FileNotFoundException]::new('A required fixed source is absent.')
+        }
+        Assert-StyleGuideOrdinaryPath -LiteralPath $strRequiredSource -ExpectedType 'File'
+    }
+} catch {
+    Write-Error 'artifact=all; destination=closed-map; phase=source-validation; category=invalid-source'
     exit 1
 }
 
@@ -554,14 +962,10 @@ if ($intChatResult -ne 0) {
     exit 1
 }
 
-# Generate STYLE_GUIDE_FULL.md (only if rationale file exists)
-if (Test-Path -Path $strRationaleFile) {
-    $intFullResult = New-StyleGuideFullVersion -SourcePath $strSourceFile -RationalePath $strRationaleFile -DestinationPath $strFullFile
-    if ($intFullResult -ne 0) {
-        exit 1
-    }
-} else {
-    Write-Host "Rationale file $strRationaleFile not found; skipping STYLE_GUIDE_FULL.md generation"
+# Generate STYLE_GUIDE_FULL.md
+$intFullResult = New-StyleGuideFullVersion -SourcePath $strSourceFile -RationalePath $strRationaleFile -DestinationPath $strFullFile
+if ($intFullResult -ne 0) {
+    exit 1
 }
 
 Write-Host "All style guide artifacts generated successfully"
