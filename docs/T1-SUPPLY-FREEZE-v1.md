@@ -53,7 +53,7 @@ Run on the reviewed toolchain against the merge commit.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `a0796f6fa8016f0e1e307f2ae9ca08e975d8713c328537c785b03969ae88b575` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `d8213bbcf4232d4ee8b3c57795ae7de0a32b8928b6cfb69ba4991bb3d0e52eba` |
 | Node | `v24.18.1` |
 | npm | `11.16.0` |
 | Platform | `linux` / `x64` |
@@ -65,7 +65,8 @@ Run on the reviewed toolchain against the merge commit.
 | Install producer argv | `npm ci --ignore-scripts --no-audit --no-fund` |
 | Installed tree SHA-256 | `4cdc37a7269eb90a413fb3f26c031b81268f62fe9129c9939337106da12cc716` |
 | Installed tree size | 2177 files, 8 symlinks, 336 directories |
-| Group-readable files | 2177 of 2177 |
+| File permissions | `{"644":2157,"755":20}` |
+| Advisory registry | `https://registry.npmjs.org/` |
 | Advisory posture SHA-256 | `ea559555c8c18bd2488219d977a994fabc868c2d46efb05bbaf92405c53488e1` |
 | Advisory counts | 0 critical, 5 high, 2 moderate, 0 low, 0 info |
 | Policy decision | `T1-ADVISORY-DISPOSITION-v1`, bounded through issue #24 |
@@ -111,19 +112,44 @@ names the cause even where the guard cannot see it.
 
 The **umask guard has the same shape and the same backstop.** It reads the umask of the
 recording process, which catches the common case where one shell both installs and records, and
-cannot see a tree built under a different umask earlier. The group-readable count is the tell
-that survives into the tree itself: under the reviewed `0022` every installed file carries group
-read, and under `umask 077` none of them do. Measured — a tree installed under `077` and
-recorded under `022` passes the guard, reports `0 of 2177` against the recorded `2177 of 2177`,
-and names its own cause.
+cannot see a tree built under a different umask earlier. The **file-permission histogram** is
+the tell that survives into the tree itself, because it records the permission bits rather than
+a predicate over them:
+
+| Install umask | Histogram | Installed tree |
+| --- | --- | --- |
+| `022` — reviewed | `{"644":2157,"755":20}` | `4cdc37a7…` |
+| `027` | `{"640":2157,"750":20}` | `62eddc28…` |
+| `077` | `{"600":2157,"700":20}` | `0a215132…` |
+
+An earlier draft counted **group-readable files** instead, and that was too weak to be a
+backstop. `umask 027` clears `0o027`, which leaves group read set — `0o644` becomes `0o640` and
+`0o755` becomes `0o750`, both still group-readable. Measured: a tree installed under `027` and
+recorded under `022` moved the digest to `62eddc28…` while the census still reported the
+recorded `2177 of 2177`, so it was blind to one of the umasks the guard itself rejects. The
+histogram distinguishes all three.
+
+The histogram is recorded and **not** folded into the digest. The full mode is machine state;
+pinning it would reintroduce exactly the drift the execute-bit normalization exists to avoid.
 
 To sidestep ambient configuration files:
 
 ```bash
 : > /tmp/npm-user-empty; : > /tmp/npm-global-empty
-npm ci --ignore-scripts --no-audit --no-fund \
-  --userconfig=/tmp/npm-user-empty --globalconfig=/tmp/npm-global-empty
+export NPM_CONFIG_USERCONFIG=/tmp/npm-user-empty
+export NPM_CONFIG_GLOBALCONFIG=/tmp/npm-global-empty
+npm ci --ignore-scripts --no-audit --no-fund
+node Get-SupplyFreezeDigest.mjs
 ```
+
+**The isolation must cover the recorder, not just the install.** An earlier draft passed
+`--userconfig` and `--globalconfig` as flags to `npm ci` alone. Those flags apply to that one
+invocation, and the script then runs `npm config list --json` without them, reloads the ambient
+files, and refuses with exit 6 — against a tree it had just installed correctly. Measured: with
+`bin-links=false` in an ambient user `.npmrc`, the flag form installed the correct 8 symlinks
+and the recorder still exited 6, so the documented workaround could not be completed. The
+environment variables above are read by every npm invocation, which is why they are used
+instead.
 
 **The two paths must be different files.** An earlier draft pointed both options at `/dev/null`,
 which does not run at all. npm de-duplicates configuration files by resolved path: it records
@@ -139,8 +165,7 @@ and the rule is about path identity rather than the file's contents.
 that matters:
 
 ```bash
-env -u npm_config_bin_links npm ci --ignore-scripts --no-audit --no-fund \
-  --userconfig=/tmp/npm-user-empty --globalconfig=/tmp/npm-global-empty
+env -u npm_config_bin_links npm ci --ignore-scripts --no-audit --no-fund
 ```
 
 The script's configuration guard is what catches both, and it is the reason this is a loud
@@ -151,6 +176,26 @@ The script refuses to run against any manifest other than the reviewed one, so a
 misleading digest. It also refuses when `node_modules` is absent or does not satisfy the
 lockfile — `package-lock-only=true` makes `npm ci` a no-op that reports `up to date` while
 reducing the tree to a single file, and a record must not be minted over that.
+
+### Why a run was refused
+
+Every refusal names the observed and reviewed values on stderr. `--any-toolchain` bypasses all
+of them and marks the output as explicitly not a freeze record.
+
+| Exit | Refusal | Usual cause |
+| ---: | --- | --- |
+| `2` | Unreviewed toolchain | different Node, npm, platform or architecture |
+| `4` | Unreviewed manifest | `package.json` or `package-lock.json` has moved |
+| `5` | Audit response is not a report | registry unreachable, or an endpoint error returned as JSON |
+| `6` | Install-shaping npm configuration | `bin-links`, `omit`, `package-lock-only` … from an `.npmrc` or the environment |
+| `7` | Tree is not the installed tree | `node_modules` absent, incomplete, or never installed |
+| `8` | Unreviewed umask | recording shell is not at `0022` |
+| `9` | Unreviewed advisory registry | `registry` points at a mirror or proxy |
+
+Exit `9` applies only when the audit runs. The registry does not shape the installed tree —
+every package in the lockfile carries an `integrity` hash and `npm ci` verifies each tarball
+against it, so substituted bytes fail the install outright. Only the advisory posture is
+exposed, which is why `--no-audit` records the lockfile-derived fields from any registry.
 
 **Check the script's own digest first.** The script reports its own SHA-256 on every run, and the
 value is recorded in the table above. This matters because the digests below are a property of

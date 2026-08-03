@@ -100,6 +100,11 @@ const REVIEWED_NPM_CONFIG = Object.freeze({
 // and it is the cheapest of them for a reader to satisfy.
 const REVIEWED_UMASK = 0o022;
 
+// The registry the recorded advisory posture was snapshotted from. Checked only
+// on the audit path -- see the comment at its use for why the installed tree is
+// not exposed to this and a --no-audit run therefore is not refused.
+const REVIEWED_REGISTRY = 'https://registry.npmjs.org/';
+
 const strWorkflowDirectory = dirname(fileURLToPath(import.meta.url));
 const arrArguments = process.argv.slice(2);
 const boolJson = arrArguments.includes('--json');
@@ -209,13 +214,27 @@ function foldInstalledTree(strRoot) {
   let intFiles = 0;
   let intSymbolicLinks = 0;
   let intDirectories = 0;
-  // Round 4 backstop. The umask guard reads the RECORDING process, so it cannot
-  // see a tree installed under a different umask in an earlier shell. Group read
-  // is the tell that survives into the tree itself: under the reviewed umask 022
-  // every installed file carries it, and under umask 077 none do. Recorded, not
-  // enforced -- a reader whose digest mismatches compares this count against the
-  // record and knows immediately whether the umask is the cause.
-  let intGroupReadable = 0;
+  // Round 4 backstop, corrected in round 5. The umask guard reads the RECORDING
+  // process, so it cannot see a tree installed under a different umask in an
+  // earlier shell. The tree's own permission bits are the tell that survives.
+  //
+  // Round 5, reported: the first version of this counted GROUP-READABLE files,
+  // which distinguishes umask 077 (no group read) from 022 and nothing else.
+  // umask 027 clears 0o027, leaving group read set -- 0o644 becomes 0o640 and
+  // 0o755 becomes 0o750, both still group-readable. Measured: a tree installed
+  // under 027 and recorded under 022 moved the digest to 62eddc28... while the
+  // census still reported the recorded 2177 of 2177. A backstop blind to one of
+  // the umasks the guard explicitly rejects is not a backstop.
+  //
+  // A histogram over the full permission bits distinguishes every umask, because
+  // it records the bits themselves rather than a predicate over them:
+  //   umask 022 -> {"644":2157,"755":20}
+  //   umask 027 -> {"640":2157,"750":20}
+  //   umask 077 -> {"600":2157,"700":20}
+  // Recorded, not enforced, and deliberately NOT folded into the digest: the
+  // full mode is machine state, and pinning it would reintroduce exactly the
+  // drift the execute-bit normalization exists to avoid.
+  const objModeHistogram = new Map();
   const walk = (strDirectory, strRelative) => {
     const arrEntries = [...readdirSync(strDirectory, { withFileTypes: true })]
       .sort((objLeft, objRight) => (objLeft.name < objRight.name ? -1 : objLeft.name > objRight.name ? 1 : 0));
@@ -277,7 +296,8 @@ function foldInstalledTree(strRoot) {
       // while group and other still carry +x. All three classes are recorded.
       intFiles += 1;
       const intMode = lstatSync(strPath).mode;
-      if ((intMode & 0o040) !== 0) intGroupReadable += 1;
+      const strPermissions = (intMode & 0o777).toString(8).padStart(3, '0');
+      objModeHistogram.set(strPermissions, (objModeHistogram.get(strPermissions) ?? 0) + 1);
       objHash.update('F', 'utf8');
       hashField(objHash, strChild);
       hashField(objHash, (intMode & 0o111).toString(8).padStart(3, '0'));
@@ -290,7 +310,8 @@ function foldInstalledTree(strRoot) {
     files: intFiles,
     symlinks: intSymbolicLinks,
     directories: intDirectories,
-    groupReadable: intGroupReadable,
+    modes: Object.fromEntries([...objModeHistogram.entries()].sort(
+      (objLeft, objRight) => (objLeft[0] < objRight[0] ? -1 : 1))),
   };
 }
 
@@ -502,11 +523,43 @@ objRecord.installedTreeSha256 = objTree.sha256;
 objRecord.installedTreeFiles = objTree.files;
 objRecord.installedTreeSymlinks = objTree.symlinks;
 objRecord.installedTreeDirectories = objTree.directories;
-objRecord.installedTreeGroupReadable = objTree.groupReadable;
+objRecord.installedTreeModes = objTree.modes;
 
 if (boolSkipAudit) {
   objRecord.auditSha256 = null;
 } else {
+  // The advisory posture is a snapshot of whatever registry answers the audit
+  // request, and nothing else in this script constrains which one that is.
+  //
+  // Round 5, reported. npm posts the audit to the configured registry, so a
+  // reader behind an enterprise proxy or a private mirror gets a posture digest
+  // computed from THAT registry's advisory view. A mirror that filters
+  // advisories, or simply has none, returns a schema-valid report -- so the
+  // round-1 shape guard passes it -- and the script records a confident-looking
+  // clean posture at exit 0. That is the same class of defect as the endpoint
+  // error the shape guard was added for, arriving from a source that looks
+  // healthy.
+  //
+  // Checked HERE rather than in REVIEWED_NPM_CONFIG, and that placement is the
+  // point. The registry does not shape the installed tree: every one of the 125
+  // packages in the lockfile carries an `integrity` hash, and `npm ci` verifies
+  // each tarball against it, so a substituted registry cannot change the bytes
+  // on disk without failing the install outright. Only the advisory half is
+  // exposed. Refusing a `--no-audit` run on a mirror would be a false failure
+  // for a reader whose tree is provably byte-identical.
+  const strRegistry = runNpm(['config', 'get', 'registry']).trim();
+  if (!boolAnyToolchain && strRegistry !== REVIEWED_REGISTRY) {
+    process.stderr.write(
+      'supply-freeze: refusing to record an advisory posture from an unreviewed registry.\n' +
+      `  registry           observed ${strRegistry}\n` +
+      `                     reviewed ${REVIEWED_REGISTRY}\n` +
+      '  npm posts the audit request to the configured registry, and a mirror that\n' +
+      '  filters or lacks advisories returns a schema-valid but misleadingly clean report.\n' +
+      '  the installed tree is unaffected -- lockfile integrity hashes pin those bytes --\n' +
+      '  so --no-audit records the lockfile-derived fields from any registry.\n');
+    process.exit(9);
+  }
+  objRecord.registry = strRegistry;
   const objAudit = JSON.parse(runNpmAllowingFailure(['audit', '--json']));
   // Reported and confirmed, and the most serious of the round. `npm audit`
   // exits nonzero for two completely different reasons: advisories were found,
@@ -581,9 +634,10 @@ if (boolJson) {
     `  tree satisfies lock  ${objRecord.treeSatisfiesLockfile}\n` +
     `  installed tree       ${objRecord.installedTreeSha256}\n` +
     `    (${objRecord.installedTreeFiles} files, ${objRecord.installedTreeSymlinks} symlinks, ${objRecord.installedTreeDirectories} directories on disk)\n` +
-    `    (${objRecord.installedTreeGroupReadable} of ${objRecord.installedTreeFiles} files group-readable; 0 means the install ran under a restrictive umask)\n` +
+    `    (file permissions ${JSON.stringify(objRecord.installedTreeModes)}; a different shape means the install ran under a different umask)\n` +
     (objRecord.auditSha256
-      ? `  advisory posture     ${objRecord.auditSha256}\n` +
+      ? `  registry             ${objRecord.registry}\n` +
+        `  advisory posture     ${objRecord.auditSha256}\n` +
         `  advisory counts      ${JSON.stringify(objRecord.auditCounts)}\n` +
         Object.entries(objRecord.auditPackages)
           .map(([strName, strValue]) => `    ${strName.padEnd(20)} ${strValue}\n`).join('')
