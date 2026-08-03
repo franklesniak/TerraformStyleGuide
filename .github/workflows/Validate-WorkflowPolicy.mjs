@@ -201,6 +201,15 @@ const REVIEWED_ACQUIRE_CMDLETS = new Set([
   'where-object',
   'write-host',
 ]);
+// Round 55. The complete command-position surface of all three acquire steps,
+// read off their projections. Native commands reach this step only through the
+// reviewed `& $strGitPath` / `& $strCurlPath` / `& $strTarPath` invocations,
+// which are call-operator forms and so are not command-position tokens at all
+// -- which is exactly why a *bare* printf or chmod was invisible.
+const REVIEWED_ACQUIRE_COMMANDS = Object.freeze([
+  'Get-FileHash', 'New-Variable', 'Select-Object', 'Test-Path', 'Where-Object',
+  'Write-Host', 'if', 'throw',
+]);
 const REVIEWED_ACQUIRE_STATIC_CALLS = new Set([
   'system.io.directory::createdirectory',
   'system.io.directory::enumeratefilesystementries',
@@ -448,6 +457,20 @@ const REVIEWED_VERIFY_SINGLE_ASSIGNMENT = Object.freeze([
 // plus `++`/`--`, because each of them writes. `-eq` and friends cannot collide
 // with this -- PowerShell comparisons are word operators and carry no `=`. A
 // boundary follows the bare form so `$intPolicyExitOther` is a different name.
+// Round 55, reported. PowerShell lets a backtick continue a statement across a
+// newline, so `$strGitPath ` + newline + `= 'git'` is one assignment -- and
+// every write pattern here allowed only spaces and tabs between the name and
+// the operator, so the continued form was invisible and the canonical binding
+// stayed the sole match. Measured accepted.
+//
+// Normalised rather than banned. Backtick continuations are zero on every
+// governed projection today, so a ban would also have worked and would have
+// broken the first legitimate one; folding the continuation away makes every
+// pattern downstream correct regardless of how the line is broken.
+function normalizeLineContinuations(strText) {
+  return strText.replace(/`[ \t]*\r?\n[ \t]*/gu, ' ');
+}
+
 function variableWritePattern(strName) {
   return new RegExp(
     `\\$(?:\\{(?:[A-Za-z_][A-Za-z0-9_]*:)?${strName}\\}` +
@@ -483,6 +506,76 @@ const REVIEWED_VERIFY_MEMBER_ACCESS = Object.freeze({
   objWorktreeBefore: Object.freeze({ '.ContainsKey': 1, '.Keys': 1, '[': 1 }),
   strControlSurfaceBefore: Object.freeze({}),
 });
+
+// Round 55, and the member closure above is why it exists. That closure names
+// the *variable* and inspects what follows it, so two things walked past it:
+//
+//   ${arrChanged}.Clear()          reported -- the braced reference is the same
+//                                  object and the scan only knew `$name.`
+//   $x = $objWorktreeBefore        found by attacking my own rule; PowerShell
+//   $x.Clear()                     copies the reference, so mutating the alias
+//                                  mutates the measured map. Confirmed: the
+//                                  gate reports NO DRIFT over a changed file.
+//
+// Both are the same shape as every defect this file keeps having -- the rule
+// constrained a spelling of a name rather than the use of an object. So the
+// count is over *every occurrence* of each protected name, in any spelling.
+// An alias assignment is an extra occurrence; a braced access is an
+// occurrence; a new read anywhere is an occurrence. Nothing can touch these
+// values without changing a number here, which is a stronger statement than
+// enumerating what may be done to them -- and the member closure stays,
+// because it says which *use* is reviewed where this says only how many.
+const REVIEWED_VERIFY_OCCURRENCES = Object.freeze({
+  arrArtifacts: 4,
+  arrChanged: 5,
+  arrOutside: 3,
+  arrRecord: 7,
+  arrRoundTrip: 2,
+  objDiff: 5,
+  objWorktreeAfter: 4,
+  objWorktreeBefore: 4,
+  strControlSurfaceBefore: 2,
+});
+
+// Any reference to a named variable, in every spelling PowerShell resolves to
+// the same one. Case-insensitive for the reason the write pattern is.
+function variableReferencePattern(strName) {
+  return new RegExp(
+    `\\$(?:\\{(?:[A-Za-z_][A-Za-z0-9_]*:)?${strName}\\}` +
+    `|(?:[A-Za-z_][A-Za-z0-9_]*:)?${strName}(?![A-Za-z0-9_]))`,
+    'giu');
+}
+
+// Round 55, reported. build.verify's command-position allowlist sees bare
+// names and its invocation closure sees `&` and `.`; a static method call is
+// neither, so `[System.Diagnostics.Process]::Start('pwsh', '-NoProfile -File
+// ./payload.ps1')` was accepted and could run checkout-controlled code before
+// the worktree baseline was recorded. Measured accepted.
+//
+// The Markdown steps answer this with a denylist of execution APIs. Here the
+// surface is enumerated instead, because the step legitimately constructs a
+// process -- Process::new and ProcessStartInfo::new are how it crosses the
+// boundary into the generator -- so a ban naming Diagnostics.Process would
+// have had to carve them out and would then have admitted Start anyway. Start
+// is simply not in this list, and neither is anything else nobody reviewed.
+const REVIEWED_VERIFY_STATIC_CALLS = Object.freeze([
+  'Convert::ToBase64String',
+  'System.Array::Copy', 'System.Array::Reverse',
+  'System.BitConverter::GetBytes', 'System.BitConverter::IsLittleEndian',
+  'System.Diagnostics.Process::new', 'System.Diagnostics.ProcessStartInfo::new',
+  'System.IO.Directory::EnumerateFileSystemEntries', 'System.IO.Directory::Exists',
+  'System.IO.Directory::GetFiles',
+  'System.IO.File::Exists', 'System.IO.File::GetAttributes',
+  'System.IO.File::OpenRead', 'System.IO.File::ReadAllBytes',
+  'System.IO.FileAttributes::Directory', 'System.IO.FileAttributes::ReparsePoint',
+  'System.IO.FileInfo::new', 'System.IO.MemoryStream::new',
+  'System.IO.Path::Combine', 'System.IO.Path::DirectorySeparatorChar',
+  'System.IO.Path::GetFileName',
+  'System.Security.Cryptography.SHA256::Create',
+  'System.StringComparer::Ordinal',
+  'System.Text.Encoding::UTF8', 'System.Text.UTF8Encoding::new',
+  'string::IsNullOrEmpty',
+]);
 
 // Round 54, found by re-running the round-53 batteries against the round-54
 // fix rather than by report. Round 53 measured indirect writers reaching this
@@ -666,6 +759,13 @@ const REVIEWED_GENERATOR_DISPATCH = Object.freeze([
   'if ($intFullResult -ne 0) {',
 ]);
 
+// Everything the generator is reviewed to do after that last statement, with
+// whitespace collapsed. The Write-Host message is a pair of quotes because the
+// projection blanks string content -- which is correct here: what the script
+// prints on success is not a policy input, and pinning it would make an
+// innocuous wording change a policy failure.
+const REVIEWED_GENERATOR_TAIL = 'exit 1 } Write-Host " " exit 0';
+
 // Round 51. The generator's safety assertions, with the number of times each
 // must appear. Every one of these was deleted or neutered in a measured battery
 // that the policy accepted, because until now only command *resolution* was
@@ -753,7 +853,10 @@ const MARKDOWN_COMMAND_POSITION = /(?:^[ \t]*|(?<!\$)\{[ \t]*|[;}|=(,][ \t]*|&&[
 // ${env:NAME}, and resolves the provider name case-insensitively, so the prefix
 // matches either case while the variable name is captured exactly -- the name
 // is what the allowlist compares, and on Linux it is case-sensitive.
-const MARKDOWN_ENV_WRITE = /\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?[ \t]*\+?=/giu;
+// Round 55: every assignment operator, not just `=` and `+=`. Measured --
+// `$env:NODE_OPTIONS ??= '--require=./payload.cjs'` assigns the preload when
+// the variable is unset and was invisible to the `+?=` form.
+const MARKDOWN_ENV_WRITE = /\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?[ \t]*(?:\+|-|\*|\/|%|\?\?)?=/giu;
 // Round 46. Execution APIs reachable without a call operator and without a bare
 // command name, so neither the invocation allowlist nor the command-position
 // scan can see them. Measured: [System.Diagnostics.Process]::Start($strNpmPath,
@@ -1707,7 +1810,10 @@ export function validateBuildPolicy(workflow, source) {
   // Read from the projection, not the raw run text: the comments around these
   // guards discuss them by name, and a rule that cannot tell prose from code
   // would let a comment keep a deleted check "present".
-  const strVerifyCode = powerShellTokenView(generateStep.run);
+  // Continuations are folded before projection, not after: the projection
+  // treats a backtick as an escape and removes it, so a statement broken
+  // across lines had already lost the only marker saying it was one.
+  const strVerifyCode = powerShellTokenView(normalizeLineContinuations(generateStep.run));
   assertReviewedGuards(strVerifyCode, REVIEWED_VERIFY_GUARDS, 'side-effect-policy', (kind, frag) => kind === 'missing'
     ? `build.verify no longer performs a reviewed drift guard: ${frag}`
     : `a reviewed drift guard is no longer reachable where it was reviewed: ${frag}`);
@@ -1721,7 +1827,7 @@ export function validateBuildPolicy(workflow, source) {
   // And what it does to them afterwards, since a mutation is not an assignment.
   for (const [strName, objReviewed] of Object.entries(REVIEWED_VERIFY_MEMBER_ACCESS)) {
     const objObserved = new Map();
-    const objPattern = new RegExp(`\\$${strName}(?![A-Za-z0-9_])[ \\t]*(\\.[A-Za-z_][A-Za-z0-9_]*|\\[)`, 'giu');
+    const objPattern = new RegExp(`\\$(?:\\{(?:[A-Za-z_][A-Za-z0-9_]*:)?${strName}\\}|(?:[A-Za-z_][A-Za-z0-9_]*:)?${strName}(?![A-Za-z0-9_]))[ \\t]*(\\.[A-Za-z_][A-Za-z0-9_]*|\\[)`, 'giu');
     for (const objMatch of strVerifyCode.matchAll(objPattern)) {
       const strMember = objMatch[1] === '[' ? '[' : objMatch[1];
       objObserved.set(strMember, (objObserved.get(strMember) ?? 0) + 1);
@@ -1752,6 +1858,22 @@ export function validateBuildPolicy(workflow, source) {
   // method. See PROCESS_TERMINATION for the enumeration and why it closes.
   if (PROCESS_TERMINATION.test(generateStep.run)) {
     reject('side-effect-policy', 'build.verify adds a process-termination path that can bypass a required probe');
+  }
+  // Static method calls, which are neither a bare command nor an invocation
+  // operator and so were visible to no other rule here.
+  for (const objCall of strVerifyCode.matchAll(/\[\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\]\s*::\s*([A-Za-z_][A-Za-z0-9_]*)/gu)) {
+    if (!REVIEWED_VERIFY_STATIC_CALLS.includes(`${objCall[1]}::${objCall[2]}`)) {
+      reject('side-effect-policy', `build.verify makes an unreviewed static call: ${objCall[1]}::${objCall[2]}`);
+    }
+  }
+  // How many times each is referred to at all -- after the member closure, so
+  // that a mutation reports which member it used rather than only that a count
+  // moved. This is what closes aliasing and the braced spelling together.
+  for (const [strName, intReviewed] of Object.entries(REVIEWED_VERIFY_OCCURRENCES)) {
+    const intObserved = (strVerifyCode.match(variableReferencePattern(strName)) ?? []).length;
+    if (intObserved !== intReviewed) {
+      reject('side-effect-policy', `build.verify refers to $${strName} ${intObserved} times rather than the reviewed ${intReviewed}`);
+    }
   }
   // What may invoke, what may sit in command position, and the writers that are
   // neither. The three together are what the generator and the Markdown steps
@@ -2079,6 +2201,31 @@ function validateAcquireStep(step, label, expected) {
       reject('acquire-policy', `${label} invokes an unreviewed cmdlet: ${objCmdlet[1]}`);
     }
   }
+  // Round 55, reported. The cmdlet allowlist above matches Verb-Noun names, so
+  // a bare *native* command is neither a cmdlet nor an invocation through a
+  // reviewed command variable and no rule saw it. Measured accepted with both
+  // acquire digests re-baselined: creating .git/hooks, writing a post-checkout
+  // hook with `printf ... > .git/hooks/post-checkout` and making it executable
+  // with `chmod +x`. The reviewed checkout then runs the hook, which can
+  // replace the validator with a zero-exit program before the policy job
+  // invokes it. Neither printf nor chmod is a cmdlet, an interpreter, or a
+  // network client, and the quoted hook body is blanked from the script-path
+  // scan -- three separate rules each looking past it.
+  //
+  // Closed the way command position is closed everywhere else in this file:
+  // positively. Audited on the projection, all three acquire steps use exactly
+  // these eight tokens and nothing else.
+  for (const objToken of stepCode.matchAll(MARKDOWN_COMMAND_POSITION)) {
+    if (!REVIEWED_ACQUIRE_COMMANDS.includes(objToken[1])) {
+      reject('acquire-policy', `${label} runs an unreviewed bare command: ${objToken[1]}`);
+    }
+  }
+  // And the redirection that made the hook a file. The existing guard only
+  // recognised destinations beginning with `$`; the reviewed steps redirect
+  // nowhere at all, so any redirection is unreviewed.
+  if (/[0-9]?>{1,2}(?!&)/u.test(stepCode)) {
+    reject('acquire-policy', `${label} redirects output to a file`);
+  }
   // Provenance for every reviewed command variable this step invokes. Only the
   // targets it actually uses are required, because verify.acquire invokes Git
   // and never curl or tar.
@@ -2348,7 +2495,7 @@ function validateMarkdownGovernedStep(step, label, expected) {
     }
   }
   for (const strName of expected.capturedStatuses) {
-    const arrAssignments = step.run.match(variableWritePattern(strName)) ?? [];
+    const arrAssignments = normalizeLineContinuations(step.run).match(variableWritePattern(strName)) ?? [];
     if (arrAssignments.length !== 1) {
       reject('markdown-policy', `${label} captured phase status ${strName} is not assigned exactly once`);
     }
@@ -3262,6 +3409,13 @@ const FIXTURE_INVENTORY = Object.freeze([
   // Round 54. PowerShell variable names are case-insensitive -- measured, the
   // invocation site read `git` -- and every count here compared them exactly.
   ['T1-GENERATOR-033', 'Git path rebound through a case-variant assignment', 'generator', (source) => replaceOnce(source, '    $strGitPath = $arrGitCommands[0].Source\n', "    $strGitPath = $arrGitCommands[0].Source\n    $STRGITPATH = 'git'\n")],
+  // Round 55. A backtick continues the statement across the newline, so this is
+  // one assignment that every write pattern here read as none.
+  ['T1-GENERATOR-034', 'Git path rebound across a line continuation', 'generator', (source) => replaceOnce(source, '    $strGitPath = $arrGitCommands[0].Source\n', "    $strGitPath = $arrGitCommands[0].Source\n    $strGitPath `\n= 'git'\n")],
+  // Every reviewed statement present, once, in order, at depth zero -- and the
+  // artifacts restored to their committed bytes afterwards through the
+  // already-allowlisted writer.
+  ['T1-GENERATOR-035', 'artifacts rewritten after the reviewed dispatch', 'generator', (source) => replaceOnce(source, 'Write-Host "All style guide artifacts generated successfully"', "Write-StyleGuideArtifact -DestinationLeaf 'STYLE_GUIDE_FULL.md' -Content $strCached\nWrite-Host \"All style guide artifacts generated successfully\"")],
   ['T1-GENERATOR-032', 'reviewed invocation kept but made unreachable', 'generator', (source) => replaceOnce(source, '    $arrTrackedPath = @(& $strGitPath --no-optional-locks -C $script:strRepositoryRoot ls-files --error-unmatch -- $DestinationLeaf 2>$null)\n    $intGitExit = $LASTEXITCODE\n', '    if ($false) {\n    $arrTrackedPath = @(& $strGitPath --no-optional-locks -C $script:strRepositoryRoot ls-files --error-unmatch -- $DestinationLeaf 2>$null)\n    }\n    $intGitExit = $LASTEXITCODE\n')],
   ['T1-BUILD-144', 'outside-paths drift guard kept but made unreachable', 'build', (source) => replaceOnce(replaceOnce(source, '              if ($arrOutside.Count -ne 0) {', '              if ($false) { if ($arrOutside.Count -ne 0) {'), '                  throw "git-state: the generator changed $($arrOutside.Count) path(s) outside the four generated artifacts"\n              }\n', '                  throw "git-state: the generator changed $($arrOutside.Count) path(s) outside the four generated artifacts"\n              } }\n')],
   // Round 53, found by extending the reported finding rather than reported. The
@@ -3287,6 +3441,13 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-151', 'measured value rebound through a bare alias', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', "          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n          sv strControlSurfaceBefore 'x'\n")],
   ['T1-BUILD-152', 'measured value rebound through the Variable provider', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', "          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n          Set-Item -Path 'variable:strControlSurfaceBefore' -Value 'x'\n")],
   ['T1-BUILD-153', 'a third constant bound outside the reviewed pair', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', "          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n          New-Variable -Name strEvil -Value 'x' -Option Constant\n")],
+  // Round 55. The member closure named the variable and read what followed it,
+  // so a braced reference and an alias both walked past it -- the second found
+  // by attacking that rule rather than by report.
+  ['T1-BUILD-154', 'drift accumulator emptied through a braced reference', 'build', (source) => replaceOnce(source, '          if ($arrChanged.Count -ne 0) {', '          ${arrChanged}.Clear()\n          if ($arrChanged.Count -ne 0) {')],
+  ['T1-BUILD-155', 'measured map mutated through an alias', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigests\n', '          $objWorktreeAfter = Get-WorktreeFileDigests\n          $objAlias = $objWorktreeBefore\n')],
+  // Neither a call operator nor a bare command token, so no rule here saw it.
+  ['T1-BUILD-156', 'process launched through a static call', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', "          [System.Diagnostics.Process]::Start('pwsh', '-NoProfile -File ./payload.ps1')\n          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n")],
   // Balanced deliberately. An unclosed `if ($false) {` shifts the depth of every
   // later gate too, so the suite would report whichever gate happens to come
   // next rather than the one this fixture is about.
@@ -3515,6 +3676,11 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   // reached without a command name, which the allowlist cannot see.
   "T1-BUILD-152": "side-effect-policy: build.verify runs an unreviewed command: Set-Item",
   "T1-BUILD-153": "side-effect-policy: build.verify uses New-Variable outside its reviewed constant bindings",
+  "T1-BUILD-154": "side-effect-policy: build.verify makes an unreviewed use of $arrChanged: .Clear",
+  "T1-BUILD-155": "side-effect-policy: build.verify refers to $objWorktreeBefore 5 times rather than the reviewed 4",
+  "T1-BUILD-156": "side-effect-policy: build.verify makes an unreviewed static call: System.Diagnostics.Process::Start",
+  "T1-GENERATOR-034": "supply-policy: the generator does not assign its Git path exactly once",
+  "T1-GENERATOR-035": "supply-policy: the generator does not terminate immediately after the reviewed dispatch",
   "T1-MARKDOWN-094": "markdown-policy: markdown.policy.validate captured phase status intPolicyExit is not assigned exactly once",
   "T1-MARKDOWN-095": "markdown-policy: markdown.policy.validate captured phase status intPolicyExit is not assigned exactly once",
   "T1-GENERATOR-033": "supply-policy: the generator does not assign its Git path exactly once",
@@ -3843,7 +4009,7 @@ export function validateGeneratorPolicy(source) {
   // Projected first: the rationale above this check in the generator names the
   // unqualified form in prose, and a rule that cannot tell prose from code
   // would forbid explaining itself.
-  const generatorCode = powerShellTokenView(source);
+  const generatorCode = powerShellTokenView(normalizeLineContinuations(source));
   // Two halves, deliberately read from two different views.
   //
   // The invocation must exist in *code*, so a comment quoting this phrase
@@ -4076,6 +4242,26 @@ export function validateGeneratorPolicy(source) {
     if (intObservedDepth !== intReviewedDepth) {
       reject('supply-policy', `a reviewed invocation is no longer reachable where it was reviewed: ${strReviewedLine}`);
     }
+  }
+  // Round 55, reported, and the sharpest finding of the round. Everything above
+  // is an *ordered* walk, which says each statement follows the last and says
+  // nothing about what may sit between them or after them. So the generator can
+  // cache the four committed artifact bodies before dispatch, run all four
+  // reviewed generators and their result checks, and then call the
+  // already-allowlisted Write-StyleGuideArtifact four more times to put the old
+  // bytes back. On a guide change it exits zero with a byte-identical worktree,
+  // and build.verify reports stale artifacts as current -- while every rule
+  // above is satisfied, because every reviewed statement is present, once, in
+  // order, at depth zero. Measured accepted.
+  //
+  // The remedy asked for was contiguity, and the reviewed tail is contiguous:
+  // the last dispatch, its result check, one Write-Host, and exit 0, with
+  // nothing else between them. Requiring exactly that leaves no position for a
+  // restoring write -- before the dispatch it would be overwritten, after it
+  // there is nowhere to stand.
+  const strTail = generatorCode.slice(intLastDispatchEnd).replace(/\s+/gu, ' ').trim();
+  if (strTail !== REVIEWED_GENERATOR_TAIL) {
+    reject('supply-policy', 'the generator does not terminate immediately after the reviewed dispatch');
   }
   // The safety assertions themselves, by exact count. Each of these was deleted
   // or disabled in the battery above and the policy still passed, because
