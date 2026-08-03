@@ -53,10 +53,11 @@ Run on the reviewed toolchain against the merge commit.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `e14f8b01016a40b50ca4562c8daf23af714fb2fa27bd6618e56d1683242a71e5` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `a0796f6fa8016f0e1e307f2ae9ca08e975d8713c328537c785b03969ae88b575` |
 | Node | `v24.18.1` |
 | npm | `11.16.0` |
 | Platform | `linux` / `x64` |
+| Install umask | `0022` |
 | `package.json` | blob `2b88a0ac85d3a8b7286040e6b1f6c4ddb4d3bce1` |
 | `package.json` SHA-256 | `e206cdb3562f0397e8eed7fb2c2586269a1f5335cdff2906da8d5e070426321e` |
 | `package-lock.json` | blob `5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca` |
@@ -64,6 +65,7 @@ Run on the reviewed toolchain against the merge commit.
 | Install producer argv | `npm ci --ignore-scripts --no-audit --no-fund` |
 | Installed tree SHA-256 | `4cdc37a7269eb90a413fb3f26c031b81268f62fe9129c9939337106da12cc716` |
 | Installed tree size | 2177 files, 8 symlinks, 336 directories |
+| Group-readable files | 2177 of 2177 |
 | Advisory posture SHA-256 | `ea559555c8c18bd2488219d977a994fabc868c2d46efb05bbaf92405c53488e1` |
 | Advisory counts | 0 critical, 5 high, 2 moderate, 0 low, 0 info |
 | Policy decision | `T1-ADVISORY-DISPOSITION-v1`, bounded through issue #24 |
@@ -90,6 +92,7 @@ introduces this document. Reproduce from a revision that contains it, which carr
 git checkout main            # or any revision containing Get-SupplyFreezeDigest.mjs
 cd .github/workflows
 git rev-parse HEAD:.github/workflows/package.json          # must equal the recorded blob
+umask 0022                   # the recorded tree was installed under this
 npm ci --ignore-scripts --no-audit --no-fund
 node Get-SupplyFreezeDigest.mjs
 ```
@@ -104,7 +107,17 @@ the reader cannot explain.
 That guard reads the configuration in effect **when the script runs**. A tree installed under
 `bin-links=false` in a shell that no longer carries the setting still passes it, so the symlink
 and file counts recorded above are the backstop for that case: 0 symlinks against a recorded 8
-names the cause even where the guard cannot see it. To sidestep ambient configuration files:
+names the cause even where the guard cannot see it.
+
+The **umask guard has the same shape and the same backstop.** It reads the umask of the
+recording process, which catches the common case where one shell both installs and records, and
+cannot see a tree built under a different umask earlier. The group-readable count is the tell
+that survives into the tree itself: under the reviewed `0022` every installed file carries group
+read, and under `umask 077` none of them do. Measured — a tree installed under `077` and
+recorded under `022` passes the guard, reports `0 of 2177` against the recorded `2177 of 2177`,
+and names its own cause.
+
+To sidestep ambient configuration files:
 
 ```bash
 : > /tmp/npm-user-empty; : > /tmp/npm-global-empty
@@ -113,10 +126,12 @@ npm ci --ignore-scripts --no-audit --no-fund \
 ```
 
 **The two paths must be different files.** An earlier draft pointed both options at `/dev/null`,
-which does not run at all: npm keys loaded configuration by resolved path and refuses to load one
-path as both `user` and `global`, so `npm ci` exits 1 with `double-loading config "/dev/null" as
-"global", previously loaded as "user"` before the install starts. Any single path used twice
-fails the same way — `/dev/null` is not special.
+which does not run at all. npm de-duplicates configuration files by resolved path: it records
+each file it loads against the layer that loaded it, and refuses to load one path as two
+different layers. Passing the same path as both `user` and `global` therefore makes `npm ci`
+exit 1 with `double-loading config "/dev/null" as "global", previously loaded as "user"` before
+the install starts. Any single path used twice fails the same way — `/dev/null` is not special,
+and the rule is about path identity rather than the file's contents.
 
 **This isolates configuration files, not the environment.** Measured: with
 `npm_config_bin_links=false` exported, the command above still installs 0 symlinks, because an
@@ -161,12 +176,23 @@ not a freeze record.
 Folds the bytes actually present under `node_modules`: every file's path, normalized execute
 bits and content, every symlink's path and target, and every directory's path, in sorted order.
 
-The **normalized execute bits** (`mode & 0o111`) rather than the full mode, and that is a
-measurement rather than a preference. All three reference installs agree on the full mode
-(`0o644` ×2157, `0o755` ×20), but node-tar applies the process umask when it extracts, so the
-non-execute bits are a property of the extracting machine. The execute bits survive the umasks
-that occur in practice — `0o755` under `umask 077` is still `0o700`, still executable by its
-owner — so the mode is recorded exactly as far as it decides whether the file can run.
+The **normalized execute bits** (`mode & 0o111`) rather than the full mode. node-tar applies the
+process umask when it extracts, so the read and write bits are a property of the extracting
+machine, and recording the full mode would make the digest drift for a reason that has nothing
+to do with the package.
+
+**The execute bits are not umask-independent either, and an earlier draft of this document
+claimed they were.** It argued that `0o755` under `umask 077` is still `0o700` and still
+executable by its owner. The file does remain executable; the *recorded value* does not survive
+— `0o755 & 0o111` is `0o111`, `0o700 & 0o111` is `0o100`. Measured: a full `npm ci` under
+`umask 077` produces `0a215132…` against the recorded `4cdc37a7…`, a mismatch caused by nothing
+but the reader's umask. So the umask is **pinned at `0022` and checked**, making it the sixth
+environmental input this record fixes, alongside Node, npm, platform, arch and npm
+configuration. It is also the cheapest of the six to satisfy.
+
+npm's own `umask` config is a separate setting that defaults to `0`, and it is what
+`npm config list` reports; the process umask is invisible to that check, which is why it needed
+its own guard rather than an extra entry in the configuration table.
 
 All three execute classes are recorded, not a single boolean. An earlier draft collapsed them,
 which made `0o755` and `0o655` hash identically. That is not a harmless normalization: POSIX

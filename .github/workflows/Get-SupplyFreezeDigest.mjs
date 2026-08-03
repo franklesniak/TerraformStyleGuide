@@ -80,6 +80,26 @@ const REVIEWED_NPM_CONFIG = Object.freeze({
   'package-lock-only': false,
 });
 
+// The process umask the recorded tree was installed under.
+//
+// Round 4, reported and confirmed. The fold records `mode & 0o111`, and an
+// earlier reply to this PR argued that mask was umask-portable because "0o755
+// under umask 077 is still 0o700, still executable". That is true about
+// EXECUTABILITY and irrelevant to the RECORDED VALUE: 0o755 & 0o111 is 0o111,
+// 0o700 & 0o111 is 0o100, so the two hash differently. Measured -- a full
+// `npm ci` under umask 077 produced digest 0a215132... against the recorded
+// 4cdc37a7..., a mismatch caused by nothing but the reader's umask.
+//
+// npm documents that folders and executables are masked by both npm's
+// configured umask and the underlying system umask. npm's own `umask` config
+// defaults to 0 and is reported by `npm config list`, so the config guard above
+// sees nothing wrong; the process umask is a separate input it never looked at.
+//
+// So it is pinned rather than assumed away. This is the sixth environmental
+// input the record pins, alongside Node, npm, platform, arch and npm config,
+// and it is the cheapest of them for a reader to satisfy.
+const REVIEWED_UMASK = 0o022;
+
 const strWorkflowDirectory = dirname(fileURLToPath(import.meta.url));
 const arrArguments = process.argv.slice(2);
 const boolJson = arrArguments.includes('--json');
@@ -189,6 +209,13 @@ function foldInstalledTree(strRoot) {
   let intFiles = 0;
   let intSymbolicLinks = 0;
   let intDirectories = 0;
+  // Round 4 backstop. The umask guard reads the RECORDING process, so it cannot
+  // see a tree installed under a different umask in an earlier shell. Group read
+  // is the tell that survives into the tree itself: under the reviewed umask 022
+  // every installed file carries it, and under umask 077 none do. Recorded, not
+  // enforced -- a reader whose digest mismatches compares this count against the
+  // record and knows immediately whether the umask is the cause.
+  let intGroupReadable = 0;
   const walk = (strDirectory, strRelative) => {
     const arrEntries = [...readdirSync(strDirectory, { withFileTypes: true })]
       .sort((objLeft, objRight) => (objLeft.name < objRight.name ? -1 : objLeft.name > objRight.name ? 1 : 0));
@@ -228,14 +255,18 @@ function foldInstalledTree(strRoot) {
       // digest did not move at all. A tree that cannot run is not the tree
       // this record claims to have measured.
       //
-      // The NORMALIZED execute bits rather than the full mode, and that is a
-      // measurement rather than a preference. All three reference installs
-      // agree on the full mode here (0o644 x2157, 0o755 x20), but node-tar
-      // applies the process umask when it extracts, so the non-execute bits are
-      // a property of the extracting machine and would make the digest
-      // irreproducible under a different umask. The execute bits survive the
+      // The NORMALIZED execute bits rather than the full mode. node-tar applies
+      // the process umask when it extracts, so the read and write bits are a
+      // property of the extracting machine; recording the full mode would make
+      // the digest drift for a reason that has nothing to do with the package.
+      //
+      // Round 4 correction, and it matters because the original reasoning here
+      // was wrong. This comment used to claim the execute bits "survive the
       // umasks that occur in practice: 0o755 under umask 077 is still 0o700,
-      // still executable by its owner.
+      // still executable by its owner." The file does remain executable, but
+      // the RECORDED VALUE moves -- 0o111 becomes 0o100 -- so the mask is no
+      // more umask-portable than the full mode was, only less obviously so.
+      // The umask is therefore pinned and checked; see REVIEWED_UMASK.
       //
       // Round 3, reported. An earlier version collapsed all three execute
       // classes to a single boolean, which meant 0o755 and 0o655 hashed
@@ -245,9 +276,11 @@ function foldInstalledTree(strRoot) {
       // process -- a 0o655 file owned by that user gives "Permission denied"
       // while group and other still carry +x. All three classes are recorded.
       intFiles += 1;
+      const intMode = lstatSync(strPath).mode;
+      if ((intMode & 0o040) !== 0) intGroupReadable += 1;
       objHash.update('F', 'utf8');
       hashField(objHash, strChild);
-      hashField(objHash, (lstatSync(strPath).mode & 0o111).toString(8).padStart(3, '0'));
+      hashField(objHash, (intMode & 0o111).toString(8).padStart(3, '0'));
       hashField(objHash, readFileSync(strPath));
     }
   };
@@ -257,6 +290,7 @@ function foldInstalledTree(strRoot) {
     files: intFiles,
     symlinks: intSymbolicLinks,
     directories: intDirectories,
+    groupReadable: intGroupReadable,
   };
 }
 
@@ -368,6 +402,28 @@ if (!boolAnyToolchain) {
   }
 }
 
+// The process umask, which npm's own config does not report. See REVIEWED_UMASK.
+//
+// This reads the umask of the RECORDING process, which is a proxy for the one
+// the install ran under -- the same install-time/measure-time gap the
+// package-lock-only guard has. It catches the common case, where one shell does
+// both. For the case where it cannot see the cause, the group-readable census
+// recorded below is the backstop: under umask 022 every installed file carries
+// group read, and under umask 077 none of them do, so a reader whose digest
+// mismatches can tell the two apart from the record alone.
+if (!boolAnyToolchain && process.umask() !== REVIEWED_UMASK) {
+  process.stderr.write(
+    'supply-freeze: refusing to record digests under an unreviewed umask.\n' +
+    `  umask              observed 0${process.umask().toString(8).padStart(3, '0')}, `
+      + `reviewed 0${REVIEWED_UMASK.toString(8).padStart(3, '0')}\n` +
+    '  npm applies the process umask when it extracts, so this changes the recorded\n' +
+    '  execute bits and therefore the installed-tree digest.\n' +
+    '  re-install and re-record under the reviewed umask:\n' +
+    `    (umask 0${REVIEWED_UMASK.toString(8).padStart(3, '0')}; `
+      + 'npm ci --ignore-scripts --no-audit --no-fund)\n');
+  process.exit(8);
+}
+
 const objRecord = {
   script: { sha256: strScriptSha256 },
   toolchain: {
@@ -375,6 +431,7 @@ const objRecord = {
     npm: strNpmVersion,
     platform: process.platform,
     arch: process.arch,
+    umask: `0${process.umask().toString(8).padStart(3, '0')}`,
   },
   manifest: {
     'package.json': sha256(strPackageBefore),
@@ -445,6 +502,7 @@ objRecord.installedTreeSha256 = objTree.sha256;
 objRecord.installedTreeFiles = objTree.files;
 objRecord.installedTreeSymlinks = objTree.symlinks;
 objRecord.installedTreeDirectories = objTree.directories;
+objRecord.installedTreeGroupReadable = objTree.groupReadable;
 
 if (boolSkipAudit) {
   objRecord.auditSha256 = null;
@@ -516,12 +574,14 @@ if (boolJson) {
     `  Node                 ${objRecord.toolchain.node}\n` +
     `  npm                  ${objRecord.toolchain.npm}\n` +
     `  platform             ${objRecord.toolchain.platform}/${objRecord.toolchain.arch}\n` +
+    `  umask                ${objRecord.toolchain.umask}\n` +
     `  package.json         ${objRecord.manifest['package.json']}\n` +
     `  package-lock.json    ${objRecord.manifest['package-lock.json']}\n` +
     `  matches reviewed     ${objRecord.matchesReviewedManifest}\n` +
     `  tree satisfies lock  ${objRecord.treeSatisfiesLockfile}\n` +
     `  installed tree       ${objRecord.installedTreeSha256}\n` +
     `    (${objRecord.installedTreeFiles} files, ${objRecord.installedTreeSymlinks} symlinks, ${objRecord.installedTreeDirectories} directories on disk)\n` +
+    `    (${objRecord.installedTreeGroupReadable} of ${objRecord.installedTreeFiles} files group-readable; 0 means the install ran under a restrictive umask)\n` +
     (objRecord.auditSha256
       ? `  advisory posture     ${objRecord.auditSha256}\n` +
         `  advisory counts      ${JSON.stringify(objRecord.auditCounts)}\n` +
