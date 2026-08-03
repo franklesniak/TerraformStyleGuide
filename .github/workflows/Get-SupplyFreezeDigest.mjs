@@ -383,6 +383,28 @@ const strScriptSha256 = sha256(strScriptBefore);
 // only place the computed start earlier, which is the direction that fails safe:
 // it can raise a false alarm, never miss a replacement.
 const intProcessStartedAt = Date.now() - Math.ceil(process.uptime() * 1000);
+// Round 29, swept rather than reported. The quiescence sweep's cross-clock
+// comparison was the reported finding; this is the same defect one comparison
+// over, on the script's own identity, and no reviewer named it.
+//
+// The round-18 note above chose Math.ceil to bias the ceiling earlier because
+// that direction fails safe. It does -- but it buys at most 1 ms, and the
+// backdating measured this round is up to 4.13 ms, so the margin is smaller than
+// the error it was protecting against. A replacement landing within roughly 3 ms
+// of process start carried a ctime below the ceiling and passed.
+//
+// Same remedy as the sweep: read the stamp from the filesystem now and compare
+// it against the filesystem later, so no clock enters the comparison at all.
+const intScriptChangedAtStart = (() => {
+  try {
+    return lstatSync(strScriptPath).ctimeMs;
+  } catch (objError) {
+    process.stderr.write(
+      'supply-freeze: this script became unreadable during the run; refusing to report.\n' +
+      `  error              ${objError.code ?? 'unknown'} at ${objError.path ?? strScriptPath}\n`);
+    process.exit(3);
+  }
+})();
 
 // "A JSON object", as distinct from everything else `typeof x === 'object'`
 // admits. Both `null` and an array answer 'object', and each of those has now
@@ -454,13 +476,42 @@ function readOrRefuse(strPath) {
 }
 
 function runNpm(arrNpmArguments, objEnv) {
-  return execFileSync('npm', arrNpmArguments, {
-    cwd: strWorkflowDirectory,
-    ...(objEnv ? { env: objEnv } : {}),
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  try {
+    return execFileSync('npm', arrNpmArguments, {
+      cwd: strWorkflowDirectory,
+      ...(objEnv ? { env: objEnv } : {}),
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (objError) {
+    // Round 29, reported. When npm is absent from PATH, is not executable, or
+    // dies before printing, execFileSync throws a spawn failure that nothing
+    // caught: the run ended at exit 1 with a raw Node stack trace, in exactly
+    // the case exit 2 exists to name. Measured on a PATH carrying node but not
+    // npm -- a plausible reproduction environment -- the reader got a dump of
+    // spawnargs instead of "unreviewed toolchain".
+    //
+    // Handled here rather than at the version probe that was reported, because
+    // every npm invocation in this file has the same failure mode and fixing the
+    // one that was demonstrated is the habit this script keeps being corrected
+    // for. Spawn failures ONLY: a non-zero exit means npm ran and disagreed,
+    // which is a different diagnosis, and `npm audit` returns 1 to report
+    // advisories. Relabelling those as a toolchain problem would replace a stack
+    // trace with a confident wrong answer, which is worse.
+    if (typeof objError?.syscall === 'string' && objError.syscall.startsWith('spawnSync')) {
+      process.stderr.write(
+        'supply-freeze: refusing to record digests on an unreviewed toolchain.\n' +
+        `  npm could not be run: ${objError.code ?? objError.message}\n` +
+        `  invocation         npm ${arrNpmArguments.join(' ')}\n` +
+        `  reviewed npm       ${REVIEWED_NPM}\n` +
+        '  the reviewed npm must be runnable before anything is recorded; its version\n' +
+        '  is itself a compared field, so an npm that cannot report one cannot be\n' +
+        '  confirmed as the reviewed toolchain.\n');
+      process.exit(2);
+    }
+    throw objError;
+  }
 }
 
 function runNpmAllowingFailure(arrNpmArguments, objEnv) {
@@ -951,8 +1002,47 @@ function normalizeAudit(objAudit) {
       }
       const strUrl = typeof objVia.url === 'string' ? objVia.url : '';
       const objMatch = strUrl.match(/GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}/u);
+      // Round 29, reported, and the fifth widening of this guard -- the comment
+      // above already counted four. Rounds 22 and 24 checked the container and
+      // then the member TYPE, and left the member's FIELDS unchecked, so `{}`
+      // satisfied every test and was recorded. Measured on the reviewed path:
+      // `via: [{}]` exited 0 and produced a freeze record carrying an advisory
+      // whose id was the invented string `npm-source-unknown`, folded into
+      // auditSha256 -- a fabricated identity inside the one field this record
+      // exists to compare exactly.
+      //
+      // Each previous round answered the shape it was shown. This one states the
+      // rule instead: EVERY field read below is validated, and nothing is ever
+      // invented. `?? 'unknown'` was the only fallback that manufactured a value
+      // rather than recording absence, and it is gone. An advisory with no GHSA
+      // url and no integer source has no identity to record, so the report is
+      // refused as malformed rather than described with a name npm never gave it.
+      if (!objMatch && !Number.isInteger(objVia.source)) {
+        throw new TypeError(
+          `advisory in ${strName} carries neither a GHSA url nor an integer source,`
+          + ' so it has no identity to record');
+      }
+      // The remaining recorded fields are absence-or-type: npm may legitimately
+      // omit any of them, and `null` records that honestly. What is refused is a
+      // present value of the wrong type, which would otherwise be copied verbatim
+      // into a digest this record asserts is stable.
+      for (const [strField, objValue, strExpected] of [
+        ['severity', objVia.severity, 'string'],
+        ['range', objVia.range, 'string'],
+        ['cvss.score', objVia.cvss?.score, 'number'],
+        ['cvss.vectorString', objVia.cvss?.vectorString, 'string'],
+      ]) {
+        if (objValue !== undefined && objValue !== null && typeof objValue !== strExpected) {
+          throw new TypeError(
+            `advisory in ${strName} has a ${strField} of type ${typeof objValue},`
+            + ` expected ${strExpected}`);
+        }
+      }
+      if (objVia.cvss !== undefined && objVia.cvss !== null && !isPlainObject(objVia.cvss)) {
+        throw new TypeError(`advisory in ${strName} has a non-object cvss`);
+      }
       arrAdvisories.push({
-        id: objMatch ? objMatch[0] : `npm-source-${objVia.source ?? 'unknown'}`,
+        id: objMatch ? objMatch[0] : `npm-source-${objVia.source}`,
         severity: objVia.severity ?? null,
         cwe: (() => {
           const arrCwe = objVia.cwe ?? [];
@@ -987,6 +1077,7 @@ function normalizeAudit(objAudit) {
 
 const strPackagePath = join(strWorkflowDirectory, 'package.json');
 const strLockPath = join(strWorkflowDirectory, 'package-lock.json');
+const strTreeRoot = join(strWorkflowDirectory, 'node_modules');
 // Round 17, reported, and the previous round's fix caught half-done. The
 // RE-reads were routed through a refusal; these initial snapshot reads were left
 // bare, so a manifest missing or unreadable before the recorder starts threw an
@@ -1016,6 +1107,22 @@ const intRecordingStartedAt = Date.now();
 
 const strPackageBefore = snapshotOrRefuse(strPackagePath);
 const strLockBefore = snapshotOrRefuse(strLockPath);
+
+// Round 29, reported -- the baseline half of the quiescence sweep. Read here
+// rather than at the ceiling above so that a missing or unreadable manifest
+// still produces its own exit-4 diagnosis instead of being reported as a failed
+// scan, and read before the version probe, `npm ls`, the audit and both folds,
+// so it precedes every byte this run records.
+//
+// A tree absent at baseline is left at 0 rather than refused: the reviewed path
+// already refuses a missing node_modules with a clearer message further down,
+// and under --any-toolchain a tree that appears mid-run should trip the sweep,
+// which comparing against 0 does.
+const objBaselineChange = existsSync(strTreeRoot)
+  ? scanOrRefuse(
+    () => newestChangeTime(strTreeRoot, [strPackagePath, strLockPath]),
+    'the baseline quiescence scan')
+  : { ctimeMs: 0, path: '(no installed tree when recording began)' };
 
 const strNodeVersion = process.version;
 const strNpmVersion = runNpm(['--version']).trim();
@@ -1218,7 +1325,6 @@ if (!boolAnyToolchain && !objRecord.matchesReviewedManifest) {
 // `npm ls` is kept, but as a consistency assertion rather than a digest source:
 // it exits non-zero when the installed tree does not satisfy the lockfile, which
 // is the one question it answers that the byte fold cannot.
-const strTreeRoot = join(strWorkflowDirectory, 'node_modules');
 let strTreeCheckDetail = '';
 try {
   // Round 19, reported. This reloaded `omit` from whatever .npmrc exists when it
@@ -1686,24 +1792,63 @@ if (objTreeAfter.sha256 !== objTree.sha256) {
 // the two detectors fired.
 //
 // What this does and does not promise, stated plainly because the round-8
-// comment on the fold above overreached and this is the correction. Between
-// them the two mechanisms detect any write that lands before this sweep reads
-// the affected entry. Neither makes the walk atomic: a write landing after the
+// comment on the fold above overreached and this is the correction -- and then
+// this correction overreached in its turn, which round 29 had to fix. It read
+// "between them the two mechanisms detect any write that lands before this sweep
+// reads the affected entry". That was false in two distinct ways, and stating a
+// guarantee this sweep does not provide is worse than the gap itself, because a
+// reader stops looking.
+//
+// First: it compared clocks that do not agree, measured at 2000 of 2000 writes
+// missed inside a ~4 ms window. That one is now fixed -- see the comparison.
+//
+// Second, and NOT fixed because it cannot be by this means: any ctime comparison
+// is blind below the filesystem's timestamp granularity. If an entry is written
+// twice within one tick -- once before the baseline and once after the second
+// fold -- both stamps truncate to the same value and the sweep sees no change.
+// On ext3, one tick is a full second. The double fold is what actually covers
+// that case, by comparing bytes rather than times; the sweep supplements it for
+// writes that land after the second fold, and neither is a substitute for the
+// other. Neither makes the walk atomic either: a write landing after the
 // sweep has passed an entry is not detected by anything here, and cannot be,
 // because a userspace sequential scan has no atomic snapshot to compare against.
 // A filesystem-level snapshot would close it outright and is the right answer
 // for a reader who has one; that is a property of the host, not of this script.
 const objNewestChange = scanOrRefuse(
   () => newestChangeTime(strTreeRoot, [strPackagePath, strLockPath]), 'the quiescence sweep');
-if (objNewestChange.ctimeMs >= intRecordingStartedAt) {
+// Round 29, reported. This compared a filesystem-stamped ctime against a
+// `Date.now()` ceiling -- two different clocks. Linux stamps inode times from
+// the COARSE clock and truncates to the filesystem's granularity, while
+// Date.now() reads the fine one, so a ctime is systematically backdated
+// relative to the ceiling it was being tested against.
+//
+// Measured on this container, ext2/ext3, 2000 files each written strictly AFTER
+// capturing the ceiling: 2000 of 2000 landed BELOW it, backdated by up to
+// 4.13 ms. Not an exotic-filesystem edge case -- the comparison was wrong every
+// single time within that window.
+//
+// The reported remedy of rounding the ceiling down by the granularity was
+// measured and rejected: it breaks the documented workflow. This script is run
+// as `npm ci && node Get-SupplyFreezeDigest.mjs`, so a backdated ceiling makes
+// the install that just finished trip the refusal.
+//
+// So the comparison is now like-for-like. The baseline is a ctime read from the
+// same filesystem, through the same lstat, truncated by the same granularity as
+// every value it is compared against, captured before any recorded byte is read.
+// No clock is consulted and no margin is guessed.
+if (objNewestChange.ctimeMs > objBaselineChange.ctimeMs) {
   process.stderr.write(
     'supply-freeze: the recorded inputs changed while recording; refusing to report.\n' +
     '  detected by        inode change time, not by the fold comparison\n' +
     `  newest change      ${objNewestChange.path}\n` +
     `                     ctime ${new Date(objNewestChange.ctimeMs).toISOString()}\n` +
+    `  baseline was       ${objBaselineChange.path}\n` +
+    `                     ctime ${new Date(objBaselineChange.ctimeMs).toISOString()}\n` +
     `  recording began    ${new Date(intRecordingStartedAt).toISOString()}\n` +
     '  an entry was written after this run began, so the digest above describes\n' +
-    '  bytes that are no longer on disk. record against a quiescent tree.\n');
+    '  bytes that are no longer on disk. record against a quiescent tree.\n' +
+    '  both ctimes are filesystem-stamped and directly comparable; the wall-clock\n' +
+    '  line is context only and is not what this refusal tested.\n');
   process.exit(10);
 }
 
@@ -1753,12 +1898,15 @@ const intScriptChangedAt = (() => {
     process.exit(3);
   }
 })();
-if (intScriptChangedAt >= intProcessStartedAt) {
+if (intScriptChangedAt !== intScriptChangedAtStart) {
   process.stderr.write(
     'supply-freeze: this script was replaced during the run; refusing to report.\n' +
     `  script ctime       ${new Date(intScriptChangedAt).toISOString()}\n` +
+    `  was at start       ${new Date(intScriptChangedAtStart).toISOString()}\n` +
     `  process began      ${new Date(intProcessStartedAt).toISOString()}\n` +
-    '  the bytes may have been restored, but the run is no longer attributable.\n');
+    '  the bytes may have been restored, but the run is no longer attributable.\n' +
+    '  the two ctimes are filesystem-stamped and directly comparable; the process\n' +
+    '  line is context only and is not what this refusal tested.\n');
   process.exit(3);
 }
 

@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `bd26c0af75ba8f1f916b6ee08e0e2db323fb1ebd367ec6f797b3e24d871d6896` | script `script.sha256` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `c2a586cd7f864a7eae6cb809035d5da214a4f6f7c16e498aaa2f7174b3d37f9a` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` | script `toolchain.platform` |
@@ -399,7 +399,7 @@ independent detectors:
    2.0s against a 0.1s fold — so that window is wide enough to matter, and the pair of folds
    brackets it.
 2. **A stat-only quiescence sweep** runs after the second fold and refuses if any entry's inode
-   change time is at or after the moment recording began.
+   change time is later than a baseline read from the same filesystem before recording began.
 
 The second detector exists because the first one has a hole, and an earlier draft of this
 section did not admit it. Two folds detect a write that lands *between* their two reads of an
@@ -412,6 +412,24 @@ the then-recorded digest reported for a tree whose file was 64829 bytes at emiss
 The sweep uses inode change time rather than modification time deliberately. `utimes` lets any
 caller set `mtime` to whatever they like, so `mtime` is forgeable; that same call moves `ctime`
 *forward* to the moment of the attempt. Measured both ways.
+
+**Both sides of that comparison come from the filesystem**, and an earlier version compared one
+side against `Date.now()` instead. Linux stamps inode times from the coarse clock and truncates
+them to the filesystem's granularity, while `Date.now()` reads the fine one, so the stamp was
+systematically backdated relative to the ceiling it was tested against. Measured on ext2/ext3,
+writing 2000 files each strictly *after* capturing the ceiling: **2000 of 2000 landed below it**,
+by up to 4.13 ms. Every write inside that window was missed.
+
+Rounding the ceiling down to cover the gap was measured and rejected — it breaks the documented
+`npm ci && node ./Get-SupplyFreezeDigest.mjs` sequence, because the install that just finished
+then trips the refusal. Comparing a filesystem stamp against a filesystem baseline needs no
+margin and no assumption about granularity.
+
+**A residual remains, and no ctime comparison can close it.** Any such check is blind below the
+filesystem's timestamp granularity: an entry written once before the baseline and again after the
+second fold, both within one tick, carries the same stamp on both reads. On ext3 a tick is a
+full second. The double fold is what covers that case, by comparing bytes rather than times. The
+two detectors are complements, not redundancy, and neither substitutes for the other.
 
 **Neither detector makes this atomic, and none can.** A userspace sequential walk has no
 snapshot to compare against, so a write landing after the sweep has passed a given entry is not
