@@ -16,7 +16,11 @@ merge. Issue #22 consumes it and requires "exact equality of every recorded fiel
 implementation start and again immediately before its merge.
 
 That requirement is only meaningful if every field can actually be recomputed. This document
-records the values and points at the committed script that derives them.
+records the values and, for each one, what derives it: mostly the committed script
+`.github/workflows/Get-SupplyFreezeDigest.mjs`, and for three repository facts a `git` command.
+The [Compared fields](#compared-fields) table names the derivation per row, which is the
+authoritative statement — an earlier draft asserted that the script derived everything, and it
+did not.
 
 ## Why this record exists
 
@@ -263,7 +267,9 @@ environment variables above are read by every npm invocation, which is why they 
 instead.
 
 **The two paths must be different files.** An earlier draft pointed both options at `/dev/null`,
-which does not run at all. npm de-duplicates configuration files by resolved path: it records
+and `npm ci` then exits 1 before the install starts — not because `/dev/null` is unusable as a
+config file, but because the same *path* was given for two different layers. npm de-duplicates
+configuration files by resolved path: it records
 each file it loads against the layer that loaded it, and refuses to load one path as two
 different layers. Passing the same path as both `user` and `global` therefore makes `npm ci`
 exit 1 with `double-loading config "/dev/null" as "global", previously loaded as "user"` before
