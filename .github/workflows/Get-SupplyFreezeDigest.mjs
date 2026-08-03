@@ -444,7 +444,26 @@ const intScriptChangedAtStart = (() => {
 // see a false mismatch if a future npm emitted the same numbers in a different
 // order. Rebuilding in a fixed order makes the compared text depend on the
 // values alone.
-const SEVERITY_ORDER = Object.freeze(['info', 'low', 'moderate', 'high', 'critical', 'total']);
+// The five buckets npm's aggregate vulnerability logic recognizes, and the
+// recorded order. SEVERITY_ORDER is derived rather than written out twice so the
+// domain and the record can never drift apart.
+const SEVERITY_LEVELS = Object.freeze(['info', 'low', 'moderate', 'high', 'critical']);
+const SEVERITY_ORDER = Object.freeze([...SEVERITY_LEVELS, 'total']);
+
+// Round 33, reported. npm copies a truthy source severity into an advisory
+// verbatim, but only the five levels above are counted, so `severity: "urgent"`
+// produced a report with total 1, every bucket 0, and a null package severity --
+// measured exit 0, recording a posture whose own arithmetic disagreed with
+// itself. Absence stays legal, because npm may omit the field; a present value
+// outside the domain is a value this record cannot mean anything by.
+function assertSeverity(strLabel, objValue, strName) {
+  if (objValue === undefined || objValue === null) return;
+  if (typeof objValue !== 'string' || !SEVERITY_LEVELS.includes(objValue)) {
+    throw new TypeError(
+      `${strLabel} in ${strName} is ${JSON.stringify(objValue)}, which is not one of`
+      + ` ${SEVERITY_LEVELS.join(', ')}`);
+  }
+}
 
 function orderedCounts(objCounts) {
   if (!objCounts || typeof objCounts !== 'object') return null;
@@ -1083,8 +1102,8 @@ function normalizeAudit(objAudit) {
       // omit any of them, and `null` records that honestly. What is refused is a
       // present value of the wrong type, which would otherwise be copied verbatim
       // into a digest this record asserts is stable.
+      assertSeverity('advisory severity', objVia.severity, strName);
       for (const [strField, objValue, strExpected] of [
-        ['severity', objVia.severity, 'string'],
         ['range', objVia.range, 'string'],
         ['cvss.score', objVia.cvss?.score, 'number'],
         ['cvss.vectorString', objVia.cvss?.vectorString, 'string'],
@@ -1122,6 +1141,24 @@ function normalizeAudit(objAudit) {
       });
     }
     arrAdvisories.sort((objLeft, objRight) => (objLeft.id < objRight.id ? -1 : objLeft.id > objRight.id ? 1 : 0));
+    // Round 33, swept rather than reported. The reported defect was an
+    // unvalidated advisory severity; these three package fields -- the object
+    // those advisories hang on -- had NO validation at all, which is the same
+    // bare `?? null` that was cleaned out one level down last round. Measured on
+    // the reviewed path, all four exited 0 and wrote the junk straight into
+    // auditSha256: `severity: 7`, `severity: "urgent"`, `isDirect: "yes"`,
+    // `range: 5`. Validating the level a reviewer names and leaving the adjacent
+    // level bare is how this guard has been widened seven times.
+    assertSeverity('package severity', objVulnerability.severity, strName);
+    for (const [strField, objValue, strExpected] of [
+      ['isDirect', objVulnerability.isDirect, 'boolean'],
+      ['range', objVulnerability.range, 'string'],
+    ]) {
+      if (objValue !== undefined && objValue !== null && typeof objValue !== strExpected) {
+        throw new TypeError(
+          `${strName} has a ${strField} of type ${typeof objValue}, expected ${strExpected}`);
+      }
+    }
     objOutput.packages[strName] = {
       severity: objVulnerability.severity ?? null,
       isDirect: objVulnerability.isDirect ?? null,
@@ -1768,7 +1805,8 @@ if (boolSkipAudit) {
   if (!Number.isInteger(objAudit.auditReportVersion)
     || !isPlainObject(objAudit.vulnerabilities)
     || !isPlainObject(objCounts)
-    || !SEVERITY_ORDER.every((strSeverity) => Number.isInteger(objCounts[strSeverity]))
+    || !SEVERITY_ORDER.every((strSeverity) => Number.isInteger(objCounts[strSeverity])
+      && objCounts[strSeverity] >= 0)
     // Round 17, reported. The guard validated the top level and stopped there,
     // so `vulnerabilities: {"x": null}` with correct counts passed -- and
     // normalizeAudit then dereferenced that null and threw a TypeError, exit 1,
@@ -1781,6 +1819,31 @@ if (boolSkipAudit) {
       'supply-freeze: npm audit did not return an audit report.\n' +
       `  npm said: ${typeof objAudit.message === 'string' ? objAudit.message : JSON.stringify(objAudit).slice(0, 300)}\n` +
       '  this is an endpoint or format failure, not an advisory posture; nothing is recorded.\n' +
+      '  pass --no-audit to record the lockfile-derived fields alone.\n');
+    process.exit(5);
+  }
+  // Round 33, swept from the reported severity defect. Integer-ness was the only
+  // test these counts got, so `total: -1` and buckets summing to 9 against a
+  // total of 1 both recorded at exit 0. The total is the sum of its parts
+  // whatever npm chooses to count, so this catches an endpoint whose arithmetic
+  // contradicts itself without assuming HOW npm tallies.
+  //
+  // Requiring the counts to be exactly recomputable from the vulnerabilities
+  // block was considered and NOT taken. It holds on the real report only because
+  // npm currently tallies one per vulnerable package -- an implementation detail,
+  // not a contract. Were npm to count advisories instead, that check would refuse
+  // a genuine report and block the freeze on a healthy repository, which is a
+  // worse failure than the one it prevents.
+  const intBucketSum = SEVERITY_LEVELS.reduce(
+    (intAcc, strSeverity) => intAcc + objCounts[strSeverity], 0);
+  if (intBucketSum !== objCounts.total) {
+    process.stderr.write(
+      'supply-freeze: npm audit returned a report whose counts contradict themselves.\n' +
+      `  severity buckets   ${SEVERITY_LEVELS.map((s) => `${s}=${objCounts[s]}`).join(' ')}\n` +
+      `  they sum to        ${intBucketSum}\n` +
+      `  total says         ${objCounts.total}\n` +
+      '  an advisory posture that disagrees with its own arithmetic cannot be compared;' +
+      ' nothing is recorded.\n' +
       '  pass --no-audit to record the lockfile-derived fields alone.\n');
     process.exit(5);
   }

@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `3f73455949c3e5330fe1a1a35c6b05e1a0d82b7932f2e9a6c3c5efc653681870` | script `script.sha256` |
+| Freeze script SHA-256 | `e0adbb441e9ab1e4fbbc27f3c8ee2f55033dd4d3fbf92d4b98f1d22287a1553a` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` | script `toolchain.platform` |
@@ -421,6 +421,7 @@ row, rather than leaving it to a sentence that has already been wrong once.
 | `3` | Recorded input changed mid-run | **no** | `package.json`, `package-lock.json` or the script itself edited while the run was in progress |
 | `4` | Unreviewed manifest | yes | `package.json` or `package-lock.json` has moved |
 | `5` | Audit response is not a report | **no** | registry unreachable, or an endpoint error returned as JSON |
+| `5` | Advisory posture contradicts itself | **no** | a severity outside npm's five recognized levels, or counts whose buckets do not sum to `total` — a posture whose own arithmetic disagrees cannot be compared exactly |
 | `6` | Install- or trust-shaping npm configuration | yes | `bin-links`, `omit`, `package-lock-only`, `umask`, `omit-lockfile-registry-resolved`, and the transport settings `proxy`, `https-proxy`, `noproxy`, `ca`, `cafile`, `strict-ssl` … from an `.npmrc` or the environment. Also raised, self-diagnosing, if the transport scrub itself failed to bind the audit environment |
 | `7` | Root missing or not a directory | **no** | `node_modules` absent, or present as a file or a symlink to one |
 | `7` | Tree does not satisfy the lockfile | yes | `node_modules` incomplete or never installed; or `npm ls` answered about a tree other than this one. The refusal names which |
