@@ -232,6 +232,40 @@ function transportEnvironment() {
         || strLower.endsWith('_proxy')) dropTrustVariable(strKey);
     }
   }
+  // Round 25, swept rather than reported. A reviewer read the loop above as
+  // leaving no_proxy in place, on the grounds that the `_` -> `-` mapping turns
+  // it into `no-proxy`, which is not a key. The mapping half is right and the
+  // conclusion is not: the test is a disjunction, and `no_proxy` ends with
+  // `_proxy`. Measured -- with NO_PROXY and no_proxy both set, both names appear
+  // in auditEnvironmentScrubbed.
+  //
+  // The finding was wrong, but that an expression can be read that way is the
+  // argument for checking what it PRODUCED rather than trusting how it reads --
+  // the same move made for `npm ls` in this round, one guard over. A future edit
+  // that breaks the scrub now fails here, loudly, instead of quietly sending the
+  // audit through an interceptor.
+  //
+  // Only the null-valued settings are checked. The non-null ones -- noproxy and
+  // strict-ssl -- are deliberately bound the other way, by transportFlags() on
+  // the command line, which outranks the environment; and an ambient
+  // npm_config_noproxy is refused before this by the pre-audit configuration
+  // check, measured at exit 6.
+  const arrResidual = Object.keys(objEnv).filter((strKey) => {
+    const strLower = strKey.toLowerCase();
+    if (strLower === 'http_proxy' || strLower === 'https_proxy' || strLower === 'no_proxy') return true;
+    if (!strLower.startsWith('npm_config_')) return false;
+    const strConfig = strLower.replace(/^npm_config_/u, '').replace(/_/gu, '-');
+    return REVIEWED_NPM_TRANSPORT[strConfig] === null;
+  });
+  if (arrResidual.length > 0) {
+    process.stderr.write(
+      'supply-freeze: the transport scrub did not bind the audit environment.\n' +
+      `  still present      ${arrResidual.sort().join(', ')}\n` +
+      '  this is a defect in this script, not in your configuration: those names\n' +
+      '  should have been removed from the child environment before the audit ran.\n' +
+      '  pass --no-audit to record the lockfile-derived fields without an audit.\n');
+    process.exit(6);
+  }
   return objEnv;
 }
 
