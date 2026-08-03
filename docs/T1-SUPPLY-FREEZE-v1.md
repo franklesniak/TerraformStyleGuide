@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `0bb6b7c708e62d56685b3cf692f4cd9a02cdd16e3a12b5a8a20b178eb6e26ba8` | script `script.sha256` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `5d08fd636299529af7cfd76ba717d85f169e146c8ae277b0a7e119e5d8885ecd` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` / `x64` | script `toolchain.platform`, `toolchain.arch` |
@@ -228,7 +228,7 @@ git rev-parse HEAD:.github/workflows/package-lock.json     # must equal the reco
 cd .github/workflows
 umask 0022                   # the recorded tree was installed under this
 npm ci --ignore-scripts --no-audit --no-fund
-node Get-SupplyFreezeDigest.mjs
+env -u NODE_OPTIONS node Get-SupplyFreezeDigest.mjs
 ```
 
 **Ambient npm configuration changes what `npm ci` produces.** A `bin-links=false` or `omit=dev`
@@ -280,7 +280,7 @@ strIsolationDirectory="$(mktemp -d)"
 export NPM_CONFIG_USERCONFIG="$strIsolationDirectory/npm-user-empty"
 export NPM_CONFIG_GLOBALCONFIG="$strIsolationDirectory/npm-global-empty"
 npm ci --ignore-scripts --no-audit --no-fund
-node Get-SupplyFreezeDigest.mjs
+env -u NODE_OPTIONS node Get-SupplyFreezeDigest.mjs
 ```
 
 **The isolation must cover the recorder, not just the install.** An earlier draft passed
@@ -347,7 +347,7 @@ row, rather than leaving it to a sentence that has already been wrong once.
 
 | Exit | Refusal | Bypassed by `--any-toolchain` | Usual cause |
 | ---: | --- | :---: | --- |
-| `2` | Unreviewed toolchain or invocation | yes | different Node, npm, platform or architecture; or a symlinked entry point |
+| `2` | Unreviewed toolchain or invocation | yes | different Node, npm, platform or architecture; a symlinked entry point; or `NODE_OPTIONS` set — see [What this script cannot check about itself](#what-this-script-cannot-check-about-itself) |
 | `3` | Recorded input changed mid-run | **no** | `package.json`, `package-lock.json` or the script itself edited while the run was in progress |
 | `4` | Unreviewed manifest | yes | `package.json` or `package-lock.json` has moved |
 | `5` | Audit response is not a report | **no** | registry unreachable, or an endpoint error returned as JSON |
@@ -410,11 +410,46 @@ does, re-compared after every other check, and its inode-change time is tested a
 start — so a replacement at any point during the run is refused rather than silently producing
 the authoritative digest for code that did not derive these values.
 
+### What this script cannot check about itself
+
 **One window remains and cannot be closed from inside.** Node reads and compiles this file before
 any statement in it executes. A replacement in *that* window is invisible to the script itself
 and can only be closed by a trusted launcher that hashes the file before invoking `node`. That is
 outside what a single read-only script can bootstrap, and it is stated here rather than implied
 away.
+
+**`NODE_OPTIONS` is the same window, reachable without touching the file at all**, and it is the
+reason the documented command now begins `env -u NODE_OPTIONS`. A preload named by that variable
+runs before the first statement here, so it can replace every answer before it is computed.
+Measured: a preload that patches `child_process.execFileSync`, calls
+`module.syncBuiltinESMExports()` and redefines `process.version` turned a run that correctly
+refuses with exit `2` on an unreviewed Node into a complete record reporting
+`freezeRecord: true`, an empty `notFreezeRecordBecause`, `treeSatisfiesLockfile: true`,
+`matchesReviewedManifest: true`, and an advisory posture of all zeros — erasing the seven real
+advisories. Nothing downstream could have caught it, because the forgery is upstream of
+everything.
+
+The script refuses when it sees `NODE_OPTIONS` set, and **that refusal is hygiene, not a security
+boundary.** Code that runs first wins: a preload whose last line is
+`delete process.env.NODE_OPTIONS` leaves the check reading `undefined`, which was measured
+alongside the forgery above. What the refusal is worth is the accidental case — a runner or shell
+that exports `NODE_OPTIONS` for unrelated reasons no longer quietly shapes a freeze record. What
+actually closes the hole is clearing the variable *before* `node` starts, which only the caller
+can do.
+
+**The permission fold measures POSIX mode bits, and nothing else.** A tree can be made unloadable
+by mechanisms `stat` does not report: POSIX ACLs — a named-user entry denying read leaves `0644`
+and the bytes untouched — and equally SELinux or AppArmor labels, a `noexec` mount, or
+`chattr +i`. None of these move the installed-tree digest or the permission histograms.
+
+This is stated rather than fixed, and the reason is that the available fix is worse than the
+statement. Node exposes no ACL or extended-attribute API, so detection means shelling out to
+`getfacl`, which is not universally installed — measured absent on the container these
+verifications were run in. A guard that silently does nothing wherever the `acl` package is
+missing would let a reader believe extended ACLs were checked when on many hosts nothing looked,
+which converts an honest blind spot into a false assurance. ACLs are also only one member of the
+set above, so the useful boundary is to say what the fold measures rather than to chase one
+mechanism and leave its siblings unmentioned.
 
 **Check the script's own digest first.** The script reports its own SHA-256 on every run, and the
 value is recorded in the table above. This matters because the digests below are a property of

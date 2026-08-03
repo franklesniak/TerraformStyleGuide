@@ -809,17 +809,36 @@ function newestChangeTime(strRoot, arrExtraPaths) {
       if (objStats.isDirectory()) walk(strPath, strChild);
     }
   };
-  consider(strRoot, 'node_modules');
-  // Round 24, reported. The same gap as the root mode fold, one function over:
-  // this lstats the LINK while walk() reads through it, so a chmod or a rename on
-  // the followed directory moved that directory's ctime and nothing the sweep
-  // looked at. realpath is safe here for the reason stat is safe in the fold -- a
-  // root that does not resolve to a directory was refused before either ran.
-  if (lstatSync(strRoot).isSymbolicLink()) {
-    consider(realpathSync(strRoot), 'node_modules (symlink target)');
-  }
+  // Round 24 for the root, round 26 for the manifests -- the same defect, and the
+  // first fix closed only the instance that had been reported. `consider` lstats,
+  // so for a symlink it records the LINK's ctime, and modifying the TARGET moves
+  // stat's ctime while leaving lstat's untouched. Measured: chmod on a target gave
+  // stat ctime moved true, lstat ctime moved false. A manifest that is a symlink
+  // could therefore have its target swapped after the snapshot and restored before
+  // the final byte comparison, with every check passing.
+  //
+  // Every path this script READS THROUGH a link is swept through the link, and the
+  // behaviour is defined once so a fourth such path cannot be added and forgotten.
+  //
+  // Tree ENTRIES deliberately do not get this. The fold hashes a symlink's target
+  // BYTES rather than the file it points at, so following one here would sweep
+  // something the digest never measured -- the rule is to follow exactly where
+  // this script's own reads follow, which is the root and the two manifests.
+  //
+  // realpathSync throws on a dangling link, which lands in scanOrRefuse and
+  // becomes the documented exit 10: a manifest that stopped resolving mid-run IS
+  // a recorded input changing.
+  const considerThroughLinks = (strPath, strLabel) => {
+    const objStats = consider(strPath, strLabel);
+    if (objStats.isSymbolicLink()) {
+      consider(realpathSync(strPath), `${strLabel} (symlink target)`);
+    }
+  };
+  considerThroughLinks(strRoot, 'node_modules');
   walk(strRoot, '');
-  for (const strPath of arrExtraPaths) consider(strPath, strPath.split('/').pop());
+  for (const strPath of arrExtraPaths) {
+    considerThroughLinks(strPath, strPath.split('/').pop());
+  }
   return { ctimeMs: intNewest, path: strNewestPath };
 }
 
@@ -967,6 +986,47 @@ const strLockBefore = snapshotOrRefuse(strLockPath);
 
 const strNodeVersion = process.version;
 const strNpmVersion = runNpm(['--version']).trim();
+
+// Round 26, reported, and the most serious finding this script has taken.
+// NODE_OPTIONS=--require runs a module before the first statement of this file,
+// so every answer below can be replaced before it is ever computed. Measured
+// here: a preload that patches child_process.execFileSync, calls
+// module.syncBuiltinESMExports() and redefines process.version turned a run
+// that refuses with exit 2 on this container's Node v22.22.2 into
+//
+//   freezeRecord: true, notFreezeRecordBecause: [], treeSatisfiesLockfile: true,
+//   matchesReviewedManifest: true, auditCounts all zero
+//
+// on an unreviewed toolchain, erasing 7 genuine advisories. Nothing downstream
+// could have caught it, because the forgery is upstream of everything.
+//
+// This check is HYGIENE, NOT A SECURITY BOUNDARY, and the record says so in the
+// same words. Code that runs first wins: a preload ending with
+// `delete process.env.NODE_OPTIONS` leaves this reading undefined. Measured --
+// with that one extra line the variable reads null while the patched
+// execFileSync is still in place. What closes the hole is clearing the variable
+// BEFORE node starts, which is why the documented command is now
+// `env -u NODE_OPTIONS node ./Get-SupplyFreezeDigest.mjs`.
+//
+// What it does buy is the accidental case: a runner or shell that exports
+// NODE_OPTIONS for unrelated reasons no longer silently shapes a freeze record.
+//
+// Blanket rather than a list of preload spellings. Rounds 23 and 24 each
+// extended a denylist over this exact variable and each was still incomplete --
+// --use-system-ca=true and five other spellings survived the second one. A
+// third attempt at enumerating NODE_OPTIONS syntax is not warranted, and the
+// cost is only that a benign --max-old-space-size must be cleared too.
+if (!boolAnyToolchain && typeof process.env.NODE_OPTIONS === 'string') {
+  process.stderr.write(
+    'supply-freeze: refusing to record digests with NODE_OPTIONS set.\n' +
+    `  NODE_OPTIONS       ${process.env.NODE_OPTIONS}\n` +
+    '  --require and --import execute code before this script does, so any answer\n' +
+    '  it reports can be forged. run the documented command instead:\n' +
+    '    env -u NODE_OPTIONS node ./Get-SupplyFreezeDigest.mjs\n' +
+    '  this is a hygiene check, not a security boundary -- a preload can unset the\n' +
+    '  variable before this line runs. see the residuals in the record.\n');
+  process.exit(2);
+}
 
 // A symlinked entry point is not the reviewed invocation: the reviewed command
 // runs this file directly. Refused alongside the toolchain because it is the
