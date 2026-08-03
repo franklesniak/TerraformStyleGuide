@@ -69,7 +69,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `04067267f0e81419950be6ba899ed58bd32ea37141e9cabfb0d069284ea400ce` | script `script.sha256` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `79802b94a6953160e0455fe9cd09fee1319514c12487d48c915a4907518055ec` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` / `x64` | script `toolchain.platform`, `toolchain.arch` |
@@ -348,6 +348,11 @@ directories and symlinks, so such an entry did not come from the install, and a 
 over it would describe something npm cannot have built. The fold distinguishes each kind and
 folds the device number alongside, so the digest reported under `--any-toolchain` is honest even
 though the refusal is bypassed there.
+
+The audit is invoked with the validated registry passed on the command line, so the request
+provably goes to the registry the record names. An earlier version read the registry in one npm
+process and ran the audit in another, which left a window for a rewritten `.npmrc` to redirect
+the audit while the record still named the reviewed registry.
 
 Exit `9` applies only when the audit runs. The registry does not shape the installed tree —
 every package in the lockfile carries an `integrity` hash and `npm ci` verifies each tarball

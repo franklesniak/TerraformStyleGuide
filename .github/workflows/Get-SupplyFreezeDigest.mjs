@@ -796,7 +796,18 @@ if (boolSkipAudit) {
     process.exit(9);
   }
   objRecord.registry = strRegistry;
-  const objAudit = JSON.parse(runNpmAllowingFailure(['audit', '--json']));
+  // Round 11, reported. The registry was READ in one npm process and the audit
+  // then ran in a SEPARATE one that reloaded configuration from scratch, so a
+  // user or global .npmrc rewritten between the two would send the audit to a
+  // different registry while objRecord.registry still named the validated one
+  // -- a schema-valid answer from a mirror, recorded under the wrong source.
+  //
+  // Passing the validated value on the command line closes it by construction
+  // rather than by a second check afterwards: npm gives command-line config the
+  // highest precedence, so this invocation cannot be redirected by any file or
+  // environment variable. The value passed is the one already compared against
+  // REVIEWED_REGISTRY and the one recorded, so all three agree by construction.
+  const objAudit = JSON.parse(runNpmAllowingFailure(['audit', '--json', `--registry=${strRegistry}`]));
   // Reported and confirmed, and the most serious of the round. `npm audit`
   // exits nonzero for two completely different reasons: advisories were found,
   // and the audit endpoint failed. Under --json it prints a JSON object either
