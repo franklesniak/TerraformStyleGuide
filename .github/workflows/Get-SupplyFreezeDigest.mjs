@@ -840,10 +840,31 @@ function foldInstalledTree(strRoot) {
         // exact failure the round-38 endpoint check exists to stop. An
         // intermediate hop simply walks around it.
         //
-        // The rule enforced is: EVERY SYMLINK FOLLOWED MUST ITSELF LIVE INSIDE
-        // THE TREE, and the final destination must too.
+        // The rule enforced is: RESOLUTION NEVER LEAVES THE TREE. Every component
+        // the walk passes through -- not merely the symlinks, not merely the
+        // endpoint -- must be inside the real root.
         //
-        // That is the precise invariant, and it took a wrong version first. The
+        // Round 42 replaced a narrower rule with that one, reported by Codex.
+        // Round 41 required only that every symlink FOLLOWED live inside the
+        // tree, which still admitted:
+        //
+        //   zg.js -> /tmp/control42/../../<abs path back into node_modules>
+        //
+        // Measured: the kernel resolves and reads it, and the guard accepted it
+        // at exit 0 with zero refusals. /tmp/control42 is an ordinary directory,
+        // so round 41 never tested it -- but its TYPE is not covered by the
+        // digest either. Replacing it with a symlink to /tmp/evil after recording
+        // sends the `..` somewhere else entirely, and the link text, and so the
+        // digest, never move. An out-of-tree component is uncovered whatever it
+        // happens to be today.
+        //
+        // A useful consequence: an absolute target now fails at its first
+        // component, because an absolute path starts at "/" and works inward.
+        // That refuses absolute links without a separate rule for them, and it
+        // closes the reproducibility gap round 41 recorded but did not fix --
+        // an absolute target folds a machine-specific string.
+        //
+        // That is the precise invariant, and it took two wrong versions. The
         // fold pins a link by hashing its target TEXT, so the mapping from that
         // text to bytes has to be decided entirely by things the digest covers --
         // that is, by entries inside the tree. Any symlink OUTSIDE the tree that
@@ -883,20 +904,49 @@ function foldInstalledTree(strRoot) {
           while (arrPending.length > 0) {
             const strPart = arrPending.shift();
             if (strPart === '.') { continue; }
-            if (strPart === '..') { strAt = dirname(strAt); continue; }
-            const strCandidate = strAt === '/' ? `/${strPart}` : `${strAt}/${strPart}`;
-            if (!lstatSync(strCandidate).isSymbolicLink()) { strAt = strCandidate; continue; }
-            intHops += 1;
-            if (intHops > 40) {
-              throw Object.assign(new Error('too many levels of symbolic links'), { code: 'ELOOP' });
+            if (strPart === '..') {
+              strAt = dirname(strAt);
+              if (!funcInside(strAt)) { boolLeavesTree = true; break; }
+              continue;
             }
+            const strCandidate = strAt === '/' ? `/${strPart}` : `${strAt}/${strPart}`;
+            // Round 42/G. EVERY resolved component is tested, not just the ones
+            // that turn out to be symlinks. This is where round 41 was wrong.
             if (!funcInside(strCandidate)) { boolLeavesTree = true; break; }
-            const strTarget = readlinkSync(strCandidate);
-            if (isAbsolute(strTarget)) { strAt = '/'; }
-            arrPending = strTarget.split('/').filter((strPart2) => strPart2.length > 0)
-              .concat(arrPending);
+            const objComponent = lstatSync(strCandidate);
+            if (objComponent.isSymbolicLink()) {
+              intHops += 1;
+              if (intHops > 40) {
+                throw Object.assign(new Error('too many levels of symbolic links'), { code: 'ELOOP' });
+              }
+              const strTarget = readlinkSync(strCandidate);
+              if (isAbsolute(strTarget)) { strAt = '/'; }
+              arrPending = strTarget.split('/').filter((strPart2) => strPart2.length > 0)
+                .concat(arrPending);
+              continue;
+            }
+            // Round 42/H. Anything that has a component after it must be a
+            // directory; the kernel answers ENOTDIR and this walk now does too.
+            if (arrPending.length > 0 && !objComponent.isDirectory()) {
+              throw Object.assign(new Error('not a directory'), { code: 'ENOTDIR' });
+            }
+            strAt = strCandidate;
           }
           if (!boolLeavesTree && !funcInside(strAt)) { boolLeavesTree = true; }
+          // Round 42/H. The kernel is the referee for every divergence this walk
+          // failed to anticipate. I have now written this resolver wrong twice --
+          // once resolving an outside hop instead of catching it, once accepting
+          // a path the filesystem rejects with ENOTDIR -- and in both cases the
+          // walk was self-consistent and simply disagreed with reality. Asking
+          // the kernel what the path resolves to, and refusing when the answers
+          // differ, catches the class rather than the two known members of it.
+          //
+          // Only reached for links this walk believes are contained, so it never
+          // resolves an escaping path, and realpathSync's own containment result
+          // is not what is trusted here -- agreement is.
+          if (!boolLeavesTree && realpathSync(strPath) !== strAt) {
+            throw Object.assign(new Error('resolution disagreed with the kernel'), { code: 'EDIVERGE' });
+          }
         } catch (objError) {
           // errno codes are a closed OS-defined set, so naming the code is safe
           // in a way that naming the target is not.
@@ -1137,8 +1187,13 @@ function foldInstalledTree(strRoot) {
 function newestChangeTime(strRoot, arrExtraPaths) {
   let intNewest = 0;
   let strNewestPath = '';
+  // Round 42, reported by Codex. Every swept entry's change time is retained,
+  // not just the maximum over them. See the comparison for why the maximum was
+  // not safe.
+  const objEntryChangeTimes = new Map();
   const consider = (strPath, strLabel) => {
     const objStats = lstatSync(strPath);
+    objEntryChangeTimes.set(strLabel, objStats.ctimeMs);
     if (objStats.ctimeMs > intNewest) {
       intNewest = objStats.ctimeMs;
       strNewestPath = strLabel;
@@ -1209,7 +1264,7 @@ function newestChangeTime(strRoot, arrExtraPaths) {
   for (const strPath of arrExtraPaths) {
     considerThroughLinks(strPath, strPath.split('/').pop());
   }
-  return { ctimeMs: intNewest, path: strNewestPath };
+  return { ctimeMs: intNewest, path: strNewestPath, entries: objEntryChangeTimes };
 }
 
 // The advisory posture, reduced to what a policy decision actually turns on.
@@ -1504,7 +1559,11 @@ const objBaselineChange = (() => {
     objRootStats = null;
   }
   if (!objRootStats?.isDirectory()) {
-    return { ctimeMs: 0, path: '(no walkable installed tree when recording began)' };
+    return {
+      ctimeMs: 0,
+      path: '(no walkable installed tree when recording began)',
+      entries: new Map(),
+    };
   }
   return scanOrRefuse(
     () => newestChangeTime(strTreeRoot, [strPackagePath, strLockPath]),
@@ -2513,19 +2572,69 @@ const objNewestChange = scanOrRefuse(
 // same filesystem, through the same lstat, truncated by the same granularity as
 // every value it is compared against, captured before any recorded byte is read.
 // No clock is consulted and no margin is guessed.
-if (objNewestChange.ctimeMs > objBaselineChange.ctimeMs) {
+// Round 42, reported by Codex. Compared PER ENTRY. This used to compare one
+// maximum against another, and a maximum silently loses any change that does not
+// exceed it.
+//
+// If any swept inode carries a ctime AHEAD of the recorder's clock -- clock skew
+// on a network filesystem, or a local inode stamped before the clock was stepped
+// backward -- then the baseline maximum is that future value, and a write landing
+// after the second fold gets a LOWER ctime. The maximum does not move, the
+// comparison passes, and the run records a digest for bytes that are no longer on
+// disk. Measured, with a control:
+//
+//   normal clock, mid-run write to a swept file  -> exit 10, refused
+//   one inode stamped 600s ahead, same write     -> exit 0, ACCEPTED
+//
+// Same write, same timing; the only difference was one future-stamped inode.
+//
+// The per-entry comparison needs no clock at all -- it compares the baseline
+// reading against the final reading of the same inode, so a ctime that moves in
+// EITHER direction is a difference. That is where the skew-robustness comes from,
+// and it is why a separate "refuse future ctimes" rule was considered and
+// dropped: it would add a false-failure mode on a legitimately skewed network
+// filesystem while detecting nothing this does not already catch.
+const funcFirstSweepDifference = (objBaseline, objFinal) => {
+  for (const [strLabel, intFinal] of objFinal) {
+    if (!objBaseline.has(strLabel)) {
+      return { kind: 'appeared during the run', label: strLabel, now: intFinal };
+    }
+    if (objBaseline.get(strLabel) !== intFinal) {
+      return {
+        kind: 'change time moved', label: strLabel, was: objBaseline.get(strLabel), now: intFinal,
+      };
+    }
+  }
+  for (const [strLabel, intWas] of objBaseline) {
+    if (!objFinal.has(strLabel)) {
+      return { kind: 'disappeared during the run', label: strLabel, was: intWas };
+    }
+  }
+  return null;
+};
+const objSweepDifference = funcFirstSweepDifference(
+  objBaselineChange.entries, objNewestChange.entries);
+if (objSweepDifference) {
   process.stderr.write(
     'supply-freeze: the recorded inputs changed while recording; refusing to report.\n' +
-    '  detected by        inode change time, not by the fold comparison\n' +
-    `  newest change      ${objNewestChange.path}\n` +
-    `                     ctime ${new Date(objNewestChange.ctimeMs).toISOString()}\n` +
-    `  baseline was       ${objBaselineChange.path}\n` +
-    `                     ctime ${new Date(objBaselineChange.ctimeMs).toISOString()}\n` +
+    '  detected by        per-entry inode change time, not by the fold comparison\n' +
+    `  entry              ${formatTreeName(objSweepDifference.label)}\n` +
+    `  what changed       ${objSweepDifference.kind}\n` +
+    (objSweepDifference.was === undefined
+      ? ''
+      : `  baseline ctime     ${new Date(objSweepDifference.was).toISOString()}\n`) +
+    (objSweepDifference.now === undefined
+      ? ''
+      : `  final ctime        ${new Date(objSweepDifference.now).toISOString()}\n`) +
+    `  entries swept      ${objBaselineChange.entries.size} at baseline, ` +
+      `${objNewestChange.entries.size} at the end\n` +
     `  recording began    ${new Date(intRecordingStartedAt).toISOString()}\n` +
-    '  an entry was written after this run began, so the digest above describes\n' +
-    '  bytes that are no longer on disk. record against a quiescent tree.\n' +
-    '  both ctimes are filesystem-stamped and directly comparable; the wall-clock\n' +
-    '  line is context only and is not what this refusal tested.\n');
+    '  an entry changed after this run began, so the digest above describes bytes\n' +
+    '  that are no longer on disk. record against a quiescent tree.\n' +
+    '  every swept entry is compared against its own baseline reading, so a change\n' +
+    '  is caught whichever direction the timestamp moves. comparing one newest\n' +
+    '  ctime against another would miss any write that lands below a maximum set\n' +
+    '  by an inode stamped ahead of this machine\'s clock.\n');
   process.exit(10);
 }
 

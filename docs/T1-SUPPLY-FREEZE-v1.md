@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `11a0f12031290817e6c2e0de72729c8abec8032ad26371c9873af4bddea593dd` | script `script.sha256` |
+| Freeze script SHA-256 | `5ba74082e347dc9308f66e6ca4150ccf38dc8cf790c0febb931185b4a8372382` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` | script `toolchain.platform` |
