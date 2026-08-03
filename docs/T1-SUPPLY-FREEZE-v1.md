@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `13c2954aa3240ce087d62bec3ec0345eeb28c05a88bea5f54e1b182938b339f8` | script `script.sha256` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `af4ff11e863329151335cb25e675ef3a553f27df65dc4b7b9ae00f1f4242db53` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` / `x64` | script `toolchain.platform`, `toolchain.arch` |
@@ -250,9 +250,11 @@ pinning it would reintroduce exactly the drift the execute-bit normalization exi
 To sidestep ambient configuration files:
 
 ```bash
-: > /tmp/npm-user-empty; : > /tmp/npm-global-empty
-export NPM_CONFIG_USERCONFIG=/tmp/npm-user-empty
-export NPM_CONFIG_GLOBALCONFIG=/tmp/npm-global-empty
+strIsolationDirectory="$(mktemp -d)"
+: > "$strIsolationDirectory/npm-user-empty"
+: > "$strIsolationDirectory/npm-global-empty"
+export NPM_CONFIG_USERCONFIG="$strIsolationDirectory/npm-user-empty"
+export NPM_CONFIG_GLOBALCONFIG="$strIsolationDirectory/npm-global-empty"
 npm ci --ignore-scripts --no-audit --no-fund
 node Get-SupplyFreezeDigest.mjs
 ```
@@ -265,6 +267,14 @@ files, and refuses with exit 6 — against a tree it had just installed correctl
 and the recorder still exited 6, so the documented workaround could not be completed. The
 environment variables above are read by every npm invocation, which is why they are used
 instead.
+
+**Use `mktemp -d`, not fixed paths in `/tmp`.** An earlier draft of these instructions named
+`/tmp/npm-user-empty` and `/tmp/npm-global-empty` outright. On a shared host any other user can
+pre-create those names as symlinks pointing at a file the reader can write, and `: >` follows a
+symlink — so running the documented command would truncate that target with the reader's
+permissions. `mktemp -d` creates a fresh directory with a name the attacker cannot predict and
+permissions only the owner holds, so the two files inside it cannot be pre-empted. Remove it with
+`rm -rf "$strIsolationDirectory"` once the record is taken.
 
 **The two paths must be different files.** An earlier draft pointed both options at `/dev/null`,
 and `npm ci` then exits 1 before the install starts — not because `/dev/null` is unusable as a
@@ -397,8 +407,11 @@ not a freeze record.
 
 ### Installed tree
 
-Folds the bytes actually present under `node_modules`: every file's path, normalized execute
-bits and content, every symlink's path and target, and every directory's path, in sorted order.
+Folds the bytes actually present under `node_modules`: every file's path, normalized **read and
+execute** bits and content; every symlink's path and raw target; every directory's path and
+normalized execute bits; every special file's path, kind and device number; and the root's own
+execute bits — in sorted order. The table below is the exact definition; this sentence is a
+summary of it and has twice been left behind when the fold changed.
 
 ### What is folded, per entry kind
 
@@ -406,6 +419,27 @@ This table is the authoritative definition. A reimplementer should be able to re
 recorded digest from it without reading the script; the script is the reference implementation,
 not the specification, and an earlier draft let the two drift — the file mask changed and this
 description did not follow.
+
+#### The byte encoding
+
+Without this, "length-prefixed" admits several incompatible encodings that all satisfy the prose
+and produce different digests. The hash is SHA-256 over a single byte stream built as follows.
+
+* A **tag** is one ASCII character, written with no separator around it.
+* A **length-prefixed field** is the field's byte length in ASCII decimal, then a single `:`
+  (`0x3A`), then exactly that many bytes. Nothing separates one field from the next.
+* **Paths** are the entry's path relative to `node_modules`, `/`-separated, with no leading
+  slash, encoded UTF-8.
+* **Permission masks** are the masked mode as a three-character, zero-padded, lower-case octal
+  ASCII string — `0o755 & 0o555` is written `555`, `0o644 & 0o555` is written `444` — and that
+  string is then length-prefixed like any other field.
+* **Device numbers** are the raw `rdev` integer in ASCII decimal, length-prefixed.
+* **Symlink targets** are the raw bytes the kernel stored, never a decoded string.
+* **File content** is the file's bytes, length-prefixed.
+
+Directory entries are emitted in ascending order of name, compared as JavaScript strings — that
+is, by UTF-16 code unit — and a directory's own record is written before the records of the
+entries beneath it.
 
 Entries are walked in sorted order by name. Every variable-length field is length-prefixed, which
 is what makes the encoding injective.

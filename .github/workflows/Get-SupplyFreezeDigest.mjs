@@ -141,6 +141,13 @@ const REVIEWED_NPM_CONFIG = Object.freeze({
 // and it is the cheapest of them for a reader to satisfy.
 const REVIEWED_UMASK = 0o022;
 
+// Round 15, reported. This was read three times -- once by the guard, once by
+// its own failure message, and once by the record -- so the value refused and
+// the value reported were separate observations of the same thing. Read once,
+// formatted once, used everywhere.
+const intObservedUmask = process.umask();
+const strObservedUmask = `0${intObservedUmask.toString(8).padStart(3, '0')}`;
+
 // The registry the recorded advisory posture was snapshotted from. Checked only
 // on the audit path -- see the comment at its use for why the installed tree is
 // not exposed to this and a --no-audit run therefore is not refused.
@@ -766,10 +773,10 @@ if (!boolAnyToolchain) {
 // themselves, so umask 022 (644/755), 027 (640/750) and 077 (600/700) are all
 // distinguishable from the record alone -- as is any other umask, which a
 // predicate over a single chosen bit could not manage.
-if (!boolAnyToolchain && process.umask() !== REVIEWED_UMASK) {
+if (!boolAnyToolchain && intObservedUmask !== REVIEWED_UMASK) {
   process.stderr.write(
     'supply-freeze: refusing to record digests under an unreviewed umask.\n' +
-    `  umask              observed 0${process.umask().toString(8).padStart(3, '0')}, `
+    `  umask              observed ${strObservedUmask}, `
       + `reviewed 0${REVIEWED_UMASK.toString(8).padStart(3, '0')}\n` +
     '  npm applies the process umask when it extracts, so this changes the recorded\n' +
     '  execute bits and therefore the installed-tree digest.\n' +
@@ -786,7 +793,7 @@ const objRecord = {
     npm: strNpmVersion,
     platform: process.platform,
     arch: process.arch,
-    umask: `0${process.umask().toString(8).padStart(3, '0')}`,
+    umask: strObservedUmask,
   },
   manifest: {
     'package.json': sha256(strPackageBefore),
@@ -841,6 +848,24 @@ try {
 //
 // A missing node_modules used to reach readdirSync and abort with a raw ENOENT
 // stack trace, which tells a reader nothing about what this script wanted.
+// Round 15, reported. A MISSING root is refused whatever the flags say. The
+// bypass promises output that is "explicitly not a freeze record" -- but with no
+// node_modules there is nothing to fold, so before this the bypassed run threw a
+// raw ENOENT, and after the scan errors were caught it exited 10 blaming a tree
+// that changed while recording. Nothing changed; the tree was never there.
+//
+// The bypass still applies to a tree that is PRESENT but does not satisfy the
+// lockfile, which is a number a reader can legitimately want.
+if (!existsSync(strTreeRoot)) {
+  process.stderr.write(
+    'supply-freeze: refusing to record digests for a tree that is not the installed tree.\n' +
+    '  node_modules       MISSING\n' +
+    '  there is nothing to fold, so no digest exists to report -- with or without\n' +
+    '  --any-toolchain. install first with the documented command:\n' +
+    '    npm ci --ignore-scripts --no-audit --no-fund\n');
+  process.exit(7);
+}
+
 if (!boolAnyToolchain && (!existsSync(strTreeRoot) || !objRecord.treeSatisfiesLockfile)) {
   process.stderr.write(
     'supply-freeze: refusing to record digests for a tree that is not the installed tree.\n' +
@@ -856,7 +881,37 @@ if (!boolAnyToolchain && (!existsSync(strTreeRoot) || !objRecord.treeSatisfiesLo
 // quiescence check below can compare every inode-change time against.
 const intRecordingStartedAt = Date.now();
 
-const objTree = foldInstalledTree(strTreeRoot);
+// Round 15, reported and confirmed. Both scans read the tree entry by entry, so
+// a concurrent delete between a readdir and the read that follows it raises
+// ENOENT from inside the walk -- and nothing caught it. Measured, with the fold
+// paused and `node_modules/glob` removed after the root readdir had already
+// listed it: exit code 1 and a raw `node:fs` stack trace, where the record
+// documents exit 10 and a message naming the cause.
+//
+// A scan that cannot complete has, by definition, failed to observe a tree that
+// held still, so it is the same refusal -- the recorded inputs changed while
+// recording. The errno and the path it failed on are reported, because "the
+// tree moved" and "this file became unreadable" send a reader to different
+// places.
+//
+// Deliberately NOT caught inside the walk to skip the entry: that would drop it
+// from the digest silently, which is the defect round 8 found in the
+// content-free `?` branch. A scan either completes over everything or refuses.
+function scanOrRefuse(fnScan, strWhat) {
+  try {
+    return fnScan();
+  } catch (objError) {
+    process.stderr.write(
+      'supply-freeze: the recorded inputs changed while recording; refusing to report.\n' +
+      `  detected by        ${strWhat} could not complete\n` +
+      `  error              ${objError.code ?? 'unknown'} at ${objError.path ?? '(path not reported)'}\n` +
+      '  an entry vanished or became unreadable while it was being read, so no\n' +
+      '  complete measurement of the tree exists. record against a quiescent tree.\n');
+    process.exit(10);
+  }
+}
+
+const objTree = scanOrRefuse(() => foldInstalledTree(strTreeRoot), 'the first fold');
 objRecord.installedTreeSha256 = objTree.sha256;
 objRecord.installedTreeFiles = objTree.files;
 objRecord.installedTreeSymlinks = objTree.symlinks;
@@ -1062,7 +1117,7 @@ if (readFileSync(strPackagePath, 'utf8') !== strPackageBefore
 // microseconds wide. A guarantee that holds except in the case nobody thought
 // about is the defect this review found five times over; the cost is one extra
 // pass at roughly 0.1s.
-const objTreeAfter = foldInstalledTree(strTreeRoot);
+const objTreeAfter = scanOrRefuse(() => foldInstalledTree(strTreeRoot), 'the second fold');
 if (objTreeAfter.sha256 !== objTree.sha256) {
   process.stderr.write(
     'supply-freeze: the installed tree changed while recording; refusing to report.\n' +
@@ -1093,7 +1148,8 @@ if (objTreeAfter.sha256 !== objTree.sha256) {
 // because a userspace sequential scan has no atomic snapshot to compare against.
 // A filesystem-level snapshot would close it outright and is the right answer
 // for a reader who has one; that is a property of the host, not of this script.
-const objNewestChange = newestChangeTime(strTreeRoot, [strPackagePath, strLockPath]);
+const objNewestChange = scanOrRefuse(
+  () => newestChangeTime(strTreeRoot, [strPackagePath, strLockPath]), 'the quiescence sweep');
 if (objNewestChange.ctimeMs >= intRecordingStartedAt) {
   process.stderr.write(
     'supply-freeze: the recorded inputs changed while recording; refusing to report.\n' +
