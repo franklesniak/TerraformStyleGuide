@@ -467,8 +467,27 @@ const REVIEWED_VERIFY_SINGLE_ASSIGNMENT = Object.freeze([
 // governed projection today, so a ban would also have worked and would have
 // broken the first legitimate one; folding the continuation away makes every
 // pattern downstream correct regardless of how the line is broken.
+//
+// Round 56, reported: folding MORE than PowerShell folds is itself an evasion.
+// A fold joins the next line onto this one, and a line that is no longer a line
+// is invisible to every rule anchored at the start of one -- so `$null = 0` +
+// backtick + a trailing SPACE + newline + `pwsh ./payload.ps1` hid a bare
+// command that PowerShell really does run. Measured accepted.
+//
+// So this folds exactly what PowerShell folds, and no more. Measured with
+// [scriptblock]::Create rather than assumed, because two of these four are not
+// what the documentation's one-line summary suggests:
+//
+//   `  + newline   -> continues      ``   + newline -> does NOT (escaped tick)
+//   `  + " " + NL  -> does NOT       ```  + newline -> continues
+//
+// Two rules, both measured: the backtick must be the FINAL character before the
+// newline, and the run of backticks ending there must be ODD -- an even run is
+// escaped-backtick pairs and continues nothing. The leading `(?<!`)` anchors the
+// match at the start of a run so parity is counted over the whole run, and the
+// pairs are preserved because they are literal content, not continuation.
 function normalizeLineContinuations(strText) {
-  return strText.replace(/`[ \t]*\r?\n[ \t]*/gu, ' ');
+  return strText.replace(/(?<!`)((?:``)*)`\r?\n[ \t]*/gu, '$1 ');
 }
 
 function variableWritePattern(strName) {
@@ -558,10 +577,22 @@ function variableReferencePattern(strName) {
 // boundary into the generator -- so a ban naming Diagnostics.Process would
 // have had to carve them out and would then have admitted Start anyway. Start
 // is simply not in this list, and neither is anything else nobody reviewed.
+//
+// Round 56: the five generic and array constructions below were always in this
+// step and were never checked -- the old pattern stopped at the first `]`, so it
+// could not parse their type names and simply did not match them. Seven of the
+// step's fifty static calls were therefore outside the allowlist entirely.
+// Reviewed on being made visible: every one is a `::new` on a collection or
+// array type, and none of them writes anything.
 const REVIEWED_VERIFY_STATIC_CALLS = Object.freeze([
   'Convert::ToBase64String',
+  'byte[]::new',
   'System.Array::Copy', 'System.Array::Reverse',
   'System.BitConverter::GetBytes', 'System.BitConverter::IsLittleEndian',
+  'System.Collections.Generic.List[byte[]]::new',
+  'System.Collections.Generic.List[string]::new',
+  'System.Collections.Generic.SortedDictionary[string, string]::new',
+  'System.Collections.Generic.Stack[string]::new',
   'System.Diagnostics.Process::new', 'System.Diagnostics.ProcessStartInfo::new',
   'System.IO.Directory::EnumerateFileSystemEntries', 'System.IO.Directory::Exists',
   'System.IO.Directory::GetFiles',
@@ -619,9 +650,16 @@ const REVIEWED_VERIFY_NEW_VARIABLE = Object.freeze([
 // Reviewed invocations carrying the brace depth each was reviewed at. Third
 // site to need this shape, so it is one function: a line whose projection holds
 // an invocation operator must be a reviewed line, in order, at its depth.
+//
+// The raw text is normalised here too, and that is load-bearing rather than
+// tidiness. Found while reproducing the round-56 fold: a fold removes a newline,
+// so a raw split has MORE lines than the projected split and every raw line
+// after the first continuation is off by one. This read a comment as the
+// invocation operand and rejected with a message naming it. Both sides have to
+// be counted in the same units.
 function assertReviewedInvocations(strRaw, strCode, arrReviewed, strCategory, strLabel) {
   const arrProjected = strCode.split('\n');
-  const arrRawLines = strRaw.split('\n');
+  const arrRawLines = normalizeLineContinuations(strRaw).split('\n');
   const arrObserved = [];
   let intLineStart = 0;
   for (let intIndex = 0; intIndex < arrProjected.length; intIndex += 1) {
@@ -644,6 +682,124 @@ function assertReviewedInvocations(strRaw, strCode, arrReviewed, strCategory, st
       reject(strCategory, `a reviewed invocation is no longer reachable where it was reviewed: ${strReviewedLine}`);
     }
   }
+}
+
+// A literal type, then a literal member name. Generic arguments are part of the
+// type -- `[System.Collections.Generic.List[byte[]]]::new()` and
+// `[...SortedDictionary[string, string]]::new()` both appear in reviewed code,
+// and a pattern that stopped at the first `]` matched neither, which is how
+// seven of the verify step's fifty static calls were invisible to its allowlist.
+const STATIC_MEMBER_CALL =
+  /\[\s*([A-Za-z_][A-Za-z0-9_.]*(?:\[[A-Za-z0-9_.,[\] \t]*\])?)\s*\]\s*::\s*([A-Za-z_][A-Za-z0-9_]*)/gu;
+
+// Round 56, reported for one surface and measured on all five. `::` was
+// constrained only where an allowlist happened to exist, and even there only on
+// one side of the operator, so three walks past it were accepted:
+//
+//   [Type]::$strMember(...)   reported -- no literal member for the pattern to read
+//   $typ = [Type]; $typ::M()  a type in a VARIABLE: no `]` for the pattern to anchor
+//   [Generic[T]]::M()         a type the pattern could not parse, so never checked
+//
+// The first was reported against build.verify; measured, all three reach the
+// generator and both Markdown steps as well, which had no `::` rule whatever.
+//
+// Enumerating those three spellings is the chase that lost in rounds 51, 53 and
+// 55, so the FORM is closed instead: every `::` in the projection must be one of
+// these well-formed literal calls. That is a count, so it has no spellings --
+// anything that reaches a static member another way leaves a `::` the pattern
+// cannot claim. Audited before shipping: on all five governed surfaces the total
+// `::` count already equals the well-formed count (verify 50, generator 68,
+// acquire 3, Markdown 10 and 9), so this refuses forms the reviewed sources
+// never used rather than narrowing one they do.
+//
+// The allowlists that already exist keep running on top of this, and get the
+// matches from here so they see the generic types too.
+// One rule, but it still names what it found: rather than reporting that a count
+// moved, it reports the `::` no well-formed call could claim, with its context.
+// That keeps the single closure and the specific diagnostic together, instead of
+// buying the message back by re-enumerating the shapes.
+// Round 56, found attacking the closure above rather than reported -- and it
+// matters because that closure cannot reach it: a Type OBJECT calls any static
+// member through instance reflection, with no `::` anywhere in the code.
+//
+//   $typ = [System.Diagnostics.Process]        <- a type literal in VALUE position
+//   $typ.GetMethod('Start').Invoke($null, @('pwsh', '-NoProfile -File ./p.ps1'))
+//
+// Measured both ways before believing it: in PowerShell the reflection really
+// does call the method, and against the validator it was accepted on
+// build.verify, the generator and both Markdown steps. `[System.Math].GetMethod`
+// does the same with no variable at all.
+//
+// Enumerating reflection members would lose -- GetMethod, InvokeMember,
+// GetField, and `$typ.$strName(...)` computes the member name anyway. So the
+// type VALUE is refused rather than its uses: a type literal may be a static
+// call or a cast, and may not be anything else. Audited across all five
+// governed sources first -- 143 type literals, followed by exactly `::` (115),
+// `$` (26) and `[` (2, both the `[void][System.IO.Directory]::CreateDirectory`
+// cast chain). Not one is followed by `.` or by an expression end, so this
+// refuses a form none of them uses rather than narrowing one they do.
+function assertTypeLiteralsAreNotValues(strCode, strCategory, strLabel) {
+  const setTypeLiteralEnd = new Set();
+  for (let intAt = 0; intAt < strCode.length; intAt += 1) {
+    if (strCode[intAt] !== '[') continue;
+    // An index bracket follows a name, a call or an earlier index; a type
+    // literal does not. Without this, $objWorktreeBefore[$strPath] reads as a
+    // type. A `]` is the ambiguous one: it closes an index in `$a[0][1]` and a
+    // cast in `[void][X]`, so it counts as a type only when the bracket it
+    // closes was itself identified as one.
+    const strBefore = strCode.slice(0, intAt).replace(/[ \t]+$/u, '');
+    const strPrev = strBefore.slice(-1);
+    if (/[A-Za-z0-9_)$]/u.test(strPrev)) continue;
+    if (strPrev === ']' && !setTypeLiteralEnd.has(strBefore.length - 1)) continue;
+    let intDepth = 0;
+    let intEnd = intAt;
+    for (; intEnd < strCode.length; intEnd += 1) {
+      if (strCode[intEnd] === '[') intDepth += 1;
+      else if (strCode[intEnd] === ']') { intDepth -= 1; if (intDepth === 0) break; }
+    }
+    if (intDepth !== 0) continue;
+    // Trimmed before the test: `[ System.Math ]` is the same type, and testing
+    // the untrimmed text would have skipped it as "not a type name" and handed
+    // back the whole evasion.
+    const strInner = strCode.slice(intAt + 1, intEnd).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_.,[\] \t]*$/u.test(strInner)) continue;
+    setTypeLiteralEnd.add(intEnd);
+    if (!/^[:$[]/u.test(strCode.slice(intEnd + 1).replace(/^[ \t]*/u, ''))) {
+      reject(strCategory, `${strLabel} uses the type [${strInner}] as a value rather than as a static call or a cast`);
+    }
+  }
+}
+
+// The last way to a Type object once type literals may not be values: obtain one
+// from a call instead. `[System.Type]::GetType('System.Diagnostics.Process')` is
+// a perfectly well-formed literal static call, so both rules above pass it, and
+// on the two surfaces that have no callee allowlist -- the generator and the
+// Markdown steps -- it was the walk that survived my own fix.
+//
+// This is a capability ban rather than a closure, which this file otherwise
+// argues against, and the distinction is that the capability is wanted nowhere:
+// measured across all five governed sources, every one of these appears exactly
+// zero times in code. Removing something none of them uses is the same move
+// already made for New-Object and the network clients, not the spelling chase
+// made for something they do. `Module` is deliberately absent from the list --
+// it is the weakest route by far and would collide with a -Module parameter.
+const REFLECTION_SURFACE =
+  /\b(?:GetType|GetMethods?|InvokeMember|GetProperty|GetField|GetConstructor|GetMember|MakeGenericMethod|Activator|Reflection|Assembly|CreateInstance|TypeHandle)\b/iu;
+
+function assertLiteralStaticCalls(strCode, strCategory, strLabel) {
+  assertTypeLiteralsAreNotValues(strCode, strCategory, strLabel);
+  if (REFLECTION_SURFACE.test(strCode)) {
+    reject(strCategory, `${strLabel} reaches a member through reflection`);
+  }
+  const arrCalls = [...strCode.matchAll(STATIC_MEMBER_CALL)];
+  const setClaimed = new Set(arrCalls.map((objCall) => objCall.index + objCall[0].indexOf('::')));
+  for (const objAt of strCode.matchAll(/::/gu)) {
+    if (!setClaimed.has(objAt.index)) {
+      const strContext = strCode.slice(Math.max(0, objAt.index - 40), objAt.index + 16).replace(/\s+/gu, ' ').trim();
+      reject(strCategory, `${strLabel} reaches a static member other than by naming a literal type and a literal member: ${strContext}`);
+    }
+  }
+  return arrCalls;
 }
 
 // The generator's command-position surface, enumerated from the reviewed script.
@@ -1860,8 +2016,10 @@ export function validateBuildPolicy(workflow, source) {
     reject('side-effect-policy', 'build.verify adds a process-termination path that can bypass a required probe');
   }
   // Static method calls, which are neither a bare command nor an invocation
-  // operator and so were visible to no other rule here.
-  for (const objCall of strVerifyCode.matchAll(/\[\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\]\s*::\s*([A-Za-z_][A-Za-z0-9_]*)/gu)) {
+  // operator and so were visible to no other rule here. The form closure runs
+  // first so a computed member, or a type held in a variable, reports as the
+  // shape it is rather than as a name that happens not to be on the list.
+  for (const objCall of assertLiteralStaticCalls(strVerifyCode, 'side-effect-policy', 'build.verify')) {
     if (!REVIEWED_VERIFY_STATIC_CALLS.includes(`${objCall[1]}::${objCall[2]}`)) {
       reject('side-effect-policy', `build.verify makes an unreviewed static call: ${objCall[1]}::${objCall[2]}`);
     }
@@ -2185,13 +2343,12 @@ function validateAcquireStep(step, label, expected) {
   // static call they make is these five, and only CreateDirectory writes
   // anything -- a directory, not file content. Anything else is a capability
   // the acquire step has never needed.
-  for (const call of stepCode.matchAll(/\[\s*([^\]\n]*?)\s*\]\s*::\s*([A-Za-z_]\w*)?/gu)) {
-    // A computed member name reaches any method without spelling one, which is
-    // the same evasion the & rule refuses for commands and New-Object for
-    // types. There is no literal to check, so the form itself is refused.
-    if (call[2] === undefined) {
-      reject('acquire-policy', `${label} calls a static member through a computed name`);
-    }
+  //
+  // Round 56: this refused a computed MEMBER but still required a literal `[`
+  // type `]` to anchor on, so `$typ = [System.IO.File]; $typ::Copy(...)` was
+  // matched by nothing at all and accepted. Both sides of the `::` are now
+  // closed by one shared rule, which is the same rule build.verify uses.
+  for (const call of assertLiteralStaticCalls(stepCode, 'acquire-policy', label)) {
     if (!REVIEWED_ACQUIRE_STATIC_CALLS.has(`${call[1]}::${call[2]}`.toLowerCase())) {
       reject('acquire-policy', `${label} calls an unreviewed static member: ${call[1]}::${call[2]}`);
     }
@@ -2600,6 +2757,16 @@ function assertMarkdownStepSurface(step, label, expected) {
   if (/GetEnvironmentVariable|SetEnvironmentVariable/iu.test(stepCode)) {
     reject('markdown-policy', `${label} resolves an environment variable through a computed name`);
   }
+  // Round 56, carried here rather than reported here. The `::` closure was
+  // reported against build.verify; measured, both of these steps accepted a
+  // computed member and a type held in a variable too, because the denylist
+  // above names execution APIs and neither form has to spell one -- the walk
+  // measured was `$typ = [System.IO.File]; $typ::Copy(...)` over the validator's
+  // own bytes. There is no allowlist to consult here, so the form alone is
+  // closed: what these steps may CALL stays governed by the denylist, and how
+  // they may reach any static member at all is now governed the same way
+  // everywhere. Audited: 9 well-formed calls in each, total `::` equal.
+  assertLiteralStaticCalls(stepCode, 'markdown-policy', label);
 }
 
 // Closing backstop, the same shape as the one on the verify step. The named
@@ -3448,6 +3615,32 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-155', 'measured map mutated through an alias', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigests\n', '          $objWorktreeAfter = Get-WorktreeFileDigests\n          $objAlias = $objWorktreeBefore\n')],
   // Neither a call operator nor a bare command token, so no rule here saw it.
   ['T1-BUILD-156', 'process launched through a static call', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', "          [System.Diagnostics.Process]::Start('pwsh', '-NoProfile -File ./payload.ps1')\n          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n")],
+  // Round 56. A backtick is a line continuation only when it is the FINAL
+  // character before the newline and its run is odd -- so neither of these two
+  // is one, and folding them anyway hid the bare command on the next line from
+  // every rule anchored at the start of a line. Both measured accepted before.
+  // The payload sits AFTER the generator on purpose: before it, the fold moves
+  // the reviewed invocation's line and the suite reports that instead.
+  ['T1-BUILD-157', 'bare command hidden behind a backtick with a trailing space', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigests', '          $null = 0` \n          pwsh -NoProfile -File ./payload.ps1\n          $objWorktreeAfter = Get-WorktreeFileDigests')],
+  ['T1-BUILD-158', 'bare command hidden behind an escaped backtick pair', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigests', '          $null = 0``\n          pwsh -NoProfile -File ./payload.ps1\n          $objWorktreeAfter = Get-WorktreeFileDigests')],
+  // Round 56, reported: no literal member for the pattern to read.
+  ['T1-BUILD-159', 'process launched through a computed static member', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', "          $strMethod = 'Start'\n          [System.Diagnostics.Process]::$strMethod('pwsh', '-NoProfile -File ./payload.ps1')\n          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n")],
+  // Round 56, found attacking the fix for the one above: a type held in a
+  // variable reaches `::` with no `]` for the pattern to anchor on at all.
+  ['T1-BUILD-160', 'process launched through a type held in a variable', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', "          $typHandle = [System.Diagnostics.Process]\n          $typHandle::Start('pwsh', '-NoProfile -File ./payload.ps1')\n          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n")],
+  // The same walk reached all five governed surfaces, so it is held closed on
+  // each of them. The acquire steps are byte-identical, so all three move.
+  ['T1-BUILD-161', 'acquire writes the validator through a type held in a variable', 'build', (source) => source.split('          & $strGitPath init --quiet .').join("          $typHandle = [System.IO.File]\n          $typHandle::Copy('./payload', './.github/workflows/Validate-WorkflowPolicy.mjs')\n          & $strGitPath init --quiet .")],
+  ['T1-GENERATOR-036', 'generator reaches a static member through a type held in a variable', 'generator', (source) => replaceOnce(source, '    $strGitPath = $arrGitCommands[0].Source', "    $typHandle = [System.IO.File]\n    $typHandle::Copy('./payload', './STYLE_GUIDE.md')\n    $strGitPath = $arrGitCommands[0].Source")],
+  ['T1-MARKDOWN-096', 'validate step reaches a static member through a type held in a variable', 'markdown', (source) => replaceOnce(source, '          $intPolicyExit = $LASTEXITCODE', "          $typHandle = [System.IO.File]\n          $typHandle::Copy('./payload', './Validate-WorkflowPolicy.mjs')\n          $intPolicyExit = $LASTEXITCODE")],
+  // The irreducible form of the same walk: instance reflection on a type
+  // literal, needing no variable to hold it and containing no `::` at all. This
+  // is the fixture that says the rule is about the type VALUE, not about `::`.
+  ['T1-BUILD-162', 'static member reached by reflection on a type literal', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', "          [System.Diagnostics.Process].GetMethod('Start').Invoke($null, @('pwsh', '-NoProfile -File ./payload.ps1'))\n          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n")],
+  // The walk that survived the two rules above: a Type obtained from a CALL
+  // rather than from a literal. Placed on the generator because that is one of
+  // the two surfaces with no callee allowlist to catch GetType on its own.
+  ['T1-GENERATOR-037', 'generator reaches a static member through a type obtained by reflection', 'generator', (source) => replaceOnce(source, '    $strGitPath = $arrGitCommands[0].Source', "    [System.Type]::GetType('System.Diagnostics.Process').GetMethod('Start').Invoke($null, @('pwsh', '-NoProfile'))\n    $strGitPath = $arrGitCommands[0].Source")],
   // Balanced deliberately. An unclosed `if ($false) {` shifts the depth of every
   // later gate too, so the suite would report whichever gate happens to come
   // next rather than the one this fixture is about.
@@ -3829,7 +4022,16 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-057": "acquire-policy: markdown.policy.acquire adds a network client",
   "T1-MARKDOWN-058": "acquire-policy: markdown.policy.acquire constructs an object through New-Object",
   "T1-MARKDOWN-059": "acquire-policy: markdown.policy.acquire calls an unreviewed static member: System.IO.File::Copy",
-  "T1-MARKDOWN-060": "acquire-policy: markdown.policy.acquire calls a static member through a computed name",
+  "T1-BUILD-157": "side-effect-policy: build.verify runs an unreviewed command: pwsh",
+  "T1-BUILD-158": "side-effect-policy: build.verify runs an unreviewed command: pwsh",
+  "T1-BUILD-159": "side-effect-policy: build.verify reaches a static member other than by naming a literal type and a literal member: d = ' ' [System.Diagnostics.Process]::$strMethod('",
+  "T1-BUILD-160": "side-effect-policy: build.verify uses the type [System.Diagnostics.Process] as a value rather than as a static call or a cast",
+  "T1-BUILD-161": "acquire-policy: build.verify.acquire uses the type [System.IO.File] as a value rather than as a static call or a cast",
+  "T1-GENERATOR-036": "supply-policy: the generator uses the type [System.IO.File] as a value rather than as a static call or a cast",
+  "T1-MARKDOWN-096": "markdown-policy: markdown.policy.validate uses the type [System.IO.File] as a value rather than as a static call or a cast",
+  "T1-BUILD-162": "side-effect-policy: build.verify uses the type [System.Diagnostics.Process] as a value rather than as a static call or a cast",
+  "T1-GENERATOR-037": "supply-policy: the generator reaches a member through reflection",
+  "T1-MARKDOWN-060": "acquire-policy: markdown.policy.acquire reaches a static member other than by naming a literal type and a literal member: [System.IO.File]::$strMethod('",
   "T1-MARKDOWN-065": "acquire-policy: markdown.policy.acquire invokes an unreviewed cmdlet: Copy-Item",
   "T1-BUILD-137": "credential-policy: build.verify.verify-checkout-credentials adds control flow that can bypass a required assertion",
   "T1-MARKDOWN-061": "acquire-policy: markdown.policy.acquire does not bind $strCurlPath exactly once as a reviewed constant",
@@ -4010,6 +4212,15 @@ export function validateGeneratorPolicy(source) {
   // unqualified form in prose, and a rule that cannot tell prose from code
   // would forbid explaining itself.
   const generatorCode = powerShellTokenView(normalizeLineContinuations(source));
+  // Round 56, carried here rather than reported here: the generator had no rule
+  // on `::` whatever, so both walks reported against build.verify were accepted
+  // in it as well. Only the FORM is closed, not the callees -- an allowlist here
+  // would be sixty-eight entries over a script whose whole job is reading and
+  // writing files, which is a large new surface bought for very little. What
+  // keeps a reviewed static call honest here is the dispatch sequence, the
+  // depth-zero requirement and the contiguous tail; what this adds is that a
+  // static member cannot be reached without naming a literal type and member.
+  assertLiteralStaticCalls(generatorCode, 'supply-policy', 'the generator');
   // Two halves, deliberately read from two different views.
   //
   // The invocation must exist in *code*, so a comment quoting this phrase
