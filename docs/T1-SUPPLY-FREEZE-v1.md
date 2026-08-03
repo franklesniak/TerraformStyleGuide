@@ -53,7 +53,7 @@ Run on the reviewed toolchain against the merge commit.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `990b2a181b6922d818bfe3464b93823fa0c64719608ac8fdaf6c56b7eda9597d` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `32c1fed6f057ac2eb67e84721eb1a562b8cf7d517f03f5c3a4703804f1093c39` |
 | Node | `v24.18.1` |
 | npm | `11.16.0` |
 | Platform | `linux` / `x64` |
@@ -62,7 +62,7 @@ Run on the reviewed toolchain against the merge commit.
 | `package-lock.json` | blob `5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca` |
 | `package-lock.json` SHA-256 | `277f7168ab3a4f1f7a2565de13191d64b1572e7cb92b67b0972b3242bd4de062` |
 | Install producer argv | `npm ci --ignore-scripts --no-audit --no-fund` |
-| Installed tree SHA-256 | `ce95cd200bf5aa5be8d516825f698ac8d71b772d75291fea4da732af30ec43a0` |
+| Installed tree SHA-256 | `c77d611336230e8e0d520370431ace130d1a78023d4006ca075fba59af09680c` |
 | Installed tree size | 2177 files, 8 symlinks, 336 directories |
 | Advisory posture SHA-256 | `ea559555c8c18bd2488219d977a994fabc868c2d46efb05bbaf92405c53488e1` |
 | Advisory counts | 0 critical, 5 high, 2 moderate, 0 low, 0 info |
@@ -89,9 +89,21 @@ introduces this document. Reproduce from a revision that contains it, which carr
 ```bash
 git checkout main            # or any revision containing Get-SupplyFreezeDigest.mjs
 cd .github/workflows
-git log -1 --format=%H -- package.json package-lock.json   # confirm the blobs are the recorded ones
+git rev-parse HEAD:.github/workflows/package.json          # must equal the recorded blob
 npm ci --ignore-scripts --no-audit --no-fund
 node Get-SupplyFreezeDigest.mjs
+```
+
+**Ambient npm configuration changes what `npm ci` produces.** A `bin-links=false` or `omit=dev`
+setting in an environment variable or a user/global `.npmrc` yields a different tree from the
+same lockfile — measured, `bin-links=false` produced 0 symlinks instead of 8 and a digest of
+`89a19867…`. The script now reads the *effective* configuration and refuses to record when any
+install-shaping setting differs from its reviewed value, so this fails loudly instead of
+producing a mismatch the reader cannot explain. To sidestep ambient configuration entirely:
+
+```bash
+npm ci --ignore-scripts --no-audit --no-fund \
+  --userconfig=/dev/null --globalconfig=/dev/null
 ```
 
 The script refuses to run against any manifest other than the reviewed one, so a revision whose
@@ -101,7 +113,7 @@ misleading digest.
 **Check the script's own digest first.** The script reports its own SHA-256 on every run, and the
 value is recorded in the table above. This matters because the digests below are a property of
 *this* script: the framing correction made during review moved the installed-tree digest from
-`32a914d9…` to `ce95cd20…` without any dependency changing at all. A reader with a correct tree,
+`32a914d9…` to `c77d6113…` without any dependency changing at all. A reader with a correct tree,
 a correct lockfile and a different script version would otherwise see a mismatch with nothing to
 explain it.
 
@@ -118,8 +130,15 @@ compute anyway — the last of which produces a number that is explicitly not a 
 
 ### Installed tree
 
-Folds the bytes actually present under `node_modules`: every file's path and content, every
-symlink's path and target, and every directory's path, in sorted order.
+Folds the bytes actually present under `node_modules`: every file's path, normalized executable
+bit and content, every symlink's path and target, and every directory's path, in sorted order.
+
+The **normalized executable bit** rather than the full mode, and that is a measurement rather
+than a preference. All three reference installs agree on the full mode (`0o644` ×2157, `0o755`
+×20), but node-tar applies the process umask when it extracts, so the non-execute bits are a
+property of the extracting machine. The execute bit survives the umasks that occur in practice —
+`0o755` under `umask 077` is still `0o700`, still executable — so exactly one bit of mode is
+recorded: the one that decides whether the file can run.
 
 Every variable-length field is **length-prefixed**, which makes the encoding injective. An
 earlier draft used line-oriented framing, and that was not injective: a POSIX path or symlink

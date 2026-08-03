@@ -18,7 +18,7 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
+import { lstatSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -41,6 +41,38 @@ const REVIEWED_ARCH = 'x64';
 const REVIEWED_PACKAGE_SHA256 = 'e206cdb3562f0397e8eed7fb2c2586269a1f5335cdff2906da8d5e070426321e';
 const REVIEWED_LOCK_SHA256 = '277f7168ab3a4f1f7a2565de13191d64b1572e7cb92b67b0972b3242bd4de062';
 
+// The same two files as Git blob identities, which is what the record's blob
+// column holds. Round 2, reported by Copilot: the documented way to check those
+// was `git log -1 --format=%H -- <path>`, which prints a COMMIT hash. Measured,
+// it printed 79ecff1d... where the record says 2b88a0ac..., so a reader
+// following the instructions compared two different kinds of hash and would
+// have concluded the record was wrong.
+//
+// Computing them here goes past the reported fix. A documented git incantation
+// is a manual step a reader can mistype or skip; deriving the blob identity in
+// the script makes it a checked field like every other value in the record.
+const REVIEWED_PACKAGE_BLOB = '2b88a0ac85d3a8b7286040e6b1f6c4ddb4d3bce1';
+const REVIEWED_LOCK_BLOB = '5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca';
+
+// Install-shaping npm configuration, with the values the recorded tree was
+// produced under. Round 2, reported: a reader with `bin-links=false` or
+// `omit=dev` in a user or global .npmrc gets a different tree from the same
+// lockfile, and the toolchain guard accepted them because Node, npm and the
+// platform were all correct. Measured -- under `bin-links=false` npm ci exited
+// 0, produced 0 symlinks instead of 8, and the script reported digest
+// 89a19867... against the recorded ce95cd20... without a word of complaint.
+//
+// `npm config list --json` reports the EFFECTIVE configuration, including
+// environment and .npmrc overrides, so these are checked rather than assumed.
+const REVIEWED_NPM_CONFIG = Object.freeze({
+  'bin-links': true,
+  omit: [],
+  include: [],
+  'install-strategy': 'hoisted',
+  'legacy-peer-deps': false,
+  'package-lock': true,
+});
+
 const strWorkflowDirectory = dirname(fileURLToPath(import.meta.url));
 const arrArguments = process.argv.slice(2);
 const boolJson = arrArguments.includes('--json');
@@ -49,6 +81,17 @@ const boolSkipAudit = arrArguments.includes('--no-audit');
 
 function sha256(strText) {
   return createHash('sha256').update(strText, 'utf8').digest('hex');
+}
+
+// A Git blob identity is SHA-1 over `blob <byteLength>\0<content>`. Implemented
+// rather than shelled out to `git`, so the check works in an exported tree with
+// no repository and cannot be confused by the working directory.
+function gitBlobId(strText) {
+  const objBytes = Buffer.from(strText, 'utf8');
+  return createHash('sha1')
+    .update(`blob ${objBytes.length}\0`, 'utf8')
+    .update(objBytes)
+    .digest('hex');
 }
 
 // One canonical serialization for the advisory record: keys in sorted order, no
@@ -166,9 +209,25 @@ function foldInstalledTree(strRoot) {
         hashField(objHash, strChild);
         continue;
       }
+      // Round 2, reported. The fold hashed path and content and ignored the
+      // mode entirely, so `chmod -x` on a package binary left the digest
+      // byte-identical while breaking the CLI with EACCES -- measured, the
+      // digest did not move at all. A tree that cannot run is not the tree
+      // this record claims to have measured.
+      //
+      // The NORMALIZED executable bit rather than the full mode, and that is a
+      // measurement rather than a preference. All three reference installs
+      // agree on the full mode here (0o644 x2157, 0o755 x20), but node-tar
+      // applies the process umask when it extracts, so the non-execute bits are
+      // a property of the extracting machine and would make the digest
+      // irreproducible under a different umask. The execute bit survives the
+      // umasks that occur in practice: 0o755 under umask 077 is still 0o700,
+      // still executable. So exactly one bit of mode is recorded, the one that
+      // decides whether the file can run.
       intFiles += 1;
       objHash.update('F', 'utf8');
       hashField(objHash, strChild);
+      hashField(objHash, (lstatSync(strPath).mode & 0o111) === 0 ? '-' : 'x');
       hashField(objHash, readFileSync(strPath));
     }
   };
@@ -267,6 +326,26 @@ if (!boolAnyToolchain && (strNodeVersion !== REVIEWED_NODE || strNpmVersion !== 
 // No circularity: the digest is computed over the file and never stored in it.
 const strScriptSha256 = sha256(readFileSync(fileURLToPath(import.meta.url), 'utf8'));
 
+// Install-shaping configuration, checked before anything is measured. See
+// REVIEWED_NPM_CONFIG above for why: the toolchain guard passes a reader whose
+// ambient npm configuration silently produced a different tree.
+if (!boolAnyToolchain) {
+  const objEffective = JSON.parse(runNpm(['config', 'list', '--json']));
+  const arrDrift = Object.entries(REVIEWED_NPM_CONFIG)
+    .filter(([strKey, objExpected]) =>
+      canonicalize(objEffective[strKey] ?? null) !== canonicalize(objExpected))
+    .map(([strKey, objExpected]) =>
+      `  ${strKey.padEnd(18)} observed ${JSON.stringify(objEffective[strKey] ?? null)}, reviewed ${JSON.stringify(objExpected)}`);
+  if (arrDrift.length > 0) {
+    process.stderr.write(
+      'supply-freeze: npm configuration would shape the install away from the reviewed tree.\n' +
+      `${arrDrift.join('\n')}\n` +
+      '  these come from the environment or a user/global .npmrc and change what npm ci produces.\n' +
+      '  re-install with them at their reviewed values before recording a freeze.\n');
+    process.exit(6);
+  }
+}
+
 const objRecord = {
   script: { sha256: strScriptSha256 },
   toolchain: {
@@ -279,9 +358,15 @@ const objRecord = {
     'package.json': sha256(strPackageBefore),
     'package-lock.json': sha256(strLockBefore),
   },
+  manifestBlobs: {
+    'package.json': gitBlobId(strPackageBefore),
+    'package-lock.json': gitBlobId(strLockBefore),
+  },
   matchesReviewedManifest:
     sha256(strPackageBefore) === REVIEWED_PACKAGE_SHA256 &&
-    sha256(strLockBefore) === REVIEWED_LOCK_SHA256,
+    sha256(strLockBefore) === REVIEWED_LOCK_SHA256 &&
+    gitBlobId(strPackageBefore) === REVIEWED_PACKAGE_BLOB &&
+    gitBlobId(strLockBefore) === REVIEWED_LOCK_BLOB,
 };
 
 // Reported and confirmed: this used to record `matchesReviewedManifest: false`
@@ -296,6 +381,8 @@ if (!boolAnyToolchain && !objRecord.matchesReviewedManifest) {
     `                     reviewed ${REVIEWED_PACKAGE_SHA256}\n` +
     `  package-lock.json  observed ${objRecord.manifest['package-lock.json']}\n` +
     `                     reviewed ${REVIEWED_LOCK_SHA256}\n` +
+    `  package.json       blob     ${gitBlobId(strPackageBefore)}\n` +
+    `                     reviewed ${REVIEWED_PACKAGE_BLOB}\n` +
     '  a changed manifest needs a new reviewed freeze, not a digest against this one.\n');
   process.exit(4);
 }
@@ -331,9 +418,22 @@ if (boolSkipAudit) {
   //
   // The shape is checked rather than the exit status, because the exit status
   // is what conflates the two cases in the first place.
+  // Round 2, reported by Copilot: `typeof null === 'object'`, so the original
+  // metadata test accepted `metadata.vulnerabilities: null` and the counts then
+  // recorded as null -- the exact endpoint-failure shape the guard exists to
+  // refuse, readmitted through a JavaScript quirk. The null test was present on
+  // `vulnerabilities` and absent on `metadata.vulnerabilities`; asymmetry in a
+  // guard is a defect even when both halves look alike.
+  //
+  // Strengthened past the reported fix: the severity counts must each be an
+  // integer. That refuses null, an empty object, and a shape change, rather
+  // than only the one value that was reported.
+  const objCounts = objAudit.metadata?.vulnerabilities;
+  const arrSeverities = ['info', 'low', 'moderate', 'high', 'critical', 'total'];
   if (!Number.isInteger(objAudit.auditReportVersion)
     || typeof objAudit.vulnerabilities !== 'object' || objAudit.vulnerabilities === null
-    || typeof objAudit.metadata?.vulnerabilities !== 'object') {
+    || typeof objCounts !== 'object' || objCounts === null
+    || !arrSeverities.every((strSeverity) => Number.isInteger(objCounts[strSeverity]))) {
     process.stderr.write(
       'supply-freeze: npm audit did not return an audit report.\n' +
       `  npm said: ${typeof objAudit.message === 'string' ? objAudit.message : JSON.stringify(objAudit).slice(0, 300)}\n` +
