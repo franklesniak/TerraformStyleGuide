@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `c2a586cd7f864a7eae6cb809035d5da214a4f6f7c16e498aaa2f7174b3d37f9a` | script `script.sha256` |
+| Freeze script SHA-256 | `c2a586cd7f864a7eae6cb809035d5da214a4f6f7c16e498aaa2f7174b3d37f9a` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` | script `toolchain.platform` |
@@ -122,6 +122,21 @@ no `--json` key produces, leaving a consumer to assemble it by hand from a shape
 invented. That is the unverifiable-derivation defect this record exists to retire, reproduced in
 the fix for a different one.
 
+**That fix was applied to this table and stopped there, which is the same mistake one level up.**
+The rule is a rule about every table in this document, and the round after it was written a
+reviewer found it still violated in [Recorded, not compared](#recorded-not-compared) — a
+directory-permissions cell holding two values from two keys. Re-sweeping every table then turned
+up a third instance still sitting *here*: the freeze-script row read
+``` `<path>` SHA-256 `<hash>` ```, so the one field a consumer must compare byte-for-byte was
+wrapped in a path and a label. The path is stated throughout this document and belongs in the
+field name, not in the value. Fixing the instance that was reported, and calling it the class,
+is the specific habit this record keeps having to correct.
+
+Two tables are deliberately exempt, because they record no comparable values: the entry-kind
+legend under [What is folded, per entry kind](#what-is-folded-per-entry-kind), whose rows group four
+special-file kinds that share one treatment, and the detection-evidence table below it, whose
+value column holds measured answers rather than recorded fields.
+
 **The three advisory rows are compared, and a mismatch there is a genuine equality failure.** An
 earlier draft said drift in them "calls for a policy re-decision rather than a failed build",
 which read as though they were exempt from the check — having it both ways, since this section's
@@ -154,12 +169,25 @@ that table exists at all — the reasoning is in
 Recorded so a reader can diagnose a mismatch or understand the context. **Not** subject to
 exact equality.
 
-| Field | Value | Why it is not compared |
-| --- | --- | --- |
-| File permissions | `{"644":2157,"755":20}` | full modes are machine state |
-| Directory permissions | `{"755":336}`, `node_modules` itself `755` | full modes are machine state |
-| Policy decision | `T1-ADVISORY-DISPOSITION-v1`, bounded through issue #24 | no artifact exists to compare against |
-| Scrubbed trust variables | `auditEnvironmentScrubbed`, e.g. `[]` or `["NODE_OPTIONS"]` | describes the machine the audit ran on, not the registry's answer |
+| Field | Value | Derived by | Why it is not compared |
+| --- | --- | --- | --- |
+| File permissions | `{"644":2157,"755":20}` | script `installedTreeModes` | full modes are machine state |
+| Directory permissions | `{"755":336}` | script `installedTreeDirectoryModes` | full modes are machine state |
+| `node_modules` root mode | `755` | script `installedTreeRootMode` | full modes are machine state |
+| Policy decision | `T1-ADVISORY-DISPOSITION-v1` | this document | no artifact exists to compare against; bounded through issue #24 |
+| Scrubbed trust variables | not captured for this record — see below | script `auditEnvironmentScrubbed` | describes the machine the audit ran on, not the registry's answer |
+
+**Why that row records no value.** An earlier draft filled its Value column with the key name and
+two hypotheticals — ``` `auditEnvironmentScrubbed`, e.g. `[]` or `["NODE_OPTIONS"]` ``` — which
+records nothing: a reader learns what the field is called and what it might have said, not what it
+did say. The obvious repair is to write `[]`, and that is **not** what happened here, because it
+would be untrue. This field was added to the script well after the digests above were taken, so
+the run that produced this record never emitted it, and no observed value exists to record. A
+plausible-looking `[]` would be a value invented to fill a column — the same fabrication the
+advisory-identity guard was tightened to prevent, committed in the record rather than in the code.
+
+The field is per-run in any case: it describes the environment of whoever executes the script, so
+a reader's own run reports their own list, not this one. On a clean environment that list is `[]`.
 
 **`auditEnvironmentScrubbed` lists names only, never values.** A `NODE_EXTRA_CA_CERTS` path or a
 proxy URL can carry a hostname, a username, or a token, and this record is published. An empty
