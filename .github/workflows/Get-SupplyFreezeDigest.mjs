@@ -119,13 +119,24 @@ const REVIEWED_NPM_CONFIG = Object.freeze({
   // that removes real coverage of a file npm writes and tools read, to dodge a
   // configuration problem the guard should simply catch.
   'omit-lockfile-registry-resolved': false,
-  // Round 19, reported. Pinning the registry URL pins where the request is
-  // ADDRESSED, not where it goes or who it trusts. npm honours `proxy`,
-  // `https-proxy` and the standard proxy environment variables for outgoing
-  // HTTPS, and `ca`, `cafile` and `strict-ssl` decide which certificates count
-  // -- so a TLS-intercepting proxy with a trusted custom CA can return a
-  // filtered, schema-valid audit while this script records the posture as having
-  // come from the public registry. The URL was checked and the transport was not.
+});
+
+// Transport and trust, checked ONLY when an audit will run.
+//
+// Round 19, reported: pinning the registry URL pins where the request is
+// ADDRESSED, not where it goes or who it trusts. npm honours `proxy`,
+// `https-proxy` and the standard proxy environment variables for outgoing HTTPS,
+// and `ca`, `cafile` and `strict-ssl` decide which certificates count -- so a
+// TLS-intercepting proxy with a trusted custom CA can return a filtered,
+// schema-valid audit while this script records the posture as public-registry.
+//
+// Round 20, reported: putting them in the table above made them unconditional,
+// which broke `--no-audit` behind a proxy with exit 6. That is precisely the
+// false failure the registry guard was placed on the audit path to avoid in
+// round 5 -- the installed tree is pinned by lockfile integrity hashes and is
+// not exposed to any of this. Separated so the install-shaping checks stay
+// unconditional and these do not.
+const REVIEWED_NPM_TRANSPORT = Object.freeze({
   proxy: null,
   'https-proxy': null,
   noproxy: [],
@@ -133,6 +144,41 @@ const REVIEWED_NPM_CONFIG = Object.freeze({
   cafile: null,
   'strict-ssl': true,
 });
+
+// Round 20, reported. Validating the six once did not bind them: the audit runs
+// in a separate process that reloads configuration, so an .npmrc rewritten in
+// between reinstated a proxy the check had just cleared. Derived from the
+// reviewed values themselves, so the values compared and the values used cannot
+// diverge.
+// A null reviewed value cannot be expressed as a flag: measured, `--proxy=`
+// makes npm warn `invalid config proxy=""` and `--ca=` breaks the TLS handshake
+// outright, because an empty string is not the same as unset. Only non-null
+// values become flags; the null ones are bound by scrubbing them from the
+// child's environment instead.
+function transportFlags() {
+  return Object.entries(REVIEWED_NPM_TRANSPORT)
+    .filter(([, objValue]) => objValue !== null)
+    .map(([strKey, objValue]) =>
+      `--${strKey}=${Array.isArray(objValue) ? objValue.join(',') : objValue}`);
+}
+
+// The environment half of the same binding. npm reads npm_config_* and the
+// standard proxy variables; both are fixed when this process starts and were
+// covered by the pre-audit check, but removing them from the child makes the
+// binding explicit rather than inherited.
+function transportEnvironment() {
+  const objEnv = { ...process.env };
+  for (const strKey of Object.keys(objEnv)) {
+    const strLower = strKey.toLowerCase();
+    if (strLower === 'http_proxy' || strLower === 'https_proxy' || strLower === 'no_proxy'
+      || Object.keys(REVIEWED_NPM_TRANSPORT).some(
+        (strConfig) => strLower === `npm_config_${strConfig.replace(/-/gu, '_')}`)) {
+      if (REVIEWED_NPM_TRANSPORT[strLower.replace(/^npm_config_/u, '').replace(/_/gu, '-')] === null
+        || strLower.endsWith('_proxy')) delete objEnv[strKey];
+    }
+  }
+  return objEnv;
+}
 
 // The process umask the recorded tree was installed under.
 //
@@ -292,18 +338,19 @@ function readOrRefuse(strPath) {
   }
 }
 
-function runNpm(arrNpmArguments) {
+function runNpm(arrNpmArguments, objEnv) {
   return execFileSync('npm', arrNpmArguments, {
     cwd: strWorkflowDirectory,
+    ...(objEnv ? { env: objEnv } : {}),
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
 
-function runNpmAllowingFailure(arrNpmArguments) {
+function runNpmAllowingFailure(arrNpmArguments, objEnv) {
   try {
-    return runNpm(arrNpmArguments);
+    return runNpm(arrNpmArguments, objEnv);
   } catch (objError) {
     // `npm audit` uses exit 1 to mean "advisories found", not "command failed".
     if (typeof objError.stdout === 'string' && objError.stdout.trim().startsWith('{')) {
@@ -827,13 +874,17 @@ if (!boolAnyToolchain && (strNodeVersion !== REVIEWED_NODE || strNpmVersion !== 
 // Install-shaping configuration, checked before anything is measured. See
 // REVIEWED_NPM_CONFIG above for why: the toolchain guard passes a reader whose
 // ambient npm configuration silently produced a different tree.
-if (!boolAnyToolchain) {
-  const objEffective = JSON.parse(runNpm(['config', 'list', '--json']));
-  const arrDrift = Object.entries(REVIEWED_NPM_CONFIG)
+function configDrift(objReviewed, objEffective) {
+  return Object.entries(objReviewed)
     .filter(([strKey, objExpected]) =>
       canonicalize(objEffective[strKey] ?? null) !== canonicalize(objExpected))
     .map(([strKey, objExpected]) =>
       `  ${strKey.padEnd(18)} observed ${JSON.stringify(objEffective[strKey] ?? null)}, reviewed ${JSON.stringify(objExpected)}`);
+}
+
+if (!boolAnyToolchain) {
+  const objEffective = JSON.parse(runNpm(['config', 'list', '--json']));
+  const arrDrift = configDrift(REVIEWED_NPM_CONFIG, objEffective);
   if (arrDrift.length > 0) {
     process.stderr.write(
       'supply-freeze: npm configuration would shape the install away from the reviewed tree.\n' +
@@ -920,7 +971,13 @@ try {
   // node_modules exits 1 plain, 0 under omit=dev, and 1 again with the inclusion
   // named on the command line. Without this, an incomplete tree could be
   // recorded with treeSatisfiesLockfile true.
-  runNpm(['ls', '--all', '--json', '--include=dev', '--include=optional', '--include=peer']);
+  // Round 20, reported. The inclusion flags did not bind the tree SELECTION:
+  // `--package-lock-only` makes npm load the virtual tree from the lockfile
+  // instead of the actual one on disk. Measured -- with no node_modules at all,
+  // `npm ls --all --json --package-lock-only --include=...` exits 0 while the
+  // same command with `--package-lock-only=false` exits 1.
+  runNpm(['ls', '--all', '--json', '--package-lock-only=false',
+    '--include=dev', '--include=optional', '--include=peer']);
   objRecord.treeSatisfiesLockfile = true;
 } catch {
   objRecord.treeSatisfiesLockfile = false;
@@ -1092,6 +1149,19 @@ if (boolSkipAudit) {
   // on disk without failing the install outright. Only the advisory half is
   // exposed. Refusing a `--no-audit` run on a mirror would be a false failure
   // for a reader whose tree is provably byte-identical.
+  if (!boolAnyToolchain) {
+    const arrTransportDrift = configDrift(
+      REVIEWED_NPM_TRANSPORT, JSON.parse(runNpm(['config', 'list', '--json'])));
+    if (arrTransportDrift.length > 0) {
+      process.stderr.write(
+        'supply-freeze: npm transport configuration would change where the audit goes.\n' +
+        `${arrTransportDrift.join('\n')}\n` +
+        '  a proxy or a custom trust store can return a schema-valid but filtered report.\n' +
+        '  the installed tree is unaffected, so --no-audit records the lockfile-derived\n' +
+        '  fields from any transport.\n');
+      process.exit(6);
+    }
+  }
   const strRegistry = runNpm(['config', 'get', 'registry']).trim();
   if (!boolAnyToolchain && strRegistry !== REVIEWED_REGISTRY) {
     process.stderr.write(
@@ -1148,7 +1218,8 @@ if (boolSkipAudit) {
     // goes to the validated registry. Forcing revalidation on this invocation
     // binds the whole posture to a current snapshot, not just its bulk half.
     '--prefer-offline=false', '--offline=false', '--prefer-online=true',
-  ]));
+    ...transportFlags(),
+  ], transportEnvironment()));
   // Reported and confirmed, and the most serious of the round. `npm audit`
   // exits nonzero for two completely different reasons: advisories were found,
   // and the audit endpoint failed. Under --json it prints a JSON object either

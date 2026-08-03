@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `6ac64bd3b0628aceb79e8abbe6206b64bd22fd84b14c0bac87bc0675c92050e6` | script `script.sha256` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `99bd979bfafff7f70804978d8e15ea7d7907b00252e461bdbac29a4785227715` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` / `x64` | script `toolchain.platform`, `toolchain.arch` |
@@ -89,10 +89,13 @@ per-row rather than asserted in a sentence.
 | Advisory counts | `{"info":0,"low":0,"moderate":2,"high":5,"critical":0,"total":7}` | script `auditCounts` |
 
 The three `git` rows are derived from the repository, not from a run of the script, and this is
-how:
+how. Note the **`^2`**: an earlier draft wrote `git rev-parse <the recorded head>`, which takes
+the value being checked as its own input and resolves it back to itself — it proved nothing. The
+second parent of the named merge is what actually establishes which reviewed head that merge
+incorporated, so the check no longer depends on the value it is meant to verify.
 
 ```bash
-git rev-parse a308c860e078b661de0dd663be35f018fc60fdcc   # reviewed head that merged
+git rev-parse 143f54e52075a1ae1e999a6e242073e3d8d4a46b^2  # reviewed head that merged
 git rev-parse 143f54e52075a1ae1e999a6e242073e3d8d4a46b   # merge commit
 git rev-parse 143f54e52075a1ae1e999a6e242073e3d8d4a46b^{tree}   # merged tree
 ```
