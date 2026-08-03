@@ -638,11 +638,34 @@ if (readFileSync(strPackagePath, 'utf8') !== strPackageBefore
   process.exit(3);
 }
 
+// Round 7, reported. `--any-toolchain` promised output that is "explicitly not
+// a freeze record", and then emitted the identical heading and the identical
+// JSON schema as a reviewed run -- measured under umask 077, the bypassed run
+// printed the same `T1-SUPPLY-FREEZE-v1 digests` banner with
+// `matchesReviewedManifest: true` and no key distinguishing it. A consumer
+// reading saved output could not tell the two apart without independently
+// re-deriving every pinned value, which is the work the record exists to save.
+//
+// The promise was in the help text and the document; it was not in the output.
+// It is now a field, so it survives being piped to a file.
+//
+// --no-audit is tracked separately rather than lumped in: it produces a
+// legitimately partial record whose missing half is visible as a null digest,
+// which is a different thing from a record whose guards did not run.
+const arrNotFreezeBecause = [];
+if (boolAnyToolchain) arrNotFreezeBecause.push('guards bypassed with --any-toolchain');
+if (boolSkipAudit) arrNotFreezeBecause.push('advisory posture not recorded (--no-audit)');
+objRecord.freezeRecord = arrNotFreezeBecause.length === 0;
+objRecord.notFreezeRecordBecause = arrNotFreezeBecause;
+
 if (boolJson) {
   process.stdout.write(`${JSON.stringify(objRecord, null, 2)}\n`);
 } else {
   process.stdout.write(
-    'T1-SUPPLY-FREEZE-v1 digests\n' +
+    (objRecord.freezeRecord
+      ? 'T1-SUPPLY-FREEZE-v1 digests\n'
+      : `T1-SUPPLY-FREEZE-v1 digests -- NOT A FREEZE RECORD\n${
+        arrNotFreezeBecause.map((strReason) => `  !! ${strReason}\n`).join('')}`) +
     `  script sha256        ${objRecord.script.sha256}\n` +
     `  Node                 ${objRecord.toolchain.node}\n` +
     `  npm                  ${objRecord.toolchain.npm}\n` +

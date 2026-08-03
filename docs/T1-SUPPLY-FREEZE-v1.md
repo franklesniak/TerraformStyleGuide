@@ -48,12 +48,21 @@ same seven packages at the same severities.
 
 Run on the reviewed toolchain against the merge commit.
 
+Issue #22 requires exact equality of every **compared** field. The two tables below say which
+those are, because not every value worth recording is a value worth comparing — a field that
+cannot be re-derived, or that tracks machine state, produces a false mismatch rather than a
+finding.
+
+### Compared fields
+
+Every value here is derived by the script from the inputs, and must match exactly.
+
 | Field | Value |
 | --- | --- |
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `756d918d5b2d122796c75e96b2f65ea0c8db58822236fcda379abf7d4abfe428` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `f8fb546e096d841ab2478b11024a724bb1380a21efcd636e695ce94f0dde0916` |
 | Node | `v24.18.1` |
 | npm | `11.16.0` |
 | Platform | `linux` / `x64` |
@@ -62,14 +71,48 @@ Run on the reviewed toolchain against the merge commit.
 | `package.json` SHA-256 | `e206cdb3562f0397e8eed7fb2c2586269a1f5335cdff2906da8d5e070426321e` |
 | `package-lock.json` | blob `5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca` |
 | `package-lock.json` SHA-256 | `277f7168ab3a4f1f7a2565de13191d64b1572e7cb92b67b0972b3242bd4de062` |
-| Install producer argv | `npm ci --ignore-scripts --no-audit --no-fund` |
 | Installed tree SHA-256 | `4cdc37a7269eb90a413fb3f26c031b81268f62fe9129c9939337106da12cc716` |
 | Installed tree size | 2177 files, 8 symlinks, 336 directories |
-| File permissions | `{"644":2157,"755":20}` |
 | Advisory registry | `https://registry.npmjs.org/` |
 | Advisory posture SHA-256 | `ea559555c8c18bd2488219d977a994fabc868c2d46efb05bbaf92405c53488e1` |
 | Advisory counts | 0 critical, 5 high, 2 moderate, 0 low, 0 info |
 | Policy decision | `T1-ADVISORY-DISPOSITION-v1`, bounded through issue #24 |
+
+The two advisory rows are compared **at a point in time**. They snapshot a database that changes
+as advisories are published; drift there calls for a policy re-decision rather than a failed
+build, which is set out in
+[Advisory posture](#advisory-posture).
+
+### Diagnostic fields — recorded, not compared
+
+Observed and reported so a reader can diagnose a mismatch. **Not** subject to exact equality.
+
+| Field | Value | Why it is not compared |
+| --- | --- | --- |
+| File permissions | `{"644":2157,"755":20}` | full modes are machine state |
+
+A harmless `0644` → `0664` leaves the installed-tree digest byte-identical — measured, still
+`4cdc37a7…` — while moving the histogram to `{"644":2156,"664":1,"755":20}`. Comparing it for
+exact equality would therefore reject a tree the digest says is correct, which is precisely the
+machine-state drift the execute-bit normalization exists to avoid. An earlier draft listed it as
+a recorded field while the prose called it "recorded, not enforced"; the table and the prose
+disagreed, and #22's rule resolved that disagreement the wrong way.
+
+### Not a recorded field: the install command
+
+The tree was produced with:
+
+```text
+npm ci --ignore-scripts --no-audit --no-fund
+```
+
+This is the **prescribed** command, not an observed value, and it is deliberately outside both
+tables above. The script captures no installation provenance whatsoever — it inspects a finished
+tree — so an equivalent invocation with the same flags in a different order yields an identical
+tree and identical output for every field the script emits. Listing it as a compared field would
+have asked #22 to check something no reader could establish, which is the exact defect this
+document was written to remove. It belongs in
+[How to reproduce](#how-to-reproduce), and that is where it now lives.
 
 ### Advisory detail
 
@@ -196,6 +239,7 @@ of them and marks the output as explicitly not a freeze record.
 | Exit | Refusal | Usual cause |
 | ---: | --- | --- |
 | `2` | Unreviewed toolchain | different Node, npm, platform or architecture |
+| `3` | Manifest changed mid-run | `package.json` or `package-lock.json` edited while `npm ls`/`npm audit` ran |
 | `4` | Unreviewed manifest | `package.json` or `package-lock.json` has moved |
 | `5` | Audit response is not a report | registry unreachable, or an endpoint error returned as JSON |
 | `6` | Install-shaping npm configuration | `bin-links`, `omit`, `package-lock-only` … from an `.npmrc` or the environment |
