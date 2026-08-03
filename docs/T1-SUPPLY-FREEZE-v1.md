@@ -69,7 +69,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `60a1b870d98bd349f5f758906a5069cb4b06add93d01644151c10fee14cc4e50` | script `script.sha256` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `04067267f0e81419950be6ba899ed58bd32ea37141e9cabfb0d069284ea400ce` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` / `x64` | script `toolchain.platform`, `toolchain.arch` |
@@ -78,7 +78,7 @@ per-row rather than asserted in a sentence.
 | `package.json` SHA-256 | `e206cdb3562f0397e8eed7fb2c2586269a1f5335cdff2906da8d5e070426321e` | script `manifest` |
 | `package-lock.json` | blob `5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca` | script `manifestBlobs` |
 | `package-lock.json` SHA-256 | `277f7168ab3a4f1f7a2565de13191d64b1572e7cb92b67b0972b3242bd4de062` | script `manifest` |
-| Installed tree SHA-256 | `4cdc37a7269eb90a413fb3f26c031b81268f62fe9129c9939337106da12cc716` | script `installedTreeSha256` |
+| Installed tree SHA-256 | `9763e9e906d325d8fd8e4a6065cf1fd8fa3c9ebb02a82aff9ab1581e6751d533` | script `installedTreeSha256` |
 | Installed tree size | 2177 files, 8 symlinks, 336 directories, 0 special entries | script `installedTreeFiles`, `installedTreeSymlinks`, `installedTreeDirectories`, `installedTreeSpecials` |
 | Advisory registry | `https://registry.npmjs.org/` | script `registry` |
 | Advisory posture SHA-256 | `ea559555c8c18bd2488219d977a994fabc868c2d46efb05bbaf92405c53488e1` | script `auditSha256` |
@@ -98,7 +98,7 @@ wrote them as `0 critical, 5 high, 2 moderate, 0 low, 0 info`, which omitted npm
 and asked a consumer to compare a sentence against a JSON object. Exact equality against prose
 is not mechanically checkable, and a compared field has to be.
 
-**The two advisory rows are compared, and a mismatch there is a genuine equality failure.** An
+**The three advisory rows are compared, and a mismatch there is a genuine equality failure.** An
 earlier draft said drift in them "calls for a policy re-decision rather than a failed build",
 which read as though they were exempt from the check — having it both ways, since this section's
 own rule is that compared fields must match exactly.
@@ -108,8 +108,15 @@ fails:
 
 | Compared field | A mismatch means | The consumer should |
 | --- | --- | --- |
-| Everything except the two advisory rows | the supply inputs are not the reviewed ones | stop and investigate the tree |
-| Advisory registry, advisory posture | the published advisory database has moved | re-decide the policy under `T1-ADVISORY-DISPOSITION-v1` |
+| Everything except the three advisory rows | the supply inputs are not the reviewed ones | stop and investigate the tree |
+| Advisory registry, advisory posture, **advisory counts** | the published advisory database has moved | re-decide the policy under `T1-ADVISORY-DISPOSITION-v1` |
+
+**Advisory counts belong in the second row**, and an earlier draft of this table left them in the
+first. They are derived from the same changing database as the posture digest — indeed they are
+folded into it — so a counts mismatch has the same cause and the same remedy. Filing them under
+"investigate the tree" would have sent a consumer looking for tampering that did not happen. The
+three advisory rows are exactly those whose `Derived by` column reads `registry`, `auditSha256`
+or `auditCounts`; every other compared row takes the first response.
 
 Concretely, for the consumer named in [Consumers](#consumers): issue #22 must treat an advisory
 mismatch as a **blocking check that needs a policy decision to clear**, not as evidence the
@@ -126,6 +133,7 @@ exact equality.
 | Field | Value | Why it is not compared |
 | --- | --- | --- |
 | File permissions | `{"644":2157,"755":20}` | full modes are machine state |
+| Directory permissions | `{"755":336}`, `node_modules` itself `755` | full modes are machine state |
 | Policy decision | `T1-ADVISORY-DISPOSITION-v1`, bounded through issue #24 | no artifact exists to compare against |
 
 **The policy decision was a compared field and should not have been.** `T1-ADVISORY-DISPOSITION-v1`
@@ -140,8 +148,8 @@ It is reclassified rather than deleted because the context is worth keeping, and
 invented as an artifact because minting a policy record is the repository owner's decision, not
 a side effect of a change about digest reproducibility. The bound itself lives in issue #24.
 
-A harmless `0644` → `0664` leaves the installed-tree digest byte-identical — measured, still
-`4cdc37a7…` — while moving the histogram to `{"644":2156,"664":1,"755":20}`. Comparing it for
+A harmless `0644` → `0664` leaves the installed-tree digest byte-identical — measured — while
+moving the histogram to `{"644":2156,"664":1,"755":20}`. Comparing it for
 exact equality would therefore reject a tree the digest says is correct, which is precisely the
 machine-state drift the execute-bit normalization exists to avoid. An earlier draft listed it as
 a recorded field while the prose called it "recorded, not enforced"; the table and the prose
@@ -215,9 +223,9 @@ a predicate over them:
 
 | Install umask | Histogram | Installed tree |
 | --- | --- | --- |
-| `022` — reviewed | `{"644":2157,"755":20}` | `4cdc37a7…` |
-| `027` | `{"640":2157,"750":20}` | `62eddc28…` |
-| `077` | `{"600":2157,"700":20}` | `0a215132…` |
+| `022` — reviewed | `{"644":2157,"755":20}` | the recorded digest |
+| `027` | `{"640":2157,"750":20}` | differs |
+| `077` | `{"600":2157,"700":20}` | differs |
 
 The histogram is a **diagnostic hint, not a proof**. Any change to a file's mode moves it —
 measured, a single `chmod g-r` under the reviewed umask turns `{"644":2157,"755":20}` into
@@ -228,8 +236,8 @@ it narrows the search rather than settling it.
 An earlier draft counted **group-readable files** instead, and that was too weak to be a
 backstop. `umask 027` clears `0o027`, which leaves group read set — `0o644` becomes `0o640` and
 `0o755` becomes `0o750`, both still group-readable. Measured: a tree installed under `027` and
-recorded under `022` moved the digest to `62eddc28…` while the census still reported the
-recorded `2177 of 2177`, so it was blind to one of the umasks the guard itself rejects. The
+recorded under `022` moved the digest while the census still reported the recorded
+`2177 of 2177`, so it was blind to one of the umasks the guard itself rejects. The
 histogram distinguishes all three.
 
 The histogram is recorded and **not** folded into the digest. The full mode is machine state;
@@ -282,21 +290,31 @@ reducing the tree to a single file, and a record must not be minted over that.
 
 ### Why a run was refused
 
-Every refusal names the observed and reviewed values on stderr. `--any-toolchain` bypasses all
-of them and marks the output as explicitly not a freeze record.
+Every refusal names the observed and reviewed values on stderr.
 
-| Exit | Refusal | Usual cause |
-| ---: | --- | --- |
-| `2` | Unreviewed toolchain | different Node, npm, platform or architecture |
-| `3` | Manifest changed mid-run | `package.json` or `package-lock.json` edited while `npm ls`/`npm audit` ran |
-| `4` | Unreviewed manifest | `package.json` or `package-lock.json` has moved |
-| `5` | Audit response is not a report | registry unreachable, or an endpoint error returned as JSON |
-| `6` | Install-shaping npm configuration | `bin-links`, `omit`, `package-lock-only`, `umask` … from an `.npmrc` or the environment |
-| `7` | Tree is not the installed tree | `node_modules` absent, incomplete, or never installed |
-| `8` | Unreviewed process umask | recording shell is not at `0022` |
-| `9` | Unreviewed advisory registry | `registry` points at a mirror or proxy |
-| `10` | Installed tree changed while recording | something wrote to `node_modules` during the run |
-| `11` | Tree contains special files | a FIFO, socket or device node under `node_modules` |
+**`--any-toolchain` does not bypass all of them, and this section said it did.** It waives the
+*reviewed-environment and reviewed-input* guards — the ones asserting that this machine and these
+files are the ones under review. It does **not** waive the *integrity-during-run* refusals, which
+assert that nothing moved underneath the measurement while it was being taken. Those hold
+regardless, because a bypassed run still emits a number, and a number taken over a tree that
+changed mid-read is wrong under any flag. The `Bypassed` column below says which is which, per
+row, rather than leaving it to a sentence that has already been wrong once.
+
+| Exit | Refusal | Bypassed by `--any-toolchain` | Usual cause |
+| ---: | --- | :---: | --- |
+| `2` | Unreviewed toolchain | yes | different Node, npm, platform or architecture |
+| `3` | Manifest changed mid-run | **no** | `package.json` or `package-lock.json` edited while the run was in progress |
+| `4` | Unreviewed manifest | yes | `package.json` or `package-lock.json` has moved |
+| `5` | Audit response is not a report | **no** | registry unreachable, or an endpoint error returned as JSON |
+| `6` | Install-shaping npm configuration | yes | `bin-links`, `omit`, `package-lock-only`, `umask`, `omit-lockfile-registry-resolved` … from an `.npmrc` or the environment |
+| `7` | Tree is not the installed tree | yes | `node_modules` absent, incomplete, or never installed |
+| `8` | Unreviewed process umask | yes | recording shell is not at `0022` |
+| `9` | Unreviewed advisory registry | yes | `registry` points at a mirror or proxy |
+| `10` | Recorded inputs changed while recording | **no** | something wrote to `node_modules` or a manifest during the run |
+| `11` | Tree contains special files | yes | a FIFO, socket or device node under `node_modules` |
+
+A bypassed run marks its own output as explicitly not a freeze record — `freezeRecord: false`
+with the reasons listed — in both output formats.
 
 Exit `10` is the counterpart to exit `3` for the tree rather than the manifests, and it has two
 independent detectors:
@@ -313,8 +331,8 @@ section did not admit it. Two folds detect a write that lands *between* their tw
 entry; a write that lands *after the second fold has already read* that entry leaves both folds
 agreeing on bytes that are already stale. Measured, with the second fold paused just after it
 read `node_modules/.package-lock.json`: writing to that file produced exit `0`, no refusal, and
-the recorded digest `4cdc37a7…` reported for a tree whose file was 64829 bytes at emission
-against the 64794 bytes actually hashed.
+the then-recorded digest reported for a tree whose file was 64829 bytes at emission against the
+64794 bytes actually hashed.
 
 The sweep uses inode change time rather than modification time deliberately. `utimes` lets any
 caller set `mtime` to whatever they like, so `mtime` is forgeable; that same call moves `ctime`
@@ -369,8 +387,8 @@ to do with the package.
 claimed they were.** It argued that `0o755` under `umask 077` is still `0o700` and still
 executable by its owner. The file does remain executable; the *recorded value* does not survive
 — `0o755 & 0o111` is `0o111`, `0o700 & 0o111` is `0o100`. Measured: a full `npm ci` under
-`umask 077` produces `0a215132…` against the recorded `4cdc37a7…`, a mismatch caused by nothing
-but the reader's umask. So the **process** umask is **pinned at `0022` and checked**, making it
+`umask 077` produces a different digest from the recorded one, a mismatch caused by nothing but
+the reader's umask. So the **process** umask is **pinned at `0022` and checked**, making it
 the sixth environmental input this record fixes, alongside Node, npm, platform, arch and npm
 configuration. It is also the cheapest of the six to satisfy. npm's own `umask` config is a
 seventh knob that lands on the same bits and is checked as part of npm configuration; the
@@ -388,8 +406,8 @@ identical lockfile with the process umask at `0022` in **both**:
 
 | `npm config umask` | Histogram | Installed tree |
 | --- | --- | --- |
-| `0` — reviewed | `{"644":2157,"755":20}` | `4cdc37a7…` |
-| `077` | `{"600":2156,"700":12,"755":8,"644":1}` | `bd7b701f…` |
+| `0` — reviewed | `{"644":2157,"755":20}` | the recorded digest |
+| `077` | `{"600":2156,"700":12,"755":8,"644":1}` | differs |
 
 The second run then emitted a complete freeze record — `freezeRecord: true`, an empty
 `notFreezeRecordBecause`, `matchesReviewedManifest: true`, and `umask 0022` printed in its own
@@ -403,6 +421,15 @@ both umask guards — measured, exit `0` — because each reads the configuratio
 script runs. The permission histogram is the backstop for that case, and the digest mismatch is
 the alarm: `{"600":2156,"700":12,"755":8,"644":1}` against a recorded `{"644":2157,"755":20}`
 names its own cause.
+
+**Directories carry their normalized execute bits too, and for one round they did not.** A
+directory's execute bit is its *traverse* permission, so clearing it for group or other makes
+everything beneath unreachable for those classes while the packages themselves stay byte-perfect.
+Measured before the fix: `0755` → `0745` → `0700` on a package directory left the digest and the
+counts completely unchanged. The `node_modules` root is folded as well — the walk starts inside
+it, so it was the one directory the fold could never have noticed, and clearing its traverse bit
+locks out the whole tree at once. This is the same argument that put execute bits on files, one
+entry kind over, and it moved the recorded digest.
 
 All three execute classes are recorded, not a single boolean. An earlier draft collapsed them,
 which made `0o755` and `0o655` hash identically. That is not a harmless normalization: POSIX
@@ -427,16 +454,16 @@ the boundary attached rather than as an unqualified guarantee.
 
 **Special files were a second unstated exception, and are no longer one.** Entries that are
 neither file, directory nor symlink used to fold to a bare tag and a path, so every such entry
-at a given path hashed identically. Measured, five distinct filesystem objects at one path all
-folded to `ddb567e1…`:
+at a given path hashed identically. Measured, all five of these at one path folded to a
+single identical digest, and each now folds distinctly:
 
 | Entry at `node_modules/__special` | Before | After |
 | --- | --- | --- |
-| FIFO | `ddb567e1…` | `b42693ae…` |
-| Unix socket | `ddb567e1…` | `7873ad21…` |
-| Character device `(1,3)` | `ddb567e1…` | `9f24dd88…` |
-| Character device `(1,5)` | `ddb567e1…` | `9c65348a…` |
-| Block device `(7,0)` | `ddb567e1…` | `c8e896d5…` |
+| FIFO | all five identical | five distinct digests |
+| Unix socket | ″ | ″ |
+| Character device `(1,3)` | ″ | ″ |
+| Character device `(1,5)` | ″ | ″ |
+| Block device `(7,0)` | ″ | ″ |
 
 The two character devices differ only in minor number, which is the `/dev/null`-versus-
 `/dev/zero` distinction, so the collision was not even confined to type. The census was blind to
@@ -481,6 +508,8 @@ The fold is verified to move for each of these, and to return exactly to baselin
 | A `.bin` target's execute bit cleared (`0o755` → `0o644`) | yes |
 | Only the owner's execute bit cleared (`0o755` → `0o655`) | yes |
 | A FIFO, socket or device node added under `node_modules` | yes, differently for each kind, and a reviewed run refuses with exit `11` |
+| A directory's execute bit cleared for group or other (`0755` → `0745`) | yes |
+| The `node_modules` root's own execute bits changed | yes |
 
 ### Advisory posture
 
@@ -493,10 +522,16 @@ news but not a change to what this repository installs; and **`effects`/`nodes`*
 are derivable from the installed tree, and one change should not move two numbers.
 
 **This digest is not reproducible from the lockfile alone, and is not meant to be.** It is a
-snapshot of a published advisory database that changes over time. Drift here means the
-published advisories moved, which calls for a policy re-decision under `T1-ADVISORY-DISPOSITION-v1`
-— not a failed build. Any consumer treating it as a lockfile-derived invariant will get a false
-failure the first time an advisory is published.
+snapshot of a published advisory database that changes over time. Drift here means the published
+advisories moved.
+
+**A mismatch is still an equality failure**, and this paragraph said otherwise until it was
+corrected. It read "— not a failed build", which invited a consumer to wave the mismatch through;
+the [compared fields](#compared-fields) section requires the opposite. The check fails; what
+differs is the **response**, which is a policy re-decision under `T1-ADVISORY-DISPOSITION-v1`
+rather than an investigation of the installed tree. A consumer treating this digest as a
+*lockfile-derived* invariant will misdiagnose the cause — it is not evidence the tree moved — but
+it must not therefore be treated as non-blocking.
 
 ## Consumers
 

@@ -104,6 +104,21 @@ const REVIEWED_NPM_CONFIG = Object.freeze({
   'package-lock': true,
   'package-lock-only': false,
   umask: 0,
+  // Round 11, reported and confirmed. npm applies this option when it CREATES
+  // lockfiles, and that includes the hidden `node_modules/.package-lock.json`
+  // the fold hashes. npm documents it as producing lockfiles without registry
+  // `resolved` keys, default false.
+  //
+  // Measured with a real `npm ci` from the identical lockfile: the hidden
+  // lockfile came back with 0 `resolved` keys against the reviewed tree's 125,
+  // moving the installed-tree digest to 042962d8... while the census still
+  // reported the recorded 2177/8/336 and nothing refused. The package payloads
+  // were byte-identical; only npm's own bookkeeping file changed.
+  //
+  // Excluding `.package-lock.json` from the fold was considered and rejected:
+  // that removes real coverage of a file npm writes and tools read, to dodge a
+  // configuration problem the guard should simply catch.
+  'omit-lockfile-registry-resolved': false,
 });
 
 // The process umask the recorded tree was installed under.
@@ -272,6 +287,11 @@ function foldInstalledTree(strRoot) {
   // full mode is machine state, and pinning it would reintroduce exactly the
   // drift the execute-bit normalization exists to avoid.
   const objModeHistogram = new Map();
+  // Directories are counted separately rather than folded into the histogram
+  // above. Merging them would turn the recorded {"644":2157,"755":20} into a
+  // shape where files and directories are indistinguishable, which is a worse
+  // diagnostic than either alone.
+  const objDirectoryModeHistogram = new Map();
   const walk = (strDirectory, strRelative) => {
     const arrEntries = [...readdirSync(strDirectory, { withFileTypes: true })]
       .sort((objLeft, objRight) => (objLeft.name < objRight.name ? -1 : objLeft.name > objRight.name ? 1 : 0));
@@ -315,9 +335,30 @@ function foldInstalledTree(strRoot) {
         continue;
       }
       if (objEntry.isDirectory()) {
+        // Round 11, reported and confirmed. This branch used to fold the tag
+        // and the path and nothing else, so a directory's permission bits were
+        // invisible to the digest AND to the census. Measured on
+        // node_modules/glob: 0755 -> 0745 -> 0700 left the digest at
+        // 4cdc37a7... and the counts at 2177/8/336 throughout.
+        //
+        // That is not cosmetic. A directory's execute bit is its traverse
+        // permission, so clearing it for group or other makes everything
+        // beneath unreachable for those classes while the packages themselves
+        // are byte-perfect -- the same "a tree that cannot run is not the tree
+        // this record claims to have measured" argument that put execute bits
+        // on files in round 2, one entry kind over.
+        //
+        // Normalized execute bits, matching the file branch, for the same
+        // reason: the read and write bits are a property of the extracting
+        // machine, and folding the full mode would reintroduce umask drift.
         intDirectories += 1;
+        const intDirectoryMode = lstatSync(strPath).mode;
+        objDirectoryModeHistogram.set(
+          (intDirectoryMode & 0o777).toString(8).padStart(3, '0'),
+          (objDirectoryModeHistogram.get((intDirectoryMode & 0o777).toString(8).padStart(3, '0')) ?? 0) + 1);
         objHash.update('D', 'utf8');
         hashField(objHash, strChild);
+        hashField(objHash, (intDirectoryMode & 0o111).toString(8).padStart(3, '0'));
         walk(strPath, strChild);
         continue;
       }
@@ -394,7 +435,22 @@ function foldInstalledTree(strRoot) {
       hashField(objHash, readFileSync(strPath));
     }
   };
+  // The root itself, which the walk above never sees because it starts inside
+  // it. Reported in the same round as the directory bits and for the same
+  // reason: clearing traverse permission on `node_modules` locks every class
+  // out of the entire tree at once, and that was the one directory the fold
+  // could never have noticed. Tagged distinctly from a child directory so the
+  // record for the root cannot be confused with an entry named after it.
+  // It is reported as its own field rather than folded into the directory
+  // histogram, so that histogram keeps summing to `directories` -- a census
+  // whose total does not match the count beside it is a diagnostic that costs
+  // the reader time to reconcile.
+  const intRootMode = lstatSync(strRoot).mode;
+  objHash.update('R', 'utf8');
+  hashField(objHash, (intRootMode & 0o111).toString(8).padStart(3, '0'));
   walk(strRoot, '');
+  const sortHistogram = (objMap) => Object.fromEntries([...objMap.entries()].sort(
+    (objLeft, objRight) => (objLeft[0] < objRight[0] ? -1 : 1)));
   return {
     sha256: objHash.digest('hex'),
     files: intFiles,
@@ -402,8 +458,9 @@ function foldInstalledTree(strRoot) {
     directories: intDirectories,
     specials: intSpecials,
     specialPaths: arrSpecialPaths,
-    modes: Object.fromEntries([...objModeHistogram.entries()].sort(
-      (objLeft, objRight) => (objLeft[0] < objRight[0] ? -1 : 1))),
+    modes: sortHistogram(objModeHistogram),
+    directoryModes: sortHistogram(objDirectoryModeHistogram),
+    rootMode: (intRootMode & 0o777).toString(8).padStart(3, '0'),
   };
 }
 
@@ -430,22 +487,31 @@ function foldInstalledTree(strRoot) {
 //
 // This narrows the window; it does not make a userspace walk atomic, and
 // nothing in this script can. See the comment at its use.
-function newestChangeTime(strRoot) {
+// Round 11: the manifests are swept too. They live one directory ABOVE
+// node_modules, so the round-9 sweep did not reach them -- which is exactly the
+// gap the manifest recheck below was reported for.
+function newestChangeTime(strRoot, arrExtraPaths) {
   let intNewest = 0;
   let strNewestPath = '';
+  const consider = (strPath, strLabel) => {
+    const objStats = lstatSync(strPath);
+    if (objStats.ctimeMs > intNewest) {
+      intNewest = objStats.ctimeMs;
+      strNewestPath = strLabel;
+    }
+    return objStats;
+  };
   const walk = (strDirectory, strRelative) => {
     for (const objEntryHint of readdirSync(strDirectory, { withFileTypes: true })) {
       const strPath = join(strDirectory, objEntryHint.name);
       const strChild = strRelative ? `${strRelative}/${objEntryHint.name}` : objEntryHint.name;
-      const objStats = lstatSync(strPath);
-      if (objStats.ctimeMs > intNewest) {
-        intNewest = objStats.ctimeMs;
-        strNewestPath = strChild;
-      }
+      const objStats = consider(strPath, `node_modules/${strChild}`);
       if (objStats.isDirectory()) walk(strPath, strChild);
     }
   };
+  consider(strRoot, 'node_modules');
   walk(strRoot, '');
+  for (const strPath of arrExtraPaths) consider(strPath, strPath.split('/').pop());
   return { ctimeMs: intNewest, path: strNewestPath };
 }
 
@@ -466,8 +532,15 @@ function newestChangeTime(strRoot) {
 //
 // Unlike the tree fold, this digest is NOT reproducible from the lockfile alone
 // and is not meant to be: it is a snapshot of an advisory database that changes
-// as new advisories are published. Drift here means "the published advisories
-// moved", which calls for a policy re-decision, not a failed build.
+// as new advisories are published.
+//
+// Round 11 correction. This comment used to say drift here "calls for a policy
+// re-decision, not a failed build", which reads as non-blocking and contradicts
+// the record: the advisory fields ARE compared, so a mismatch IS an equality
+// failure. What differs is the response -- re-decide the policy rather than
+// investigate the tree -- not whether the check fails. The record was corrected
+// one round earlier and this comment was left behind, which is the same partial
+// fix the correction was about.
 function normalizeAudit(objAudit) {
   const objVulnerabilities = objAudit.vulnerabilities ?? {};
   const objOutput = {
@@ -664,6 +737,8 @@ objRecord.installedTreeSymlinks = objTree.symlinks;
 objRecord.installedTreeDirectories = objTree.directories;
 objRecord.installedTreeSpecials = objTree.specials;
 objRecord.installedTreeModes = objTree.modes;
+objRecord.installedTreeDirectoryModes = objTree.directoryModes;
+objRecord.installedTreeRootMode = objTree.rootMode;
 
 // Round 9. A FIFO, socket or device node under node_modules means this is not
 // an installed tree, which is the same thing refusal 7 asserts for a different
@@ -846,17 +921,37 @@ if (objTreeAfter.sha256 !== objTree.sha256) {
 // because a userspace sequential scan has no atomic snapshot to compare against.
 // A filesystem-level snapshot would close it outright and is the right answer
 // for a reader who has one; that is a property of the host, not of this script.
-const objNewestChange = newestChangeTime(strTreeRoot);
+const objNewestChange = newestChangeTime(strTreeRoot, [strPackagePath, strLockPath]);
 if (objNewestChange.ctimeMs >= intRecordingStartedAt) {
   process.stderr.write(
-    'supply-freeze: the installed tree changed while recording; refusing to report.\n' +
+    'supply-freeze: the recorded inputs changed while recording; refusing to report.\n' +
     '  detected by        inode change time, not by the fold comparison\n' +
-    `  newest change      node_modules/${objNewestChange.path}\n` +
+    `  newest change      ${objNewestChange.path}\n` +
     `                     ctime ${new Date(objNewestChange.ctimeMs).toISOString()}\n` +
     `  recording began    ${new Date(intRecordingStartedAt).toISOString()}\n` +
     '  an entry was written after this run began, so the digest above describes\n' +
     '  bytes that are no longer on disk. record against a quiescent tree.\n');
   process.exit(10);
+}
+
+// Round 11, reported and confirmed. The manifest assertion above runs BEFORE
+// the second fold and the sweep, and nothing read the manifests again after it,
+// so a write landing in that interval was invisible: measured, editing
+// package.json during the second fold gave exit 0 with the reviewed hash
+// e206cdb3... reported, matchesReviewedManifest: true, and b916f1cc... actually
+// on disk at emission.
+//
+// That is the identical late-write window the second fold was added to close
+// for node_modules, left open one file over -- the same "fixed it here, not
+// there" shape this review has now found several times. The content comparison
+// is repeated here, after every scan and immediately before the record is
+// emitted, so the hashes reported are the bytes last observed.
+if (readFileSync(strPackagePath, 'utf8') !== strPackageBefore
+  || readFileSync(strLockPath, 'utf8') !== strLockBefore) {
+  process.stderr.write(
+    'supply-freeze: package metadata changed after the tree was recorded; refusing to report\n' +
+    '  the manifest hashes above would describe bytes that are no longer on disk.\n');
+  process.exit(3);
 }
 
 // Round 7, reported. `--any-toolchain` promised output that is "explicitly not
@@ -899,6 +994,7 @@ if (boolJson) {
     `  installed tree       ${objRecord.installedTreeSha256}\n` +
     `    (${objRecord.installedTreeFiles} files, ${objRecord.installedTreeSymlinks} symlinks, ${objRecord.installedTreeDirectories} directories, ${objRecord.installedTreeSpecials} special entries on disk)\n` +
     `    (file permissions ${JSON.stringify(objRecord.installedTreeModes)}; a different shape is consistent with a different install umask, or with modes changed after install)\n` +
+    `    (directory permissions ${JSON.stringify(objRecord.installedTreeDirectoryModes)}, node_modules itself ${objRecord.installedTreeRootMode})\n` +
     (objRecord.auditSha256
       ? `  registry             ${objRecord.registry}\n` +
         `  advisory posture     ${objRecord.auditSha256}\n` +
