@@ -179,6 +179,16 @@ arbitrary byte string, and decoding it as UTF-8 first is lossy: targets of the s
 `0x80` and `0x81` both decode to U+FFFD and hashed identically — a real collision, measured on
 ext4, in the very property this fold claims.
 
+**Path components are the one exception, and are folded as UTF-8-decoded names.** Directory
+entries come from `readdirSync`, which decodes names the same lossy way, so a filename holding
+non-UTF-8 bytes would collide by the identical mechanism. It is left as it stands rather than
+quietly fixed: reading entries as raw bytes changes how every path in the tree sorts and hashes,
+which would move the recorded digest to guard a case npm cannot produce — package names are
+constrained to a subset of ASCII, and all 2177 entries in the reviewed tree are ASCII. A symlink
+target is different in kind, being an arbitrary string npm writes rather than a validated name,
+which is why that one is byte-exact. Stated here so the fold's injectivity claim is read with
+the boundary attached rather than as an unqualified guarantee.
+
 Every variable-length field is **length-prefixed**, which makes the encoding injective. An
 earlier draft used line-oriented framing, and that was not injective: a POSIX path or symlink
 target may itself contain a newline, so two genuinely different trees hashed identically. Both
