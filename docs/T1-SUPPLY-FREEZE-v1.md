@@ -98,9 +98,24 @@ wrote them as `0 critical, 5 high, 2 moderate, 0 low, 0 info`, which omitted npm
 and asked a consumer to compare a sentence against a JSON object. Exact equality against prose
 is not mechanically checkable, and a compared field has to be.
 
-The two advisory rows are compared **at a point in time**. They snapshot a database that changes
-as advisories are published; drift there calls for a policy re-decision rather than a failed
-build, which is set out in
+**The two advisory rows are compared, and a mismatch there is a genuine equality failure.** An
+earlier draft said drift in them "calls for a policy re-decision rather than a failed build",
+which read as though they were exempt from the check — having it both ways, since this section's
+own rule is that compared fields must match exactly.
+
+They are not exempt. What differs is the correct *response* to a mismatch, not whether the check
+fails:
+
+| Compared field | A mismatch means | The consumer should |
+| --- | --- | --- |
+| Everything except the two advisory rows | the supply inputs are not the reviewed ones | stop and investigate the tree |
+| Advisory registry, advisory posture | the published advisory database has moved | re-decide the policy under `T1-ADVISORY-DISPOSITION-v1` |
+
+Concretely, for the consumer named in [Consumers](#consumers): issue #22 must treat an advisory
+mismatch as a **blocking check that needs a policy decision to clear**, not as evidence the
+installed tree was tampered with, and not as something to wave through. The advisory rows
+snapshot a database that changes as advisories are published, which is why the second row of
+that table exists at all — the reasoning is in
 [Advisory posture](#advisory-posture).
 
 ### Recorded, not compared
