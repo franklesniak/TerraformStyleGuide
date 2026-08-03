@@ -53,7 +53,7 @@ Run on the reviewed toolchain against the merge commit.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `32c1fed6f057ac2eb67e84721eb1a562b8cf7d517f03f5c3a4703804f1093c39` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `e14f8b01016a40b50ca4562c8daf23af714fb2fa27bd6618e56d1683242a71e5` |
 | Node | `v24.18.1` |
 | npm | `11.16.0` |
 | Platform | `linux` / `x64` |
@@ -62,7 +62,7 @@ Run on the reviewed toolchain against the merge commit.
 | `package-lock.json` | blob `5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca` |
 | `package-lock.json` SHA-256 | `277f7168ab3a4f1f7a2565de13191d64b1572e7cb92b67b0972b3242bd4de062` |
 | Install producer argv | `npm ci --ignore-scripts --no-audit --no-fund` |
-| Installed tree SHA-256 | `c77d611336230e8e0d520370431ace130d1a78023d4006ca075fba59af09680c` |
+| Installed tree SHA-256 | `4cdc37a7269eb90a413fb3f26c031b81268f62fe9129c9939337106da12cc716` |
 | Installed tree size | 2177 files, 8 symlinks, 336 directories |
 | Advisory posture SHA-256 | `ea559555c8c18bd2488219d977a994fabc868c2d46efb05bbaf92405c53488e1` |
 | Advisory counts | 0 critical, 5 high, 2 moderate, 0 low, 0 info |
@@ -104,16 +104,38 @@ the reader cannot explain.
 That guard reads the configuration in effect **when the script runs**. A tree installed under
 `bin-links=false` in a shell that no longer carries the setting still passes it, so the symlink
 and file counts recorded above are the backstop for that case: 0 symlinks against a recorded 8
-names the cause even where the guard cannot see it. To sidestep ambient configuration entirely:
+names the cause even where the guard cannot see it. To sidestep ambient configuration files:
 
 ```bash
+: > /tmp/npm-user-empty; : > /tmp/npm-global-empty
 npm ci --ignore-scripts --no-audit --no-fund \
-  --userconfig=/dev/null --globalconfig=/dev/null
+  --userconfig=/tmp/npm-user-empty --globalconfig=/tmp/npm-global-empty
 ```
+
+**The two paths must be different files.** An earlier draft pointed both options at `/dev/null`,
+which does not run at all: npm keys loaded configuration by resolved path and refuses to load one
+path as both `user` and `global`, so `npm ci` exits 1 with `double-loading config "/dev/null" as
+"global", previously loaded as "user"` before the install starts. Any single path used twice
+fails the same way — `/dev/null` is not special.
+
+**This isolates configuration files, not the environment.** Measured: with
+`npm_config_bin_links=false` exported, the command above still installs 0 symlinks, because an
+`npm_config_*` environment variable outranks the empty files. Scrub the environment as well when
+that matters:
+
+```bash
+env -u npm_config_bin_links npm ci --ignore-scripts --no-audit --no-fund \
+  --userconfig=/tmp/npm-user-empty --globalconfig=/tmp/npm-global-empty
+```
+
+The script's configuration guard is what catches both, and it is the reason this is a loud
+failure rather than a silent one.
 
 The script refuses to run against any manifest other than the reviewed one, so a revision whose
 `package.json` or `package-lock.json` has moved will exit non-zero rather than report a
-misleading digest.
+misleading digest. It also refuses when `node_modules` is absent or does not satisfy the
+lockfile — `package-lock-only=true` makes `npm ci` a no-op that reports `up to date` while
+reducing the tree to a single file, and a record must not be minted over that.
 
 **Check the script's own digest first.** The script reports its own SHA-256 on every run, and the
 value is recorded in the table above. This matters because the digests below are a property of
@@ -127,23 +149,35 @@ sha256sum Get-SupplyFreezeDigest.mjs   # must equal the recorded value
 ```
 
 The script refuses to report on any toolchain other than Node `v24.18.1` with npm `11.16.0` on
-`linux`/`x64`, because a digest taken on a different combination is not this record. Pass `--json` for machine-
-readable output, `--no-audit` to skip the network-dependent half, and `--any-toolchain` to
-compute anyway — the last of which produces a number that is explicitly not a freeze record.
+`linux`/`x64`, because a digest taken on a different combination is not this record. Pass
+`--json` for machine-readable output, `--no-audit` to skip the network-dependent half, and
+`--any-toolchain` to compute anyway — the last of which produces a number that is explicitly
+not a freeze record.
 
 ## What each digest does and does not prove
 
 ### Installed tree
 
-Folds the bytes actually present under `node_modules`: every file's path, normalized executable
-bit and content, every symlink's path and target, and every directory's path, in sorted order.
+Folds the bytes actually present under `node_modules`: every file's path, normalized execute
+bits and content, every symlink's path and target, and every directory's path, in sorted order.
 
-The **normalized executable bit** rather than the full mode, and that is a measurement rather
-than a preference. All three reference installs agree on the full mode (`0o644` ×2157, `0o755`
-×20), but node-tar applies the process umask when it extracts, so the non-execute bits are a
-property of the extracting machine. The execute bit survives the umasks that occur in practice —
-`0o755` under `umask 077` is still `0o700`, still executable — so exactly one bit of mode is
-recorded: the one that decides whether the file can run.
+The **normalized execute bits** (`mode & 0o111`) rather than the full mode, and that is a
+measurement rather than a preference. All three reference installs agree on the full mode
+(`0o644` ×2157, `0o755` ×20), but node-tar applies the process umask when it extracts, so the
+non-execute bits are a property of the extracting machine. The execute bits survive the umasks
+that occur in practice — `0o755` under `umask 077` is still `0o700`, still executable by its
+owner — so the mode is recorded exactly as far as it decides whether the file can run.
+
+All three execute classes are recorded, not a single boolean. An earlier draft collapsed them,
+which made `0o755` and `0o655` hash identically. That is not a harmless normalization: POSIX
+consults **only the owner bits** when the process euid owns the file, so a `0o655` file is not
+executable by the user who installed it even though group and other still carry `+x`. Measured
+with an owner-matched process — `Permission denied`, while the collapsed fold did not move.
+
+Symlink targets are folded as **raw bytes**, not as decoded strings. A POSIX target is an
+arbitrary byte string, and decoding it as UTF-8 first is lossy: targets of the single bytes
+`0x80` and `0x81` both decode to U+FFFD and hashed identically — a real collision, measured on
+ext4, in the very property this fold claims.
 
 Every variable-length field is **length-prefixed**, which makes the encoding injective. An
 earlier draft used line-oriented framing, and that was not injective: a POSIX path or symlink
@@ -178,6 +212,8 @@ The fold is verified to move for each of these, and to return exactly to baselin
 | A `.bin` symlink redirected to another target | yes |
 | A file truncated to empty | yes |
 | An unexpected file added anywhere under `node_modules` | yes |
+| A `.bin` target's execute bit cleared (`0o755` → `0o644`) | yes |
+| Only the owner's execute bit cleared (`0o755` → `0o655`) | yes |
 
 ### Advisory posture
 

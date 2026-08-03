@@ -18,7 +18,7 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { lstatSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -59,11 +59,17 @@ const REVIEWED_LOCK_BLOB = '5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca';
 // `omit=dev` in a user or global .npmrc gets a different tree from the same
 // lockfile, and the toolchain guard accepted them because Node, npm and the
 // platform were all correct. Measured -- under `bin-links=false` npm ci exited
-// 0, produced 0 symlinks instead of 8, and the script reported digest
-// 89a19867... against the recorded ce95cd20... without a word of complaint.
+// 0 and produced 0 symlinks instead of the recorded 8, and the script reported
+// a mismatched digest without a word of complaint.
 //
 // `npm config list --json` reports the EFFECTIVE configuration, including
 // environment and .npmrc overrides, so these are checked rather than assumed.
+//
+// Round 3, reported: `package-lock-only` has to be listed explicitly. npm
+// defines it as "only use the package-lock.json, ignoring node_modules", and it
+// force-sets package-lock=true, so the entry below it cannot catch it
+// indirectly. Measured -- `npm ci` under package-lock-only=true exits 0 saying
+// "up to date" while reducing node_modules to a single .package-lock.json file.
 const REVIEWED_NPM_CONFIG = Object.freeze({
   'bin-links': true,
   omit: [],
@@ -71,6 +77,7 @@ const REVIEWED_NPM_CONFIG = Object.freeze({
   'install-strategy': 'hoisted',
   'legacy-peer-deps': false,
   'package-lock': true,
+  'package-lock-only': false,
 });
 
 const strWorkflowDirectory = dirname(fileURLToPath(import.meta.url));
@@ -192,7 +199,13 @@ function foldInstalledTree(strRoot) {
         intSymbolicLinks += 1;
         objHash.update('L', 'utf8');
         hashField(objHash, strChild);
-        hashField(objHash, readlinkSync(strPath));
+        // Round 3, reported. readlinkSync's default string encoding decodes the
+        // target as UTF-8, and a POSIX target is arbitrary bytes. Two distinct
+        // targets therefore collided: raw 0x80 and raw 0x81 both decode to the
+        // single replacement character U+FFFD and hashed identically -- measured
+        // on ext4. Requesting a Buffer hashes the bytes the kernel actually
+        // stored, which is what "injective" has to mean here.
+        hashField(objHash, readlinkSync(strPath, { encoding: 'buffer' }));
         continue;
       }
       if (objEntry.isDirectory()) {
@@ -215,19 +228,26 @@ function foldInstalledTree(strRoot) {
       // digest did not move at all. A tree that cannot run is not the tree
       // this record claims to have measured.
       //
-      // The NORMALIZED executable bit rather than the full mode, and that is a
+      // The NORMALIZED execute bits rather than the full mode, and that is a
       // measurement rather than a preference. All three reference installs
       // agree on the full mode here (0o644 x2157, 0o755 x20), but node-tar
       // applies the process umask when it extracts, so the non-execute bits are
       // a property of the extracting machine and would make the digest
-      // irreproducible under a different umask. The execute bit survives the
+      // irreproducible under a different umask. The execute bits survive the
       // umasks that occur in practice: 0o755 under umask 077 is still 0o700,
-      // still executable. So exactly one bit of mode is recorded, the one that
-      // decides whether the file can run.
+      // still executable by its owner.
+      //
+      // Round 3, reported. An earlier version collapsed all three execute
+      // classes to a single boolean, which meant 0o755 and 0o655 hashed
+      // identically. That is not a harmless normalization: POSIX consults only
+      // the OWNER bits when the process euid owns the file, so 0o655 is not
+      // executable by the user who installed it. Measured with an owner-matched
+      // process -- a 0o655 file owned by that user gives "Permission denied"
+      // while group and other still carry +x. All three classes are recorded.
       intFiles += 1;
       objHash.update('F', 'utf8');
       hashField(objHash, strChild);
-      hashField(objHash, (lstatSync(strPath).mode & 0o111) === 0 ? '-' : 'x');
+      hashField(objHash, (lstatSync(strPath).mode & 0o111).toString(8).padStart(3, '0'));
       hashField(objHash, readFileSync(strPath));
     }
   };
@@ -317,11 +337,13 @@ if (!boolAnyToolchain && (strNodeVersion !== REVIEWED_NODE || strNpmVersion !== 
 //
 // Raised while answering the reproduction-steps finding, and it is the reason
 // that finding is more than a documentation fix: "run the script and compare"
-// is ambiguous unless the reader knows WHICH script. The framing correction in
-// this same round moved the installed-tree digest from 32a914d9 to ce95cd20
-// without any dependency changing, which is exactly the confusion a reader
-// would hit -- a correct tree, a correct lockfile, and a number that does not
-// match, with nothing in the record to explain why.
+// is ambiguous unless the reader knows WHICH script. Review has moved the
+// installed-tree digest several times without any dependency changing -- making
+// the fold injective, then recording execute bits, then hashing symlink targets
+// as raw bytes. That is exactly the confusion a reader would hit: a correct
+// tree, a correct lockfile, and a number that does not match, with nothing in
+// the record to explain why. Specific digests are deliberately not quoted here;
+// a number in a comment has nothing deriving it and goes stale silently.
 //
 // No circularity: the digest is computed over the file and never stored in it.
 const strScriptSha256 = sha256(readFileSync(fileURLToPath(import.meta.url), 'utf8'));
@@ -390,6 +412,7 @@ if (!boolAnyToolchain && !objRecord.matchesReviewedManifest) {
 // `npm ls` is kept, but as a consistency assertion rather than a digest source:
 // it exits non-zero when the installed tree does not satisfy the lockfile, which
 // is the one question it answers that the byte fold cannot.
+const strTreeRoot = join(strWorkflowDirectory, 'node_modules');
 try {
   runNpm(['ls', '--all', '--json']);
   objRecord.treeSatisfiesLockfile = true;
@@ -397,7 +420,27 @@ try {
   objRecord.treeSatisfiesLockfile = false;
 }
 
-const objTree = foldInstalledTree(join(strWorkflowDirectory, 'node_modules'));
+// Round 3. Carried across from the package-lock-only finding rather than
+// reported directly, because it is the same defect the manifest guard above
+// already fixed, left standing one field over: `treeSatisfiesLockfile` was
+// RECORDED and never ENFORCED. Measured -- a tree with one package directory
+// deleted, and a tree reduced by `package-lock-only=true` to a single
+// .package-lock.json file, both exited 0 and printed a full freeze record.
+//
+// A missing node_modules used to reach readdirSync and abort with a raw ENOENT
+// stack trace, which tells a reader nothing about what this script wanted.
+if (!boolAnyToolchain && (!existsSync(strTreeRoot) || !objRecord.treeSatisfiesLockfile)) {
+  process.stderr.write(
+    'supply-freeze: refusing to record digests for a tree that is not the installed tree.\n' +
+    `  node_modules       ${existsSync(strTreeRoot) ? 'present' : 'MISSING'}\n` +
+    `  satisfies lockfile ${objRecord.treeSatisfiesLockfile}\n` +
+    '  install first with the documented command, then record:\n' +
+    '    npm ci --ignore-scripts --no-audit --no-fund\n' +
+    '  note that package-lock-only=true makes npm ci a no-op that reports success.\n');
+  process.exit(7);
+}
+
+const objTree = foldInstalledTree(strTreeRoot);
 objRecord.installedTreeSha256 = objTree.sha256;
 objRecord.installedTreeFiles = objTree.files;
 objRecord.installedTreeSymlinks = objTree.symlinks;
