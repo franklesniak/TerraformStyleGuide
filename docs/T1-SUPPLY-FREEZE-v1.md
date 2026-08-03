@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `41dc974682f9721ca1eea514668145021df51b09867a410212042a7a1d7877e6` | script `script.sha256` |
+| Freeze script SHA-256 | `187c21db6b1e6b50a6358ab4f5b43224aa5624296ecd062be65aa99a3665ed24` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` | script `toolchain.platform` |
@@ -445,6 +445,7 @@ row, rather than leaving it to a sentence that has already been wrong once.
 | `9` | Unreviewed advisory registry | yes | `registry` points at a mirror or proxy |
 | `10` | Recorded inputs changed while recording | **no** | something wrote to `node_modules` or a manifest during the run |
 | `11` | Tree contains special files | yes | a FIFO, socket or device node under `node_modules` |
+| `11` | Tree contains links that leave it | yes | a symlink under `node_modules` resolving outside it — typically a package directory replaced by a link to an external tree |
 
 A bypassed run marks its own output as explicitly not a freeze record — `freezeRecord: false`
 with the reasons listed — in both output formats.
@@ -577,6 +578,21 @@ project `npmrc` **created in the window between that check and the audit invocat
 requires writing into the repository working directory mid-run. That is the same residual class as
 the preload above: an actor who can do it already runs code on the host, and the check is worth
 what it is worth against the accidental case.
+
+**A symlink under `node_modules` may not resolve outside it.** The fold hashes a link's target
+*text*, never the bytes behind it, which is right for the eight `.bin` shims a normal install
+creates — they point back into the tree, so the bytes they reach are folded at their real location
+and editing them does move the digest. A target *outside* the tree is different in kind: those
+bytes are never read, so the digest is silent about code that actually loads. Measured, with
+`node_modules/eastasianwidth` replaced by a link to an external directory holding a minimal
+`{"name","version","main"}` manifest: `npm ls --all` exits `0`, `treeSatisfiesLockfile` comes back
+`true` so the exit-`7` refusal never fires, a digest is recorded at exit `0` — and rewriting the
+code behind that link afterwards leaves the digest byte-identical. Such a tree is now refused with
+exit `11`.
+
+The boundary is *where the link reaches*, not that it is a link, and it is checked against the
+fully resolved root so that a chain leaving in two hops is caught and a legitimately symlinked
+`node_modules` root is not mistaken for an escape.
 
 **The quiescence sweep follows a manifest's whole symlink chain, but not symlinked directory
 components.** Where a manifest resolves through several links — `package.json` → `mid` → `real` —

@@ -657,6 +657,10 @@ function foldInstalledTree(strRoot) {
   let intDirectories = 0;
   let intSpecials = 0;
   const arrSpecialPaths = [];
+  // Round 38. Collected rather than thrown so the refusal can name every
+  // escaping link at once, matching how special files are reported.
+  const arrEscapingLinks = [];
+  const strRealRoot = realpathSync(strRoot);
   // Round 4 backstop, corrected in round 5. The umask guard reads the RECORDING
   // process, so it cannot see a tree installed under a different umask in an
   // earlier shell. The tree's own permission bits are the tell that survives.
@@ -723,6 +727,34 @@ function foldInstalledTree(strRoot) {
         // on ext4. Requesting a Buffer hashes the bytes the kernel actually
         // stored, which is what "injective" has to mean here.
         hashField(objHash, readlinkSync(strPath, { encoding: 'buffer' }));
+        // Round 38, reported by Codex. A link whose target lies OUTSIDE the tree
+        // names bytes this fold never reads, and hashing the target text does
+        // not cover them. Measured: with node_modules/eastasianwidth replaced by
+        // a link to an external directory holding a minimal
+        // {"name","version","main"} manifest, `npm ls --all` exits 0,
+        // treeSatisfiesLockfile comes back TRUE so the exit-7 refusal never
+        // fires, the script records a digest at exit 0 -- and rewriting the code
+        // behind that link afterwards leaves the digest byte-identical. A
+        // reviewed run would have emitted freezeRecord: true over a tree whose
+        // executing code was outside the record and free to change.
+        //
+        // Only OUT-OF-TREE targets are refused, and that boundary is the whole
+        // of the reasoning. A link pointing back inside node_modules names bytes
+        // this walk already folds at their real location, so editing them does
+        // move the digest -- covered, and refusing it would be a false failure
+        // on the eight .bin shims a normal install creates. It is what the link
+        // reaches that matters, not that it is a link.
+        //
+        // Resolved with realpathSync against the RESOLVED root, so a chain that
+        // leaves the tree in two hops is caught and a legitimately symlinked
+        // node_modules root does not read as an escape. A dangling link resolves
+        // to nothing and is left to the sweep that already refuses it.
+        try {
+          const strResolved = realpathSync(strPath);
+          if (strResolved !== strRealRoot && !strResolved.startsWith(`${strRealRoot}/`)) {
+            arrEscapingLinks.push({ path: strChild, resolved: strResolved });
+          }
+        } catch { /* dangling: the quiescence sweep refuses it as a changed input */ }
         continue;
       }
       if (objEntry.isDirectory()) {
@@ -902,6 +934,7 @@ function foldInstalledTree(strRoot) {
     directories: intDirectories,
     specials: intSpecials,
     specialPaths: arrSpecialPaths,
+    escapingLinks: arrEscapingLinks,
     modes: sortHistogram(objModeHistogram),
     directoryModes: sortHistogram(objDirectoryModeHistogram),
     rootMode: (intRootMode & 0o777).toString(8).padStart(3, '0'),
@@ -1777,6 +1810,24 @@ if (!boolAnyToolchain && objTree.specials > 0) {
       ? `    ... and ${objTree.specialPaths.length - 10} more\n` : '') +
     '  npm ci creates only files, directories and symlinks; a FIFO, socket or\n' +
     '  device node under node_modules did not come from the install.\n');
+  process.exit(11);
+}
+
+// Round 38, reported by Codex. Refused rather than recorded: a link out of the
+// tree makes the installed-tree digest silent about the code that actually
+// loads, which is the one thing that digest exists to pin.
+if (!boolAnyToolchain && objTree.escapingLinks.length > 0) {
+  process.stderr.write(
+    'supply-freeze: refusing to record digests for a tree whose links leave it.\n' +
+    `  escaping links     ${objTree.escapingLinks.length} (expected 0)\n` +
+    `${objTree.escapingLinks.slice(0, 10).map((objLink) =>
+      `    node_modules/${objLink.path} -> ${objLink.resolved}\n`).join('')}` +
+    (objTree.escapingLinks.length > 10
+      ? `    ... and ${objTree.escapingLinks.length - 10} more\n` : '') +
+    '  the fold hashes a link\'s target text, not the bytes behind it, so a target\n' +
+    '  outside node_modules is code this digest does not cover and cannot detect\n' +
+    '  changes to. npm ci installs package contents in place; a package directory\n' +
+    '  that is a link to somewhere else did not come from the install.\n');
   process.exit(11);
 }
 
