@@ -1407,6 +1407,46 @@ function normalizeConfigValue(objValue) {
 // the reader the comparison while protecting nothing.
 const SENSITIVE_CONFIG_KEYS = Object.freeze(['proxy', 'https-proxy', 'ca', 'cafile']);
 
+// Round 37, reported by Codex, and the third round running on one class. Rounds
+// 35 and 36 each fixed the reported site: NODE_OPTIONS, then the transport
+// values. Round 36's fix was described as covering the class and did not -- it
+// made configDrift's OUTPUT safe, which is a fix to one formatter, while the
+// registry refusal builds its line by hand and prints the URL verbatim. Fixing
+// the class means every path by which a URL reaches output, so this is applied
+// at the three that exist rather than at the one reported.
+//
+// A URL carries its secrets in two places: userinfo (`https://user:token@host`)
+// and the query. Both are removed; scheme, host and path are kept, because a
+// reader needs to see WHICH registry was refused for the message to be worth
+// printing at all. Measured: the reviewed registry has neither part, so this is
+// a no-op on every non-bypassed run.
+function redactUrl(strValue) {
+  try {
+    const objUrl = new URL(strValue);
+    const boolCarriedSecret = objUrl.username !== '' || objUrl.password !== ''
+      || objUrl.search !== '' || objUrl.hash !== '';
+    objUrl.username = '';
+    objUrl.password = '';
+    objUrl.search = '';
+    objUrl.hash = '';
+    return boolCarriedSecret ? `${objUrl.toString()} (credentials and query redacted)` : objUrl.toString();
+  } catch {
+    // Not a URL. Returned unchanged rather than blanked: a malformed registry
+    // value is itself the diagnostic, and this helper is not the place to
+    // decide that an unparseable string is a secret.
+    return strValue;
+  }
+}
+
+// npm's own error text embeds the full request URL, which is how the same token
+// escapes through a guard that never touches the registry setting. Measured, an
+// audit against a credentialed registry returns:
+//   request to https://host/path?token=... failed, reason: connect ECONNREFUSED
+// so the message cannot be forwarded verbatim either.
+function redactUrlsInText(strText) {
+  return strText.replace(/https?:\/\/[^\s"']+/gu, (strMatch) => redactUrl(strMatch));
+}
+
 function configDrift(objReviewed, objEffective) {
   return Object.entries(objReviewed)
     .filter(([strKey, objExpected]) =>
@@ -1760,7 +1800,7 @@ if (boolSkipAudit) {
   if (!boolAnyToolchain && strRegistry !== REVIEWED_REGISTRY) {
     process.stderr.write(
       'supply-freeze: refusing to record an advisory posture from an unreviewed registry.\n' +
-      `  registry           observed ${strRegistry}\n` +
+      `  registry           observed ${redactUrl(strRegistry)}\n` +
       `                     reviewed ${REVIEWED_REGISTRY}\n` +
       '  npm posts the audit request to the configured registry, and a mirror that\n' +
       '  filters or lacks advisories returns a schema-valid but misleadingly clean report.\n' +
@@ -1768,7 +1808,12 @@ if (boolSkipAudit) {
       '  so --no-audit records the lockfile-derived fields from any registry.\n');
     process.exit(9);
   }
-  objRecord.registry = strRegistry;
+  // Recorded through the same redaction. The refusal above is gated on
+  // !boolAnyToolchain, so a bypassed run never reaches it -- which is exactly
+  // the run that can carry an unreviewed, credentialed registry, and it would
+  // otherwise land the token in the emitted artifact rather than merely in a
+  // log line. A no-op for the reviewed registry, which has no userinfo or query.
+  objRecord.registry = redactUrl(strRegistry);
   // Round 11, reported. The registry was READ in one npm process and the audit
   // then ran in a SEPARATE one that reloaded configuration from scratch, so a
   // user or global .npmrc rewritten between the two would send the audit to a
@@ -1935,7 +1980,7 @@ if (boolSkipAudit) {
     || !Object.values(objAudit.vulnerabilities).every(isPlainObject)) {
     process.stderr.write(
       'supply-freeze: npm audit did not return an audit report.\n' +
-      `  npm said: ${typeof objAudit.message === 'string' ? objAudit.message : JSON.stringify(objAudit).slice(0, 300)}\n` +
+      `  npm said: ${redactUrlsInText(typeof objAudit.message === 'string' ? objAudit.message : JSON.stringify(objAudit).slice(0, 300))}\n` +
       '  this is an endpoint or format failure, not an advisory posture; nothing is recorded.\n' +
       '  pass --no-audit to record the lockfile-derived fields alone.\n');
     process.exit(5);

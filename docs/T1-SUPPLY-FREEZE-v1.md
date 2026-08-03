@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `999a0a58553127d83a75052895fb0b47cd0f144e943d8f5bb6881debfa0efe2d` | script `script.sha256` |
+| Freeze script SHA-256 | `735893c763df115bf26751ad7882623966153cfa41885201d482cef05a6e39cd` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` | script `toolchain.platform` |
@@ -890,18 +890,32 @@ it must not therefore be treated as non-blocking.
 
 ## Consumers
 
-Issue #22 consumes this record. Its equality requirement is discharged by **both** of the
+Issue #22 consumes this record. Its equality requirement is discharged by **all three** of the
 following, with the caveat on the advisory posture noted directly above:
 
-1. Re-running the script and comparing its `--json` output against every script-derived row.
-2. Running the three `git rev-parse` commands in [Compared fields](#compared-fields) and comparing
+1. Re-running the script and confirming its `--json` output has `freezeRecord: true` with an empty
+   `notFreezeRecordBecause`.
+2. Comparing that output against every script-derived row.
+3. Running the three `git rev-parse` commands in [Compared fields](#compared-fields) and comparing
    their output against the three `git`-derived rows.
 
-**The second step is not optional, and an earlier draft of this section omitted it.** It said the
+**Step 1 is a gate on the other two, not a fourth row to check.** Without it the procedure can
+report itself satisfied over output the script has explicitly disowned: `--any-toolchain` bypasses
+every guard, so a run with the reviewed files, tree, toolchain and umask but an ambient
+`bin-links=false` — which a normal run refuses at the configuration guard with exit `6` — emits
+every script-derived row in the table unchanged and sets `freezeRecord: false`. Comparing only the
+listed rows accepts it. The script already states its own standing in the artifact; the procedure
+has to read it.
+
+**Step 3 is not optional either, and an earlier draft of this section omitted it.** It said the
 requirement was discharged "by re-running the script above and comparing against the table", which
 a consumer could follow literally and completely — while leaving the reviewed head, the merge
 commit and the merged tree unchecked, because the script emits no field for any of them. Three
 compared rows would have gone unverified by a procedure that reported itself satisfied.
+
+That omission and the missing gate above are the same defect twice: a procedure that lists what to
+compare, and is read as complete because it is specific. Both were found by review rather than by
+anything structural, which is why the list is now stated as a conjunction with the gate first.
 
 That is the same defect this document was written to retire, in the instructions rather than in
 the values: the [Compared fields](#compared-fields) table was corrected to stop claiming the
