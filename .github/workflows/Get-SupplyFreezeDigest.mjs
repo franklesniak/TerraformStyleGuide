@@ -70,6 +70,31 @@ const REVIEWED_LOCK_BLOB = '5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca';
 // force-sets package-lock=true, so the entry below it cannot catch it
 // indirectly. Measured -- `npm ci` under package-lock-only=true exits 0 saying
 // "up to date" while reducing node_modules to a single .package-lock.json file.
+//
+// Round 9, reported and confirmed, and the most serious of that round. npm has
+// its OWN `umask` config, separate from the process umask the guard below
+// checks, and it was absent from this list. npm documents it as additive rather
+// than a replacement -- "npm does not circumvent this, but rather adds the
+// `--umask` config to it" -- with a default of 0, and it is not deprecated.
+//
+// Measured, two real `npm ci` installs from the identical lockfile with the
+// process umask at 0022 in BOTH:
+//   npm umask 0   (default) -> {"644":2157,"755":20}                     4cdc37a7...
+//   npm umask 077           -> {"600":2156,"700":12,"755":8,"644":1}     bd7b701f...
+// The second run then emitted `freezeRecord: true` with an empty
+// notFreezeRecordBecause, matchesReviewedManifest true and `umask 0022` printed
+// in its own toolchain block -- a complete, unqualified freeze record over a
+// tree that is not the reviewed one. The process-umask guard looked straight at
+// it and was satisfied, because it reads a different umask.
+//
+// `npm config list --json` does report the key (63 under NPM_CONFIG_UMASK=077),
+// so this guard could always have seen it and simply never asked. That is the
+// same "an install-shaping setting the config guard could see and didn't"
+// defect as bin-links in round 2, package-lock-only in round 3 and the registry
+// in round 5. The permission histogram is the backstop here for the same reason
+// it is for the process umask: it records the observed modes rather than a
+// predicate over them, so a tree installed under either umask names its own
+// cause even when neither guard was watching at install time.
 const REVIEWED_NPM_CONFIG = Object.freeze({
   'bin-links': true,
   omit: [],
@@ -78,6 +103,7 @@ const REVIEWED_NPM_CONFIG = Object.freeze({
   'legacy-peer-deps': false,
   'package-lock': true,
   'package-lock-only': false,
+  umask: 0,
 });
 
 // The process umask the recorded tree was installed under.
@@ -223,6 +249,8 @@ function foldInstalledTree(strRoot) {
   let intFiles = 0;
   let intSymbolicLinks = 0;
   let intDirectories = 0;
+  let intSpecials = 0;
+  const arrSpecialPaths = [];
   // Round 4 backstop, corrected in round 5. The umask guard reads the RECORDING
   // process, so it cannot see a tree installed under a different umask in an
   // earlier shell. The tree's own permission bits are the tell that survives.
@@ -296,8 +324,38 @@ function foldInstalledTree(strRoot) {
       if (!objEntry.isFile()) {
         // A socket, device or FIFO under node_modules is not something an
         // install produces. Recorded rather than skipped so it cannot hide.
-        objHash.update('?', 'utf8');
+        //
+        // Round 9, reported by Copilot and confirmed WIDER than reported. The
+        // branch used to fold a bare '?' tag and the path, so every special
+        // entry at a given path hashed identically. Copilot said two different
+        // TYPES would collide; measured, five distinct filesystem objects at
+        // one path all folded to ddb567e1... -- FIFO, Unix socket, character
+        // device (1,3), character device (1,5) and block device (7,0). The two
+        // character devices differ only in minor number, which is the
+        // /dev/null-versus-/dev/zero distinction, so the collision was not even
+        // limited to type. The census was blind to all five: 2177/8/336 in
+        // every case, identical to a tree with no special entry at all.
+        //
+        // The type tag and the device number are folded so the encoding is
+        // injective here too. `rdev` lives on Stats and not on Dirent, so this
+        // takes an lstat -- charged only to entries that reach this branch,
+        // which in a real install is none of them.
+        //
+        // Folding this correctly matters independently of the exit-11 refusal
+        // below, because --any-toolchain bypasses every guard and still runs
+        // the fold. A digest whose injectivity depends on a guard is not
+        // injective in exactly the runs where nothing else is checking.
+        intSpecials += 1;
+        arrSpecialPaths.push(strChild);
+        const objSpecial = lstatSync(strPath);
+        const strTag = objSpecial.isFIFO() ? 'P'
+          : objSpecial.isSocket() ? 'S'
+          : objSpecial.isCharacterDevice() ? 'C'
+          : objSpecial.isBlockDevice() ? 'B'
+          : '?';
+        objHash.update(strTag, 'utf8');
         hashField(objHash, strChild);
+        hashField(objHash, String(objSpecial.rdev));
         continue;
       }
       // Round 2, reported. The fold hashed path and content and ignored the
@@ -342,9 +400,53 @@ function foldInstalledTree(strRoot) {
     files: intFiles,
     symlinks: intSymbolicLinks,
     directories: intDirectories,
+    specials: intSpecials,
+    specialPaths: arrSpecialPaths,
     modes: Object.fromEntries([...objModeHistogram.entries()].sort(
       (objLeft, objRight) => (objLeft[0] < objRight[0] ? -1 : 1))),
   };
+}
+
+// The newest inode-change time anywhere under the tree, with the path carrying
+// it. Stat-only: no file is read, so this costs a fraction of a content fold.
+//
+// Round 9, reported by Codex and confirmed by construction. The two content
+// folds detect a write that lands BETWEEN their two reads of the same entry.
+// They cannot detect a write that lands after the SECOND fold has already read
+// that entry, because nothing reads it again -- both folds then agree on bytes
+// that are already stale. Measured with the second fold paused just after it
+// read `.package-lock.json`: writing to that file gave exit 0, no exit-10
+// refusal, and the recorded digest 4cdc37a7... reported for a tree whose file
+// was 64829 bytes at emission against the 64794 bytes actually hashed.
+//
+// This sweep tests a different predicate -- "was anything under this tree
+// touched during the recording window" rather than "did two reads agree" -- and
+// it catches that case precisely because it runs after the write.
+//
+// ctime rather than mtime, and that choice is load-bearing. `utimes` sets atime
+// and mtime to any value a caller likes, so mtime is forgeable; the same call
+// moves ctime FORWARD to the moment of the forgery. Measured: a write moved
+// ctime, and the utimes attempt to restore the timestamps moved it again.
+//
+// This narrows the window; it does not make a userspace walk atomic, and
+// nothing in this script can. See the comment at its use.
+function newestChangeTime(strRoot) {
+  let intNewest = 0;
+  let strNewestPath = '';
+  const walk = (strDirectory, strRelative) => {
+    for (const objEntryHint of readdirSync(strDirectory, { withFileTypes: true })) {
+      const strPath = join(strDirectory, objEntryHint.name);
+      const strChild = strRelative ? `${strRelative}/${objEntryHint.name}` : objEntryHint.name;
+      const objStats = lstatSync(strPath);
+      if (objStats.ctimeMs > intNewest) {
+        intNewest = objStats.ctimeMs;
+        strNewestPath = strChild;
+      }
+      if (objStats.isDirectory()) walk(strPath, strChild);
+    }
+  };
+  walk(strRoot, '');
+  return { ctimeMs: intNewest, path: strNewestPath };
 }
 
 // The advisory posture, reduced to what a policy decision actually turns on.
@@ -551,12 +653,38 @@ if (!boolAnyToolchain && (!existsSync(strTreeRoot) || !objRecord.treeSatisfiesLo
   process.exit(7);
 }
 
+// Captured before anything under the tree is read, so it is a ceiling the
+// quiescence check below can compare every inode-change time against.
+const intRecordingStartedAt = Date.now();
+
 const objTree = foldInstalledTree(strTreeRoot);
 objRecord.installedTreeSha256 = objTree.sha256;
 objRecord.installedTreeFiles = objTree.files;
 objRecord.installedTreeSymlinks = objTree.symlinks;
 objRecord.installedTreeDirectories = objTree.directories;
+objRecord.installedTreeSpecials = objTree.specials;
 objRecord.installedTreeModes = objTree.modes;
+
+// Round 9. A FIFO, socket or device node under node_modules means this is not
+// an installed tree, which is the same thing refusal 7 asserts for a different
+// cause -- so it gets the same treatment rather than a digest.
+//
+// The fold above now distinguishes these entries from one another, so the
+// number reported under --any-toolchain is honest either way. This refusal is
+// about what a REVIEWED run is allowed to mint: `npm ci` produces no such
+// entry, so a record over a tree containing one would be a freeze record for
+// something npm cannot have built.
+if (!boolAnyToolchain && objTree.specials > 0) {
+  process.stderr.write(
+    'supply-freeze: refusing to record digests for a tree containing special files.\n' +
+    `  special entries    ${objTree.specials} (expected 0)\n` +
+    `${objTree.specialPaths.slice(0, 10).map((strPath) => `    node_modules/${strPath}\n`).join('')}` +
+    (objTree.specialPaths.length > 10
+      ? `    ... and ${objTree.specialPaths.length - 10} more\n` : '') +
+    '  npm ci creates only files, directories and symlinks; a FIFO, socket or\n' +
+    '  device node under node_modules did not come from the install.\n');
+  process.exit(11);
+}
 
 if (boolSkipAudit) {
   objRecord.auditSha256 = null;
@@ -668,11 +796,20 @@ if (readFileSync(strPackagePath, 'utf8') !== strPackageBefore
 // already-hashed file during that window left installedTreeSha256 describing a
 // tree that no longer existed, under a freezeRecord: true heading.
 //
-// Re-folding BRACKETS the slow operation rather than narrowing the window:
-// reordering the audit earlier would have made the race less likely and still
+// Re-folding brackets the audit rather than merely reordering around it:
+// moving the audit earlier would have made the race less likely and still
 // undetectable, and "less likely" is not a property a freeze record can rest
 // on. The second fold is the same code over the same tree, so a mismatch means
 // the bytes moved underneath it.
+//
+// Round 9 correction, and it is this comment's own argument turned around. An
+// earlier version of this paragraph said re-folding brackets the slow operation
+// "rather than narrowing the window", which claimed more than two sequential
+// walks can deliver: a write landing after the second fold has read an entry
+// leaves both folds agreeing on stale bytes, and that was demonstrated rather
+// than argued. What brackets the audit is the PAIR of folds; the second fold's
+// own duration is a window this comparison does not cover. The quiescence check
+// after it covers that one, and the limit that remains is stated there.
 //
 // Done unconditionally, including under --no-audit where the window is only
 // microseconds wide. A guarantee that holds except in the case nobody thought
@@ -688,6 +825,37 @@ if (objTreeAfter.sha256 !== objTree.sha256) {
       ` then ${objTreeAfter.files}/${objTreeAfter.symlinks}/${objTreeAfter.directories}` +
       ' (files/symlinks/directories)\n' +
     '  something wrote to node_modules while this ran. record against a quiescent tree.\n');
+  process.exit(10);
+}
+
+// Round 9, reported by Codex. The comparison above answers "did two reads of
+// the same entry agree", and a write that lands after the SECOND fold read an
+// entry escapes it -- demonstrated, with the recorded digest emitted at exit 0
+// for a file that had already grown by 35 bytes. See newestChangeTime.
+//
+// Same cause as the refusal above, so the same exit code: the installed tree
+// changed while recording. A second exit number for one cause would inflate the
+// table that the round-7 finding had to correct, and the message names which of
+// the two detectors fired.
+//
+// What this does and does not promise, stated plainly because the round-8
+// comment on the fold above overreached and this is the correction. Between
+// them the two mechanisms detect any write that lands before this sweep reads
+// the affected entry. Neither makes the walk atomic: a write landing after the
+// sweep has passed an entry is not detected by anything here, and cannot be,
+// because a userspace sequential scan has no atomic snapshot to compare against.
+// A filesystem-level snapshot would close it outright and is the right answer
+// for a reader who has one; that is a property of the host, not of this script.
+const objNewestChange = newestChangeTime(strTreeRoot);
+if (objNewestChange.ctimeMs >= intRecordingStartedAt) {
+  process.stderr.write(
+    'supply-freeze: the installed tree changed while recording; refusing to report.\n' +
+    '  detected by        inode change time, not by the fold comparison\n' +
+    `  newest change      node_modules/${objNewestChange.path}\n` +
+    `                     ctime ${new Date(objNewestChange.ctimeMs).toISOString()}\n` +
+    `  recording began    ${new Date(intRecordingStartedAt).toISOString()}\n` +
+    '  an entry was written after this run began, so the digest above describes\n' +
+    '  bytes that are no longer on disk. record against a quiescent tree.\n');
   process.exit(10);
 }
 
@@ -729,7 +897,7 @@ if (boolJson) {
     `  matches reviewed     ${objRecord.matchesReviewedManifest}\n` +
     `  tree satisfies lock  ${objRecord.treeSatisfiesLockfile}\n` +
     `  installed tree       ${objRecord.installedTreeSha256}\n` +
-    `    (${objRecord.installedTreeFiles} files, ${objRecord.installedTreeSymlinks} symlinks, ${objRecord.installedTreeDirectories} directories on disk)\n` +
+    `    (${objRecord.installedTreeFiles} files, ${objRecord.installedTreeSymlinks} symlinks, ${objRecord.installedTreeDirectories} directories, ${objRecord.installedTreeSpecials} special entries on disk)\n` +
     `    (file permissions ${JSON.stringify(objRecord.installedTreeModes)}; a different shape is consistent with a different install umask, or with modes changed after install)\n` +
     (objRecord.auditSha256
       ? `  registry             ${objRecord.registry}\n` +
