@@ -168,6 +168,12 @@ function transportFlags() {
 // binding explicit rather than inherited.
 function transportEnvironment() {
   const objEnv = { ...process.env };
+  // Round 21, reported. NODE_EXTRA_CA_CERTS is a Node-level trust root, invisible
+  // to `npm config list` -- which keeps reporting ca: null and strict-ssl: true --
+  // so an interceptor whose certificate chains to it could return a filtered,
+  // schema-valid report attributed to the public registry. Checking npm's trust
+  // settings and inheriting Node's was a gap the previous round's fix left open.
+  delete objEnv.NODE_EXTRA_CA_CERTS;
   for (const strKey of Object.keys(objEnv)) {
     const strLower = strKey.toLowerCase();
     if (strLower === 'http_proxy' || strLower === 'https_proxy' || strLower === 'no_proxy'
@@ -874,10 +880,29 @@ if (!boolAnyToolchain && (strNodeVersion !== REVIEWED_NODE || strNpmVersion !== 
 // Install-shaping configuration, checked before anything is measured. See
 // REVIEWED_NPM_CONFIG above for why: the toolchain guard passes a reader whose
 // ambient npm configuration silently produced a different tree.
+// npm serializes an unset `noproxy` as [''] rather than [] -- its config
+// definition is `default: ''` with type [String, Array], so the empty string
+// survives into the array form. Round 21, reported as P1: comparing against []
+// therefore treated npm's own default as drift and exited 6 before the audit on
+// an otherwise clean machine, which would have blocked the primary freeze record
+// from ever being regenerated.
+//
+// Not reproducible on this host -- its npm reports a populated noproxy from
+// configuration rather than the environment -- so this rests on the reporter's
+// measurement across npm 10.9.8 and 11.4.2 plus npm's documented default. The
+// normalization is correct either way: '', [] and [''] all mean "no exclusions".
+function normalizeConfigValue(objValue) {
+  const arrValue = Array.isArray(objValue) ? objValue : [objValue];
+  const arrMeaningful = arrValue.filter(
+    (objEntry) => objEntry !== '' && objEntry !== null && objEntry !== undefined);
+  return Array.isArray(objValue) || objValue === '' ? arrMeaningful : objValue;
+}
+
 function configDrift(objReviewed, objEffective) {
   return Object.entries(objReviewed)
     .filter(([strKey, objExpected]) =>
-      canonicalize(objEffective[strKey] ?? null) !== canonicalize(objExpected))
+      canonicalize(normalizeConfigValue(objEffective[strKey] ?? null))
+        !== canonicalize(normalizeConfigValue(objExpected)))
     .map(([strKey, objExpected]) =>
       `  ${strKey.padEnd(18)} observed ${JSON.stringify(objEffective[strKey] ?? null)}, reviewed ${JSON.stringify(objExpected)}`);
 }
@@ -1072,7 +1097,8 @@ function scanOrRefuse(fnScan, strWhat) {
 // refusing, and a root pointed at an arbitrarily large tree would be scanned in
 // full before anything objected. lstat answers the same question before a single
 // entry is read.
-if (!boolAnyToolchain && !lstatSync(strTreeRoot).isDirectory()) {
+if (!boolAnyToolchain
+  && !scanOrRefuse(() => lstatSync(strTreeRoot), 'the root type check').isDirectory()) {
   process.stderr.write(
     'supply-freeze: refusing to record digests for a tree that is not the installed tree.\n' +
     '  node_modules       present, but a symlink rather than a directory\n' +
@@ -1219,7 +1245,15 @@ if (boolSkipAudit) {
     // binds the whole posture to a current snapshot, not just its bulk half.
     '--prefer-offline=false', '--offline=false', '--prefer-online=true',
     ...transportFlags(),
-  ], transportEnvironment()));
+    // Round 21, reported. The binding is applied only to reviewed runs. Under
+    // --any-toolchain the configuration refusal is correctly bypassed, but
+    // forcing the reviewed transport anyway made the audit fail with exit 5 on a
+    // network that needs an ambient proxy -- denying the explicitly-marked
+    // non-freeze output the flag promises. A bypassed run uses its own transport
+    // and says so in notFreezeRecordBecause.
+  ].filter((strArgument) => boolAnyToolchain
+    ? !Object.keys(REVIEWED_NPM_TRANSPORT).some((strKey) => strArgument.startsWith(`--${strKey}=`))
+    : true), boolAnyToolchain ? undefined : transportEnvironment()));
   // Reported and confirmed, and the most serious of the round. `npm audit`
   // exits nonzero for two completely different reasons: advisories were found,
   // and the audit endpoint failed. Under --json it prints a JSON object either
