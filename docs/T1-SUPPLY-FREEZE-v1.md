@@ -167,7 +167,9 @@ that table exists at all — the reasoning is in
 ### Recorded, not compared
 
 Recorded so a reader can diagnose a mismatch or understand the context. **Not** subject to
-exact equality.
+exact equality. Every row below carries a value. One field the script emits has none for this
+record, and it is described in [A field this record does not carry](#a-field-this-record-does-not-carry)
+rather than given a row here.
 
 | Field | Value | Derived by | Why it is not compared |
 | --- | --- | --- | --- |
@@ -175,26 +177,39 @@ exact equality.
 | Directory permissions | `{"755":336}` | script `installedTreeDirectoryModes` | full modes are machine state |
 | `node_modules` root mode | `755` | script `installedTreeRootMode` | full modes are machine state |
 | Policy decision | `T1-ADVISORY-DISPOSITION-v1` | this document | no artifact exists to compare against; bounded through issue #24 |
-| Scrubbed trust variables | not recorded in this freeze — see below | script `auditEnvironmentScrubbed`, added after these digests were taken | describes the machine the audit ran on, not the registry's answer |
 
-**Why that row records no value.** An earlier draft filled its Value column with the key name and
+### A field this record does not carry
+
+`auditEnvironmentScrubbed` is emitted by the current script but has no value in this record, so it
+has no row in the table above.
+
+**It had one for four rounds, and that was the defect.** The row sat in a table of recorded values
+holding no value, and reviewers read the contradiction rather than the four paragraphs answering
+it: the cell said the field was not captured, then that it had no value, then that it was not
+recorded in this freeze — three wordings, each reported in turn. Rewording a row that should not
+have been in that table is answering the shape shown, which is the habit this document keeps
+finding in its own script. The row is gone; what it was trying to say is below.
+
+An earlier draft filled its Value column with the key name and
 two hypotheticals — the key name, then `[]` or `["NODE_OPTIONS"]` offered as examples — which
 records nothing: a reader learns what the field is called and what it might have said, not what it
 did say. The obvious repair is to write `[]`, and that is **not** what happened here, because it
 would be untrue for this record.
 
-The row says *not recorded*, not *no value*, and the distinction is the one this script enforces
+*Not recorded* is not the same as *no value*, and the distinction is the one this script enforces
 in code. An empty list is a value: it asserts that the scrub ran and removed nothing. This record
-cannot assert that, so a cell reading "no value" would blur absence into emptiness — the same
+cannot assert that, so calling it "no value" would blur absence into emptiness — the same
 conflation the advisory guard refuses when it rejects a missing `via` key that an earlier version
 quietly turned into `[]`.
 
 The current script does always emit the key — `[]` under `--no-audit`, a sorted list otherwise —
-and a reviewer reasonably read the row as contradicting that. It does not, and the `Derived by`
-cell now says why: the field was added to the script *after* these digests were taken. The commit
-that recorded the advisory posture above is an ancestor of the commit that introduced
-`auditEnvironmentScrubbed`, so the run that minted this record could not have emitted it, and no
-observed value exists. Writing a plausible-looking `[]` would be a value invented to fill a
+and two independent reviewers read that as contradicting this record. It does not, and the reason
+is checkable rather than asserted: the field was added to the script *after* these digests were
+taken. The commit that recorded the advisory posture above (`8905ba3`) is an ancestor of the
+commit that introduced `auditEnvironmentScrubbed` (`bdbfb81`), which `git merge-base --is-ancestor`
+confirms, so the run that minted this record could not have emitted the field and no observed
+value exists. A later reviewer asked for the value observed in the same run that produced the
+recorded `auditSha256` — there is no such observation to record. Writing a plausible-looking `[]` would be a value invented to fill a
 column — the same fabrication the advisory-identity guard was tightened to refuse, committed in
 the record instead of in the code.
 
