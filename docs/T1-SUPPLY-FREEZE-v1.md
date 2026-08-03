@@ -69,7 +69,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `79802b94a6953160e0455fe9cd09fee1319514c12487d48c915a4907518055ec` | script `script.sha256` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `db01d3752c32f6bfbfc4e30b58e53bff95cb4aaf479cf7c6877c870d51ae6d45` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` / `x64` | script `toolchain.platform`, `toolchain.arch` |
@@ -78,7 +78,7 @@ per-row rather than asserted in a sentence.
 | `package.json` SHA-256 | `e206cdb3562f0397e8eed7fb2c2586269a1f5335cdff2906da8d5e070426321e` | script `manifest` |
 | `package-lock.json` | blob `5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca` | script `manifestBlobs` |
 | `package-lock.json` SHA-256 | `277f7168ab3a4f1f7a2565de13191d64b1572e7cb92b67b0972b3242bd4de062` | script `manifest` |
-| Installed tree SHA-256 | `9763e9e906d325d8fd8e4a6065cf1fd8fa3c9ebb02a82aff9ab1581e6751d533` | script `installedTreeSha256` |
+| Installed tree SHA-256 | `16f42788850678b04361c87009be01eefa2354358d40a30d03d4a23b1298eb2a` | script `installedTreeSha256` |
 | Installed tree size | 2177 files, 8 symlinks, 336 directories, 0 special entries | script `installedTreeFiles`, `installedTreeSymlinks`, `installedTreeDirectories`, `installedTreeSpecials` |
 | Advisory registry | `https://registry.npmjs.org/` | script `registry` |
 | Advisory posture SHA-256 | `ea559555c8c18bd2488219d977a994fabc868c2d46efb05bbaf92405c53488e1` | script `auditSha256` |
@@ -303,7 +303,7 @@ row, rather than leaving it to a sentence that has already been wrong once.
 | Exit | Refusal | Bypassed by `--any-toolchain` | Usual cause |
 | ---: | --- | :---: | --- |
 | `2` | Unreviewed toolchain | yes | different Node, npm, platform or architecture |
-| `3` | Manifest changed mid-run | **no** | `package.json` or `package-lock.json` edited while the run was in progress |
+| `3` | Recorded input changed mid-run | **no** | `package.json`, `package-lock.json` or the script itself edited while the run was in progress |
 | `4` | Unreviewed manifest | yes | `package.json` or `package-lock.json` has moved |
 | `5` | Audit response is not a report | **no** | registry unreachable, or an endpoint error returned as JSON |
 | `6` | Install-shaping npm configuration | yes | `bin-links`, `omit`, `package-lock-only`, `umask`, `omit-lockfile-registry-resolved` … from an `.npmrc` or the environment |
@@ -358,6 +358,17 @@ Exit `9` applies only when the audit runs. The registry does not shape the insta
 every package in the lockfile carries an `integrity` hash and `npm ci` verifies each tarball
 against it, so substituted bytes fail the install outright. Only the advisory posture is
 exposed, which is why `--no-audit` records the lockfile-derived fields from any registry.
+
+**The script's identity is bound to the run.** Its bytes are read as the first thing the script
+does, re-compared after every other check, and its inode-change time is tested against process
+start — so a replacement at any point during the run is refused rather than silently producing
+the authoritative digest for code that did not derive these values.
+
+**One window remains and cannot be closed from inside.** Node reads and compiles this file before
+any statement in it executes. A replacement in *that* window is invisible to the script itself
+and can only be closed by a trusted launcher that hashes the file before invoking `node`. That is
+outside what a single read-only script can bootstrap, and it is stated here rather than implied
+away.
 
 **Check the script's own digest first.** The script reports its own SHA-256 on every run, and the
 value is recorded in the table above. This matters because the digests below are a property of
@@ -435,6 +446,23 @@ counts completely unchanged. The `node_modules` root is folded as well — the w
 it, so it was the one directory the fold could never have noticed, and clearing its traverse bit
 locks out the whole tree at once. This is the same argument that put execute bits on files, one
 entry kind over, and it moved the recorded digest.
+
+**Read permission is folded alongside execute, and for one round it was not.** The fold masked
+`mode & 0o111`, so `0644` → `0600` on an installed module was invisible: the owner running the
+recorder can still read it and `npm ls` still passes, but a group or other user can no longer
+load it. The histogram moves, but it is a *non-compared* diagnostic, so every compared field
+stayed equal and a reviewed run would have emitted `freezeRecord: true` for a tree those users
+cannot use. The mask is now `mode & 0o555` — read and execute together are exactly the "can each
+permission class still load this" property. **Write bits stay out**: they do not affect
+loadability and are the most machine-variable of the three.
+
+**A symlinked `node_modules` root is refused.** `npm ci` creates the root as a real directory; a
+symlink redirects where every installed module loads from while the contents behind it can be
+byte-identical. The root's entry kind and link target are folded when it is not a directory, so
+the number reported under `--any-toolchain` is honest, and a reviewed run refuses with exit `7`.
+Measured here, `npm ls --all --json` already exits non-zero on a symlinked root, so that refusal
+is defence in depth rather than the only thing standing between a reader and a wrong record —
+but incidental protection that depends on an npm version is not what this record rests on.
 
 All three execute classes are recorded, not a single boolean. An earlier draft collapsed them,
 which made `0o755` and `0o655` hash identically. That is not a harmless normalization: POSIX
@@ -514,6 +542,8 @@ The fold is verified to move for each of these, and to return exactly to baselin
 | Only the owner's execute bit cleared (`0o755` → `0o655`) | yes |
 | A FIFO, socket or device node added under `node_modules` | yes, differently for each kind, and a reviewed run refuses with exit `11` |
 | A directory's execute bit cleared for group or other (`0755` → `0745`) | yes |
+| A file's read bit cleared for group and other (`0644` → `0600`) | yes |
+| `node_modules` replaced by a symlink to a byte-identical tree | yes, and a reviewed run refuses with exit `7` |
 | The `node_modules` root's own execute bits changed | yes |
 
 ### Advisory posture

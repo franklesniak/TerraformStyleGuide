@@ -156,6 +156,32 @@ function sha256(strText) {
   return createHash('sha256').update(strText, 'utf8').digest('hex');
 }
 
+// Round 12, reported. The self-read used to sit AFTER the toolchain guard, and
+// therefore after an `npm --version` subprocess -- tens of milliseconds during
+// which this file could be replaced. The process would go on executing the
+// source Node had already loaded while reporting the SHA-256 of a different
+// file, so restoring the reviewed bytes over a modified version inside that
+// window produced the authoritative script digest for a run that derived every
+// other field with other code. Neither the final content checks nor the
+// quiescence sweep looked at the script.
+//
+// Three changes, because no one of them is sufficient. The read is now the
+// first thing this script does, so the window between Node's load and the read
+// contains no code of ours. The bytes are kept and re-compared at the end. And
+// the script's own inode-change time is checked against PROCESS START rather
+// than against the later recording ceiling, so a replacement anywhere in the
+// process lifetime is caught.
+//
+// The residual, stated rather than implied: Node reads and compiles this file
+// before any statement here executes, so a replacement in THAT window is
+// invisible to the script itself and can only be closed by a trusted launcher
+// hashing the file before invoking node. That is outside what one read-only
+// script can bootstrap, and the record says so.
+const strScriptPath = fileURLToPath(import.meta.url);
+const strScriptBefore = readFileSync(strScriptPath, 'utf8');
+const strScriptSha256 = sha256(strScriptBefore);
+const intProcessStartedAt = Date.now() - Math.round(process.uptime() * 1000);
+
 // "A JSON object", as distinct from everything else `typeof x === 'object'`
 // admits. Both `null` and an array answer 'object', and each of those has now
 // been reported as a hole in the audit shape guard -- null in round 2, arrays
@@ -425,13 +451,29 @@ function foldInstalledTree(strRoot) {
       // executable by the user who installed it. Measured with an owner-matched
       // process -- a 0o655 file owned by that user gives "Permission denied"
       // while group and other still carry +x. All three classes are recorded.
+      //
+      // Round 12, reported and confirmed. This folded `mode & 0o111` alone, so
+      // READ permission was invisible: measured, 0644 -> 0600 on an installed
+      // .js file left the digest byte-identical. The owner running the recorder
+      // can still read it and `npm ls` still passes, but a group or other user
+      // can no longer load that module -- and the histogram that does move is
+      // explicitly a non-compared diagnostic, so every compared field stayed
+      // equal and a reviewed run would emit freezeRecord: true for a tree those
+      // users cannot use.
+      //
+      // `mode & 0o555` is read AND execute, which together are exactly the
+      // "can each permission class still load this" property. Write bits stay
+      // out deliberately: they do not affect loadability and are the most
+      // machine-variable of the three. Both halves are umask-dependent, which
+      // is fine for the same reason the execute bits are -- the umask is
+      // pinned and checked.
       intFiles += 1;
       const intMode = lstatSync(strPath).mode;
       const strPermissions = (intMode & 0o777).toString(8).padStart(3, '0');
       objModeHistogram.set(strPermissions, (objModeHistogram.get(strPermissions) ?? 0) + 1);
       objHash.update('F', 'utf8');
       hashField(objHash, strChild);
-      hashField(objHash, (intMode & 0o111).toString(8).padStart(3, '0'));
+      hashField(objHash, (intMode & 0o555).toString(8).padStart(3, '0'));
       hashField(objHash, readFileSync(strPath));
     }
   };
@@ -445,9 +487,35 @@ function foldInstalledTree(strRoot) {
   // histogram, so that histogram keeps summing to `directories` -- a census
   // whose total does not match the count beside it is a diagnostic that costs
   // the reader time to reconcile.
-  const intRootMode = lstatSync(strRoot).mode;
+  const objRootStats = lstatSync(strRoot);
+  const intRootMode = objRootStats.mode;
   objHash.update('R', 'utf8');
   hashField(objHash, (intRootMode & 0o111).toString(8).padStart(3, '0'));
+  // Round 12, reported. lstat sees the root itself, but only its execute mask
+  // was folded -- and a 0755 directory and a 0777 symlink both mask to 111, so
+  // a `node_modules` that is a SYMLINK to a byte-identical tree elsewhere folded
+  // to exactly the same digest and counts as the real thing. `walk` then follows
+  // the link, so the redirect controlling where all installed code loads from
+  // was the one thing the fold ignored. Measured: identical digest either way.
+  //
+  // The reporter added that `npm ls --all --json` exits 0 with a symlinked root,
+  // which would let a full record be emitted. That did NOT reproduce here -- on
+  // npm 10.9.7 it exits non-zero for both a relative symlink and an absolute one
+  // to an external tree, so refusal 7 already fires. The fold is fixed anyway:
+  // --any-toolchain bypasses that guard and still folds, and an incidental
+  // protection that depends on npm's version is not one to rely on.
+  //
+  // Folded only when the root is NOT a directory, so the reviewed layout's
+  // digest is unaffected. `R` is followed by a length prefix, which begins with
+  // a digit, and `K` by a letter, so the two cannot be confused.
+  const boolRootIsDirectory = objRootStats.isDirectory();
+  if (!boolRootIsDirectory) {
+    objHash.update('K', 'utf8');
+    hashField(objHash, objRootStats.isSymbolicLink() ? 'L' : '?');
+    if (objRootStats.isSymbolicLink()) {
+      hashField(objHash, readlinkSync(strRoot, { encoding: 'buffer' }));
+    }
+  }
   walk(strRoot, '');
   const sortHistogram = (objMap) => Object.fromEntries([...objMap.entries()].sort(
     (objLeft, objRight) => (objLeft[0] < objRight[0] ? -1 : 1)));
@@ -461,6 +529,7 @@ function foldInstalledTree(strRoot) {
     modes: sortHistogram(objModeHistogram),
     directoryModes: sortHistogram(objDirectoryModeHistogram),
     rootMode: (intRootMode & 0o777).toString(8).padStart(3, '0'),
+    rootIsDirectory: boolRootIsDirectory,
   };
 }
 
@@ -608,7 +677,8 @@ if (!boolAnyToolchain && (strNodeVersion !== REVIEWED_NODE || strNpmVersion !== 
 // a number in a comment has nothing deriving it and goes stale silently.
 //
 // No circularity: the digest is computed over the file and never stored in it.
-const strScriptSha256 = sha256(readFileSync(fileURLToPath(import.meta.url), 'utf8'));
+// The digest itself is computed at the very top of this file; see there for why.
+// This comment stays here because it explains WHY the field exists at all.
 
 // Install-shaping configuration, checked before anything is measured. See
 // REVIEWED_NPM_CONFIG above for why: the toolchain guard passes a reader whose
@@ -749,6 +819,21 @@ objRecord.installedTreeRootMode = objTree.rootMode;
 // about what a REVIEWED run is allowed to mint: `npm ci` produces no such
 // entry, so a record over a tree containing one would be a freeze record for
 // something npm cannot have built.
+// Round 12. `npm ci` creates node_modules as a real directory. A symlinked root
+// redirects where every installed module loads from while the contents behind it
+// can be byte-identical, so it is the same class as refusal 7 already covers --
+// this is not the installed tree -- and it reuses that exit rather than adding
+// an eleventh number for a tenth cause.
+if (!boolAnyToolchain && !objTree.rootIsDirectory) {
+  process.stderr.write(
+    'supply-freeze: refusing to record digests for a tree that is not the installed tree.\n' +
+    '  node_modules       present, but not a directory\n' +
+    `  root mode          ${objTree.rootMode}\n` +
+    '  npm ci creates node_modules as a real directory. A symlinked root points the\n' +
+    '  install somewhere this record does not describe, however identical its contents.\n');
+  process.exit(7);
+}
+
 if (!boolAnyToolchain && objTree.specials > 0) {
   process.stderr.write(
     'supply-freeze: refusing to record digests for a tree containing special files.\n' +
@@ -807,7 +892,28 @@ if (boolSkipAudit) {
   // highest precedence, so this invocation cannot be redirected by any file or
   // environment variable. The value passed is the one already compared against
   // REVIEWED_REGISTRY and the one recorded, so all three agree by construction.
-  const objAudit = JSON.parse(runNpmAllowingFailure(['audit', '--json', `--registry=${strRegistry}`]));
+  //
+  // Round 12, reported, and this is the previous round's fix caught being
+  // partial. Pinning the registry on this command line closed one input and
+  // left the rest reloading: the audit subprocess still reads `omit` and
+  // `include` from whatever .npmrc exists when it starts, and npm's own
+  // `npm audit --help` lists `[--omit <dev|optional|peer> ...]`.
+  //
+  // Every one of the 125 packages in this lockfile is a dev dependency, so
+  // `omit=dev` empties the audited set entirely. Measured: `npm audit --json
+  // --omit=dev` returns a schema-valid report with total 0 against the true 7 --
+  // it passes the shape guard and would be recorded as a clean posture,
+  // attributed to the registry this script had just validated.
+  //
+  // `include` counteracts `omit` in npm's precedence, so naming all three
+  // groups explicitly neutralises any ambient omission rather than checking for
+  // it afterwards. Measured: under `omit=dev` this restores total 7, and on a
+  // clean run it leaves total 7 unchanged.
+  const objAudit = JSON.parse(runNpmAllowingFailure([
+    'audit', '--json',
+    `--registry=${strRegistry}`,
+    '--include=dev', '--include=optional', '--include=peer',
+  ]));
   // Reported and confirmed, and the most serious of the round. `npm audit`
   // exits nonzero for two completely different reasons: advisories were found,
   // and the audit endpoint failed. Under --json it prints a JSON object either
@@ -962,6 +1068,25 @@ if (readFileSync(strPackagePath, 'utf8') !== strPackageBefore
   process.stderr.write(
     'supply-freeze: package metadata changed after the tree was recorded; refusing to report\n' +
     '  the manifest hashes above would describe bytes that are no longer on disk.\n');
+  process.exit(3);
+}
+
+// Round 12. The script's own bytes, re-compared after everything else. A
+// replacement during the run would otherwise leave the reported script digest
+// describing a file that is not the one that produced these numbers.
+if (readFileSync(strScriptPath, 'utf8') !== strScriptBefore) {
+  process.stderr.write(
+    'supply-freeze: this script changed while it was running; refusing to report.\n' +
+    `  reported digest    ${strScriptSha256}\n` +
+    '  the file on disk no longer matches the source that derived these values.\n');
+  process.exit(3);
+}
+if (lstatSync(strScriptPath).ctimeMs >= intProcessStartedAt) {
+  process.stderr.write(
+    'supply-freeze: this script was replaced during the run; refusing to report.\n' +
+    `  script ctime       ${new Date(lstatSync(strScriptPath).ctimeMs).toISOString()}\n` +
+    `  process began      ${new Date(intProcessStartedAt).toISOString()}\n` +
+    '  the bytes may have been restored, but the run is no longer attributable.\n');
   process.exit(3);
 }
 
