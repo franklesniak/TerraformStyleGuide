@@ -54,8 +54,8 @@ function canonicalize(objValue) {
   return JSON.stringify(objValue ?? null);
 }
 
-function runNpm(arrArgs) {
-  return execFileSync('npm', arrArgs, {
+function runNpm(arrNpmArguments) {
+  return execFileSync('npm', arrNpmArguments, {
     cwd: strWorkflowDirectory,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
@@ -63,9 +63,9 @@ function runNpm(arrArgs) {
   });
 }
 
-function runNpmAllowingFailure(arrArgs) {
+function runNpmAllowingFailure(arrNpmArguments) {
   try {
-    return runNpm(arrArgs);
+    return runNpm(arrNpmArguments);
   } catch (objError) {
     // `npm audit` uses exit 1 to mean "advisories found", not "command failed".
     if (typeof objError.stdout === 'string' && objError.stdout.trim().startsWith('{')) {
@@ -99,7 +99,7 @@ function runNpmAllowingFailure(arrArgs) {
 function foldInstalledTree(strRoot) {
   const objHash = createHash('sha256');
   let intFiles = 0;
-  let intSymlinks = 0;
+  let intSymbolicLinks = 0;
   const walk = (strDirectory, strRelative) => {
     const arrEntries = [...readdirSync(strDirectory, { withFileTypes: true })]
       .sort((objLeft, objRight) => (objLeft.name < objRight.name ? -1 : objLeft.name > objRight.name ? 1 : 0));
@@ -107,7 +107,7 @@ function foldInstalledTree(strRoot) {
       const strPath = join(strDirectory, objEntry.name);
       const strChild = strRelative ? `${strRelative}/${objEntry.name}` : objEntry.name;
       if (objEntry.isSymbolicLink()) {
-        intSymlinks += 1;
+        intSymbolicLinks += 1;
         objHash.update(`L ${strChild} -> ${readlinkSync(strPath)}\n`, 'utf8');
         continue;
       }
@@ -128,7 +128,7 @@ function foldInstalledTree(strRoot) {
     }
   };
   walk(strRoot, '');
-  return { sha256: objHash.digest('hex'), files: intFiles, symlinks: intSymlinks };
+  return { sha256: objHash.digest('hex'), files: intFiles, symlinks: intSymbolicLinks };
 }
 
 // The advisory posture, reduced to what a policy decision actually turns on.
@@ -152,7 +152,7 @@ function foldInstalledTree(strRoot) {
 // moved", which calls for a policy re-decision, not a failed build.
 function normalizeAudit(objAudit) {
   const objVulnerabilities = objAudit.vulnerabilities ?? {};
-  const objOut = {
+  const objOutput = {
     auditReportVersion: objAudit.auditReportVersion ?? null,
     counts: objAudit.metadata?.vulnerabilities ?? null,
     packages: {},
@@ -176,14 +176,14 @@ function normalizeAudit(objAudit) {
       });
     }
     arrAdvisories.sort((objLeft, objRight) => (objLeft.id < objRight.id ? -1 : objLeft.id > objRight.id ? 1 : 0));
-    objOut.packages[strName] = {
+    objOutput.packages[strName] = {
       severity: objVulnerability.severity ?? null,
       isDirect: objVulnerability.isDirect ?? null,
       range: objVulnerability.range ?? null,
       advisories: arrAdvisories,
     };
   }
-  return objOut;
+  return objOutput;
 }
 
 const strPackagePath = join(strWorkflowDirectory, 'package.json');
