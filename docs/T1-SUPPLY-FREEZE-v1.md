@@ -53,6 +53,7 @@ Run on the reviewed toolchain against the merge commit.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `990b2a181b6922d818bfe3464b93823fa0c64719608ac8fdaf6c56b7eda9597d` |
 | Node | `v24.18.1` |
 | npm | `11.16.0` |
 | Platform | `linux` / `x64` |
@@ -96,6 +97,17 @@ node Get-SupplyFreezeDigest.mjs
 The script refuses to run against any manifest other than the reviewed one, so a revision whose
 `package.json` or `package-lock.json` has moved will exit non-zero rather than report a
 misleading digest.
+
+**Check the script's own digest first.** The script reports its own SHA-256 on every run, and the
+value is recorded in the table above. This matters because the digests below are a property of
+*this* script: the framing correction made during review moved the installed-tree digest from
+`32a914d9…` to `ce95cd20…` without any dependency changing at all. A reader with a correct tree,
+a correct lockfile and a different script version would otherwise see a mismatch with nothing to
+explain it.
+
+```bash
+sha256sum Get-SupplyFreezeDigest.mjs   # must equal the recorded value
+```
 
 The script refuses to report on any toolchain other than Node `v24.18.1` with npm `11.16.0` on
 `linux`/`x64`, because a digest taken on a different combination is not this record. Pass `--json` for machine-

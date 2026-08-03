@@ -254,7 +254,21 @@ if (!boolAnyToolchain && (strNodeVersion !== REVIEWED_NODE || strNpmVersion !== 
   process.exit(2);
 }
 
+// This script's own digest, reported alongside the values it derives.
+//
+// Raised while answering the reproduction-steps finding, and it is the reason
+// that finding is more than a documentation fix: "run the script and compare"
+// is ambiguous unless the reader knows WHICH script. The framing correction in
+// this same round moved the installed-tree digest from 32a914d9 to ce95cd20
+// without any dependency changing, which is exactly the confusion a reader
+// would hit -- a correct tree, a correct lockfile, and a number that does not
+// match, with nothing in the record to explain why.
+//
+// No circularity: the digest is computed over the file and never stored in it.
+const strScriptSha256 = sha256(readFileSync(fileURLToPath(import.meta.url), 'utf8'));
+
 const objRecord = {
+  script: { sha256: strScriptSha256 },
   toolchain: {
     node: strNodeVersion,
     npm: strNpmVersion,
@@ -355,8 +369,10 @@ if (boolJson) {
 } else {
   process.stdout.write(
     'T1-SUPPLY-FREEZE-v1 digests\n' +
+    `  script sha256        ${objRecord.script.sha256}\n` +
     `  Node                 ${objRecord.toolchain.node}\n` +
     `  npm                  ${objRecord.toolchain.npm}\n` +
+    `  platform             ${objRecord.toolchain.platform}/${objRecord.toolchain.arch}\n` +
     `  package.json         ${objRecord.manifest['package.json']}\n` +
     `  package-lock.json    ${objRecord.manifest['package-lock.json']}\n` +
     `  matches reviewed     ${objRecord.matchesReviewedManifest}\n` +
