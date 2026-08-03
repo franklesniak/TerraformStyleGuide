@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `af4ff11e863329151335cb25e675ef3a553f27df65dc4b7b9ae00f1f4242db53` | script `script.sha256` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `8345732097215e922066f282566fdbbbaeff12c3a4c70514a399d80a46de4d5e` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` / `x64` | script `toolchain.platform`, `toolchain.arch` |
@@ -323,7 +323,8 @@ row, rather than leaving it to a sentence that has already been wrong once.
 | `4` | Unreviewed manifest | yes | `package.json` or `package-lock.json` has moved |
 | `5` | Audit response is not a report | **no** | registry unreachable, or an endpoint error returned as JSON |
 | `6` | Install-shaping npm configuration | yes | `bin-links`, `omit`, `package-lock-only`, `umask`, `omit-lockfile-registry-resolved` … from an `.npmrc` or the environment |
-| `7` | Tree is not the installed tree | yes | `node_modules` absent, incomplete, or never installed |
+| `7` | Root missing or not a directory | **no** | `node_modules` absent, or present as a file or a symlink to one |
+| `7` | Tree does not satisfy the lockfile | yes | `node_modules` incomplete, or never installed |
 | `8` | Unreviewed process umask | yes | recording shell is not at `0022` |
 | `9` | Unreviewed advisory registry | yes | `registry` points at a mirror or proxy |
 | `10` | Recorded inputs changed while recording | **no** | something wrote to `node_modules` or a manifest during the run |
@@ -578,7 +579,12 @@ target may itself contain a newline, so two genuinely different trees hashed ide
 the symlink framing and the file framing were affected, and both were demonstrated with real
 directories on disk before the fix and shown to differ after it.
 
-**Reproducible from the lockfile and the reviewed platform.** Three independent `npm ci`
+**Reproducible from the lockfile and every pinned environmental input**, which means all six:
+the Node and npm versions, the platform and architecture, the npm configuration, and the process
+umask. An earlier draft of this sentence named only the lockfile and the platform, which
+contradicted both the guards and this document's own measured examples — a different npm version,
+an `npm_config_umask`, a `bin-links=false`, or a different process umask each move the digest on
+an otherwise identical lockfile and platform. Three independent `npm ci`
 installs in three different absolute paths produce the identical digest, which also
 demonstrates that no machine-specific path leaks into the hashed bytes.
 

@@ -18,7 +18,7 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -256,6 +256,22 @@ function canonicalize(objValue) {
       .join(',')}}`;
   }
   return JSON.stringify(objValue ?? null);
+}
+
+// Round 16, reported. Every manifest read after the first snapshot was a bare
+// readFileSync, so a manifest deleted or made unreadable mid-run threw before
+// the comparison it feeds could issue the documented exit 3 -- exit 1 and a raw
+// node:fs trace instead. A read that cannot complete IS the input changing.
+function readOrRefuse(strPath) {
+  try {
+    return readFileSync(strPath, 'utf8');
+  } catch (objError) {
+    process.stderr.write(
+      'supply-freeze: a recorded input could not be re-read; refusing to report.\n' +
+      `  error              ${objError.code ?? 'unknown'} at ${objError.path ?? strPath}\n` +
+      '  it was readable when this run began, so it changed underneath the record.\n');
+    process.exit(3);
+  }
 }
 
 function runNpm(arrNpmArguments) {
@@ -653,6 +669,19 @@ function newestChangeTime(strRoot, arrExtraPaths) {
 // investigate the tree -- not whether the check fails. The record was corrected
 // one round earlier and this comment was left behind, which is the same partial
 // fix the correction was about.
+function parseAuditOrRefuse(strBody) {
+  try {
+    return JSON.parse(strBody);
+  } catch (objError) {
+    process.stderr.write(
+      'supply-freeze: npm audit did not return an audit report.\n' +
+      `  npm emitted output that is not valid JSON: ${objError.message}\n` +
+      '  this is an endpoint or format failure, not an advisory posture; nothing is recorded.\n' +
+      '  pass --no-audit to record the lockfile-derived fields alone.\n');
+    process.exit(5);
+  }
+}
+
 function normalizeAudit(objAudit) {
   const objVulnerabilities = objAudit.vulnerabilities ?? {};
   const objOutput = {
@@ -856,10 +885,25 @@ try {
 //
 // The bypass still applies to a tree that is PRESENT but does not satisfy the
 // lockfile, which is a number a reader can legitimately want.
-if (!existsSync(strTreeRoot)) {
+// Round 16, reported, and the same misdiagnosis one case over. The previous
+// round made a MISSING root unconditional and stopped there; a root that exists
+// but is a regular file, or a symlink to one, still reached the fold and came
+// back as exit 10 "the recorded inputs changed" -- measured, ENOTDIR -- for a
+// root that had been stable for the whole run. Walkability is checked with stat
+// rather than lstat, so a symlink to a real directory stays foldable and is
+// handled by the reviewed-run guard that already covers it.
+const boolRootWalkable = existsSync(strTreeRoot) && (() => {
+  try {
+    return statSync(strTreeRoot).isDirectory();
+  } catch {
+    return false;
+  }
+})();
+
+if (!boolRootWalkable) {
   process.stderr.write(
     'supply-freeze: refusing to record digests for a tree that is not the installed tree.\n' +
-    '  node_modules       MISSING\n' +
+    `  node_modules       ${existsSync(strTreeRoot) ? 'present, but not a directory' : 'MISSING'}\n` +
     '  there is nothing to fold, so no digest exists to report -- with or without\n' +
     '  --any-toolchain. install first with the documented command:\n' +
     '    npm ci --ignore-scripts --no-audit --no-fund\n');
@@ -1020,10 +1064,21 @@ if (boolSkipAudit) {
   // groups explicitly neutralises any ambient omission rather than checking for
   // it afterwards. Measured: under `omit=dev` this restores total 7, and on a
   // clean run it leaves total 7 unchanged.
-  const objAudit = JSON.parse(runNpmAllowingFailure([
+  // Round 16, reported. A truncated or malformed body that still starts with `{`
+  // is returned by runNpmAllowingFailure and then thrown on by JSON.parse as a
+  // raw SyntaxError -- exit 1, before the shape guard below could call it what
+  // it is. Unparseable output is exactly "not an audit report".
+  const objAudit = parseAuditOrRefuse(runNpmAllowingFailure([
     'audit', '--json',
     `--registry=${strRegistry}`,
     '--include=dev', '--include=optional', '--include=peer',
+    // Round 16, reported. npm's metavulnerability calculation loads packuments
+    // through the cache, and npm documents prefer-offline as bypassing staleness
+    // checks -- so an ambient prefer-offline lets inherited advisories be
+    // computed from stale version data while the bulk advisory request still
+    // goes to the validated registry. Forcing revalidation on this invocation
+    // binds the whole posture to a current snapshot, not just its bulk half.
+    '--prefer-offline=false', '--offline=false', '--prefer-online=true',
   ]));
   // Reported and confirmed, and the most serious of the round. `npm audit`
   // exits nonzero for two completely different reasons: advisories were found,
@@ -1085,8 +1140,8 @@ if (boolSkipAudit) {
 
 // Read-only is an assertion, not a claim. `npm ls` and `npm audit` are supposed
 // to leave both files alone; this proves they did rather than trusting them.
-if (readFileSync(strPackagePath, 'utf8') !== strPackageBefore
-  || readFileSync(strLockPath, 'utf8') !== strLockBefore) {
+if (readOrRefuse(strPackagePath) !== strPackageBefore
+  || readOrRefuse(strLockPath) !== strLockBefore) {
   process.stderr.write('supply-freeze: package metadata changed while reading it; refusing to report\n');
   process.exit(3);
 }
@@ -1174,8 +1229,8 @@ if (objNewestChange.ctimeMs >= intRecordingStartedAt) {
 // there" shape this review has now found several times. The content comparison
 // is repeated here, after every scan and immediately before the record is
 // emitted, so the hashes reported are the bytes last observed.
-if (readFileSync(strPackagePath, 'utf8') !== strPackageBefore
-  || readFileSync(strLockPath, 'utf8') !== strLockBefore) {
+if (readOrRefuse(strPackagePath) !== strPackageBefore
+  || readOrRefuse(strLockPath) !== strLockBefore) {
   process.stderr.write(
     'supply-freeze: package metadata changed after the tree was recorded; refusing to report\n' +
     '  the manifest hashes above would describe bytes that are no longer on disk.\n');
@@ -1185,7 +1240,7 @@ if (readFileSync(strPackagePath, 'utf8') !== strPackageBefore
 // Round 12. The script's own bytes, re-compared after everything else. A
 // replacement during the run would otherwise leave the reported script digest
 // describing a file that is not the one that produced these numbers.
-if (readFileSync(strScriptPath, 'utf8') !== strScriptBefore) {
+if (readOrRefuse(strScriptPath) !== strScriptBefore) {
   process.stderr.write(
     'supply-freeze: this script changed while it was running; refusing to report.\n' +
     `  reported digest    ${strScriptSha256}\n` +
