@@ -25,6 +25,16 @@ import { fileURLToPath } from 'node:url';
 const REVIEWED_NODE = 'v24.18.1';
 const REVIEWED_NPM = '11.16.0';
 
+// Reported and confirmed: the toolchain guard originally checked Node and npm
+// and not the platform, so a reader on Windows passed the guard and then could
+// not match the recorded tree digest however correct their lockfile was. npm's
+// bin-links writes `.cmd` and `.ps1` shims on Windows where POSIX gets symlinks,
+// so the two trees genuinely differ on disk. The digest is reproducible from the
+// lockfile AND this platform, never from the lockfile alone, and saying only the
+// latter was an overclaim in the record rather than a defect in the fold.
+const REVIEWED_PLATFORM = 'linux';
+const REVIEWED_ARCH = 'x64';
+
 // The manifest and lockfile digests the workflow policy already pins. Repeated
 // here so this script fails loudly rather than reporting digests for a tree
 // that is not the reviewed one.
@@ -96,10 +106,39 @@ function runNpmAllowingFailure(arrNpmArguments) {
 // Reproducibility is measured, not assumed: three independent `npm ci` installs
 // in three different absolute paths produce identical digests, which also proves
 // no machine-specific path leaks into the hashed bytes.
+//
+// Every variable-length field is length-prefixed, and that is load-bearing
+// rather than tidiness. Reported and confirmed: the first framing wrote
+// `L <path> -> <target>\n`, which is not injective, because a POSIX path or
+// symlink target may itself contain a newline. Two genuinely different trees
+// hashed identically --
+//
+//   tree one:  a -> "T\nL b -> U",  c -> "V"
+//   tree two:  a -> "T",            b -> "U\nL c -> V"
+//
+// both feed `L a -> T\nL b -> U\nL c -> V\n`. Measured, not argued: the two
+// directories produced the same digest.
+//
+// The same defect was in the FILE framing and was not reported; carrying the
+// finding across found it. `F <path>:<length>\n<content>` collides just as
+// readily -- one file named `a:2\nXYF b` containing `ZW` hashes exactly like two
+// files `a` and `b` containing `XY` and `ZW`. Also measured.
+//
+// Length-prefixing makes the encoding prefix-free: a reader takes the tag, then
+// digits up to the separator, then exactly that many bytes, with no ambiguity
+// about where a field ends. Directories are recorded too, so a stray empty one
+// cannot hide in a tree whose files are all accounted for.
+function hashField(objHash, objField) {
+  const objBytes = Buffer.isBuffer(objField) ? objField : Buffer.from(objField, 'utf8');
+  objHash.update(`${objBytes.length}:`, 'utf8');
+  objHash.update(objBytes);
+}
+
 function foldInstalledTree(strRoot) {
   const objHash = createHash('sha256');
   let intFiles = 0;
   let intSymbolicLinks = 0;
+  let intDirectories = 0;
   const walk = (strDirectory, strRelative) => {
     const arrEntries = [...readdirSync(strDirectory, { withFileTypes: true })]
       .sort((objLeft, objRight) => (objLeft.name < objRight.name ? -1 : objLeft.name > objRight.name ? 1 : 0));
@@ -108,27 +147,38 @@ function foldInstalledTree(strRoot) {
       const strChild = strRelative ? `${strRelative}/${objEntry.name}` : objEntry.name;
       if (objEntry.isSymbolicLink()) {
         intSymbolicLinks += 1;
-        objHash.update(`L ${strChild} -> ${readlinkSync(strPath)}\n`, 'utf8');
+        objHash.update('L', 'utf8');
+        hashField(objHash, strChild);
+        hashField(objHash, readlinkSync(strPath));
         continue;
       }
       if (objEntry.isDirectory()) {
+        intDirectories += 1;
+        objHash.update('D', 'utf8');
+        hashField(objHash, strChild);
         walk(strPath, strChild);
         continue;
       }
       if (!objEntry.isFile()) {
         // A socket, device or FIFO under node_modules is not something an
         // install produces. Recorded rather than skipped so it cannot hide.
-        objHash.update(`? ${strChild}\n`, 'utf8');
+        objHash.update('?', 'utf8');
+        hashField(objHash, strChild);
         continue;
       }
-      const objBytes = readFileSync(strPath);
       intFiles += 1;
-      objHash.update(`F ${strChild}:${objBytes.length}\n`, 'utf8');
-      objHash.update(objBytes);
+      objHash.update('F', 'utf8');
+      hashField(objHash, strChild);
+      hashField(objHash, readFileSync(strPath));
     }
   };
   walk(strRoot, '');
-  return { sha256: objHash.digest('hex'), files: intFiles, symlinks: intSymbolicLinks };
+  return {
+    sha256: objHash.digest('hex'),
+    files: intFiles,
+    symlinks: intSymbolicLinks,
+    directories: intDirectories,
+  };
 }
 
 // The advisory posture, reduced to what a policy decision actually turns on.
@@ -194,17 +244,23 @@ const strLockBefore = readFileSync(strLockPath, 'utf8');
 const strNodeVersion = process.version;
 const strNpmVersion = runNpm(['--version']).trim();
 
-if (!boolAnyToolchain && (strNodeVersion !== REVIEWED_NODE || strNpmVersion !== REVIEWED_NPM)) {
+if (!boolAnyToolchain && (strNodeVersion !== REVIEWED_NODE || strNpmVersion !== REVIEWED_NPM
+  || process.platform !== REVIEWED_PLATFORM || process.arch !== REVIEWED_ARCH)) {
   process.stderr.write(
     'supply-freeze: refusing to record digests on an unreviewed toolchain.\n' +
-    `  observed Node ${strNodeVersion}, npm ${strNpmVersion}\n` +
-    `  reviewed Node ${REVIEWED_NODE}, npm ${REVIEWED_NPM}\n` +
+    `  observed Node ${strNodeVersion}, npm ${strNpmVersion}, ${process.platform}/${process.arch}\n` +
+    `  reviewed Node ${REVIEWED_NODE}, npm ${REVIEWED_NPM}, ${REVIEWED_PLATFORM}/${REVIEWED_ARCH}\n` +
     '  pass --any-toolchain to compute anyway; the result is then not a freeze record.\n');
   process.exit(2);
 }
 
 const objRecord = {
-  toolchain: { node: strNodeVersion, npm: strNpmVersion },
+  toolchain: {
+    node: strNodeVersion,
+    npm: strNpmVersion,
+    platform: process.platform,
+    arch: process.arch,
+  },
   manifest: {
     'package.json': sha256(strPackageBefore),
     'package-lock.json': sha256(strLockBefore),
@@ -213,6 +269,22 @@ const objRecord = {
     sha256(strPackageBefore) === REVIEWED_PACKAGE_SHA256 &&
     sha256(strLockBefore) === REVIEWED_LOCK_SHA256,
 };
+
+// Reported and confirmed: this used to record `matchesReviewedManifest: false`
+// and then print a full record and exit 0, which contradicted the comment on the
+// pinned constants above and let an automated caller reading the process status
+// accept digests taken over supply inputs nobody reviewed. Refusing here, before
+// node_modules is even opened, is what that comment already claimed.
+if (!boolAnyToolchain && !objRecord.matchesReviewedManifest) {
+  process.stderr.write(
+    'supply-freeze: refusing to record digests for an unreviewed manifest.\n' +
+    `  package.json       observed ${objRecord.manifest['package.json']}\n` +
+    `                     reviewed ${REVIEWED_PACKAGE_SHA256}\n` +
+    `  package-lock.json  observed ${objRecord.manifest['package-lock.json']}\n` +
+    `                     reviewed ${REVIEWED_LOCK_SHA256}\n` +
+    '  a changed manifest needs a new reviewed freeze, not a digest against this one.\n');
+  process.exit(4);
+}
 
 // `npm ls` is kept, but as a consistency assertion rather than a digest source:
 // it exits non-zero when the installed tree does not satisfy the lockfile, which
@@ -228,11 +300,33 @@ const objTree = foldInstalledTree(join(strWorkflowDirectory, 'node_modules'));
 objRecord.installedTreeSha256 = objTree.sha256;
 objRecord.installedTreeFiles = objTree.files;
 objRecord.installedTreeSymlinks = objTree.symlinks;
+objRecord.installedTreeDirectories = objTree.directories;
 
 if (boolSkipAudit) {
   objRecord.auditSha256 = null;
 } else {
   const objAudit = JSON.parse(runNpmAllowingFailure(['audit', '--json']));
+  // Reported and confirmed, and the most serious of the round. `npm audit`
+  // exits nonzero for two completely different reasons: advisories were found,
+  // and the audit endpoint failed. Under --json it prints a JSON object either
+  // way, so the old "stdout starts with a brace" test accepted an endpoint
+  // error as a report. Measured against a dead registry: npm emitted
+  // {"message":"... ECONNREFUSED ...","error":{...}}, normalizeAudit saw zero
+  // packages, and the script printed a confident posture digest over an empty
+  // set and exited 0. A network blip would have silently rewritten the record.
+  //
+  // The shape is checked rather than the exit status, because the exit status
+  // is what conflates the two cases in the first place.
+  if (!Number.isInteger(objAudit.auditReportVersion)
+    || typeof objAudit.vulnerabilities !== 'object' || objAudit.vulnerabilities === null
+    || typeof objAudit.metadata?.vulnerabilities !== 'object') {
+    process.stderr.write(
+      'supply-freeze: npm audit did not return an audit report.\n' +
+      `  npm said: ${typeof objAudit.message === 'string' ? objAudit.message : JSON.stringify(objAudit).slice(0, 300)}\n` +
+      '  this is an endpoint or format failure, not an advisory posture; nothing is recorded.\n' +
+      '  pass --no-audit to record the lockfile-derived fields alone.\n');
+    process.exit(5);
+  }
   const objNormalizedAudit = normalizeAudit(objAudit);
   objRecord.auditSha256 = sha256(canonicalize(objNormalizedAudit));
   objRecord.auditCounts = objNormalizedAudit.counts;
@@ -268,7 +362,7 @@ if (boolJson) {
     `  matches reviewed     ${objRecord.matchesReviewedManifest}\n` +
     `  tree satisfies lock  ${objRecord.treeSatisfiesLockfile}\n` +
     `  installed tree       ${objRecord.installedTreeSha256}\n` +
-    `    (${objRecord.installedTreeFiles} files, ${objRecord.installedTreeSymlinks} symlinks on disk)\n` +
+    `    (${objRecord.installedTreeFiles} files, ${objRecord.installedTreeSymlinks} symlinks, ${objRecord.installedTreeDirectories} directories on disk)\n` +
     (objRecord.auditSha256
       ? `  advisory posture     ${objRecord.auditSha256}\n` +
         `  advisory counts      ${JSON.stringify(objRecord.auditCounts)}\n` +

@@ -55,13 +55,14 @@ Run on the reviewed toolchain against the merge commit.
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` |
 | Node | `v24.18.1` |
 | npm | `11.16.0` |
+| Platform | `linux` / `x64` |
 | `package.json` | blob `2b88a0ac85d3a8b7286040e6b1f6c4ddb4d3bce1` |
 | `package.json` SHA-256 | `e206cdb3562f0397e8eed7fb2c2586269a1f5335cdff2906da8d5e070426321e` |
 | `package-lock.json` | blob `5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca` |
 | `package-lock.json` SHA-256 | `277f7168ab3a4f1f7a2565de13191d64b1572e7cb92b67b0972b3242bd4de062` |
 | Install producer argv | `npm ci --ignore-scripts --no-audit --no-fund` |
-| Installed tree SHA-256 | `32a914d9f49a84d4066c3fb235acb8381ca8e9b910f7882cabf84af4661d11ac` |
-| Installed tree size | 2177 files, 8 symlinks |
+| Installed tree SHA-256 | `ce95cd200bf5aa5be8d516825f698ac8d71b772d75291fea4da732af30ec43a0` |
+| Installed tree size | 2177 files, 8 symlinks, 336 directories |
 | Advisory posture SHA-256 | `ea559555c8c18bd2488219d977a994fabc868c2d46efb05bbaf92405c53488e1` |
 | Advisory counts | 0 critical, 5 high, 2 moderate, 0 low, 0 info |
 | Policy decision | `T1-ADVISORY-DISPOSITION-v1`, bounded through issue #24 |
@@ -80,16 +81,24 @@ Run on the reviewed toolchain against the merge commit.
 
 ## How to reproduce
 
-From a clean clone of the recorded commit:
+The script is **not** present at the recorded T1 merge commit — it is added by the change that
+introduces this document. Reproduce from a revision that contains it, which carries the same
+`package.json` and `package-lock.json` blobs:
 
 ```bash
+git checkout main            # or any revision containing Get-SupplyFreezeDigest.mjs
 cd .github/workflows
+git log -1 --format=%H -- package.json package-lock.json   # confirm the blobs are the recorded ones
 npm ci --ignore-scripts --no-audit --no-fund
 node Get-SupplyFreezeDigest.mjs
 ```
 
-The script refuses to report on any toolchain other than Node `v24.18.1` with npm `11.16.0`,
-because a digest taken on a different pair is not this record. Pass `--json` for machine-
+The script refuses to run against any manifest other than the reviewed one, so a revision whose
+`package.json` or `package-lock.json` has moved will exit non-zero rather than report a
+misleading digest.
+
+The script refuses to report on any toolchain other than Node `v24.18.1` with npm `11.16.0` on
+`linux`/`x64`, because a digest taken on a different combination is not this record. Pass `--json` for machine-
 readable output, `--no-audit` to skip the network-dependent half, and `--any-toolchain` to
 compute anyway — the last of which produces a number that is explicitly not a freeze record.
 
@@ -97,12 +106,24 @@ compute anyway — the last of which produces a number that is explicitly not a 
 
 ### Installed tree
 
-Folds the bytes actually present under `node_modules`: every file's path, length and content,
-and every symlink's target, in sorted order.
+Folds the bytes actually present under `node_modules`: every file's path and content, every
+symlink's path and target, and every directory's path, in sorted order.
 
-**Reproducible from the lockfile alone.** Three independent `npm ci` installs in three
-different absolute paths produce the identical digest, which also demonstrates that no
-machine-specific path leaks into the hashed bytes.
+Every variable-length field is **length-prefixed**, which makes the encoding injective. An
+earlier draft used line-oriented framing, and that was not injective: a POSIX path or symlink
+target may itself contain a newline, so two genuinely different trees hashed identically. Both
+the symlink framing and the file framing were affected, and both were demonstrated with real
+directories on disk before the fix and shown to differ after it.
+
+**Reproducible from the lockfile and the reviewed platform.** Three independent `npm ci`
+installs in three different absolute paths produce the identical digest, which also
+demonstrates that no machine-specific path leaks into the hashed bytes.
+
+It is **not** reproducible from the lockfile alone, and an earlier draft of this document
+claimed otherwise. npm's `bin-links` writes `.cmd` and `.ps1` shims on Windows where POSIX
+gets symlinks, so the same lockfile yields a genuinely different tree on a different platform.
+The script therefore pins `linux`/`x64` alongside the Node and npm versions and refuses to
+report elsewhere.
 
 An earlier version of this script digested a normalized `npm ls --all --json` instead, because
 that is what the retired field was named after. **That would have been close to worthless**,
