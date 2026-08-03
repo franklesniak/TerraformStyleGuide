@@ -1423,18 +1423,41 @@ const SENSITIVE_CONFIG_KEYS = Object.freeze(['proxy', 'https-proxy', 'ca', 'cafi
 function redactUrl(strValue) {
   try {
     const objUrl = new URL(strValue);
+    // Round 38, reported by Codex, and it is this helper's own comment being
+    // wrong one round after it was written. That comment said scheme, host and
+    // path are kept "because a reader has to see WHICH registry was refused" --
+    // but the host answers that question, and the PATH is as free-form as the
+    // query. Measured: NPM_CONFIG_REGISTRY=https://host/SUPPLYSECRET/ is
+    // returned verbatim by npm, so the token rode out in the pathname of a value
+    // this function had already declared safe.
+    //
+    // The path is dropped rather than kept, and the boundary is exact: a
+    // pathname of `/` is what a bare origin produces, so the reviewed registry
+    // https://registry.npmjs.org/ is returned CHARACTER-IDENTICAL and the
+    // compared row does not move. Anything longer is withheld.
+    const boolPathCarries = objUrl.pathname !== '/' && objUrl.pathname !== '';
     const boolCarriedSecret = objUrl.username !== '' || objUrl.password !== ''
-      || objUrl.search !== '' || objUrl.hash !== '';
-    objUrl.username = '';
-    objUrl.password = '';
-    objUrl.search = '';
-    objUrl.hash = '';
-    return boolCarriedSecret ? `${objUrl.toString()} (credentials and query redacted)` : objUrl.toString();
+      || objUrl.search !== '' || objUrl.hash !== '' || boolPathCarries;
+    const strSafe = `${objUrl.protocol}//${objUrl.host}${boolPathCarries ? '/' : objUrl.pathname}`;
+    return boolCarriedSecret ? `${strSafe} (path, credentials and query redacted)` : strSafe;
   } catch {
-    // Not a URL. Returned unchanged rather than blanked: a malformed registry
-    // value is itself the diagnostic, and this helper is not the place to
-    // decide that an unparseable string is a secret.
-    return strValue;
+    // Round 38, reported by Copilot, in the round-37 fix above and in the
+    // sentence defending it. This returned strValue unchanged, on the reasoning
+    // that a malformed registry value is itself the diagnostic and that this
+    // helper should not decide an unparseable string is a secret. That is a
+    // redactor that FAILS OPEN, and the reasoning was backwards: an unparseable
+    // string is exactly the case where nothing has inspected the value, so it is
+    // the one to withhold rather than the one to trust.
+    //
+    // Measured: `registry.example.invalid/path?token=...` throws in new URL()
+    // because it has no scheme, so the token was returned verbatim and reached
+    // both the refusal text and objRecord.registry. The parseable case that
+    // carries the same token was redacted; the malformed one was not.
+    //
+    // Length and the fact of being unparseable are kept, matching what the
+    // NODE_OPTIONS refusal reports. That is the whole of the diagnostic the old
+    // branch was defending -- "this value is not a URL" -- without the payload.
+    return `unparseable, ${strValue.length} characters (value not shown)`;
   }
 }
 
