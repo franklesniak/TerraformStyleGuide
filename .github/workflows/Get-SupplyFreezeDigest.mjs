@@ -44,7 +44,7 @@ const REVIEWED_LOCK_SHA256 = '277f7168ab3a4f1f7a2565de13191d64b1572e7cb92b67b097
 // The same two files as Git blob identities, which is what the record's blob
 // column holds. Round 2, reported by Copilot: the documented way to check those
 // was `git log -1 --format=%H -- <path>`, which prints a COMMIT hash. Measured,
-// it printed 79ecff1d... where the record says 2b88a0ac..., so a reader
+// it printed a COMMIT hash where the record holds a BLOB id, so a reader
 // following the instructions compared two different kinds of hash and would
 // have concluded the record was wrong.
 //
@@ -79,8 +79,8 @@ const REVIEWED_LOCK_BLOB = '5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca';
 //
 // Measured, two real `npm ci` installs from the identical lockfile with the
 // process umask at 0022 in BOTH:
-//   npm umask 0   (default) -> {"644":2157,"755":20}                     4cdc37a7...
-//   npm umask 077           -> {"600":2156,"700":12,"755":8,"644":1}     bd7b701f...
+//   npm umask 0   (default) -> {"644":2157,"755":20}            the recorded digest
+//   npm umask 077           -> {"600":2156,"700":12,"755":8,"644":1}   a different one
 // The second run then emitted `freezeRecord: true` with an empty
 // notFreezeRecordBecause, matchesReviewedManifest true and `umask 0022` printed
 // in its own toolchain block -- a complete, unqualified freeze record over a
@@ -111,7 +111,7 @@ const REVIEWED_NPM_CONFIG = Object.freeze({
   //
   // Measured with a real `npm ci` from the identical lockfile: the hidden
   // lockfile came back with 0 `resolved` keys against the reviewed tree's 125,
-  // moving the installed-tree digest to 042962d8... while the census still
+  // moving the installed-tree digest while the census still
   // reported the recorded 2177/8/336 and nothing refused. The package payloads
   // were byte-identical; only npm's own bookkeeping file changed.
   //
@@ -128,8 +128,8 @@ const REVIEWED_NPM_CONFIG = Object.freeze({
 // under umask 077 is still 0o700, still executable". That is true about
 // EXECUTABILITY and irrelevant to the RECORDED VALUE: 0o755 & 0o111 is 0o111,
 // 0o700 & 0o111 is 0o100, so the two hash differently. Measured -- a full
-// `npm ci` under umask 077 produced digest 0a215132... against the recorded
-// 4cdc37a7..., a mismatch caused by nothing but the reader's umask.
+// `npm ci` under umask 077 produced a digest that differs from the recorded
+// one, a mismatch caused by nothing but the reader's umask.
 //
 // npm documents that folders and executables are masked by both npm's
 // configured umask and the underlying system umask. npm's own `umask` config
@@ -187,6 +187,26 @@ const intProcessStartedAt = Date.now() - Math.round(process.uptime() * 1000);
 // been reported as a hole in the audit shape guard -- null in round 2, arrays
 // in round 6. One predicate, used everywhere, rather than a conjunction
 // rewritten at each call site and wrong in a different way each time.
+// Severity order for the recorded counts AND for the shape guard below. One
+// list drives both, so the field that is compared and the field that is
+// validated cannot describe different shapes.
+//
+// Round 13, reported by Copilot. `counts` used to be npm's own object copied
+// straight through, so its KEY ORDER came from npm's JSON emitter. The digest
+// was never at risk -- canonicalize sorts keys -- but the record quotes the
+// counts as a compared field, and a reader string-comparing that value would
+// see a false mismatch if a future npm emitted the same numbers in a different
+// order. Rebuilding in a fixed order makes the compared text depend on the
+// values alone.
+const SEVERITY_ORDER = Object.freeze(['info', 'low', 'moderate', 'high', 'critical', 'total']);
+
+function orderedCounts(objCounts) {
+  if (!objCounts || typeof objCounts !== 'object') return null;
+  const objOrdered = {};
+  for (const strSeverity of SEVERITY_ORDER) objOrdered[strSeverity] = objCounts[strSeverity];
+  return objOrdered;
+}
+
 function isPlainObject(objValue) {
   return typeof objValue === 'object' && objValue !== null && !Array.isArray(objValue);
 }
@@ -396,7 +416,7 @@ function foldInstalledTree(strRoot) {
         // branch used to fold a bare '?' tag and the path, so every special
         // entry at a given path hashed identically. Copilot said two different
         // TYPES would collide; measured, five distinct filesystem objects at
-        // one path all folded to ddb567e1... -- FIFO, Unix socket, character
+        // one path all folded identically -- FIFO, Unix socket, character
         // device (1,3), character device (1,5) and block device (7,0). The two
         // character devices differ only in minor number, which is the
         // /dev/null-versus-/dev/zero distinction, so the collision was not even
@@ -542,7 +562,7 @@ function foldInstalledTree(strRoot) {
 // that entry, because nothing reads it again -- both folds then agree on bytes
 // that are already stale. Measured with the second fold paused just after it
 // read `.package-lock.json`: writing to that file gave exit 0, no exit-10
-// refusal, and the recorded digest 4cdc37a7... reported for a tree whose file
+// refusal, and the then-recorded digest reported for a tree whose file
 // was 64829 bytes at emission against the 64794 bytes actually hashed.
 //
 // This sweep tests a different predicate -- "was anything under this tree
@@ -614,7 +634,7 @@ function normalizeAudit(objAudit) {
   const objVulnerabilities = objAudit.vulnerabilities ?? {};
   const objOutput = {
     auditReportVersion: objAudit.auditReportVersion ?? null,
-    counts: objAudit.metadata?.vulnerabilities ?? null,
+    counts: orderedCounts(objAudit.metadata?.vulnerabilities),
     packages: {},
   };
   for (const strName of Object.keys(objVulnerabilities).sort()) {
@@ -673,8 +693,14 @@ if (!boolAnyToolchain && (strNodeVersion !== REVIEWED_NODE || strNpmVersion !== 
 // the fold injective, then recording execute bits, then hashing symlink targets
 // as raw bytes. That is exactly the confusion a reader would hit: a correct
 // tree, a correct lockfile, and a number that does not match, with nothing in
-// the record to explain why. Specific digests are deliberately not quoted here;
-// a number in a comment has nothing deriving it and goes stale silently.
+// the record to explain why.
+//
+// No digest is quoted anywhere in this file's comments, and round 13 is when
+// that finally became true. A comment claiming exactly this sat beside
+// comments quoting the installed-tree digest -- which by then had moved twice
+// and so were wrong, demonstrating the claim while contradicting it. A number
+// in a comment has nothing deriving it and goes stale silently; the record
+// holds the authoritative values and the script regenerates them.
 //
 // No circularity: the digest is computed over the file and never stored in it.
 // The digest itself is computed at the very top of this file; see there for why.
@@ -946,11 +972,10 @@ if (boolSkipAudit) {
   // hand-written conjunction, so the two halves cannot drift apart again --
   // that asymmetry is what admitted `null` in the first place.
   const objCounts = objAudit.metadata?.vulnerabilities;
-  const arrSeverities = ['info', 'low', 'moderate', 'high', 'critical', 'total'];
   if (!Number.isInteger(objAudit.auditReportVersion)
     || !isPlainObject(objAudit.vulnerabilities)
     || !isPlainObject(objCounts)
-    || !arrSeverities.every((strSeverity) => Number.isInteger(objCounts[strSeverity]))) {
+    || !SEVERITY_ORDER.every((strSeverity) => Number.isInteger(objCounts[strSeverity]))) {
     process.stderr.write(
       'supply-freeze: npm audit did not return an audit report.\n' +
       `  npm said: ${typeof objAudit.message === 'string' ? objAudit.message : JSON.stringify(objAudit).slice(0, 300)}\n` +
@@ -1055,8 +1080,8 @@ if (objNewestChange.ctimeMs >= intRecordingStartedAt) {
 // the second fold and the sweep, and nothing read the manifests again after it,
 // so a write landing in that interval was invisible: measured, editing
 // package.json during the second fold gave exit 0 with the reviewed hash
-// e206cdb3... reported, matchesReviewedManifest: true, and b916f1cc... actually
-// on disk at emission.
+// the reviewed manifest hash reported, matchesReviewedManifest: true, and
+// different bytes actually on disk at emission.
 //
 // That is the identical late-write window the second fold was added to close
 // for node_modules, left open one file over -- the same "fixed it here, not
