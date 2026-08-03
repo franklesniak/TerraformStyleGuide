@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `b9f656643961c53e8f06838843c504c19d905fe0335eb883643f49b072bd6964` | script `script.sha256` |
+| Freeze script SHA-256 | `41dc974682f9721ca1eea514668145021df51b09867a410212042a7a1d7877e6` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` | script `toolchain.platform` |
@@ -432,7 +432,8 @@ row, rather than leaving it to a sentence that has already been wrong once.
 
 | Exit | Refusal | Bypassed by `--any-toolchain` | Usual cause |
 | ---: | --- | :---: | --- |
-| `2` | Unreviewed toolchain or invocation | yes | different Node, npm, platform or architecture; a symlinked entry point; or `NODE_OPTIONS` set — see [What this script cannot check about itself](#what-this-script-cannot-check-about-itself) |
+| `2` | Unreviewed toolchain | yes | different Node, npm, platform or architecture; a symlinked entry point; or `NODE_OPTIONS` set — see [What this script cannot check about itself](#what-this-script-cannot-check-about-itself) |
+| `2` | Unrecognized invocation | **no** | an argument the script does not support; `--any-toolchain --bogus` still exits `2` |
 | `3` | Recorded input changed mid-run | **no** | `package.json`, `package-lock.json` or the script itself edited while the run was in progress |
 | `4` | Unreviewed manifest | yes | `package.json` or `package-lock.json` has moved |
 | `5` | Audit response is not a report | **no** | registry unreachable, or an endpoint error returned as JSON |

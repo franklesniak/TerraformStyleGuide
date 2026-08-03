@@ -2033,6 +2033,31 @@ if (boolSkipAudit) {
       '  pass --no-audit to record the lockfile-derived fields alone.\n');
     process.exit(5);
   }
+  // Round 38, reported by Codex. The sum check above tests the counts against
+  // THEMSELVES, so a response whose counts contradict its own vulnerability
+  // records passed: nonzero severities with an empty `vulnerabilities` object
+  // sums correctly and normalized to a nonzero auditCounts over an EMPTY
+  // auditPackages map, recorded at exit 0. The inverse -- populated records with
+  // all-zero counts -- passed the same way.
+  //
+  // The test is emptiness against zero, in both directions, and that shape is
+  // load-bearing. The comment above explains why the counts are NOT required to
+  // be recomputable from the records: npm currently tallies one per vulnerable
+  // package, which is an implementation detail, and a stricter check would
+  // refuse a genuine report if npm ever counted advisories instead. A
+  // biconditional on emptiness survives either choice -- under any tallying
+  // rule, zero records means zero total and some records means a nonzero one --
+  // so it catches the contradiction without betting on the rule.
+  if ((Object.keys(objAudit.vulnerabilities).length === 0) !== (objCounts.total === 0)) {
+    process.stderr.write(
+      'supply-freeze: npm audit returned counts that contradict its vulnerability records.\n' +
+      `  vulnerability records   ${Object.keys(objAudit.vulnerabilities).length}\n` +
+      `  total says              ${objCounts.total}\n` +
+      '  one of the two is empty and the other is not, so the posture cannot be'
+      + ' compared; nothing is recorded.\n' +
+      '  pass --no-audit to record the lockfile-derived fields alone.\n');
+    process.exit(5);
+  }
   let objNormalizedAudit;
   try {
     objNormalizedAudit = normalizeAudit(objAudit);
