@@ -73,17 +73,21 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `3732cf4d1f9f96c3f7ed100fe8f0e6a21c02d713d0ed3097b1aea35063607c3a` | script `script.sha256` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `bd26c0af75ba8f1f916b6ee08e0e2db323fb1ebd367ec6f797b3e24d871d6896` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
-| Platform | `linux` / `x64` | script `toolchain.platform`, `toolchain.arch` |
+| Platform | `linux` | script `toolchain.platform` |
+| Architecture | `x64` | script `toolchain.arch` |
 | Install umask | `0022` | script `toolchain.umask` |
 | `package.json` | blob `2b88a0ac85d3a8b7286040e6b1f6c4ddb4d3bce1` | script `manifestBlobs` |
 | `package.json` SHA-256 | `e206cdb3562f0397e8eed7fb2c2586269a1f5335cdff2906da8d5e070426321e` | script `manifest` |
 | `package-lock.json` | blob `5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca` | script `manifestBlobs` |
 | `package-lock.json` SHA-256 | `277f7168ab3a4f1f7a2565de13191d64b1572e7cb92b67b0972b3242bd4de062` | script `manifest` |
 | Installed tree SHA-256 | `16f42788850678b04361c87009be01eefa2354358d40a30d03d4a23b1298eb2a` | script `installedTreeSha256` |
-| Installed tree size | 2177 files, 8 symlinks, 336 directories, 0 special entries | script `installedTreeFiles`, `installedTreeSymlinks`, `installedTreeDirectories`, `installedTreeSpecials` |
+| Installed tree files | `2177` | script `installedTreeFiles` |
+| Installed tree symlinks | `8` | script `installedTreeSymlinks` |
+| Installed tree directories | `336` | script `installedTreeDirectories` |
+| Installed tree special entries | `0` | script `installedTreeSpecials` |
 | Advisory registry | `https://registry.npmjs.org/` | script `registry` |
 | Advisory posture SHA-256 | `ea559555c8c18bd2488219d977a994fabc868c2d46efb05bbaf92405c53488e1` | script `auditSha256` |
 | Advisory counts | `{"info":0,"low":0,"moderate":2,"high":5,"critical":0,"total":7}` | script `auditCounts` |
@@ -104,6 +108,19 @@ git rev-parse 143f54e52075a1ae1e999a6e242073e3d8d4a46b^{tree}   # merged tree
 wrote them as `0 critical, 5 high, 2 moderate, 0 low, 0 info`, which omitted npm's own `total`
 and asked a consumer to compare a sentence against a JSON object. Exact equality against prose
 is not mechanically checkable, and a compared field has to be.
+
+**One row holds one value from one key**, and two rows had to be split to satisfy that. The rule
+above was written for the advisory counts and then left violated twice in the same table: the
+installed-tree census read `2177 files, 8 symlinks, 336 directories, 0 special entries` — a
+sentence a consumer had to parse — and the platform row packed `linux` and `x64` into one
+slash-separated cell. Both are now one row per emitted key, matching every other script-derived
+row.
+
+Encoding the census as a single JSON object was the reported suggestion and was **not** taken.
+The script emits four separate keys and no combined object, so such a row would document a value
+no `--json` key produces, leaving a consumer to assemble it by hand from a shape this document
+invented. That is the unverifiable-derivation defect this record exists to retire, reproduced in
+the fix for a different one.
 
 **The three advisory rows are compared, and a mismatch there is a genuine equality failure.** An
 earlier draft said drift in them "calls for a policy re-decision rather than a failed build",
@@ -669,9 +686,15 @@ the Node and npm versions, the platform and architecture, the npm configuration,
 umask. An earlier draft of this sentence named only the lockfile and the platform, which
 contradicted both the guards and this document's own measured examples — a different npm version,
 an `npm_config_umask`, a `bin-links=false`, or a different process umask each move the digest on
-an otherwise identical lockfile and platform. Three independent `npm ci`
-installs in three different absolute paths produce the identical digest, which also
+an otherwise identical lockfile and platform. Four independent `npm ci`
+installs in four different absolute paths produce the identical digest, which also
 demonstrates that no machine-specific path leaks into the hashed bytes.
+
+The four paths differ in length and in shape — `alpha`, `bb`, `c-c-c`,
+`dddd-longer-path` — so a leaked path would have to collide across all four to go unnoticed. This
+said "three" while the pull request description said "four", and the reported fix was to write
+"multiple" so that neither could be wrong. The count is the evidence, so the disagreement was
+settled by re-running the experiment instead: four installs, four paths, one digest.
 
 It is **not** reproducible from the lockfile alone, and an earlier draft of this document
 claimed otherwise. npm's `bin-links` writes `.cmd` and `.ps1` shims on Windows where POSIX

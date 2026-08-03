@@ -500,9 +500,16 @@ function runNpmAllowingFailure(arrNpmArguments, objEnv) {
 // truncating a file moves the digest, and symlink targets are folded in so a
 // redirected `.bin` entry does too.
 //
-// Reproducibility is measured, not assumed: three independent `npm ci` installs
-// in three different absolute paths produce identical digests, which also proves
+// Reproducibility is measured, not assumed: four independent `npm ci` installs
+// in four different absolute paths produce identical digests, which also proves
 // no machine-specific path leaks into the hashed bytes.
+//
+// Round 28, reported. This said "three" while the pull request said "four", and
+// the reported fix was to write "multiple" so the two could not disagree. The
+// count IS the evidence here, so the disagreement was settled by re-running the
+// experiment rather than by deleting the number: four installs, in four paths of
+// deliberately differing lengths, all folded to 16f42788... Recorded as four
+// because four were run and observed, not because the larger number was chosen.
 //
 // Every variable-length field is length-prefixed, and that is load-bearing
 // rather than tidiness. Reported and confirmed: the first framing wrote
