@@ -1273,10 +1273,19 @@ const strNpmVersion = runNpm(['--version']).trim();
 // --use-system-ca=true and five other spellings survived the second one. A
 // third attempt at enumerating NODE_OPTIONS syntax is not warranted, and the
 // cost is only that a benign --max-old-space-size must be cleared too.
+// Round 35, reported by Codex. The value is not printed. NODE_OPTIONS is as
+// attacker-controlled as the trust variables scrubbed for the audit, and it
+// carries the same freight: a --require path exposes a username and a layout,
+// an --import URL can carry a host or a token. The scrub above this file
+// records those by NAME ONLY for exactly that reason, and refusal output goes
+// to the same CI logs the record does -- so echoing this one in full defeated
+// that rule one screen away from where it is stated. Presence and length are
+// enough to act on: the operator re-runs with `env -u NODE_OPTIONS` either way,
+// and length distinguishes "set to empty" from "set to something".
 if (!boolAnyToolchain && typeof process.env.NODE_OPTIONS === 'string') {
   process.stderr.write(
     'supply-freeze: refusing to record digests with NODE_OPTIONS set.\n' +
-    `  NODE_OPTIONS       ${process.env.NODE_OPTIONS}\n` +
+    `  NODE_OPTIONS       present, ${process.env.NODE_OPTIONS.length} characters (value not shown)\n` +
     '  --require and --import execute code before this script does, so any answer\n' +
     '  it reports can be forged. run the documented command instead:\n' +
     '    env -u NODE_OPTIONS node ./Get-SupplyFreezeDigest.mjs\n' +
@@ -1750,6 +1759,44 @@ if (boolSkipAudit) {
     // binds the whole posture to a current snapshot, not just its bulk half.
     '--prefer-offline=false', '--offline=false', '--prefer-online=true',
     ...transportFlags(),
+    // Round 35, reported by Codex, and this is the round-20 fix caught being
+    // half a fix. That round bound the six transport settings against a rewrite
+    // between the check and the audit, and its own comment describes the split:
+    // the non-null ones become flags, "the null ones are bound by scrubbing them
+    // from the child's environment instead". Scrubbing the ENVIRONMENT does not
+    // touch the FILE half of the same source. npm loads project, user and global
+    // npmrc files, and proxy/https-proxy/ca/cafile are all null -- so they carry
+    // no flag, and a file rewritten after the check supplies them to this child.
+    //
+    // Measured, npm 10.9.7: with npm_config_proxy and every *_proxy variable
+    // removed from the environment, a proxy set in an npmrc still reaches the
+    // child -- via NPM_CONFIG_USERCONFIG, which survives the scrub because
+    // `userconfig` is not a REVIEWED_NPM_TRANSPORT key and does not end in
+    // `_proxy`, and via a plain ./.npmrc with no variable set at all. Also
+    // measured: `--proxy=` does not close it. It is not merely noisy -- npm
+    // warns `invalid config` and KEEPS the npmrc value, so the empty flag is
+    // inert, which is why round 20 could not express the null values as flags
+    // and had to reach for the environment.
+    //
+    // --userconfig and --globalconfig DO exist, and being command line they
+    // outrank every file. Pointed at an empty source and a missing one: both
+    // read as empty, and npm refuses the same path twice with `double-loading
+    // config`, so the two must differ. No temporary file is written for this --
+    // this script writes none anywhere, and re-introducing a writer to hold two
+    // empty files would cost more than it closes.
+    //
+    // The PROJECT npmrc is NOT closed by this and is not claimed to be. It is
+    // read from the directory this child runs in, npm has no flag that relocates
+    // that source, and `--proxy=` is inert per above. What covers it instead:
+    // the transport check above runs `npm config list --json` in the same
+    // directory, and a committed .github/workflows/.npmrc is visible there --
+    // measured, its proxy appears in that output -- so the static case exits 6.
+    // What remains is a project npmrc created in the window between that check
+    // and this line, which is a write into the repository working directory
+    // mid-run: the same residual class as the preload the NODE_OPTIONS refusal
+    // documents, and named in the record rather than papered over.
+    ...(boolAnyToolchain ? [] : ['--userconfig=/dev/null',
+      '--globalconfig=/nonexistent/supply-freeze-globalconfig']),
     // Round 21, reported. The binding is applied only to reviewed runs. Under
     // --any-toolchain the configuration refusal is correctly bypassed, but
     // forcing the reviewed transport anyway made the audit fail with exit 5 on a
@@ -1912,14 +1959,36 @@ if (readOrRefuse(strPackagePath) !== strPackageBefore
 // about is the defect this review found five times over; the cost is one extra
 // pass at roughly 0.1s.
 const objTreeAfter = scanOrRefuse(() => foldInstalledTree(strTreeRoot), 'the second fold');
-if (objTreeAfter.sha256 !== objTree.sha256) {
+// Round 35, reported by Codex. Every field is compared, not the digest alone.
+// The digest folds `mode & 0o555` -- read and execute -- so the write bits and
+// the setuid/setgid/sticky bits are outside it BY DESIGN, for the reasons the
+// round-12 comment on the fold gives. That makes the mode histograms and the
+// root mode genuinely non-derivable from the digest: measured, 0644 and 0664
+// both fold to 444 while landing in DIFFERENT histogram buckets, so a group
+// write bit added between the folds moves `modes` and leaves both digests
+// equal. installedTreeModes is copied from the FIRST fold, so the record would
+// carry a histogram that no longer described the tree, at exit 0.
+//
+// Compared as the whole object rather than as the two fields reported. The
+// digest is one field among several the fold returns, and enumerating the two
+// that are currently outside it would re-open the moment a third is added --
+// the same "fixed the reported instance, not the class" mistake rounds 2 and 6
+// each made on the audit shape guard. Anything foldInstalledTree returns is now
+// held still between the folds, whether or not the digest covers it.
+const arrFoldDrift = Object.keys(objTree).filter((strField) =>
+  JSON.stringify(objTree[strField]) !== JSON.stringify(objTreeAfter[strField]));
+if (arrFoldDrift.length > 0) {
   process.stderr.write(
     'supply-freeze: the installed tree changed while recording; refusing to report.\n' +
+    `  fields that moved   ${arrFoldDrift.join(', ')}\n` +
     `  first fold         ${objTree.sha256}\n` +
     `  second fold        ${objTreeAfter.sha256}\n` +
     `  counts             ${objTree.files}/${objTree.symlinks}/${objTree.directories}` +
       ` then ${objTreeAfter.files}/${objTreeAfter.symlinks}/${objTreeAfter.directories}` +
       ' (files/symlinks/directories)\n' +
+    arrFoldDrift.filter((strField) => strField !== 'sha256').map((strField) =>
+      `  ${strField.padEnd(18)} ${JSON.stringify(objTree[strField])}` +
+      ` then ${JSON.stringify(objTreeAfter[strField])}\n`).join('') +
     '  something wrote to node_modules while this ran. record against a quiescent tree.\n');
   process.exit(10);
 }

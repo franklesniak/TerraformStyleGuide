@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `e0adbb441e9ab1e4fbbc27f3c8ee2f55033dd4d3fbf92d4b98f1d22287a1553a` | script `script.sha256` |
+| Freeze script SHA-256 | `96ae24c3bf7df7ac992dd65ccd9d5674e50f7adee74224af72d20fb7c22cbeab` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` | script `toolchain.platform` |
@@ -451,10 +451,15 @@ with the reasons listed — in both output formats.
 Exit `10` is the counterpart to exit `3` for the tree rather than the manifests, and it has two
 independent detectors:
 
-1. **The tree is folded twice**, once before `npm audit` and again after it. A mismatch means
-   the bytes moved between the two reads. The audit is a network round trip — measured at about
-   2.0s against a 0.1s fold — so that window is wide enough to matter, and the pair of folds
-   brackets it.
+1. **The tree is folded twice**, once before `npm audit` and again after it, and **every field
+   the fold returns is compared, not the digest alone**. That distinction is load-bearing: the
+   digest folds `mode & 0o555`, so the write and setuid/setgid/sticky bits sit outside it by
+   design, and the mode histograms are therefore not derivable from it. Measured, `0644` and
+   `0664` both fold to `444` while landing in different histogram buckets — so a group write bit
+   added between the folds moves `modes` and leaves both digests equal, and comparing only the
+   digest would emit the first fold's histogram for a tree it no longer described. The audit is a
+   network round trip — measured at about 2.0s against a 0.1s fold — so that window is wide
+   enough to matter, and the pair of folds brackets it.
 2. **A stat-only quiescence sweep** runs after the second fold and refuses if any entry's inode
    change time is later than a baseline read from the same filesystem before recording began.
 
@@ -540,6 +545,27 @@ alongside the forgery above. What the refusal is worth is the accidental case �
 that exports `NODE_OPTIONS` for unrelated reasons no longer quietly shapes a freeze record. What
 actually closes the hole is clearing the variable *before* `node` starts, which only the caller
 can do.
+
+**The audit child's transport is bound against three of npm's four configuration sources, not
+four.** npm takes settings from the command line, the environment, and project, user and global
+`npmrc` files, in that precedence order. The command line outranks everything, so the settings
+that have a non-null reviewed value — `noproxy` and `strict-ssl` — are passed as flags and cannot
+be overridden by any file. The four with a null reviewed value — `proxy`, `https-proxy`, `ca` and
+`cafile` — have no flag available: measured, `--proxy=` does not clear a proxy but is *inert*, npm
+warns `invalid config` and keeps the value the file supplied. Those four are bound instead by
+removing the matching variables from the child's environment and by pointing `--userconfig` and
+`--globalconfig` at an empty source and a missing one, which closes the environment, user and
+global sources.
+
+**The project `npmrc` is the fourth, and it is not closed by construction.** It is read from the
+directory the audit child runs in, and npm offers no flag that relocates that source. What covers
+it is a check rather than a construction: the transport comparison runs `npm config list --json`
+in the same directory, so a committed `.github/workflows/.npmrc` is visible to it — measured, a
+proxy set there appears in that output — and the run refuses with exit `6`. What remains is a
+project `npmrc` **created in the window between that check and the audit invocation**, which
+requires writing into the repository working directory mid-run. That is the same residual class as
+the preload above: an actor who can do it already runs code on the host, and the check is worth
+what it is worth against the accidental case.
 
 **The permission fold measures POSIX mode bits, and nothing else.** A tree can be made unloadable
 by mechanisms `stat` does not report: POSIX ACLs — a named-user entry denying read leaves `0644`
