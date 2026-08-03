@@ -18,7 +18,7 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -177,7 +177,23 @@ function sha256(strText) {
 // invisible to the script itself and can only be closed by a trusted launcher
 // hashing the file before invoking node. That is outside what one read-only
 // script can bootstrap, and the record says so.
-const strScriptPath = fileURLToPath(import.meta.url);
+//
+// Round 13, reported. `import.meta.url` is NOT always the file Node compiled.
+// Under `--preserve-symlinks-main` -- which an ambient NODE_OPTIONS can supply --
+// it is the symlink that was invoked, and measured, lstat on it reports
+// isSymbolicLink() true while the source Node actually loaded is the target.
+// Every check here would then have described the link's inode: its content
+// comparison reads through the link and its ctime never moves, so a target
+// modified at compile time and restored before the self-read would emit the
+// reviewed digest for code that was never reviewed.
+//
+// Resolving first makes every subsequent check -- the digest, the content
+// re-comparison and the ctime ceiling -- describe the bytes that were compiled.
+// That alone closes the attack, because restoring a modified target during the
+// run moves the TARGET's ctime past process start.
+const strInvokedPath = fileURLToPath(import.meta.url);
+const strScriptPath = realpathSync(strInvokedPath);
+const boolEntryPointIsLink = strInvokedPath !== strScriptPath;
 const strScriptBefore = readFileSync(strScriptPath, 'utf8');
 const strScriptSha256 = sha256(strScriptBefore);
 const intProcessStartedAt = Date.now() - Math.round(process.uptime() * 1000);
@@ -673,6 +689,20 @@ const strLockBefore = readFileSync(strLockPath, 'utf8');
 
 const strNodeVersion = process.version;
 const strNpmVersion = runNpm(['--version']).trim();
+
+// A symlinked entry point is not the reviewed invocation: the reviewed command
+// runs this file directly. Refused alongside the toolchain because it is the
+// same question -- is this the environment the record was made in -- rather than
+// a twelfth exit number for a cause exit 2 already names.
+if (!boolAnyToolchain && boolEntryPointIsLink) {
+  process.stderr.write(
+    'supply-freeze: refusing to record digests from a symlinked entry point.\n' +
+    `  invoked as         ${strInvokedPath}\n` +
+    `  resolves to        ${strScriptPath}\n` +
+    '  under --preserve-symlinks-main the source Node compiles is the target, not\n' +
+    '  the link. Run the file directly so the script identity is unambiguous.\n');
+  process.exit(2);
+}
 
 if (!boolAnyToolchain && (strNodeVersion !== REVIEWED_NODE || strNpmVersion !== REVIEWED_NPM
   || process.platform !== REVIEWED_PLATFORM || process.arch !== REVIEWED_ARCH)) {

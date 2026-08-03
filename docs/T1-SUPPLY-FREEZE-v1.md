@@ -69,7 +69,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `933058edd7dfc1b1dfa11f807a1d2979555bbb879800e729fb326b2189edd142` | script `script.sha256` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `13c2954aa3240ce087d62bec3ec0345eeb28c05a88bea5f54e1b182938b339f8` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` / `x64` | script `toolchain.platform`, `toolchain.arch` |
@@ -302,7 +302,7 @@ row, rather than leaving it to a sentence that has already been wrong once.
 
 | Exit | Refusal | Bypassed by `--any-toolchain` | Usual cause |
 | ---: | --- | :---: | --- |
-| `2` | Unreviewed toolchain | yes | different Node, npm, platform or architecture |
+| `2` | Unreviewed toolchain or invocation | yes | different Node, npm, platform or architecture; or a symlinked entry point |
 | `3` | Recorded input changed mid-run | **no** | `package.json`, `package-lock.json` or the script itself edited while the run was in progress |
 | `4` | Unreviewed manifest | yes | `package.json` or `package-lock.json` has moved |
 | `5` | Audit response is not a report | **no** | registry unreachable, or an endpoint error returned as JSON |
@@ -394,7 +394,34 @@ not a freeze record.
 Folds the bytes actually present under `node_modules`: every file's path, normalized execute
 bits and content, every symlink's path and target, and every directory's path, in sorted order.
 
-The **normalized execute bits** (`mode & 0o111`) rather than the full mode. node-tar applies the
+### What is folded, per entry kind
+
+This table is the authoritative definition. A reimplementer should be able to reproduce the
+recorded digest from it without reading the script; the script is the reference implementation,
+not the specification, and an earlier draft let the two drift — the file mask changed and this
+description did not follow.
+
+Entries are walked in sorted order by name. Every variable-length field is length-prefixed, which
+is what makes the encoding injective.
+
+| Entry kind | Tag | Fields folded, in order |
+| --- | --- | --- |
+| The `node_modules` root | `R` | its normalized execute bits (`mode & 0o111`); then, **only if it is not a directory**, tag `K`, the kind letter, and for a symlink its raw target bytes |
+| File | `F` | relative path, normalized **read and execute** bits (`mode & 0o555`), content |
+| Directory | `D` | relative path, normalized execute bits (`mode & 0o111`), then its entries |
+| Symlink | `L` | relative path, raw target bytes |
+| FIFO / socket / char device / block device | `P` / `S` / `C` / `B` | relative path, device number (`rdev`) |
+| Any other entry kind | `?` | relative path, device number |
+
+**Files carry read bits; directories carry only execute bits.** That asymmetry is deliberate. For
+a file, read permission is what determines whether a class can load it, so it belongs in the
+digest. For a directory, the execute bit is the traverse permission and read permission only
+controls listing, which does not affect whether code beneath it loads.
+
+**Write bits are folded for nothing.** They do not affect loadability and are the most
+machine-variable of the three.
+
+The **normalized permission bits** rather than the full mode. node-tar applies the
 process umask when it extracts, so the read and write bits are a property of the extracting
 machine, and recording the full mode would make the digest drift for a reason that has nothing
 to do with the package.
