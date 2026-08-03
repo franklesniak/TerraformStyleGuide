@@ -96,10 +96,15 @@ node Get-SupplyFreezeDigest.mjs
 
 **Ambient npm configuration changes what `npm ci` produces.** A `bin-links=false` or `omit=dev`
 setting in an environment variable or a user/global `.npmrc` yields a different tree from the
-same lockfile — measured, `bin-links=false` produced 0 symlinks instead of 8 and a digest of
-`89a19867…`. The script now reads the *effective* configuration and refuses to record when any
-install-shaping setting differs from its reviewed value, so this fails loudly instead of
-producing a mismatch the reader cannot explain. To sidestep ambient configuration entirely:
+same lockfile — measured, `bin-links=false` installs 0 symlinks where the record has 8. The
+script reads the *effective* configuration and refuses to record when any install-shaping
+setting differs from its reviewed value, so this fails loudly instead of producing a mismatch
+the reader cannot explain.
+
+That guard reads the configuration in effect **when the script runs**. A tree installed under
+`bin-links=false` in a shell that no longer carries the setting still passes it, so the symlink
+and file counts recorded above are the backstop for that case: 0 symlinks against a recorded 8
+names the cause even where the guard cannot see it. To sidestep ambient configuration entirely:
 
 ```bash
 npm ci --ignore-scripts --no-audit --no-fund \
@@ -112,10 +117,10 @@ misleading digest.
 
 **Check the script's own digest first.** The script reports its own SHA-256 on every run, and the
 value is recorded in the table above. This matters because the digests below are a property of
-*this* script: the framing correction made during review moved the installed-tree digest from
-`32a914d9…` to `c77d6113…` without any dependency changing at all. A reader with a correct tree,
-a correct lockfile and a different script version would otherwise see a mismatch with nothing to
-explain it.
+*this* script: during review the installed-tree digest moved twice without any dependency
+changing at all — once when the fold was made injective, and again when the executable bit was
+added to it. A reader with a correct tree, a correct lockfile and a different script version
+would otherwise see a mismatch with nothing to explain it.
 
 ```bash
 sha256sum Get-SupplyFreezeDigest.mjs   # must equal the recorded value
