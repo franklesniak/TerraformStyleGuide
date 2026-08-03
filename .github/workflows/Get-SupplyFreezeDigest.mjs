@@ -1,0 +1,278 @@
+// Derives the T1-SUPPLY-FREEZE-v1 digests reproducibly.
+//
+// Why this file exists. The original freeze record carried two fields recorded
+// as "normalized SHA-256" -- one over `npm ls --all --json`, one over
+// `npm audit --json`. The procedure that produced those two numbers was never
+// committed; only its outputs were, in a pull request description. A digest
+// whose derivation is unrecorded proves nothing, because a reader who computes
+// a different value cannot tell whether the inputs changed or whether they
+// normalized differently. Issue #22 requires "exact equality of every recorded
+// field" against that record, which for those two fields no one could discharge.
+//
+// So the derivation lives here, in the repository, and the record quotes what
+// this file produces. The two superseded values are NOT reproduced by this
+// script and cannot be: their recipe is unknown. See docs/T1-SUPPLY-FREEZE-v1.md.
+//
+// This script is read-only. It runs no install, writes no file, and asserts the
+// manifest and lockfile are byte-identical after it finishes.
+
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const REVIEWED_NODE = 'v24.18.1';
+const REVIEWED_NPM = '11.16.0';
+
+// The manifest and lockfile digests the workflow policy already pins. Repeated
+// here so this script fails loudly rather than reporting digests for a tree
+// that is not the reviewed one.
+const REVIEWED_PACKAGE_SHA256 = 'e206cdb3562f0397e8eed7fb2c2586269a1f5335cdff2906da8d5e070426321e';
+const REVIEWED_LOCK_SHA256 = '277f7168ab3a4f1f7a2565de13191d64b1572e7cb92b67b0972b3242bd4de062';
+
+const strWorkflowDirectory = dirname(fileURLToPath(import.meta.url));
+const arrArguments = process.argv.slice(2);
+const boolJson = arrArguments.includes('--json');
+const boolAnyToolchain = arrArguments.includes('--any-toolchain');
+const boolSkipAudit = arrArguments.includes('--no-audit');
+
+function sha256(strText) {
+  return createHash('sha256').update(strText, 'utf8').digest('hex');
+}
+
+// One canonical serialization for the advisory record: keys in sorted order, no
+// insignificant whitespace. Two readers who agree on the field selection below
+// therefore agree on the bytes.
+function canonicalize(objValue) {
+  if (Array.isArray(objValue)) return `[${objValue.map(canonicalize).join(',')}]`;
+  if (objValue && typeof objValue === 'object') {
+    return `{${Object.keys(objValue).sort()
+      .map((strKey) => `${JSON.stringify(strKey)}:${canonicalize(objValue[strKey])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(objValue ?? null);
+}
+
+function runNpm(arrArgs) {
+  return execFileSync('npm', arrArgs, {
+    cwd: strWorkflowDirectory,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+function runNpmAllowingFailure(arrArgs) {
+  try {
+    return runNpm(arrArgs);
+  } catch (objError) {
+    // `npm audit` uses exit 1 to mean "advisories found", not "command failed".
+    if (typeof objError.stdout === 'string' && objError.stdout.trim().startsWith('{')) {
+      return objError.stdout;
+    }
+    throw objError;
+  }
+}
+
+// The installed tree, folded from the bytes actually on disk.
+//
+// The first version of this script digested a normalized `npm ls --all --json`,
+// because that is what the original record's field was named after. Attacking
+// it before shipping showed the field would have been close to worthless:
+// editing `node_modules/glob/package.json` to version 9.9.9 and re-running left
+// the digest completely unchanged, because `npm ls` reports the resolved graph
+// that the LOCKFILE determines, not the bytes present on disk. The lockfile's
+// own SHA-256 is already a recorded field, so that digest restated an existing
+// one while appearing to measure something new.
+//
+// This measures the stated intent instead -- what is actually installed, which
+// is what actually runs. It is the same shape as the parser-tree fold the
+// workflow policy already performs over node_modules/yaml, widened to the whole
+// tree. Path and length are folded in alongside content so that renaming or
+// truncating a file moves the digest, and symlink targets are folded in so a
+// redirected `.bin` entry does too.
+//
+// Reproducibility is measured, not assumed: three independent `npm ci` installs
+// in three different absolute paths produce identical digests, which also proves
+// no machine-specific path leaks into the hashed bytes.
+function foldInstalledTree(strRoot) {
+  const objHash = createHash('sha256');
+  let intFiles = 0;
+  let intSymlinks = 0;
+  const walk = (strDirectory, strRelative) => {
+    const arrEntries = [...readdirSync(strDirectory, { withFileTypes: true })]
+      .sort((objLeft, objRight) => (objLeft.name < objRight.name ? -1 : objLeft.name > objRight.name ? 1 : 0));
+    for (const objEntry of arrEntries) {
+      const strPath = join(strDirectory, objEntry.name);
+      const strChild = strRelative ? `${strRelative}/${objEntry.name}` : objEntry.name;
+      if (objEntry.isSymbolicLink()) {
+        intSymlinks += 1;
+        objHash.update(`L ${strChild} -> ${readlinkSync(strPath)}\n`, 'utf8');
+        continue;
+      }
+      if (objEntry.isDirectory()) {
+        walk(strPath, strChild);
+        continue;
+      }
+      if (!objEntry.isFile()) {
+        // A socket, device or FIFO under node_modules is not something an
+        // install produces. Recorded rather than skipped so it cannot hide.
+        objHash.update(`? ${strChild}\n`, 'utf8');
+        continue;
+      }
+      const objBytes = readFileSync(strPath);
+      intFiles += 1;
+      objHash.update(`F ${strChild}:${objBytes.length}\n`, 'utf8');
+      objHash.update(objBytes);
+    }
+  };
+  walk(strRoot, '');
+  return { sha256: objHash.digest('hex'), files: intFiles, symlinks: intSymlinks };
+}
+
+// The advisory posture, reduced to what a policy decision actually turns on.
+//
+// Kept: which package is affected, its resolved severity, whether it is direct,
+// and per advisory the stable GitHub Security Advisory identifier, its severity,
+// CWE list, CVSS score and vector, and affected range.
+//
+// Dropped, deliberately:
+//   * `title` -- prose. GitHub rewords advisory titles without the advisory
+//     changing identity, so a title in the digest produces drift that means
+//     nothing. The GHSA id is the identity.
+//   * `fixAvailable` -- changes the day a fix ships upstream. That is news, but
+//     it is not a change in what this repository installs.
+//   * `effects` and `nodes` -- derivable from the tree fold above, so including
+//     them would make one change move two numbers.
+//
+// Unlike the tree fold, this digest is NOT reproducible from the lockfile alone
+// and is not meant to be: it is a snapshot of an advisory database that changes
+// as new advisories are published. Drift here means "the published advisories
+// moved", which calls for a policy re-decision, not a failed build.
+function normalizeAudit(objAudit) {
+  const objVulnerabilities = objAudit.vulnerabilities ?? {};
+  const objOut = {
+    auditReportVersion: objAudit.auditReportVersion ?? null,
+    counts: objAudit.metadata?.vulnerabilities ?? null,
+    packages: {},
+  };
+  for (const strName of Object.keys(objVulnerabilities).sort()) {
+    const objVulnerability = objVulnerabilities[strName];
+    const arrAdvisories = [];
+    for (const objVia of objVulnerability.via ?? []) {
+      // A `via` entry that is a bare string names another package in the chain
+      // rather than an advisory; the chain is already covered by the tree.
+      if (typeof objVia !== 'object' || objVia === null) continue;
+      const strUrl = typeof objVia.url === 'string' ? objVia.url : '';
+      const objMatch = strUrl.match(/GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}/u);
+      arrAdvisories.push({
+        id: objMatch ? objMatch[0] : `npm-source-${objVia.source ?? 'unknown'}`,
+        severity: objVia.severity ?? null,
+        cwe: [...(objVia.cwe ?? [])].sort(),
+        cvssScore: objVia.cvss?.score ?? null,
+        cvssVector: objVia.cvss?.vectorString ?? null,
+        range: objVia.range ?? null,
+      });
+    }
+    arrAdvisories.sort((objLeft, objRight) => (objLeft.id < objRight.id ? -1 : objLeft.id > objRight.id ? 1 : 0));
+    objOut.packages[strName] = {
+      severity: objVulnerability.severity ?? null,
+      isDirect: objVulnerability.isDirect ?? null,
+      range: objVulnerability.range ?? null,
+      advisories: arrAdvisories,
+    };
+  }
+  return objOut;
+}
+
+const strPackagePath = join(strWorkflowDirectory, 'package.json');
+const strLockPath = join(strWorkflowDirectory, 'package-lock.json');
+const strPackageBefore = readFileSync(strPackagePath, 'utf8');
+const strLockBefore = readFileSync(strLockPath, 'utf8');
+
+const strNodeVersion = process.version;
+const strNpmVersion = runNpm(['--version']).trim();
+
+if (!boolAnyToolchain && (strNodeVersion !== REVIEWED_NODE || strNpmVersion !== REVIEWED_NPM)) {
+  process.stderr.write(
+    'supply-freeze: refusing to record digests on an unreviewed toolchain.\n' +
+    `  observed Node ${strNodeVersion}, npm ${strNpmVersion}\n` +
+    `  reviewed Node ${REVIEWED_NODE}, npm ${REVIEWED_NPM}\n` +
+    '  pass --any-toolchain to compute anyway; the result is then not a freeze record.\n');
+  process.exit(2);
+}
+
+const objRecord = {
+  toolchain: { node: strNodeVersion, npm: strNpmVersion },
+  manifest: {
+    'package.json': sha256(strPackageBefore),
+    'package-lock.json': sha256(strLockBefore),
+  },
+  matchesReviewedManifest:
+    sha256(strPackageBefore) === REVIEWED_PACKAGE_SHA256 &&
+    sha256(strLockBefore) === REVIEWED_LOCK_SHA256,
+};
+
+// `npm ls` is kept, but as a consistency assertion rather than a digest source:
+// it exits non-zero when the installed tree does not satisfy the lockfile, which
+// is the one question it answers that the byte fold cannot.
+try {
+  runNpm(['ls', '--all', '--json']);
+  objRecord.treeSatisfiesLockfile = true;
+} catch {
+  objRecord.treeSatisfiesLockfile = false;
+}
+
+const objTree = foldInstalledTree(join(strWorkflowDirectory, 'node_modules'));
+objRecord.installedTreeSha256 = objTree.sha256;
+objRecord.installedTreeFiles = objTree.files;
+objRecord.installedTreeSymlinks = objTree.symlinks;
+
+if (boolSkipAudit) {
+  objRecord.auditSha256 = null;
+} else {
+  const objAudit = JSON.parse(runNpmAllowingFailure(['audit', '--json']));
+  const objNormalizedAudit = normalizeAudit(objAudit);
+  objRecord.auditSha256 = sha256(canonicalize(objNormalizedAudit));
+  objRecord.auditCounts = objNormalizedAudit.counts;
+  objRecord.auditPackages = Object.fromEntries(
+    Object.entries(objNormalizedAudit.packages).map(([strName, objValue]) => [
+      strName,
+      // An empty advisory list is not a missing entry: the package is reached
+      // only through a vulnerable dependency, so its `via` names packages
+      // rather than advisories. Saying so beats printing empty parentheses.
+      objValue.advisories.length > 0
+        ? `${objValue.severity} (${objValue.advisories.map((objAdvisory) => objAdvisory.id).join(', ')})`
+        : `${objValue.severity} (inherited through dependencies)`,
+    ]));
+}
+
+// Read-only is an assertion, not a claim. `npm ls` and `npm audit` are supposed
+// to leave both files alone; this proves they did rather than trusting them.
+if (readFileSync(strPackagePath, 'utf8') !== strPackageBefore
+  || readFileSync(strLockPath, 'utf8') !== strLockBefore) {
+  process.stderr.write('supply-freeze: package metadata changed while reading it; refusing to report\n');
+  process.exit(3);
+}
+
+if (boolJson) {
+  process.stdout.write(`${JSON.stringify(objRecord, null, 2)}\n`);
+} else {
+  process.stdout.write(
+    'T1-SUPPLY-FREEZE-v1 digests\n' +
+    `  Node                 ${objRecord.toolchain.node}\n` +
+    `  npm                  ${objRecord.toolchain.npm}\n` +
+    `  package.json         ${objRecord.manifest['package.json']}\n` +
+    `  package-lock.json    ${objRecord.manifest['package-lock.json']}\n` +
+    `  matches reviewed     ${objRecord.matchesReviewedManifest}\n` +
+    `  tree satisfies lock  ${objRecord.treeSatisfiesLockfile}\n` +
+    `  installed tree       ${objRecord.installedTreeSha256}\n` +
+    `    (${objRecord.installedTreeFiles} files, ${objRecord.installedTreeSymlinks} symlinks on disk)\n` +
+    (objRecord.auditSha256
+      ? `  advisory posture     ${objRecord.auditSha256}\n` +
+        `  advisory counts      ${JSON.stringify(objRecord.auditCounts)}\n` +
+        Object.entries(objRecord.auditPackages)
+          .map(([strName, strValue]) => `    ${strName.padEnd(20)} ${strValue}\n`).join('')
+      : '  advisory posture     (skipped)\n'));
+}
