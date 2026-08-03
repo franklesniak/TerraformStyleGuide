@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `96ae24c3bf7df7ac992dd65ccd9d5674e50f7adee74224af72d20fb7c22cbeab` | script `script.sha256` |
+| Freeze script SHA-256 | `999a0a58553127d83a75052895fb0b47cd0f144e943d8f5bb6881debfa0efe2d` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` | script `toolchain.platform` |
@@ -554,8 +554,18 @@ be overridden by any file. The four with a null reviewed value — `proxy`, `htt
 `cafile` — have no flag available: measured, `--proxy=` does not clear a proxy but is *inert*, npm
 warns `invalid config` and keeps the value the file supplied. Those four are bound instead by
 removing the matching variables from the child's environment and by pointing `--userconfig` and
-`--globalconfig` at an empty source and a missing one, which closes the environment, user and
+`--globalconfig` at two sources that cannot carry settings, which closes the environment, user and
 global sources.
+
+Those two substitutes are `/dev/null` and a path *beneath* `/dev/null`. The second is not a path
+merely assumed to be absent — an earlier version used `/nonexistent/supply-freeze-globalconfig`
+and that was a defect, because npm reads the file if it happens to exist and the assumption is
+weakest exactly where this script runs: measured in the verification container, the process is
+uid 0 and `mkdir /nonexistent` succeeds. `/dev/null` is a character device, so every path beneath
+it is `ENOTDIR` for every user including root — measured, both `mkdir` and `touch` refuse — which
+makes the source empty by construction rather than by assumption. Two distinct paths are required
+because npm rejects the same config file twice with `double-loading config`, and it compares
+*resolved* paths: `/dev/../dev/null` collides with `/dev/null`.
 
 **The project `npmrc` is the fourth, and it is not closed by construction.** It is read from the
 directory the audit child runs in, and npm offers no flag that relocates that source. What covers
@@ -566,6 +576,19 @@ project `npmrc` **created in the window between that check and the audit invocat
 requires writing into the repository working directory mid-run. That is the same residual class as
 the preload above: an actor who can do it already runs code on the host, and the check is worth
 what it is worth against the accidental case.
+
+**The quiescence sweep follows a manifest's whole symlink chain, but not symlinked directory
+components.** Where a manifest resolves through several links — `package.json` → `mid` → `real` —
+every hop is stat'd individually, because collapsing the chain with `realpathSync` left the middle
+of it unwatched: measured, repointing `mid` alone changed the bytes read through `package.json`
+while the outer link's `lstat` ctime and the original target's `stat` ctime both stayed put, so the
+swap moved no value the sweep collected. Each hop now appears in a refusal by name, as
+`package.json (link hop 1)`.
+
+What is still outside it is a symlinked *directory* component of the path. Closing that would mean
+stat'ing every parent directory up to `/`, whose change times move for reasons that have nothing to
+do with this record — a check that refuses correct runs is not a stricter check, so the boundary is
+drawn at the leaf's own chain and stated here instead.
 
 **The permission fold measures POSIX mode bits, and nothing else.** A tree can be made unloadable
 by mechanisms `stat` does not report: POSIX ACLs — a named-user entry denying read leaves `0644`

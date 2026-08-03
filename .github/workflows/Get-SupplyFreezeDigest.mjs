@@ -970,13 +970,39 @@ function newestChangeTime(strRoot, arrExtraPaths) {
   // something the digest never measured -- the rule is to follow exactly where
   // this script's own reads follow, which is the root and the two manifests.
   //
-  // realpathSync throws on a dangling link, which lands in scanOrRefuse and
-  // becomes the documented exit 10: a manifest that stopped resolving mid-run IS
-  // a recorded input changing.
+  // A dangling link makes the next hop's lstat throw ENOENT, which lands in
+  // scanOrRefuse and becomes the documented exit 10: a manifest that stopped
+  // resolving mid-run IS a recorded input changing.
+  //
+  // Round 36, reported by Codex. Every hop is considered, not the outer link and
+  // the final target. The previous version called realpathSync, which COLLAPSES
+  // the chain -- so with `outer -> mid -> real`, it swept `outer` and `real` and
+  // never looked at `mid`. Measured: repointing `mid` alone changed the bytes
+  // read through `outer` from one file to another while `outer`'s lstat ctime and
+  // the original target's stat ctime both stayed put, so the swap was invisible
+  // to every value this sweep collected.
+  //
+  // The walk is the LEAF'S LINK CHAIN, deliberately, and not every component of
+  // the resolved path. Considering directory components would pull `/`, `/home`
+  // and every parent into the sweep, whose ctimes move for reasons that have
+  // nothing to do with this record -- an over-sensitive check that refuses real
+  // runs is not a stricter check, it is a broken one. A symlinked DIRECTORY
+  // component is therefore still outside this, and is stated in the record
+  // rather than implied closed.
   const considerThroughLinks = (strPath, strLabel) => {
-    const objStats = consider(strPath, strLabel);
-    if (objStats.isSymbolicLink()) {
-      consider(realpathSync(strPath), `${strLabel} (symlink target)`);
+    let strCurrent = strPath;
+    for (let intHop = 0; ; intHop += 1) {
+      const objStats = consider(
+        strCurrent, intHop === 0 ? strLabel : `${strLabel} (link hop ${intHop})`);
+      if (!objStats.isSymbolicLink()) return;
+      // A cycle would otherwise spin here. The throw is the same exit 10 a
+      // dangling link produces, and for the same reason: the path stopped
+      // resolving to bytes this script can name.
+      if (intHop >= 40) {
+        throw new Error(`${strLabel}: symlink chain exceeds 40 hops at ${strCurrent}`);
+      }
+      const strTarget = readlinkSync(strCurrent);
+      strCurrent = strTarget.startsWith('/') ? strTarget : join(dirname(strCurrent), strTarget);
     }
   };
   considerThroughLinks(strRoot, 'node_modules');
@@ -1361,13 +1387,41 @@ function normalizeConfigValue(objValue) {
   return Array.isArray(objValue) || objValue === '' ? arrMeaningful : objValue;
 }
 
+// Round 36, reported by Codex. Keys whose OBSERVED value must never be printed.
+// A rejected `proxy` or `https-proxy` is a URL and can carry credentials; `ca`
+// is a private trust anchor; `cafile` is a path that can name a username or an
+// internal layout. The refusal text goes to CI logs, so printing them there is
+// the same leak the NODE_OPTIONS refusal was fixed for one round earlier, and
+// the audit scrub two hundred lines up already records this exact class of input
+// by name only, for this exact reason.
+//
+// A key belongs here when its value can carry a host, a username, a token or a
+// key. The membership test is the value's SHAPE, not which table it lives in --
+// which is why this is a property consulted by the formatter rather than a flag
+// passed at one call site. REVIEWED_NPM_CONFIG's keys are booleans, small
+// enumerations and an integer umask; none can carry a secret, and their observed
+// values are the whole diagnostic point of that refusal, so they still print.
+//
+// The REVIEWED value is always printed, for every key. Those are literals in
+// this file, visible to anyone reading the source, so redacting them would cost
+// the reader the comparison while protecting nothing.
+const SENSITIVE_CONFIG_KEYS = Object.freeze(['proxy', 'https-proxy', 'ca', 'cafile']);
+
 function configDrift(objReviewed, objEffective) {
   return Object.entries(objReviewed)
     .filter(([strKey, objExpected]) =>
       canonicalize(normalizeConfigValue(objEffective[strKey] ?? null))
         !== canonicalize(normalizeConfigValue(objExpected)))
-    .map(([strKey, objExpected]) =>
-      `  ${strKey.padEnd(18)} observed ${JSON.stringify(objEffective[strKey] ?? null)}, reviewed ${JSON.stringify(objExpected)}`);
+    .map(([strKey, objExpected]) => {
+      const objObserved = objEffective[strKey] ?? null;
+      const strObserved = SENSITIVE_CONFIG_KEYS.includes(strKey)
+        // Null is printed as itself: it is the reviewed value for every key in
+        // this set, so "observed null" cannot leak anything and saying so is
+        // more useful than a redaction marker that hides which side differs.
+        ? (objObserved === null ? 'null' : 'set (value not shown)')
+        : JSON.stringify(objObserved);
+      return `  ${strKey.padEnd(18)} observed ${strObserved}, reviewed ${JSON.stringify(objExpected)}`;
+    });
 }
 
 if (!boolAnyToolchain) {
@@ -1795,8 +1849,25 @@ if (boolSkipAudit) {
     // and this line, which is a write into the repository working directory
     // mid-run: the same residual class as the preload the NODE_OPTIONS refusal
     // documents, and named in the record rather than papered over.
+    //
+    // Round 36, reported by Codex, and this is the round-35 fix above caught in
+    // its turn. The global substitute was `/nonexistent/supply-freeze-globalconfig`
+    // -- a path ASSUMED to be missing rather than one that cannot exist. If it
+    // does exist npm reads it, measured returning a planted proxy alongside
+    // `--userconfig=/dev/null`, and the assumption is weakest exactly where this
+    // script runs: measured in this container, the process is uid 0 and
+    // `mkdir /nonexistent` succeeds. Replacing one attacker-supplyable config
+    // source with another one is not a fix.
+    //
+    // `/dev/null/...` cannot exist, and not by assumption. /dev/null is a
+    // character device, so every path beneath it is ENOTDIR for everyone
+    // including root -- measured, both `mkdir` and `touch` refuse. npm reads it
+    // as an absent config file and the audit returns the true 7/7 posture.
+    // Still two distinct paths because npm rejects the same file twice with
+    // `double-loading config`, and the dedupe is by RESOLVED path: measured,
+    // `/dev/../dev/null` collides with `/dev/null` too.
     ...(boolAnyToolchain ? [] : ['--userconfig=/dev/null',
-      '--globalconfig=/nonexistent/supply-freeze-globalconfig']),
+      '--globalconfig=/dev/null/supply-freeze-globalconfig']),
     // Round 21, reported. The binding is applied only to reviewed runs. Under
     // --any-toolchain the configuration refusal is correctly bypassed, but
     // forcing the reviewed transport anyway made the audit fail with exit 5 on a
