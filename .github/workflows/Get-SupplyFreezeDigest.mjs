@@ -19,7 +19,7 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs';
-import { delimiter, dirname, join } from 'node:path';
+import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REVIEWED_NODE = 'v24.18.1';
@@ -359,6 +359,48 @@ function sha256(strText) {
   return createHash('sha256').update(strText, 'utf8').digest('hex');
 }
 
+// Round 41, reported by Codex. Names read off the tree are attacker-chosen, and
+// POSIX permits every byte in a filename except NUL and the slash -- newline,
+// carriage return and ESC included. Printed verbatim into a refusal, a name
+// carrying a newline ends the line and starts a new one at column 0, which in a
+// retained CI log is indistinguishable from something this script said. That is
+// CWE-117 log forging, and it was reachable at three refusals:
+//
+//   ln -s /etc/hostname $'zevil\nsupply-freeze: all checks passed, tree is clean'
+//
+//   supply-freeze: refusing to record digests for a tree whose links leave it.
+//     escaping links     2 (expected 0)
+//       node_modules/eastasianwidth/zevil
+//   supply-freeze: all checks passed, tree is clean      <-- the filename
+//
+// An ESC is worse than a newline: `\033[2K\033[G` erases the rendered line and
+// returns the cursor, so the real path is overwritten rather than merely joined.
+//
+// \p{Cc} is the Unicode Control category -- C0, DEL and C1. \p{Cf} is Format,
+// which carries the bidirectional overrides and isolates behind Trojan Source
+// (CVE-2021-42574); those reorder rendered text without emitting any byte a C0
+// filter would catch. Printable text of every script is left alone, so a package
+// with a legitimately non-ASCII path still prints as itself.
+//
+// Escaping rather than stripping is deliberate, and it is what the Trojan Source
+// authors recommend for display tools: the operator has to be able to act on the
+// name. \xNN and \u{NNNN} are unambiguous and the true name is recoverable.
+//
+// Applied where these names are COLLECTED rather than where they are printed.
+// Rounds 35 through 40 were six consecutive defects of one shape -- a value made
+// safe at one print site while it stayed dangerous in the variable -- and the
+// sixth was at a site my own round-39 sweep had listed and not opened. A name
+// that is escaped on the way into the array cannot be un-escaped by a later edit
+// that adds a print site.
+function formatTreeName(strName) {
+  return strName.replace(/[\p{Cc}\p{Cf}]/gu, (strChar) => {
+    const intCode = strChar.codePointAt(0);
+    return intCode <= 0xff
+      ? `\\x${intCode.toString(16).padStart(2, '0')}`
+      : `\\u{${intCode.toString(16).padStart(4, '0')}}`;
+  });
+}
+
 // Round 12, reported. The self-read used to sit AFTER the toolchain guard, and
 // therefore after an `npm --version` subprocess -- tens of milliseconds during
 // which this file could be replaced. The process would go on executing the
@@ -510,7 +552,7 @@ function readOrRefuse(strPath) {
   } catch (objError) {
     process.stderr.write(
       'supply-freeze: a recorded input could not be re-read; refusing to report.\n' +
-      `  error              ${objError.code ?? 'unknown'} at ${objError.path ?? strPath}\n` +
+      `  error              ${objError.code ?? 'unknown'} at ${formatTreeName(String(objError.path ?? strPath))}\n` +
       '  it was readable when this run began, so it changed underneath the record.\n');
     process.exit(3);
   }
@@ -749,9 +791,13 @@ function foldInstalledTree(strRoot) {
         // on the eight .bin shims a normal install creates. It is what the link
         // reaches that matters, not that it is a link.
         //
-        // Resolved with realpathSync against the RESOLVED root, so a chain that
-        // leaves the tree in two hops is caught and a legitimately symlinked
-        // node_modules root does not read as an escape.
+        // Containment is tested against the RESOLVED root, so a legitimately
+        // symlinked node_modules root does not read as an escape.
+        //
+        // Round 41 corrected the sentence that stood here. It claimed "a chain
+        // that leaves the tree in two hops is caught", and that was false: it was
+        // caught only if it ENDED outside. Codex refuted it, and the measurement
+        // is below. Writing the claim down is what stopped it being checked.
         //
         // Round 39, reported by Codex. The previous version swallowed a failed
         // resolution on the claim that "the quiescence sweep refuses it as a
@@ -775,26 +821,104 @@ function foldInstalledTree(strRoot) {
         // is the entire claim this guard makes. Refusing an unproven claim is the
         // conservative reading, and it is the reading that does not have to be
         // revisited when a new errno shows up.
+        // Round 41, reported by Codex. EVERY HOP is tested for containment, not
+        // just the endpoint. realpathSync collapses the whole chain, so a link
+        // that leaves the tree and comes back read as contained:
+        //
+        //   node_modules/eastasianwidth/zchain.js -> /tmp/mid41 -> <in-tree file>
+        //
+        // Measured on this tree, repointing /tmp/mid41 between two runs while the
+        // link's own text stayed `/tmp/mid41` throughout:
+        //   /tmp/mid41 -> eastasianwidth.js  exit 0, 0 refusals, 7480241947adfc1c
+        //   /tmp/mid41 -> README.md          exit 0, 0 refusals, 7480241947adfc1c
+        //
+        // Both endpoints are already folded, so both sets of bytes are inside the
+        // digest. What is NOT inside it is WHICH of them `zchain.js` selects, and
+        // that selector is an out-of-tree pointer anyone can repoint between the
+        // recording run and the build that loads through it. Two runs emit the
+        // same successful freeze record over different executing code -- the
+        // exact failure the round-38 endpoint check exists to stop. An
+        // intermediate hop simply walks around it.
+        //
+        // The rule enforced is: EVERY SYMLINK FOLLOWED MUST ITSELF LIVE INSIDE
+        // THE TREE, and the final destination must too.
+        //
+        // That is the precise invariant, and it took a wrong version first. The
+        // fold pins a link by hashing its target TEXT, so the mapping from that
+        // text to bytes has to be decided entirely by things the digest covers --
+        // that is, by entries inside the tree. Any symlink OUTSIDE the tree that
+        // the resolution passes through is a pointer the record does not cover
+        // and an attacker can repoint afterwards.
+        //
+        // The first attempt walked hop by hop and called realpathSync() on each
+        // hop's parent before testing it. That silently resolved the outside hop
+        // instead of catching it, and it accepted:
+        //
+        //   zparent.js -> /tmp/outdir41/back/README.md   (/tmp/outdir41/back
+        //                                                 being a symlink back
+        //                                                 into node_modules)
+        //
+        // which is the same defect one directory level up: repointing
+        // /tmp/outdir41/back changes which in-tree file loads. The comment there
+        // asserted that case was covered. It was not, and only running it said
+        // so -- the assertion is what stopped it being checked, exactly as with
+        // the two-hop sentence this round corrected.
+        //
+        // Walking COMPONENTS rather than hops fixes it, because the thing that
+        // must be tested is where each symlink SITS, not where it points. The
+        // walk starts at the resolved root instead of at "/" so that the tree's
+        // own ancestors -- /home may legitimately be a symlink -- are never
+        // themselves candidates for refusal.
+        //
+        // 40 is Linux MAXSYMLINKS. Past it the kernel returns ELOOP and so does
+        // this walk, which routes to the unresolved-link refusal rather than to a
+        // silent accept -- an unprovable containment claim is refused, per R39.
+        const funcInside = (strCandidate) =>
+          strCandidate === strRealRoot || strCandidate.startsWith(`${strRealRoot}/`);
+        let boolLeavesTree = false;
         try {
-          const strResolved = realpathSync(strPath);
-          if (strResolved !== strRealRoot && !strResolved.startsWith(`${strRealRoot}/`)) {
-            // Round 39, reported by Codex. The resolved target is NOT retained.
-            // It is chosen by whoever wrote the link, unbounded in length, and
-            // can carry a username, internal layout or a path-borne token into a
-            // CI log that outlives the run. The in-tree name is what an operator
-            // needs to act; `ls -l` on the tree answers "where did it point".
-            //
-            // Dropped at the point of COLLECTION rather than at the point of
-            // printing, which is the part that matters: rounds 35 through 38 were
-            // each a leak of a value that some earlier round had redacted at one
-            // print site while leaving it live in a variable. A value that was
-            // never stored cannot be printed by a later edit.
-            arrEscapingLinks.push({ path: strChild });
+          let strAt = strRealRoot;
+          let arrPending = strChild.split('/').filter((strPart) => strPart.length > 0);
+          let intHops = 0;
+          while (arrPending.length > 0) {
+            const strPart = arrPending.shift();
+            if (strPart === '.') { continue; }
+            if (strPart === '..') { strAt = dirname(strAt); continue; }
+            const strCandidate = strAt === '/' ? `/${strPart}` : `${strAt}/${strPart}`;
+            if (!lstatSync(strCandidate).isSymbolicLink()) { strAt = strCandidate; continue; }
+            intHops += 1;
+            if (intHops > 40) {
+              throw Object.assign(new Error('too many levels of symbolic links'), { code: 'ELOOP' });
+            }
+            if (!funcInside(strCandidate)) { boolLeavesTree = true; break; }
+            const strTarget = readlinkSync(strCandidate);
+            if (isAbsolute(strTarget)) { strAt = '/'; }
+            arrPending = strTarget.split('/').filter((strPart2) => strPart2.length > 0)
+              .concat(arrPending);
           }
+          if (!boolLeavesTree && !funcInside(strAt)) { boolLeavesTree = true; }
         } catch (objError) {
           // errno codes are a closed OS-defined set, so naming the code is safe
           // in a way that naming the target is not.
-          arrUnresolvedLinks.push({ path: strChild, code: objError?.code ?? 'unknown' });
+          arrUnresolvedLinks.push({ path: formatTreeName(strChild), code: objError?.code ?? 'unknown' });
+          continue;
+        }
+        if (boolLeavesTree) {
+          // Round 39, reported by Codex. The resolved target is NOT retained.
+          // It is chosen by whoever wrote the link, unbounded in length, and
+          // can carry a username, internal layout or a path-borne token into a
+          // CI log that outlives the run. The in-tree name is what an operator
+          // needs to act; `ls -l` on the tree answers "where did it point".
+          //
+          // Dropped at the point of COLLECTION rather than at the point of
+          // printing, which is the part that matters: rounds 35 through 38 were
+          // each a leak of a value that some earlier round had redacted at one
+          // print site while leaving it live in a variable. A value that was
+          // never stored cannot be printed by a later edit.
+          //
+          // Round 41 applies the same reasoning to the name's own BYTES, which
+          // this round showed were attacker-chosen too.
+          arrEscapingLinks.push({ path: formatTreeName(strChild) });
         }
         continue;
       }
@@ -851,7 +975,7 @@ function foldInstalledTree(strRoot) {
         // the fold. A digest whose injectivity depends on a guard is not
         // injective in exactly the runs where nothing else is checking.
         intSpecials += 1;
-        arrSpecialPaths.push(strChild);
+        arrSpecialPaths.push(formatTreeName(strChild));
         const objSpecial = lstatSync(strPath);
         const strTag = objSpecial.isFIFO() ? 'P'
           : objSpecial.isSocket() ? 'S'
@@ -1331,7 +1455,7 @@ function snapshotOrRefuse(strPath) {
     process.stderr.write(
       'supply-freeze: refusing to record digests for an unreviewed manifest.\n' +
       `  ${strPath.split('/').pop().padEnd(18)} could not be read\n` +
-      `  error              ${objError.code ?? 'unknown'} at ${objError.path ?? strPath}\n` +
+      `  error              ${objError.code ?? 'unknown'} at ${formatTreeName(String(objError.path ?? strPath))}\n` +
       '  the reviewed manifest must be present and readable before anything is recorded.\n');
     process.exit(4);
   }
@@ -1920,7 +2044,10 @@ if (!boolAnyToolchain && objTree.escapingLinks.length > 0) {
       `    node_modules/${objLink.path}\n`).join('')}` +
     (objTree.escapingLinks.length > 10
       ? `    ... and ${objTree.escapingLinks.length - 10} more\n` : '') +
-    '  each link above resolves to a path outside the tree root. the target is not\n' +
+    '  each link above passes outside the tree root somewhere along its chain --\n' +
+    '  which is not the same as ending outside it, and a chain that leaves and\n' +
+    '  comes back is refused too: the hop outside decides which in-tree bytes load\n' +
+    '  and nothing in this record covers that hop. the target is not\n' +
     '  printed: it is chosen by whoever wrote the link and CI logs are retained, so\n' +
     '  a target carrying a username, internal layout or a path-borne token would\n' +
     '  outlive this run. run `ls -l` on the names above to see where they point.\n' +
