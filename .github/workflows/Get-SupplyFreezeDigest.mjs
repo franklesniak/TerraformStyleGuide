@@ -203,7 +203,12 @@ const strScriptPath = realpathSync(strInvokedPath);
 const boolEntryPointIsLink = strInvokedPath !== strScriptPath;
 const strScriptBefore = readFileSync(strScriptPath, 'utf8');
 const strScriptSha256 = sha256(strScriptBefore);
-const intProcessStartedAt = Date.now() - Math.round(process.uptime() * 1000);
+// Round 18, reported. Math.round can round the uptime DOWN, which places the
+// computed start LATER than the real one -- and anything changed inside that
+// sliver carries a ctime below the ceiling and escapes the check. Math.ceil can
+// only place the computed start earlier, which is the direction that fails safe:
+// it can raise a false alarm, never miss a replacement.
+const intProcessStartedAt = Date.now() - Math.ceil(process.uptime() * 1000);
 
 // "A JSON object", as distinct from everything else `typeof x === 'object'`
 // admits. Both `null` and an array answer 'object', and each of those has now
@@ -974,6 +979,21 @@ function scanOrRefuse(fnScan, strWhat) {
   }
 }
 
+// Round 18, reported by Copilot. The symlinked-root refusal below read
+// objTree.rootIsDirectory, which only exists AFTER the whole redirected tree had
+// been walked and hashed -- so a reviewed run did the entire fold before
+// refusing, and a root pointed at an arbitrarily large tree would be scanned in
+// full before anything objected. lstat answers the same question before a single
+// entry is read.
+if (!boolAnyToolchain && !lstatSync(strTreeRoot).isDirectory()) {
+  process.stderr.write(
+    'supply-freeze: refusing to record digests for a tree that is not the installed tree.\n' +
+    '  node_modules       present, but a symlink rather than a directory\n' +
+    '  npm ci creates node_modules as a real directory. A symlinked root points the\n' +
+    '  install somewhere this record does not describe, however identical its contents.\n');
+  process.exit(7);
+}
+
 const objTree = scanOrRefuse(() => foldInstalledTree(strTreeRoot), 'the first fold');
 objRecord.installedTreeSha256 = objTree.sha256;
 objRecord.installedTreeFiles = objTree.files;
@@ -1284,10 +1304,14 @@ if (readOrRefuse(strScriptPath) !== strScriptBefore) {
     '  the file on disk no longer matches the source that derived these values.\n');
   process.exit(3);
 }
-if (lstatSync(strScriptPath).ctimeMs >= intProcessStartedAt) {
+// Round 18, reported, and the same defect round 15 fixed for the umask. The
+// value compared and the value printed were two separate stat calls, so a
+// message could quote a timestamp that was never the one refused.
+const intScriptChangedAt = lstatSync(strScriptPath).ctimeMs;
+if (intScriptChangedAt >= intProcessStartedAt) {
   process.stderr.write(
     'supply-freeze: this script was replaced during the run; refusing to report.\n' +
-    `  script ctime       ${new Date(lstatSync(strScriptPath).ctimeMs).toISOString()}\n` +
+    `  script ctime       ${new Date(intScriptChangedAt).toISOString()}\n` +
     `  process began      ${new Date(intProcessStartedAt).toISOString()}\n` +
     '  the bytes may have been restored, but the run is no longer attributable.\n');
   process.exit(3);
