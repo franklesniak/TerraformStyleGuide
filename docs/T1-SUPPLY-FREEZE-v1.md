@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `c2a586cd7f864a7eae6cb809035d5da214a4f6f7c16e498aaa2f7174b3d37f9a` | script `script.sha256` |
+| Freeze script SHA-256 | `3f73455949c3e5330fe1a1a35c6b05e1a0d82b7932f2e9a6c3c5efc653681870` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` | script `toolchain.platform` |
@@ -126,9 +126,9 @@ the fix for a different one.
 The rule is a rule about every table in this document, and the round after it was written a
 reviewer found it still violated in [Recorded, not compared](#recorded-not-compared) — a
 directory-permissions cell holding two values from two keys. Re-sweeping every table then turned
-up a third instance still sitting *here*: the freeze-script row read
-``` `<path>` SHA-256 `<hash>` ```, so the one field a consumer must compare byte-for-byte was
-wrapped in a path and a label. The path is stated throughout this document and belongs in the
+up a third instance still sitting *here*: the freeze-script row put the path and the label
+`SHA-256` in the value cell alongside the hash, so the one field a consumer must compare
+byte-for-byte was wrapped in prose. The path is stated throughout this document and belongs in the
 field name, not in the value. Fixing the instance that was reported, and calling it the class,
 is the specific habit this record keeps having to correct.
 
@@ -175,19 +175,26 @@ exact equality.
 | Directory permissions | `{"755":336}` | script `installedTreeDirectoryModes` | full modes are machine state |
 | `node_modules` root mode | `755` | script `installedTreeRootMode` | full modes are machine state |
 | Policy decision | `T1-ADVISORY-DISPOSITION-v1` | this document | no artifact exists to compare against; bounded through issue #24 |
-| Scrubbed trust variables | not captured for this record — see below | script `auditEnvironmentScrubbed` | describes the machine the audit ran on, not the registry's answer |
+| Scrubbed trust variables | no value for this record — see below | script `auditEnvironmentScrubbed`, added after these digests were taken | describes the machine the audit ran on, not the registry's answer |
 
 **Why that row records no value.** An earlier draft filled its Value column with the key name and
-two hypotheticals — ``` `auditEnvironmentScrubbed`, e.g. `[]` or `["NODE_OPTIONS"]` ``` — which
+two hypotheticals — the key name, then `[]` or `["NODE_OPTIONS"]` offered as examples — which
 records nothing: a reader learns what the field is called and what it might have said, not what it
 did say. The obvious repair is to write `[]`, and that is **not** what happened here, because it
-would be untrue. This field was added to the script well after the digests above were taken, so
-the run that produced this record never emitted it, and no observed value exists to record. A
-plausible-looking `[]` would be a value invented to fill a column — the same fabrication the
-advisory-identity guard was tightened to prevent, committed in the record rather than in the code.
+would be untrue for this record.
+
+The current script does always emit the key — `[]` under `--no-audit`, a sorted list otherwise —
+and a reviewer reasonably read the row as contradicting that. It does not, and the `Derived by`
+cell now says why: the field was added to the script *after* these digests were taken. The commit
+that recorded the advisory posture above is an ancestor of the commit that introduced
+`auditEnvironmentScrubbed`, so the run that minted this record could not have emitted it, and no
+observed value exists. Writing a plausible-looking `[]` would be a value invented to fill a
+column — the same fabrication the advisory-identity guard was tightened to refuse, committed in
+the record instead of in the code.
 
 The field is per-run in any case: it describes the environment of whoever executes the script, so
 a reader's own run reports their own list, not this one. On a clean environment that list is `[]`.
+That is what a reader should expect to see; it is not a value this record can claim was observed.
 
 **`auditEnvironmentScrubbed` lists names only, never values.** A `NODE_EXTRA_CA_CERTS` path or a
 proxy URL can carry a hostname, a username, or a token, and this record is published. An empty
@@ -812,6 +819,19 @@ it must not therefore be treated as non-blocking.
 
 ## Consumers
 
-Issue #22 consumes this record. Its equality requirement is discharged by re-running the script
-above and comparing against the table, with the caveat on the advisory posture noted directly
-above.
+Issue #22 consumes this record. Its equality requirement is discharged by **both** of the
+following, with the caveat on the advisory posture noted directly above:
+
+1. Re-running the script and comparing its `--json` output against every script-derived row.
+2. Running the three `git rev-parse` commands in [Compared fields](#compared-fields) and comparing
+   their output against the three `git`-derived rows.
+
+**The second step is not optional, and an earlier draft of this section omitted it.** It said the
+requirement was discharged "by re-running the script above and comparing against the table", which
+a consumer could follow literally and completely — while leaving the reviewed head, the merge
+commit and the merged tree unchecked, because the script emits no field for any of them. Three
+compared rows would have gone unverified by a procedure that reported itself satisfied.
+
+That is the same defect this document was written to retire, in the instructions rather than in
+the values: the [Compared fields](#compared-fields) table was corrected to stop claiming the
+script derived everything, and this section was left asserting it one heading later.

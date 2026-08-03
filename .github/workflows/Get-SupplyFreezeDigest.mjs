@@ -19,7 +19,7 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REVIEWED_NODE = 'v24.18.1';
@@ -333,6 +333,28 @@ const boolJson = arrArguments.includes('--json');
 const boolAnyToolchain = arrArguments.includes('--any-toolchain');
 const boolSkipAudit = arrArguments.includes('--no-audit');
 
+// Round 31, reported. Parsing was three membership tests and nothing else, so
+// every unrecognized argument was accepted in silence. Measured: `--no-audti`
+// exits 0 and performs the registry audit, which is the opposite of what the
+// caller asked for -- and the one option whose whole purpose is to keep this
+// process off the network is also the one most likely to be typed from memory.
+// The record it produces is not wrong, but it is not the record requested, and
+// nothing in the output says so.
+//
+// Refused rather than warned: a warning on stderr is invisible to `--json`
+// consumers, which are the callers most likely to be scripted.
+const SUPPORTED_ARGUMENTS = new Set(['--json', '--any-toolchain', '--no-audit']);
+const arrUnsupported = arrArguments.filter((strArg) => !SUPPORTED_ARGUMENTS.has(strArg));
+if (arrUnsupported.length > 0) {
+  process.stderr.write(
+    'supply-freeze: refusing to record digests for an unrecognized invocation.\n' +
+    `  unrecognized       ${arrUnsupported.join(' ')}\n` +
+    `  supported          ${[...SUPPORTED_ARGUMENTS].join(' ')}\n` +
+    '  a mistyped option would otherwise be ignored in silence, and the run would\n' +
+    '  record something other than what was asked for.\n');
+  process.exit(2);
+}
+
 function sha256(strText) {
   return createHash('sha256').update(strText, 'utf8').digest('hex');
 }
@@ -475,11 +497,31 @@ function readOrRefuse(strPath) {
   }
 }
 
+// Round 31, reported. npm ships as `#!/usr/bin/env node`, so the runtime its
+// subprocesses use is whatever `node` PATH resolves first -- NOT the Node running
+// this file. A recorder launched as `/opt/reviewed/bin/node ./Get-...mjs` with a
+// different node earlier on PATH reports the reviewed process.version while every
+// config read, tree walk and audit runs under the other one. Demonstrated with a
+// PATH shim: the shim was invoked by npm while the parent stayed on its own
+// execPath, so `toolchain.node` described the parent alone.
+//
+// Binding by PATH rather than by exec'ing npm-cli.js directly, because npm is a
+// symlink to a .js file here but a shell wrapper on other installs, and the
+// wrapper case would silently keep the old behaviour. Putting this Node's own
+// directory first makes `env node` resolve to it however npm is packaged.
+function npmChildEnv(objEnv) {
+  const objBase = objEnv ?? process.env;
+  return {
+    ...objBase,
+    PATH: `${dirname(process.execPath)}${delimiter}${objBase.PATH ?? ''}`,
+  };
+}
+
 function runNpm(arrNpmArguments, objEnv) {
   try {
     return execFileSync('npm', arrNpmArguments, {
       cwd: strWorkflowDirectory,
-      ...(objEnv ? { env: objEnv } : {}),
+      env: npmChildEnv(objEnv),
       encoding: 'utf8',
       maxBuffer: 64 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -981,7 +1023,22 @@ function normalizeAudit(objAudit) {
     // and the human output relabelled the package as inherited. The try/catch
     // added last round cannot help: nothing throws. Shapes that are wrong but
     // iterable need a type check, not an exception handler.
-    if (!Array.isArray(objVulnerability.via ?? [])) {
+    // Round 31, reported, and the sixth widening -- the `?? []` here is the same
+    // manufacture-a-value habit the advisory fields were cleaned of last round,
+    // hiding one level up. A vulnerability with NO `via` key at all was handed an
+    // empty array, iterated zero times, and recorded as a package with no
+    // advisory identity: measured, exit 0 with a complete-looking record and the
+    // package relabelled inherited. The non-array case refused; the missing case,
+    // which is the likelier endpoint failure, did not.
+    //
+    // `via` is required, so its absence is a malformed report rather than an
+    // empty one. Checked with a property test rather than a truthiness one: an
+    // explicit `via: null` is also absent for this purpose, and `?? []` treated
+    // it as a legitimate empty list.
+    if (!Object.hasOwn(objVulnerability, 'via') || objVulnerability.via === null) {
+      throw new TypeError(`vulnerability ${strName} has no via array`);
+    }
+    if (!Array.isArray(objVulnerability.via)) {
       throw new TypeError(`vulnerability ${strName} has a non-array via`);
     }
     for (const objVia of objVulnerability.via ?? []) {
@@ -1118,11 +1175,34 @@ const strLockBefore = snapshotOrRefuse(strLockPath);
 // already refuses a missing node_modules with a clearer message further down,
 // and under --any-toolchain a tree that appears mid-run should trip the sweep,
 // which comparing against 0 does.
-const objBaselineChange = existsSync(strTreeRoot)
-  ? scanOrRefuse(
+// Round 31, reported, and a regression this baseline introduced last round. The
+// guard was `existsSync`, which is true for a node_modules that is a regular file
+// or a symlink to one -- so newestChangeTime called readdirSync on a non-directory
+// and scanOrRefuse reported ENOTDIR as exit 10, "an entry vanished while being
+// read; record against a quiescent tree". Measured against the previous commit:
+// the same tree gave exit 7, "node_modules present, but not a directory". A
+// correct refusal was replaced with one that sends the operator chasing a race
+// that never happened, because this scan was inserted ahead of the root
+// validation that already answers the question.
+//
+// The condition is now walkability, not existence. `statSync` follows a symlinked
+// root, which is what newestChangeTime does too, so the two agree about what is
+// walkable; anything else defers to the root refusal further down, which names
+// the real problem.
+const objBaselineChange = (() => {
+  let objRootStats = null;
+  try {
+    objRootStats = statSync(strTreeRoot);
+  } catch {
+    objRootStats = null;
+  }
+  if (!objRootStats?.isDirectory()) {
+    return { ctimeMs: 0, path: '(no walkable installed tree when recording began)' };
+  }
+  return scanOrRefuse(
     () => newestChangeTime(strTreeRoot, [strPackagePath, strLockPath]),
-    'the baseline quiescence scan')
-  : { ctimeMs: 0, path: '(no installed tree when recording began)' };
+    'the baseline quiescence scan');
+})();
 
 const strNodeVersion = process.version;
 const strNpmVersion = runNpm(['--version']).trim();
