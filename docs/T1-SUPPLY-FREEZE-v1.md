@@ -175,13 +175,19 @@ exact equality.
 | Directory permissions | `{"755":336}` | script `installedTreeDirectoryModes` | full modes are machine state |
 | `node_modules` root mode | `755` | script `installedTreeRootMode` | full modes are machine state |
 | Policy decision | `T1-ADVISORY-DISPOSITION-v1` | this document | no artifact exists to compare against; bounded through issue #24 |
-| Scrubbed trust variables | no value for this record — see below | script `auditEnvironmentScrubbed`, added after these digests were taken | describes the machine the audit ran on, not the registry's answer |
+| Scrubbed trust variables | not recorded in this freeze — see below | script `auditEnvironmentScrubbed`, added after these digests were taken | describes the machine the audit ran on, not the registry's answer |
 
 **Why that row records no value.** An earlier draft filled its Value column with the key name and
 two hypotheticals — the key name, then `[]` or `["NODE_OPTIONS"]` offered as examples — which
 records nothing: a reader learns what the field is called and what it might have said, not what it
 did say. The obvious repair is to write `[]`, and that is **not** what happened here, because it
 would be untrue for this record.
+
+The row says *not recorded*, not *no value*, and the distinction is the one this script enforces
+in code. An empty list is a value: it asserts that the scrub ran and removed nothing. This record
+cannot assert that, so a cell reading "no value" would blur absence into emptiness — the same
+conflation the advisory guard refuses when it rejects a missing `via` key that an earlier version
+quietly turned into `[]`.
 
 The current script does always emit the key — `[]` under `--no-audit`, a sorted list otherwise —
 and a reviewer reasonably read the row as contradicting that. It does not, and the `Derived by`
