@@ -1120,7 +1120,13 @@ function parseAuditOrRefuse(strBody) {
   } catch (objError) {
     process.stderr.write(
       'supply-freeze: npm audit did not return an audit report.\n' +
-      `  npm emitted output that is not valid JSON: ${objError.message}\n` +
+      // Round 40, found by sweeping every refusal rather than the reported one.
+      // A JSON.parse SyntaxError embeds a slice of the offending input --
+      // measured: `Unexpected token '<', "<html>prox"... is not valid JSON` --
+      // so npm output that begins with a credential-bearing URL puts part of it
+      // here. The sibling refusal three blocks down already wrapped its message;
+      // this one and the normalization one below did not.
+      `  npm emitted output that is not valid JSON: ${redactUrlsInText(objError.message)}\n` +
       '  this is an endpoint or format failure, not an advisory posture; nothing is recorded.\n' +
       '  pass --no-audit to record the lockfile-derived fields alone.\n');
     process.exit(5);
@@ -1132,7 +1138,27 @@ function normalizeAudit(objAudit) {
   const objOutput = {
     auditReportVersion: objAudit.auditReportVersion ?? null,
     counts: orderedCounts(objAudit.metadata?.vulnerabilities),
-    packages: {},
+    // Round 40, reported by Codex. A PLAIN object literal here inherits
+    // Object.prototype, so assigning a package named `__proto__` invoked the
+    // prototype SETTER instead of creating an own property. The record was lost
+    // in silence: the raw report still had `__proto__` as an own key, so the
+    // round-38 count cross-check saw one vulnerability and agreed with
+    // `total: 1`, while this map ended up with zero own keys.
+    //
+    // Measured, changing only `range` -- a field the counts do not depend on:
+    //   name `__proto__`, range <1.0.0  -> auditSha256 5438d3f58398151c
+    //   name `__proto__`, range <9.9.9  -> auditSha256 5438d3f58398151c  identical
+    //   name `normalpkg`, range <1.0.0  -> auditSha256 950e0376cfe3dc8c
+    //   name `normalpkg`, range <9.9.9  -> auditSha256 bd1fb640b93a13ec  moves
+    // The package contributed NOTHING to the digest while the run exited 0
+    // recording `high: 1, total: 1`.
+    //
+    // A null prototype removes the mechanism for every inherited name at once
+    // rather than for the one name that was reported -- `constructor` and
+    // `toString` had the same shape of problem. JSON.stringify treats a
+    // null-prototype object identically, so the recorded auditSha256 for a real
+    // report is unchanged; that is verified rather than assumed.
+    packages: Object.create(null),
   };
   for (const strName of Object.keys(objVulnerabilities).sort()) {
     const objVulnerability = objVulnerabilities[strName];
@@ -1266,6 +1292,25 @@ function normalizeAudit(objAudit) {
       range: objVulnerability.range ?? null,
       advisories: arrAdvisories,
     };
+  }
+  // Round 40. The null prototype above closes the mechanism that was reported;
+  // this closes the FAILURE MODE, which is broader and is what actually hurt --
+  // normalization dropping a record and the run still exiting 0. Any future
+  // reason a package fails to land here (a name colliding with something, an
+  // early continue added later) now refuses instead of quietly shortening the
+  // record the digest is taken over.
+  //
+  // Stated as a count equality rather than a key-by-key comparison because the
+  // loop's whole contract is one output package per input record; if that ever
+  // stops holding, the digest is being taken over a different set than the
+  // counts describe, and which key went missing is a diagnosis for the operator
+  // rather than something this assertion needs to name.
+  const intRawRecords = Object.keys(objVulnerabilities).length;
+  const intNormalized = Object.keys(objOutput.packages).length;
+  if (intNormalized !== intRawRecords) {
+    throw new TypeError(
+      `normalization produced ${intNormalized} packages from ${intRawRecords} `
+      + 'vulnerability records; the digest would not cover every reported package');
   }
   return objOutput;
 }
@@ -1402,8 +1447,17 @@ if (!boolAnyToolchain && typeof process.env.NODE_OPTIONS === 'string') {
 if (!boolAnyToolchain && boolEntryPointIsLink) {
   process.stderr.write(
     'supply-freeze: refusing to record digests from a symlinked entry point.\n' +
-    `  invoked as         ${strInvokedPath}\n` +
-    `  resolves to        ${strScriptPath}\n` +
+    // Round 40, reported by Codex. Both paths used to be printed here. Whoever
+    // creates the link chooses its NAME as well as its target, so a link called
+    // `USER_token-SUPPLYSECRET.mjs` put that string verbatim into `invoked as`
+    // -- measured, one occurrence in the refusal output -- and CI retains logs.
+    //
+    // Neither path is printed now. Whoever invoked the command already knows the
+    // path they typed, and the resolved target is this file; nothing here needs
+    // the log to tell them. This is the same names-only rule the trust scrub and
+    // the escaping-link refusal state.
+    '  the path used to invoke this script is a symlink; neither it nor its target\n' +
+    '  is printed, because both are chosen by whoever created the link.\n' +
     '  under --preserve-symlinks-main the source Node compiles is the target, not\n' +
     '  the link. Run the file directly so the script identity is unambiguous.\n');
   process.exit(2);
@@ -2182,7 +2236,9 @@ if (boolSkipAudit) {
   } catch (objError) {
     process.stderr.write(
       'supply-freeze: npm audit did not return an audit report.\n' +
-      `  the report could not be normalized: ${objError.message}\n` +
+      // Round 40, same sweep. normalizeAudit's TypeErrors embed the report's own
+      // package names and field values, which come from the audit response.
+      `  the report could not be normalized: ${redactUrlsInText(objError.message)}\n` +
       '  this is a format failure, not an advisory posture; nothing is recorded.\n' +
       '  pass --no-audit to record the lockfile-derived fields alone.\n');
     process.exit(5);

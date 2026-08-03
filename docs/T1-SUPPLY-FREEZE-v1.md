@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `2a83bc66cbf818de8098286df713ed74b65bb3485318b2e684ebbec4dc045540` | script `script.sha256` |
+| Freeze script SHA-256 | `9d41eb794fd62db40d33136c131bab19b7e170e7fe12f8d1bb9e221b62238d9b` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` | script `toolchain.platform` |
@@ -438,6 +438,7 @@ row, rather than leaving it to a sentence that has already been wrong once.
 | `4` | Unreviewed manifest | yes | `package.json` or `package-lock.json` has moved |
 | `5` | Audit response is not a report | **no** | registry unreachable, or an endpoint error returned as JSON |
 | `5` | Advisory posture contradicts itself | **no** | a severity outside npm's five recognized levels, or counts whose buckets do not sum to `total` — a posture whose own arithmetic disagrees cannot be compared exactly |
+| `5` | Normalization did not cover every reported package | **no** | the normalized package map holds fewer entries than the report had vulnerability records, so the digest would be taken over a shorter set than the counts describe |
 | `6` | Install- or trust-shaping npm configuration | yes | `bin-links`, `omit`, `package-lock-only`, `umask`, `omit-lockfile-registry-resolved`, and the transport settings `proxy`, `https-proxy`, `noproxy`, `ca`, `cafile`, `strict-ssl` … from an `.npmrc` or the environment. Also raised, self-diagnosing, if the transport scrub itself failed to bind the audit environment |
 | `7` | Root missing or not a directory | **no** | `node_modules` absent, or present as a file or a symlink to one |
 | `7` | Tree does not satisfy the lockfile | yes | `node_modules` incomplete or never installed; or `npm ls` answered about a tree other than this one. The refusal names which |
@@ -614,6 +615,27 @@ a second run agreed at exit `0` with a byte-identical digest, because a link's *
 change when the thing it points at appears and disappears. The `lstat`-based quiescence sweep
 cannot see this: `lstat` reports the link's own inode and never the target's. Both such links are
 now refused with exit `11`, reporting the in-tree name and the `errno` code only.
+
+**The symlinked-entry-point refusal names neither the invoked path nor its target.** Whoever
+creates that link chooses its name as well as where it points, so both strings are attacker-chosen;
+a link named `USER_token-SUPPLYSECRET.mjs` put that string verbatim into the refusal, and CI
+retains logs. Neither is printed now. Nothing is lost by it: whoever ran the command already knows
+the path they typed, and the target is this file.
+
+**The normalized advisory map is built with a null prototype, and its size is checked.** A package
+named `__proto__` assigned into an ordinary object invokes the prototype *setter* instead of
+creating an own property, so the record vanished while the raw report still carried `__proto__` as
+an own key — the count cross-check therefore agreed with `total: 1` and the run exited `0` over a
+digest that omitted the only package. Measured by varying `range`, a field the counts do not depend
+on: with the name `__proto__` the digest was `5438d3f5…` for both `<1.0.0` and `<9.9.9`, identical,
+while an ordinary name moved it. A null prototype removes this for every inherited name rather than
+the one that was reported, and `JSON.stringify` treats such an object identically, so the recorded
+`auditSha256` for a real report does not move — verified by running the same report through both
+versions and comparing.
+
+The size check is the half that generalizes. It refuses when the normalized map holds fewer entries
+than the report had records, whatever the cause, so a future edit that drops a package fails closed
+instead of silently shortening the set the digest is taken over.
 
 **The quiescence sweep follows a manifest's whole symlink chain, but not symlinked directory
 components.** Where a manifest resolves through several links — `package.json` → `mid` → `real` —
