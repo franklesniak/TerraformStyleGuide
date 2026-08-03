@@ -173,7 +173,25 @@ function transportEnvironment() {
   // so an interceptor whose certificate chains to it could return a filtered,
   // schema-valid report attributed to the public registry. Checking npm's trust
   // settings and inheriting Node's was a gap the previous round's fix left open.
+  // Round 22, reported. NODE_EXTRA_CA_CERTS was one of several Node-level trust
+  // overrides. NODE_USE_SYSTEM_CA, and --use-system-ca / --use-openssl-ca passed
+  // through NODE_OPTIONS, redirect Node at the system or OpenSSL store, where an
+  // enterprise or interceptor CA can authenticate a filtered response while npm
+  // still reports ca: null and strict-ssl: true. SSL_CERT_FILE and SSL_CERT_DIR
+  // are the OpenSSL half of the same thing.
   delete objEnv.NODE_EXTRA_CA_CERTS;
+  delete objEnv.NODE_USE_SYSTEM_CA;
+  delete objEnv.SSL_CERT_FILE;
+  delete objEnv.SSL_CERT_DIR;
+  if (typeof objEnv.NODE_OPTIONS === 'string') {
+    const strScrubbed = objEnv.NODE_OPTIONS
+      .split(/\s+/u)
+      .filter((strOption) => strOption !== '--use-system-ca' && strOption !== '--use-openssl-ca')
+      .join(' ')
+      .trim();
+    if (strScrubbed) objEnv.NODE_OPTIONS = strScrubbed;
+    else delete objEnv.NODE_OPTIONS;
+  }
   for (const strKey of Object.keys(objEnv)) {
     const strLower = strKey.toLowerCase();
     if (strLower === 'http_proxy' || strLower === 'https_proxy' || strLower === 'no_proxy'
@@ -770,6 +788,15 @@ function normalizeAudit(objAudit) {
   for (const strName of Object.keys(objVulnerabilities).sort()) {
     const objVulnerability = objVulnerabilities[strName];
     const arrAdvisories = [];
+    // Round 22, reported. A string `via` is ITERABLE, so this loop walked it
+    // character by character, matched no advisory in any character, and returned
+    // zero advisories without throwing -- the digest lost the advisory identity
+    // and the human output relabelled the package as inherited. The try/catch
+    // added last round cannot help: nothing throws. Shapes that are wrong but
+    // iterable need a type check, not an exception handler.
+    if (!Array.isArray(objVulnerability.via ?? [])) {
+      throw new TypeError(`vulnerability ${strName} has a non-array via`);
+    }
     for (const objVia of objVulnerability.via ?? []) {
       // A `via` entry that is a bare string names another package in the chain
       // rather than an advisory; the chain is already covered by the tree.
@@ -779,7 +806,12 @@ function normalizeAudit(objAudit) {
       arrAdvisories.push({
         id: objMatch ? objMatch[0] : `npm-source-${objVia.source ?? 'unknown'}`,
         severity: objVia.severity ?? null,
-        cwe: [...(objVia.cwe ?? [])].sort(),
+        cwe: (() => {
+          if (!Array.isArray(objVia.cwe ?? [])) {
+            throw new TypeError(`advisory in ${strName} has a non-array cwe`);
+          }
+          return [...(objVia.cwe ?? [])].sort();
+        })(),
         cvssScore: objVia.cvss?.score ?? null,
         cvssVector: objVia.cvss?.vectorString ?? null,
         range: objVia.range ?? null,
@@ -1001,7 +1033,10 @@ try {
   // instead of the actual one on disk. Measured -- with no node_modules at all,
   // `npm ls --all --json --package-lock-only --include=...` exits 0 while the
   // same command with `--package-lock-only=false` exits 1.
-  runNpm(['ls', '--all', '--json', '--package-lock-only=false',
+  // Round 22, reported. `--all` does not survive an ambient `depth=0`: npm then
+  // checks direct dependencies only and exits 0 with a transitive package
+  // missing, recording treeSatisfiesLockfile true. Depth is pinned explicitly.
+  runNpm(['ls', '--all', '--json', '--package-lock-only=false', '--depth=4294967295',
     '--include=dev', '--include=optional', '--include=peer']);
   objRecord.treeSatisfiesLockfile = true;
 } catch {
@@ -1453,7 +1488,19 @@ if (readOrRefuse(strScriptPath) !== strScriptBefore) {
 // Round 18, reported, and the same defect round 15 fixed for the umask. The
 // value compared and the value printed were two separate stat calls, so a
 // message could quote a timestamp that was never the one refused.
-const intScriptChangedAt = lstatSync(strScriptPath).ctimeMs;
+// Round 22, reported. The read above is guarded and this stat was not, so the
+// source vanishing between them exited 1 with a stack trace where the table says
+// exit 3. Same transition, same refusal.
+const intScriptChangedAt = (() => {
+  try {
+    return lstatSync(strScriptPath).ctimeMs;
+  } catch (objError) {
+    process.stderr.write(
+      'supply-freeze: this script became unreadable during the run; refusing to report.\n' +
+      `  error              ${objError.code ?? 'unknown'} at ${objError.path ?? strScriptPath}\n`);
+    process.exit(3);
+  }
+})();
 if (intScriptChangedAt >= intProcessStartedAt) {
   process.stderr.write(
     'supply-freeze: this script was replaced during the run; refusing to report.\n' +

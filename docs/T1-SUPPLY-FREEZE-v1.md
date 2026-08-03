@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `f559787489620604df820be3f7e6045999577305c5f476080f5b1fae8385420d` | script `script.sha256` |
+| Freeze script | `.github/workflows/Get-SupplyFreezeDigest.mjs` SHA-256 `a745387054eb89781cdd951c5864d106f9bf0cf79a1aa13362ea8fdd57907324` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` / `x64` | script `toolchain.platform`, `toolchain.arch` |
