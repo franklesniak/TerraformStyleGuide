@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `b4416373b880c92d86c2ea0c956ed942c1aeb78cf16e443605aec045da76d03a` | script `script.sha256` |
+| Freeze script SHA-256 | `979d73127adb94fee9aca52b47474a53537819eb6722220d5a8479956df3be7f` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` | script `toolchain.platform` |
@@ -452,6 +452,7 @@ row, rather than leaving it to a sentence that has already been wrong once.
 | `5` | Advisory has no usable identity | **no** | an advisory record carrying neither a GHSA url nor a positive safe-integer source id. An id past 2^53-1 is refused here too: two different reported ids stop being distinguishable at that size, so both would be recorded as one identity |
 | `6` | Install- or trust-shaping npm configuration | yes | `bin-links`, `omit`, `package-lock-only`, `umask`, `omit-lockfile-registry-resolved`, and the transport settings `proxy`, `https-proxy`, `noproxy`, `ca`, `cafile`, `strict-ssl` … from an `.npmrc` or the environment. Also raised, self-diagnosing, if the transport scrub itself failed to bind the audit environment |
 | `7` | Root missing or not a directory | **no** | `node_modules` absent, or present as a file or a symlink to one |
+| `7` | Root is a symlink to a directory | yes | `node_modules` replaced by a symlink whose target is a real directory, which redirects where every installed module loads from while the contents behind it stay byte-identical. Refused by `lstat` before the tree is walked, so an arbitrarily large target is not scanned first. Under `--any-toolchain` the target is folded instead, with the **target's** normalized bits recorded as the root mode |
 | `7` | Tree does not satisfy the lockfile | yes | `node_modules` incomplete or never installed; or `npm ls` answered about a tree other than this one. The refusal names which |
 | `8` | Unreviewed process umask | yes | recording shell is not at `0022` |
 | `9` | Unreviewed advisory registry | yes | `registry` points at a mirror or proxy |
@@ -477,7 +478,12 @@ independent detectors:
    network round trip — measured at about 2.0s against a 0.1s fold — so that window is wide
    enough to matter, and the pair of folds brackets it.
 2. **A stat-only quiescence sweep** runs after the second fold and refuses if any entry's inode
-   change time is later than a baseline read from the same filesystem before recording began.
+   change time *differs* from that same entry's own baseline reading, taken from the same
+   filesystem before recording began — or if an entry appeared or disappeared between the two
+   sweeps. The predicate is inequality, not lateness: a stamp that moves *backward*, which a
+   clock-skewed or backdated filesystem can produce, is refused on the same footing as one that
+   moves forward. That is the whole reason the comparison is per entry rather than against a
+   single newest-ctime ceiling, since a ceiling can only ask whether a stamp is later than it.
 
 The second detector exists because the first one has a hole, and an earlier draft of this
 section did not admit it. Two folds detect a write that lands *between* their two reads of an

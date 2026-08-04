@@ -1622,8 +1622,34 @@ function normalizeAudit(objAudit) {
       // own prefix either. With no match the identity falls through to the
       // source-id test below, which either finds a real identity or refuses --
       // both correct, and neither is a truncated name npm never emitted.
+      //
+      // Round 50, reported by Codex, in those boundary classes one round after
+      // they were written. Both were `[0-9a-z]`, so an UPPERCASE alphanumeric
+      // counted as a boundary and the truncation the round-49 fix exists to stop
+      // was still reachable one case letter away. Measured on the same urls:
+      //
+      //   .../GHSA-aaaa-bbbb-ccccX  -> GHSA-aaaa-bbbb-cccc
+      //   .../GHSA-aaaa-bbbb-ccccY  -> GHSA-aaaa-bbbb-cccc
+      //
+      // Two reports naming different advisories, one identity and one
+      // auditSha256 -- the defect the paragraph above claims to have closed.
+      //
+      // The class is what a GHSA identifier is MADE OF rather than a guess at
+      // what delimits one, which is the distinction rounds 47 through 49 spent
+      // three rounds learning on the url scanner: these ids are drawn from an
+      // alphabet of alphanumerics and `-`, so any of those on either side means
+      // the token continues and this match is a piece of a longer one. Case is
+      // irrelevant to that question -- an uppercase letter can only appear here
+      // in a malformed report, and `X` is no more a delimiter than `x` is.
+      // Applied to BOTH sides, since the leading class also lacked `-`, so
+      // `x-GHSA-aaaa-bbbb-cccc` matched its own tail.
+      //
+      // The form npm actually emits is untouched, and that is the constraint
+      // this is measured against rather than an aspiration:
+      // https://github.com/advisories/GHSA-vh95-rmgr-6w4m is bounded by `/` and
+      // end-of-string, neither of which is an identifier character.
       const objMatch = strUrl.match(
-        /(?<![0-9a-z])GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}(?![0-9a-z-])/u);
+        /(?<![0-9A-Za-z-])GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}(?![0-9A-Za-z-])/u);
       // Round 29, reported, and the fifth widening of this guard -- the comment
       // above already counted four. Rounds 22 and 24 checked the container and
       // then the member TYPE, and left the member's FIELDS unchecked, so `{}`
@@ -2267,10 +2293,42 @@ function redactUrl(strValue) {
 // same line is withheld too, so npm's `request to <url> failed, reason: ECONNREFUSED`
 // now reports the host and loses the reason. A withheld diagnostic is recoverable
 // by rerunning; a published credential is not, and this output goes to CI logs.
+//
+// Round 50, reported by Codex, and it is the paragraph above being wrong about
+// its own file. That paragraph defended end-of-line as the boundary by saying a
+// line terminator "cannot sit inside a URL in this output, because the escaper
+// below turns every line separator into a printable escape before anything is
+// written". The escaper ran AFTER the scan, so at SCAN time a terminator was
+// still a terminator -- a sentence true of the output, applied to the input.
+// Measured on the unrecognized-argument refusal, separator between path and
+// query:
+//
+//   --registry=https://host/a<LF>b?token=SUPPLYSECRET
+//     -> https://host/ (path, credentials and query redacted)\x0ab?token=SUPPLYSECRET
+//   --registry=https://host/a<U+2028>b?token=SUPPLYSECRET
+//     -> https://host/ (path, credentials and query redacted)\u{2028}b?token=SUPPLYSECRET
+//
+// CR and U+2029 behave as LF and U+2028 do. `new URL()` takes all four: it
+// DELETES tab, LF and CR from its input and percent-encodes U+2028 and U+2029.
+// So the prefilter was narrower than the parser it feeds for the third time --
+// now on the one character class the round-49 rule was written around.
+//
+// The ORDER is inverted rather than the class widened again: escape first, then
+// scan. After formatTreeName no line terminator exists anywhere in the string, so
+// the class stops at nothing and round 49's sentence becomes true of the text
+// being scanned rather than of text already printed. The class is kept rather
+// than written `.`, which means exactly this under ECMA-262, because an
+// expression that names its own boundary survives an edit that moves the escaper.
+//
+// Handing redactUrl already-escaped text is safe because that helper's output
+// cannot carry what the escaper would have caught: for http and https the WHATWG
+// host parser strips tab, LF, CR and the zero-width formats and REFUSES every
+// other Cc/Cf/Zl/Zp code point, so protocol and host are printable ASCII, and the
+// unparseable branch prints a length rather than a value. Probed over twelve such
+// code points in three host positions -- every one either vanished or threw.
 function formatUntrustedText(strText) {
-  return formatTreeName(
-    String(strText).replace(
-      /https?:\/\/[^\n\r\u2028\u2029]*/giu, (strMatch) => redactUrl(strMatch)));
+  return formatTreeName(String(strText)).replace(
+    /https?:\/\/[^\n\r\u2028\u2029]*/giu, (strMatch) => redactUrl(strMatch));
 }
 
 function configDrift(objReviewed, objEffective) {
