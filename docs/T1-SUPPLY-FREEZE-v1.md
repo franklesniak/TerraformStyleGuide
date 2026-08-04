@@ -80,10 +80,10 @@ per-row rather than asserted in a sentence.
 | Platform | `linux` | script `toolchain.platform` |
 | Architecture | `x64` | script `toolchain.arch` |
 | Install umask | `0022` | script `toolchain.umask` |
-| `package.json` blob | `2b88a0ac85d3a8b7286040e6b1f6c4ddb4d3bce1` | script `manifestBlobs` |
-| `package.json` SHA-256 | `e206cdb3562f0397e8eed7fb2c2586269a1f5335cdff2906da8d5e070426321e` | script `manifest` |
-| `package-lock.json` blob | `5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca` | script `manifestBlobs` |
-| `package-lock.json` SHA-256 | `277f7168ab3a4f1f7a2565de13191d64b1572e7cb92b67b0972b3242bd4de062` | script `manifest` |
+| `package.json` blob | `2b88a0ac85d3a8b7286040e6b1f6c4ddb4d3bce1` | script `manifestBlobs['package.json']` |
+| `package.json` SHA-256 | `e206cdb3562f0397e8eed7fb2c2586269a1f5335cdff2906da8d5e070426321e` | script `manifest['package.json']` |
+| `package-lock.json` blob | `5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca` | script `manifestBlobs['package-lock.json']` |
+| `package-lock.json` SHA-256 | `277f7168ab3a4f1f7a2565de13191d64b1572e7cb92b67b0972b3242bd4de062` | script `manifest['package-lock.json']` |
 | Installed tree SHA-256 | `6061b674c7dbdaaec16a2c7f7016c70cfcaea32c76490ddd7edf88341ce3c3ce` | script `installedTreeSha256` |
 | Installed tree files | `2177` | script `installedTreeFiles` |
 | Installed tree symlinks | `8` | script `installedTreeSymlinks` |
