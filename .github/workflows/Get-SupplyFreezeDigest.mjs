@@ -2782,6 +2782,72 @@ function normalizeAudit(objAudit) {
 
 const strPackagePath = join(strWorkflowDirectory, 'package.json');
 const strLockPath = join(strWorkflowDirectory, 'package-lock.json');
+
+// Round 66, reported by Codex as a P1, and it is a hole in what "the inputs did
+// not move" means. Every sweep so far watched INODES -- the tree root, the two
+// manifests, this directory -- while npm resolves its cwd by NAME. Rename the
+// genuine `.github` aside after the config check and the first fold, put a
+// different `.github/workflows` at the same pathname carrying a project `.npmrc`
+// or lockfile that points the audit somewhere else, let the audit child run, then
+// rename the original parent back before the final sweep. Every watched inode is
+// untouched: the workflows directory, the manifests and every node_modules entry
+// keep their own ctimes, so both sweeps agree and both folds match, while the
+// audit answered from a directory this script never measured.
+//
+// The ancestors are therefore swept too. A rename is a modification of the
+// CONTAINING directory, so moving `.github` moves the repository root's ctime,
+// and renaming it back moves it again; the renamed inode's own ctime moves as
+// well, since rename(2) updates it. Either is enough for the existing per-entry
+// comparison to refuse.
+//
+// The chain stops at the repository root rather than climbing to `/`. Above the
+// checkout the ancestors are shared with the rest of the machine -- `/home`, the
+// mount point, `/` -- and their ctimes move for reasons that have nothing to do
+// with this run, so sweeping them would refuse healthy runs without closing
+// anything this script can defend. A checkout whose PARENT is writable by an
+// attacker is outside the boundary and is stated as a precondition in the record.
+const arrWorkflowAncestors = [
+  dirname(strWorkflowDirectory),
+  dirname(dirname(strWorkflowDirectory)),
+];
+
+// Round 66, reported by Codex as a P1, and the same defect one input over. A
+// symlinked `package.json` or `package-lock.json` had its link AND its final
+// target watched, but not the target's PARENT. That parent can be renamed aside
+// and replaced after the snapshot, so `npm ls` and `npm audit` -- which open the
+// path by name -- read different bytes, and restoring the parent before the final
+// sweep leaves the watched link and the original target's ctimes matching. The
+// run could emit freezeRecord: true with lockfile and advisory answers derived
+// from bytes other than the compared manifest hashes.
+//
+// This is refused rather than swept, and the deciding argument is that the script
+// ALREADY refuses this exact shape one file over: exit 13 rejects a `.npmrc` that
+// is a symlink, on the reasoning that "a link is opened through a target whose own
+// parent can be swapped mid-run". The manifests are the more load-bearing inputs
+// -- they are the compared hashes -- and were held to the weaker rule. Sweeping
+// the target's ancestors instead would mean walking an unbounded chain outside the
+// checkout, where ctimes move for unrelated reasons; refusing keeps the input
+// boundary a set this script can actually prove.
+for (const [strPath, strLabel] of [[strPackagePath, 'package.json'], [strLockPath, 'package-lock.json']]) {
+  let objLinkStats;
+  try {
+    objLinkStats = lstatSync(strPath);
+  } catch {
+    continue;
+  }
+  if (!objLinkStats.isSymbolicLink()) continue;
+  process.stderr.write(
+    'supply-freeze: refusing a recorded manifest that is a symlink.\n' +
+    `  manifest           ${formatUntrustedText(strLabel)}\n` +
+    '  this path is opened by name by npm ls and npm audit, and its target sits in\n' +
+    '  a directory this script does not watch. That directory can be renamed aside\n' +
+    '  and replaced while the run is in progress and restored before the final\n' +
+    '  sweep, so the link and its original target still compare equal while npm\n' +
+    '  answered from different bytes than the ones hashed here.\n' +
+    '  the same rule already applies to a project .npmrc; replace the link with a\n' +
+    '  regular file inside the workflow directory.\n');
+  process.exit(15);
+}
 const strTreeRoot = join(strWorkflowDirectory, 'node_modules');
 // Round 17, reported, and the previous round's fix caught half-done. The
 // RE-reads were routed through a refusal; these initial snapshot reads were left
@@ -2896,7 +2962,7 @@ const objBaselineChange = (() => {
     };
   }
   return scanOrRefuse(
-    () => newestChangeTime(strTreeRoot, [strPackagePath, strLockPath, strWorkflowDirectory]),
+    () => newestChangeTime(strTreeRoot, [strPackagePath, strLockPath, strWorkflowDirectory, ...arrWorkflowAncestors]),
     'the baseline quiescence scan');
 })();
 
@@ -4471,7 +4537,7 @@ if (!boolAnyToolchain) {
 // A filesystem-level snapshot would close it outright and is the right answer
 // for a reader who has one; that is a property of the host, not of this script.
 const objNewestChange = scanOrRefuse(
-  () => newestChangeTime(strTreeRoot, [strPackagePath, strLockPath, strWorkflowDirectory]), 'the quiescence sweep');
+  () => newestChangeTime(strTreeRoot, [strPackagePath, strLockPath, strWorkflowDirectory, ...arrWorkflowAncestors]), 'the quiescence sweep');
 // Round 29, reported. This compared a filesystem-stamped ctime against a
 // `Date.now()` ceiling -- two different clocks. Linux stamps inode times from
 // the COARSE clock and truncates to the filesystem's granularity, while

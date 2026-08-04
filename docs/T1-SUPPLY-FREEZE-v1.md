@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `f28f27a7ace1d0d50531bc0849b02a74bf63ba3ec8f17d3bed4e5f9870fe211c` | script `script.sha256` |
+| Freeze script SHA-256 | `5c3660defbeeed009de4ff08025546dc7943e5c897f5889bad346003c0342b6a` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -675,6 +675,22 @@ already declares `freezeRecord: false`.
 | `12` | Tree contains an undecodable entry name | **no** | an entry under `node_modules` whose name is not valid UTF-8. Such a name decodes to U+FFFD, so a sibling named U+FFFD shares the decoded name and both resolve to one file — the other is never read and never reaches the digest. Refused rather than folded, because the alternative is a digest over a tree the script did not measure. The check is a byte round trip, so a file legitimately named U+FFFD still folds |
 | `13` | Project npm configuration is not a regular file | **no** | `.github/workflows/.npmrc` present as a symlink, directory, FIFO, socket or device node. npm reads it as a configuration source, and only a regular file can be held still across the run — a link is opened through a target whose own parent can be swapped mid-run, and a link that does not resolve is indistinguishable from no file at all while its target can still be created for the audit and removed. Measured: `--any-toolchain --no-audit` exits `13` exactly as a plain run does |
 | `14` | Tree entry the recorder does not solely control | **no** | an entry under `node_modules` carrying setuid, setgid or sticky bits; a regular file with more than one hard link, so a second path can rewrite the bytes; or an entry owned by a different uid than the recording process, whose owner can chmod and rewrite it after the final sweep. None of the three move the digest — it folds `mode & 0o555` and bytes, and the histograms mask to `0o777` — so they are refused rather than folded. `uid` and `gid` are deliberately **not** hashed: they are properties of the machine, and folding them would make two hosts that installed identical packages produce different digests. Measured: setuid and hard-link cases each exit `14`, and removing them returns the identical tree digest |
+| `15` | Recorded manifest is a symlink | **no** | `package.json` or `package-lock.json` present as a symlink. Both are opened *by name* by `npm ls` and `npm audit`, and a link's target sits in a directory outside the swept set, which can be renamed aside, replaced, and restored before the final sweep — leaving the link and its original target comparing equal while npm answered from other bytes. The same rule already applies to a project `.npmrc` (exit `13`); this closes the gap where the more load-bearing inputs, the ones whose hashes are compared, were held to the weaker rule. Measured: a symlinked `package.json` exits `15`, and restoring a regular file returns exit `0` |
+
+**The swept set now includes the workflow directory's ancestors** — `.github` and the
+repository root — because npm resolves its working directory by name while every earlier sweep
+watched inodes. Renaming `.github` aside, standing a different `workflows` directory at the same
+pathname for the audit child, and renaming the original back left every watched inode untouched.
+A rename modifies the containing directory, so the repository root's change time moves, and
+`rename(2)` moves the renamed inode's own change time as well. Measured: perturbing the
+repository root mid-run now exits `10`, while the same perturbation applied to a directory
+outside the swept set still exits `0`.
+
+The chain stops at the repository root. Above the checkout the ancestors are shared with the
+rest of the machine, and their change times move for reasons unrelated to this run, so sweeping
+them would refuse healthy runs without closing anything this script can defend. **A checkout
+whose parent directory is writable by an untrusted party is therefore outside the boundary, and
+is a precondition rather than something this script detects.**
 
 A bypassed run marks its own output as explicitly not a freeze record — `freezeRecord: false`
 with the reasons listed — in both output formats.
