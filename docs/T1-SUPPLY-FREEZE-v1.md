@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `a101eecbce3ffdca132a34d339f11722ff6f1ec53df84a2b1a18e8af1abfeba8` | script `script.sha256` |
+| Freeze script SHA-256 | `76be488c8c37bdfb3286d0450ac948c35ea1547c646b5fd48d507d87b03134cb` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` | script `toolchain.platform` |
@@ -436,7 +436,7 @@ row, rather than leaving it to a sentence that has already been wrong once.
 | `2` | Unrecognized invocation | **no** | an argument the script does not support; `--any-toolchain --bogus` still exits `2` |
 | `3` | Recorded input changed mid-run | **no** | `package.json`, `package-lock.json` or the script itself edited while the run was in progress |
 | `4` | Unreviewed manifest | yes | `package.json` or `package-lock.json` has moved |
-| `5` | Audit response is not a report | **no** | registry unreachable, or an endpoint error returned as JSON |
+| `5` | Audit response is not a report | **no** | registry unreachable, an endpoint error returned as JSON, or a document that is not shaped like an audit report — including a report version that is not a positive safe integer, or a severity count that is not a nonnegative safe integer, since past 2^53-1 two different reported numbers stop being distinguishable |
 | `5` | Advisory posture contradicts itself | **no** | a severity outside npm's five recognized levels, or counts whose buckets do not sum to `total` — a posture whose own arithmetic disagrees cannot be compared exactly |
 | `5` | Normalization did not cover every reported package | **no** | the normalized package map holds fewer entries than the report had vulnerability records, so the digest would be taken over a shorter set than the counts describe |
 | `5` | Advisory has no usable identity | **no** | an advisory record carrying neither a GHSA url nor a positive safe-integer source id. An id past 2^53-1 is refused here too: two different reported ids stop being distinguishable at that size, so both would be recorded as one identity |

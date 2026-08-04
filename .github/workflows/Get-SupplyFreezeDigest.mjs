@@ -1332,7 +1332,7 @@ function parseAuditOrRefuse(strBody) {
       // so npm output that begins with a credential-bearing URL puts part of it
       // here. The sibling refusal three blocks down already wrapped its message;
       // this one and the normalization one below did not.
-      `  npm emitted output that is not valid JSON: ${redactUrlsInText(objError.message)}\n` +
+      `  npm emitted output that is not valid JSON: ${formatUntrustedText(objError.message)}\n` +
       '  this is an endpoint or format failure, not an advisory posture; nothing is recorded.\n' +
       '  pass --no-audit to record the lockfile-derived fields alone.\n');
     process.exit(5);
@@ -1622,6 +1622,50 @@ const strLockBefore = snapshotOrRefuse(strLockPath);
 // root, which is what newestChangeTime does too, so the two agree about what is
 // walkable; anything else defers to the root refusal further down, which names
 // the real problem.
+// Round 44, reported by Codex, and an exact hit on the sentence the round-31
+// comment above used to DEFEND the statSync choice: "the two agree about what is
+// walkable". They do agree -- and both are wrong about a symlinked root, which
+// the reviewed path refuses outright further down. So this baseline would walk
+// an external tree the run has already decided not to record.
+//
+// Measured on a symlinked root pointing at a target holding an unreadable
+// directory: exit 10, "the baseline quiescence scan could not complete ... an
+// entry vanished or became unreadable", when the true answer is exit 7, "not the
+// installed tree". A refusal naming a race that never happened, again -- the same
+// defect round 31 fixed, one layer up. A large or concurrently changing target
+// also pays an unbounded walk before the refusal it was always going to get.
+//
+// The root rejection is therefore made BEFORE the scan rather than after the
+// fold. lstat, not stat: the question is what node_modules IS, not what it points
+// at. A missing root is left alone -- lstat throwing means there is nothing to
+// reject here, and the later refusal names it MISSING with better wording.
+//
+// The message lives in one function called from both sites, so the early refusal
+// and the post-fold one cannot drift apart. The post-fold check is kept rather
+// than replaced: it reads the root again, later, and so still catches a root
+// swapped mid-run.
+function refuseRootThatIsNotADirectory(strRootMode) {
+  process.stderr.write(
+    'supply-freeze: refusing to record digests for a tree that is not the installed tree.\n' +
+    '  node_modules       present, but not a directory\n' +
+    `  root mode          ${strRootMode}\n` +
+    '  npm ci creates node_modules as a real directory. A symlinked root points the\n' +
+    '  install somewhere this record does not describe, however identical its contents.\n');
+  process.exit(7);
+}
+
+if (!boolAnyToolchain) {
+  let objRootLinkStats = null;
+  try {
+    objRootLinkStats = lstatSync(strTreeRoot);
+  } catch {
+    objRootLinkStats = null;
+  }
+  if (objRootLinkStats && !objRootLinkStats.isDirectory()) {
+    refuseRootThatIsNotADirectory((objRootLinkStats.mode & 0o777).toString(8).padStart(3, '0'));
+  }
+}
+
 const objBaselineChange = (() => {
   let objRootStats = null;
   try {
@@ -1849,8 +1893,25 @@ function redactUrl(strValue) {
 // audit against a credentialed registry returns:
 //   request to https://host/path?token=... failed, reason: connect ECONNREFUSED
 // so the message cannot be forwarded verbatim either.
-function redactUrlsInText(strText) {
-  return strText.replace(/https?:\/\/[^\s"']+/gu, (strMatch) => redactUrl(strMatch));
+// Round 44, reported by Codex against the record's package names. Sweeping the
+// class rather than the site: this is the ONE funnel every piece of untrusted
+// text passes through on its way to an operator, and it redacted urls while
+// leaving control characters intact. Three sinks were affected -- npm's non-JSON
+// output, the endpoint's own `message`, and normalizeAudit's TypeErrors, which
+// embed report package names and field values.
+//
+// Renamed from redactUrlsInText because it now does both jobs and the name has to
+// say so; a caller reaching for "redact" would not have guessed it also escapes.
+//
+// Escaping happens HERE, at the print site, and deliberately not where these
+// names are hashed. formatTreeName is not injective -- a name holding the literal
+// four characters \x0a and a name holding a real newline escape to the same
+// string -- so escaping before the digest would create exactly the collision
+// class rounds 43 and 44 have been closing. The JSON record keeps the raw bytes,
+// where JSON.stringify escapes them losslessly.
+function formatUntrustedText(strText) {
+  return formatTreeName(
+    strText.replace(/https?:\/\/[^\s"']+/gu, (strMatch) => redactUrl(strMatch)));
 }
 
 function configDrift(objReviewed, objEffective) {
@@ -2141,14 +2202,10 @@ objRecord.installedTreeRootMode = objTree.rootMode;
 // can be byte-identical, so it is the same class as refusal 7 already covers --
 // this is not the installed tree -- and it reuses that exit rather than adding
 // an eleventh number for a tenth cause.
+// Round 44. Reached only when the root changed after the early rejection above,
+// since a symlinked root is refused before the baseline scan now.
 if (!boolAnyToolchain && !objTree.rootIsDirectory) {
-  process.stderr.write(
-    'supply-freeze: refusing to record digests for a tree that is not the installed tree.\n' +
-    '  node_modules       present, but not a directory\n' +
-    `  root mode          ${objTree.rootMode}\n` +
-    '  npm ci creates node_modules as a real directory. A symlinked root points the\n' +
-    '  install somewhere this record does not describe, however identical its contents.\n');
-  process.exit(7);
+  refuseRootThatIsNotADirectory(objTree.rootMode);
 }
 
 if (!boolAnyToolchain && objTree.specials > 0) {
@@ -2417,10 +2474,26 @@ if (boolSkipAudit) {
     process.exit(5);
   }
   const objCounts = objAudit.metadata?.vulnerabilities;
-  if (!Number.isInteger(objAudit.auditReportVersion)
+  // Round 44, reported by Codex. SAFE integers, the same class round 43 closed on
+  // the advisory source id and did not sweep to its siblings here. Past 2^53-1
+  // distinct JSON integers stop having distinct doubles, so two different reports
+  // canonicalize to one record. Measured, reports differing only in a last digit:
+  //
+  //   auditReportVersion 9007199254740992 / ...93  -> both posture 7427fbb568f68e6f
+  //   info = total = 9007199254740992 / ...93      -> both posture 9dc26eff097871ba
+  //
+  // The second pair also satisfies the bucket-sum check below, because setting one
+  // bucket and the total to the same unsafe value keeps the arithmetic consistent
+  // -- a self-consistent report that is still two reports recorded as one.
+  //
+  // SEVERITY_ORDER ends with 'total', so this covers the total as well as the five
+  // levels. The sum check downstream stays sound once these are safe: a bucket sum
+  // that is inexact necessarily exceeds 2^53-1, and the total it is compared to
+  // cannot, so an inexact sum can never compare equal.
+  if (!(Number.isSafeInteger(objAudit.auditReportVersion) && objAudit.auditReportVersion > 0)
     || !isPlainObject(objAudit.vulnerabilities)
     || !isPlainObject(objCounts)
-    || !SEVERITY_ORDER.every((strSeverity) => Number.isInteger(objCounts[strSeverity])
+    || !SEVERITY_ORDER.every((strSeverity) => Number.isSafeInteger(objCounts[strSeverity])
       && objCounts[strSeverity] >= 0)
     // Round 17, reported. The guard validated the top level and stopped there,
     // so `vulnerabilities: {"x": null}` with correct counts passed -- and
@@ -2432,7 +2505,7 @@ if (boolSkipAudit) {
     || !Object.values(objAudit.vulnerabilities).every(isPlainObject)) {
     process.stderr.write(
       'supply-freeze: npm audit did not return an audit report.\n' +
-      `  npm said: ${redactUrlsInText(typeof objAudit.message === 'string' ? objAudit.message : JSON.stringify(objAudit).slice(0, 300))}\n` +
+      `  npm said: ${formatUntrustedText(typeof objAudit.message === 'string' ? objAudit.message : JSON.stringify(objAudit).slice(0, 300))}\n` +
       '  this is an endpoint or format failure, not an advisory posture; nothing is recorded.\n' +
       '  pass --no-audit to record the lockfile-derived fields alone.\n');
     process.exit(5);
@@ -2495,7 +2568,7 @@ if (boolSkipAudit) {
       'supply-freeze: npm audit did not return an audit report.\n' +
       // Round 40, same sweep. normalizeAudit's TypeErrors embed the report's own
       // package names and field values, which come from the audit response.
-      `  the report could not be normalized: ${redactUrlsInText(objError.message)}\n` +
+      `  the report could not be normalized: ${formatUntrustedText(objError.message)}\n` +
       '  this is a format failure, not an advisory posture; nothing is recorded.\n' +
       '  pass --no-audit to record the lockfile-derived fields alone.\n');
     process.exit(5);
@@ -2813,6 +2886,6 @@ if (boolJson) {
         `  advisory posture     ${objRecord.auditSha256}\n` +
         `  advisory counts      ${JSON.stringify(objRecord.auditCounts)}\n` +
         Object.entries(objRecord.auditPackages)
-          .map(([strName, strValue]) => `    ${strName.padEnd(20)} ${strValue}\n`).join('')
+          .map(([strName, strValue]) => `    ${formatTreeName(strName).padEnd(20)} ${strValue}\n`).join('')
       : '  advisory posture     (skipped)\n'));
 }
