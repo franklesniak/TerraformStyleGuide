@@ -196,8 +196,11 @@ const REVIEWED_NPM = '11.16.0';
 // workflows already pin (D6C664DF...) before it was opened -- so this constant
 // describes the bytes CI extracts rather than the machine it was computed on.
 // The container's own /opt/node24 folds to the same value, which is a
-// corroboration and not the source.
-const REVIEWED_NPM_TREE_SHA256 = 'd26b1ad0777070b7840445679915da3a55df4896d8cb52c076a6b2093417b029';
+// corroboration and not the source. Re-derived from that same archive in round
+// 58 when the fold framing changed -- a new encoding must be measured against
+// the pinned artifact again, not carried over on the argument that the trees
+// matched under the OLD encoding, which is the very ambiguity round 58 reported.
+const REVIEWED_NPM_TREE_SHA256 = 'f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231';
 const REVIEWED_NPM_TREE_FILES = 1916;
 
 // Reported and confirmed: the toolchain guard originally checked Node and npm
@@ -792,11 +795,49 @@ function npmInstallationRootOrRefuse() {
 //
 // Directory and symlink entries are folded by name so that adding a file, or
 // replacing a real file with a link to one, cannot leave the digest unmoved.
-function foldNpmInstallation(strRoot) {
+// Round 58, reported by Codex, and both halves are omissions from the round-56
+// and round-57 work rather than new surface.
+//
+// The ROOT INODE. The change fold recorded only entries reached by readdirSync,
+// never strRoot itself. On POSIX a directory swap -- rename the genuine npm
+// aside, put a hostile directory at the same path, restore afterwards -- moves
+// the ROOT's ctime and leaves every descendant's untouched, so both digests
+// returned to their starting values while the hostile npm had already answered
+// every subprocess. The root is now the first record in the change fold.
+//
+// The LAUNCHER. `bin/npm` lives beside the distribution's bin/node, OUTSIDE
+// lib/node_modules/npm, so folding the installation never saw it. Replacing that
+// one symlink after the initial containment check is enough to answer every call
+// and restore before the end. It is folded here so the launcher and the tree it
+// points into are one authenticated object rather than two checks that can
+// disagree about which interval they cover.
+//
+// Inode numbers accompany every change record for the same reason: ctime catches
+// a write, ino catches a swap, and a rename-in/rename-out can move one without
+// the other on some filesystems.
+function foldNpmInstallation(strRoot, strLauncherPath) {
   const objHash = createHash('sha256');
   const objChangeHash = createHash('sha256');
   let intFiles = 0;
   let intSymlinks = 0;
+  const considerRootOrLauncher = (strPath, strLabel) => {
+    try {
+      const objStat = lstatSync(strPath);
+      hashField(objChangeHash, strLabel);
+      hashField(objChangeHash, `${objStat.ino}:${objStat.ctimeMs}:${objStat.mode}`);
+      // The launcher's target is part of its identity: repointing a symlink
+      // moves its ctime, but recording where it points makes the refusal say so
+      // and covers a filesystem that does not.
+      if (objStat.isSymbolicLink()) hashField(objChangeHash, readlinkSync(strPath));
+    } catch (objError) {
+      process.stderr.write(
+        'supply-freeze: refusing to verify an npm installation that cannot be read.\n' +
+        formatErrorLocation(objError, strPath));
+      process.exit(2);
+    }
+  };
+  considerRootOrLauncher(strRoot, '(installation root)');
+  if (strLauncherPath !== undefined) considerRootOrLauncher(strLauncherPath, '(npm launcher)');
   const walk = (strDirectory, strRelative) => {
     let arrNames;
     try {
@@ -813,16 +854,22 @@ function foldNpmInstallation(strRoot) {
       try {
         const objStat = lstatSync(strPath);
         if (objStat.isDirectory()) {
-          objHash.update(`d ${strKey}\n`);
+          hashField(objHash, 'd');
+          hashField(objHash, strKey);
           walk(strPath, strKey);
         } else if (objStat.isSymbolicLink()) {
           intSymlinks += 1;
-          objHash.update(`l ${strKey}\n`);
+          hashField(objHash, 'l');
+          hashField(objHash, strKey);
+          hashField(objHash, readlinkSync(strPath));
         } else if (objStat.isFile()) {
           intFiles += 1;
-          objHash.update(`f ${strKey} ${sha256(readFileSync(strPath))}\n`);
+          hashField(objHash, 'f');
+          hashField(objHash, strKey);
+          hashField(objHash, sha256(readFileSync(strPath)));
         } else {
-          objHash.update(`? ${strKey}\n`);
+          hashField(objHash, '?');
+          hashField(objHash, strKey);
         }
         // Round 57, and this half exists because the reply that shipped the
         // content fold argued its way out of it and was wrong.
@@ -842,7 +889,8 @@ function foldNpmInstallation(strRoot) {
         // ctime and neither moves it back. Neither observable covers the other's
         // case, which is the same conclusion the .npmrc sweep reached, and the
         // two are folded separately so a mismatch says which one moved.
-        objChangeHash.update(`${strKey} ${objStat.ctimeMs}\n`);
+        hashField(objChangeHash, strKey);
+        hashField(objChangeHash, `${objStat.ino}:${objStat.ctimeMs}`);
       } catch (objError) {
         process.stderr.write(
           'supply-freeze: refusing to verify an npm installation that changed while being read.\n' +
@@ -2508,7 +2556,7 @@ const strNodeVersion = process.version;
 // nodejs.org, whose SHA-256 was checked against the digest markdownlint.yml and
 // build.yml already pin before the archive was opened -- so the constant comes
 // from the same bytes CI extracts, not from a local directory of unknown
-// provenance. Both fold to d26b1ad0..., 1916 files and no symlinks.
+// provenance. Both fold to f5855634..., 1916 files and no symlinks.
 //
 // The byte comparison is gated on --any-toolchain and the containment check is
 // not, which is the same line the version guard draws: that flag waives which
@@ -2536,8 +2584,14 @@ if (!existsSync(strNpmBesideNode)) {
   process.exit(2);
 }
 const strNpmTreeRoot = npmInstallationRootOrRefuse();
-const objNpmTree = foldNpmInstallation(strNpmTreeRoot);
-if (!boolAnyToolchain && objNpmTree.sha256 !== REVIEWED_NPM_TREE_SHA256) {
+const objNpmTree = foldNpmInstallation(strNpmTreeRoot, strNpmBesideNode);
+// Round 58, reported by Codex: REVIEWED_NPM_TREE_FILES was printed in the
+// refusal and never compared, so it documented a number rather than asserting
+// one. It is an independent backstop now -- the digest is the primary check and
+// the census fails on a different property, so an encoding weakness in one is
+// not a weakness in both.
+if (!boolAnyToolchain && (objNpmTree.sha256 !== REVIEWED_NPM_TREE_SHA256
+  || objNpmTree.files !== REVIEWED_NPM_TREE_FILES)) {
   process.stderr.write(
     'supply-freeze: refusing to trust an npm installation that is not the reviewed one.\n' +
     `  node               ${formatUntrustedText(process.execPath)}\n` +
@@ -3969,7 +4023,7 @@ if (!readOrRefuse(strScriptPath).equals(objScriptBefore)) {
 // which npm is acceptable and marks the output not a freeze record, so there is
 // no freeze record here to protect.
 if (!boolAnyToolchain) {
-  const objNpmTreeAfter = foldNpmInstallation(strNpmTreeRoot);
+  const objNpmTreeAfter = foldNpmInstallation(strNpmTreeRoot, strNpmBesideNode);
   if (objNpmTreeAfter.sha256 !== objNpmTree.sha256
     || objNpmTreeAfter.changeSha256 !== objNpmTree.changeSha256) {
     process.stderr.write(
