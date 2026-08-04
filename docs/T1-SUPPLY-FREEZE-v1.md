@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `b46f92a0372457ef7ac0f04dfee0b9283cfac723bf58cad6aab5b582a3e954dd` | script `script.sha256` |
+| Freeze script SHA-256 | `1aee3d703ea00af48bcd98bc20e8a22347e9f8e4d355c11ab550172b8fa9ab48` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` | script `toolchain.platform` |
@@ -930,12 +930,38 @@ The fold is verified to move for each of these, and to return exactly to baselin
 ### Advisory posture
 
 Folds the identity of each advisory — package, severity, GHSA identifier, CWE list, CVSS score
-and vector, affected range — plus the overall counts.
+and vector, affected range — plus the names a report gives as the packages a vulnerability is
+inherited *through*, plus the overall counts.
 
 Deliberately excluded: advisory **titles**, because GitHub rewords them without the advisory
 changing identity; **`fixAvailable`**, because it changes the day a fix ships upstream, which is
 news but not a change to what this repository installs; and **`effects`/`nodes`**, because they
 are derivable from the installed tree, and one change should not move two numbers.
+
+**The inherited-through names were excluded on that same reasoning until round 47, and the
+reasoning was wrong for them.** The installed tree records which packages *depend on* which; this
+field records which package the *registry declared vulnerable*. A tree edge is not an advisory
+claim, so the tree cannot supply this name — and when a report names a package that has no
+vulnerability record of its own, nothing else in the record names it either. Measured before the
+fix: three reports differing only in that name folded to one posture digest, and printed one
+identical `inherited through dependencies` line. Distinct claims about causation must not become
+one record.
+
+**The recorded digest above predates this change.** It was taken under the normalization that
+dropped those names, so the current script does not reproduce it even from a byte-identical
+report. That holds for **every** report, not only ones carrying an inherited package: the field is
+emitted for each package whether or not the report supplied any names, because an empty list is a
+value — it asserts the report named nothing — and a key present only sometimes would blur absence
+into emptiness, the same conflation refused for a missing `via` key and for
+`auditEnvironmentScrubbed`. Measured on a fixture with no string `via` entries at all, the posture
+moved from `b169ecf8…` to `e1009b90…`.
+
+This is stated rather than papered over: a value whose recipe has moved is the failure this whole
+record exists to prevent, and inventing a recomputed number without the registry response that
+produced it would be the fabrication the advisory-identity guard was tightened to refuse. The row
+must be re-taken on a networked run, under `T1-ADVISORY-DISPOSITION-v1`; it is a policy
+re-decision row rather than a compared one, which is why this does not invalidate the
+lockfile-derived fields around it.
 
 **This digest is not reproducible from the lockfile alone, and is not meant to be.** It is a
 snapshot of a published advisory database that changes over time. Drift here means the published
@@ -961,12 +987,22 @@ following, with the caveat on the advisory posture noted directly above:
    their output against the three `git`-derived rows.
 
 **Step 1 is a gate on the other two, not a fourth row to check.** Without it the procedure can
-report itself satisfied over output the script has explicitly disowned: `--any-toolchain` bypasses
-every guard, so a run with the reviewed files, tree, toolchain and umask but an ambient
-`bin-links=false` — which a normal run refuses at the configuration guard with exit `6` — emits
-every script-derived row in the table unchanged and sets `freezeRecord: false`. Comparing only the
-listed rows accepts it. The script already states its own standing in the artifact; the procedure
-has to read it.
+report itself satisfied over output the script has explicitly disowned: `--any-toolchain` waives
+the reviewed-environment and reviewed-input guards — the `Bypassed` column in
+[Why a run was refused](#why-a-run-was-refused) says which, per row — so a run with the reviewed
+files, tree, toolchain and umask but an ambient `bin-links=false`, which a normal run refuses at
+the configuration guard with exit `6`, emits every script-derived row in the table unchanged and
+sets `freezeRecord: false`. Comparing only the listed rows accepts it. The script already states
+its own standing in the artifact; the procedure has to read it.
+
+**It does not waive every refusal, and this paragraph said it did.** That is the same sentence
+[Why a run was refused](#why-a-run-was-refused) already corrects for itself, left standing here —
+a correction applied at the site that was reported and not swept to its sibling. A bypassed run
+still exits `2` on an unrecognized argument or an npm it cannot run, `5` on an audit response that
+is not a report, `3` if a recorded input changes mid-run, and `7` on a missing or non-walkable
+`node_modules`. All measured, not inferred. Those exits mean **no record was produced at all**,
+which is a different outcome from a record the script produced and disowned, and a consumer who
+expects the bypass to always yield a comparable artifact will misdiagnose the difference.
 
 **Step 3 is not optional either, and an earlier draft of this section omitted it.** It said the
 requirement was discharged "by re-running the script above and comparing against the table", which

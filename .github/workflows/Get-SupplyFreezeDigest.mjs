@@ -658,7 +658,21 @@ function runNpm(arrNpmArguments, objEnv) {
       process.stderr.write(
         'supply-freeze: refusing to record digests on an unreviewed toolchain.\n' +
         `  npm could not be run: ${formatUntrustedText(String(objError.code ?? objError.message))}\n` +
-        `  invocation         npm ${arrNpmArguments.join(' ')}\n` +
+        // Round 47, reported by Codex, and this is round 45's sweep caught one
+        // line below where it stopped. That round escaped the message above and
+        // recorded this refusal as safe because it is "built from a constant
+        // command name" -- true of the line above, and this line prints the
+        // ARGUMENTS. The audit invocation carries `--registry=${strRegistry}`,
+        // which under --any-toolchain is an unvalidated, possibly credentialed
+        // value. Measured, with npm removed after `config get registry`:
+        //
+        //   invocation  npm audit --json --registry=https://user:hunter2@…?token=SUPPLYSECRET
+        //
+        // at exit 2, while npm's own error text on the adjacent path redacted
+        // the same URL correctly. The invocation is kept rather than dropped --
+        // knowing WHICH call failed is the whole diagnostic -- with every
+        // argument through the funnel.
+        `  invocation         npm ${arrNpmArguments.map((strArgument) => formatUntrustedText(strArgument)).join(' ')}\n` +
         `  reviewed npm       ${REVIEWED_NPM}\n` +
         '  the reviewed npm must be runnable before anything is recorded; its version\n' +
         '  is itself a compared field, so an npm that cannot report one cannot be\n' +
@@ -1394,6 +1408,35 @@ function normalizeAudit(objAudit) {
   for (const strName of Object.keys(objVulnerabilities).sort()) {
     const objVulnerability = objVulnerabilities[strName];
     const arrAdvisories = [];
+    // Round 47, reported by Codex. String `via` entries were dropped on the
+    // `continue` below, so the only field naming WHAT made a package vulnerable
+    // was discarded. Measured, three reports identical but for that name:
+    //
+    //   via ["examplepkg"] / ["depA"] / ["depB"]  -> all posture f8682da6e254c9f0
+    //
+    // with the same `inheritedpkg  high (inherited through dependencies)` line in
+    // all three. Three different claims about causation, one record.
+    //
+    // The comment that justified the drop said the chain "is already covered by
+    // the tree", and that is the sentence this review reliably turns into the
+    // next finding. It is wrong for a reason worth writing down: the installed
+    // tree records which packages DEPEND on which, and this field records which
+    // package the REGISTRY declared vulnerable. A tree edge is not an advisory
+    // claim, and the posture digest is a statement about the registry's answer.
+    //
+    // Retained rather than the offered alternative of refusing a string that
+    // names no vulnerability record. That alternative keeps the digest stable --
+    // an unresolvable name is the only case that collides -- but it rests on npm
+    // always emitting resolvable names, which is a guess about an implementation
+    // rather than a documented grammar. Same rule that declined npm's name
+    // grammar in round 43 and duplicate ids in round 44: retaining what was
+    // supplied cannot refuse a legitimate report, while requiring resolution can.
+    //
+    // Order is preserved rather than sorted. Sorting would make two orderings of
+    // the same names one record, and every round since 43 has been about closing
+    // collisions rather than opening new ones; whether npm's ordering is stable
+    // is exactly the implementation guess this file keeps declining to make.
+    const arrViaPackages = [];
     // Round 22, reported. A string `via` is ITERABLE, so this loop walked it
     // character by character, matched no advisory in any character, and returned
     // zero advisories without throwing -- the digest lost the advisory identity
@@ -1420,8 +1463,11 @@ function normalizeAudit(objAudit) {
     }
     for (const objVia of objVulnerability.via ?? []) {
       // A `via` entry that is a bare string names another package in the chain
-      // rather than an advisory; the chain is already covered by the tree.
-      if (typeof objVia === 'string') continue;
+      // rather than an advisory. Recorded, not dropped -- see arrViaPackages.
+      if (typeof objVia === 'string') {
+        arrViaPackages.push(objVia);
+        continue;
+      }
       // Round 24, reported. The round-22 fix validated the CONTAINER and left
       // its MEMBERS unchecked, so `via: [null]` and `via: [7]` both fell through
       // the old combined test onto `continue` -- no advisory, no throw, and the
@@ -1596,6 +1642,11 @@ function normalizeAudit(objAudit) {
       isDirect: objVulnerability.isDirect ?? null,
       range: objVulnerability.range ?? null,
       advisories: arrAdvisories,
+      // Raw, deliberately. Escaping on the way into a digest is what round 44
+      // established must never happen -- formatTreeName is not injective, so it
+      // would manufacture the collisions these rounds keep closing. The print
+      // site escapes; JSON.stringify handles the record losslessly.
+      viaPackages: arrViaPackages,
     };
   }
   // Round 40. The null prototype above closes the mechanism that was reported;
@@ -2205,7 +2256,14 @@ if (!boolAnyToolchain && (!existsSync(strTreeRoot) || !objRecord.treeSatisfiesLo
     'supply-freeze: refusing to record digests for a tree that is not the installed tree.\n' +
     `  node_modules       ${existsSync(strTreeRoot) ? 'present' : 'MISSING'}\n` +
     `  satisfies lockfile ${objRecord.treeSatisfiesLockfile}\n` +
-    (strTreeCheckDetail ? `  because            ${strTreeCheckDetail}\n` : '') +
+    // Round 47, swept from the reported argument defect rather than reported.
+    // NOT exploitable, and said so rather than counted: this is either a fixed
+    // string or Node's own error message over the `npm ls` argument list, which
+    // carries no registry -- so nothing here is endpoint- or caller-supplied.
+    // Routed through the funnel anyway, because "npm's text cannot reach this"
+    // is a non-local argument that has to keep being true through future edits,
+    // and this file already documents that npm's error text embeds request URLs.
+    (strTreeCheckDetail ? `  because            ${formatUntrustedText(strTreeCheckDetail)}\n` : '') +
     '  install first with the documented command, then record:\n' +
     '    npm ci --ignore-scripts --no-audit --no-fund\n' +
     '  note that package-lock-only=true makes npm ci a no-op that reports success.\n');
@@ -2668,7 +2726,12 @@ if (boolSkipAudit) {
       // rather than advisories. Saying so beats printing empty parentheses.
       objValue.advisories.length > 0
         ? `${objValue.severity} (${objValue.advisories.map((objAdvisory) => objAdvisory.id).join(', ')})`
-        : `${objValue.severity} (inherited through dependencies)`,
+        // Round 47. The digest now distinguishes these; the human line did not,
+        // and a reader comparing two records by eye would have seen the same
+        // sentence for different causes. Named where npm supplied a name. This
+        // map is built after auditSha256 is taken, so it is display only.
+        : `${objValue.severity} (inherited through ${objValue.viaPackages.length > 0
+          ? objValue.viaPackages.join(', ') : 'dependencies'})`,
     ]));
 }
 
