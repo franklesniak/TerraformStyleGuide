@@ -48,8 +48,128 @@ const RE_URL_IN_TEXT = new RegExp(
   + ':[/\\\\\\t\\n\\r]*[\\s\\S]*', 'iu');
 const RE_LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/gu;
 
+// Round 56, reported by Codex, and the round-55 fix caught in its own turn.
+// That round moved this block above SUPPORTED_ARGUMENTS and then wrote that it
+// "genuinely precedes every other statement". It did not: process.umask(), the
+// three --flag membership scans and strWorkflowDirectory still ran ahead of it,
+// so the claim was false in the same commit that made it. Fixing the position a
+// reviewer pointed at and restating the invariant as though the class were
+// closed is the habit this file keeps rediscovering.
+//
+// It is now the first executable statement in the module, ahead of every
+// constant that is not a compile-time regular expression. That is checkable
+// rather than asserted: nothing above this line executes except the four
+// literal RE_ constructions, and the block depends only on hoisted function
+// declarations and imports.
+//
+// The window between Node COMPILING this file and this read cannot be closed
+// from inside the script -- the record says so, and no reordering changes it.
+// What reordering buys is that the window is no longer widened by anything the
+// caller supplies, which a long argument list previously did.
+//
+// The rationale below travelled with the code this time. Round 55 moved the
+// statements and left rounds 12 and 13 explaining them from forty lines away,
+// under a stub pointer -- the same split this loop has reported against the
+// record four times.
+
+// Round 12, reported. The self-read used to sit AFTER the toolchain guard, and
+// therefore after an `npm --version` subprocess -- tens of milliseconds during
+// which this file could be replaced. The process would go on executing the
+// source Node had already loaded while reporting the SHA-256 of a different
+// file, so restoring the reviewed bytes over a modified version inside that
+// window produced the authoritative script digest for a run that derived every
+// other field with other code. Neither the final content checks nor the
+// quiescence sweep looked at the script.
+//
+// Three changes, because no one of them is sufficient. The read is now the
+// first thing this script does, so the window between Node's load and the read
+// contains no code of ours. The bytes are kept and re-compared at the end. And
+// the script's own inode-change time is checked against PROCESS START rather
+// than against the later recording ceiling, so a replacement anywhere in the
+// process lifetime is caught.
+//
+// The residual, stated rather than implied: Node reads and compiles this file
+// before any statement here executes, so a replacement in THAT window is
+// invisible to the script itself and can only be closed by a trusted launcher
+// hashing the file before invoking node. That is outside what one read-only
+// script can bootstrap, and the record says so.
+//
+// Round 13, reported. `import.meta.url` is NOT always the file Node compiled.
+// Under `--preserve-symlinks-main` -- which an ambient NODE_OPTIONS can supply --
+// it is the symlink that was invoked, and measured, lstat on it reports
+// isSymbolicLink() true while the source Node actually loaded is the target.
+// Every check here would then have described the link's inode: its content
+// comparison reads through the link and its ctime never moves, so a target
+// modified at compile time and restored before the self-read would emit the
+// reviewed digest for code that was never reviewed.
+//
+// Resolving first makes every subsequent check -- the digest, the content
+// re-comparison and the ctime ceiling -- describe the bytes that were compiled.
+// That alone closes the attack, because restoring a modified target during the
+// run moves the TARGET's ctime past process start.
+// Round 55, reported by Codex, and it is the round-12 comment being wrong about
+// its own position. That comment says "the read is now the first thing this
+// script does, so the window between Node's load and the read contains no code
+// of ours" -- but argument membership and the unsupported-argument filter ran
+// first, roughly 150 lines of code and one refusal ahead of it. A long argument
+// list widens that window, and the ctime baseline was captured after it too, so
+// a replacement landing inside it could be read as the reviewed bytes while the
+// process kept executing the source Node had already compiled.
+//
+// The window between Node's compile and this read cannot be closed from inside
+// the script -- the record says so -- but it can be kept as small as the
+// language allows, which is what the comment claimed and did not deliver. The
+// snapshot and its ctime baseline now genuinely precede every other statement.
+const strInvokedPath = fileURLToPath(import.meta.url);
+const strScriptPath = realpathSync(strInvokedPath);
+const boolEntryPointIsLink = strInvokedPath !== strScriptPath;
+const objScriptBefore = readFileSync(strScriptPath);
+const strScriptSha256 = sha256(objScriptBefore);
+// Round 18, reported. Math.round can round the uptime DOWN, which places the
+// computed start LATER than the real one -- and anything changed inside that
+// sliver carries a ctime below the ceiling and escapes the check. Math.ceil can
+// only place the computed start earlier, which is the direction that fails safe:
+// it can raise a false alarm, never miss a replacement.
+const intProcessStartedAt = Date.now() - Math.ceil(process.uptime() * 1000);
+// Round 29, swept rather than reported. The quiescence sweep's cross-clock
+// comparison was the reported finding; this is the same defect one comparison
+// over, on the script's own identity, and no reviewer named it.
+//
+// The round-18 note above chose Math.ceil to bias the ceiling earlier because
+// that direction fails safe. It does -- but it buys at most 1 ms, and the
+// backdating measured this round is up to 4.13 ms, so the margin is smaller than
+// the error it was protecting against. A replacement landing within roughly 3 ms
+// of process start carried a ctime below the ceiling and passed.
+//
+// Same remedy as the sweep: read the stamp from the filesystem now and compare
+// it against the filesystem later, so no clock enters the comparison at all.
+const intScriptChangedAtStart = (() => {
+  try {
+    return lstatSync(strScriptPath).ctimeMs;
+  } catch (objError) {
+    process.stderr.write(
+      'supply-freeze: this script became unreadable during the run; refusing to report.\n' +
+      formatErrorLocation(objError, strScriptPath));
+    process.exit(3);
+  }
+})();
+
 const REVIEWED_NODE = 'v24.18.1';
 const REVIEWED_NPM = '11.16.0';
+
+// The npm INSTALLATION, as opposed to the version string npm prints about
+// itself. Round 56: the version string is written by the program being
+// identified, so it cannot identify it. See the guard above the first runNpm
+// call for the measured forgery this exists to refuse.
+//
+// Derived from lib/node_modules/npm inside node-v24.18.1-linux-x64.tar.xz,
+// fetched from nodejs.org and checked against the archive digest the two
+// workflows already pin (D6C664DF...) before it was opened -- so this constant
+// describes the bytes CI extracts rather than the machine it was computed on.
+// The container's own /opt/node24 folds to the same value, which is a
+// corroboration and not the source.
+const REVIEWED_NPM_TREE_SHA256 = 'd26b1ad0777070b7840445679915da3a55df4896d8cb52c076a6b2093417b029';
+const REVIEWED_NPM_TREE_FILES = 1916;
 
 // Reported and confirmed: the toolchain guard originally checked Node and npm
 // and not the platform, so a reader on Windows passed the guard and then could
@@ -375,52 +495,6 @@ const boolSkipAudit = arrArguments.includes('--no-audit');
 //
 // Refused rather than warned: a warning on stderr is invisible to `--json`
 // consumers, which are the callers most likely to be scripted.
-// Round 55, reported by Codex, and it is the round-12 comment being wrong about
-// its own position. That comment says "the read is now the first thing this
-// script does, so the window between Node's load and the read contains no code
-// of ours" -- but argument membership and the unsupported-argument filter ran
-// first, roughly 150 lines of code and one refusal ahead of it. A long argument
-// list widens that window, and the ctime baseline was captured after it too, so
-// a replacement landing inside it could be read as the reviewed bytes while the
-// process kept executing the source Node had already compiled.
-//
-// The window between Node's compile and this read cannot be closed from inside
-// the script -- the record says so -- but it can be kept as small as the
-// language allows, which is what the comment claimed and did not deliver. The
-// snapshot and its ctime baseline now genuinely precede every other statement.
-const strInvokedPath = fileURLToPath(import.meta.url);
-const strScriptPath = realpathSync(strInvokedPath);
-const boolEntryPointIsLink = strInvokedPath !== strScriptPath;
-const objScriptBefore = readFileSync(strScriptPath);
-const strScriptSha256 = sha256(objScriptBefore);
-// Round 18, reported. Math.round can round the uptime DOWN, which places the
-// computed start LATER than the real one -- and anything changed inside that
-// sliver carries a ctime below the ceiling and escapes the check. Math.ceil can
-// only place the computed start earlier, which is the direction that fails safe:
-// it can raise a false alarm, never miss a replacement.
-const intProcessStartedAt = Date.now() - Math.ceil(process.uptime() * 1000);
-// Round 29, swept rather than reported. The quiescence sweep's cross-clock
-// comparison was the reported finding; this is the same defect one comparison
-// over, on the script's own identity, and no reviewer named it.
-//
-// The round-18 note above chose Math.ceil to bias the ceiling earlier because
-// that direction fails safe. It does -- but it buys at most 1 ms, and the
-// backdating measured this round is up to 4.13 ms, so the margin is smaller than
-// the error it was protecting against. A replacement landing within roughly 3 ms
-// of process start carried a ctime below the ceiling and passed.
-//
-// Same remedy as the sweep: read the stamp from the filesystem now and compare
-// it against the filesystem later, so no clock enters the comparison at all.
-const intScriptChangedAtStart = (() => {
-  try {
-    return lstatSync(strScriptPath).ctimeMs;
-  } catch (objError) {
-    process.stderr.write(
-      'supply-freeze: this script became unreadable during the run; refusing to report.\n' +
-      formatErrorLocation(objError, strScriptPath));
-    process.exit(3);
-  }
-})();
 
 const SUPPORTED_ARGUMENTS = new Set(['--json', '--any-toolchain', '--no-audit']);
 const arrUnsupported = arrArguments.filter((strArg) => !SUPPORTED_ARGUMENTS.has(strArg));
@@ -551,43 +625,6 @@ function formatTreeName(strName) {
   });
 }
 
-// Round 12, reported. The self-read used to sit AFTER the toolchain guard, and
-// therefore after an `npm --version` subprocess -- tens of milliseconds during
-// which this file could be replaced. The process would go on executing the
-// source Node had already loaded while reporting the SHA-256 of a different
-// file, so restoring the reviewed bytes over a modified version inside that
-// window produced the authoritative script digest for a run that derived every
-// other field with other code. Neither the final content checks nor the
-// quiescence sweep looked at the script.
-//
-// Three changes, because no one of them is sufficient. The read is now the
-// first thing this script does, so the window between Node's load and the read
-// contains no code of ours. The bytes are kept and re-compared at the end. And
-// the script's own inode-change time is checked against PROCESS START rather
-// than against the later recording ceiling, so a replacement anywhere in the
-// process lifetime is caught.
-//
-// The residual, stated rather than implied: Node reads and compiles this file
-// before any statement here executes, so a replacement in THAT window is
-// invisible to the script itself and can only be closed by a trusted launcher
-// hashing the file before invoking node. That is outside what one read-only
-// script can bootstrap, and the record says so.
-//
-// Round 13, reported. `import.meta.url` is NOT always the file Node compiled.
-// Under `--preserve-symlinks-main` -- which an ambient NODE_OPTIONS can supply --
-// it is the symlink that was invoked, and measured, lstat on it reports
-// isSymbolicLink() true while the source Node actually loaded is the target.
-// Every check here would then have described the link's inode: its content
-// comparison reads through the link and its ctime never moves, so a target
-// modified at compile time and restored before the self-read would emit the
-// reviewed digest for code that was never reviewed.
-//
-// Resolving first makes every subsequent check -- the digest, the content
-// re-comparison and the ctime ceiling -- describe the bytes that were compiled.
-// That alone closes the attack, because restoring a modified target during the
-// run moves the TARGET's ctime past process start.
-// The self-snapshot block that used to sit here now runs BEFORE argument
-// processing; see its note above SUPPORTED_ARGUMENTS.
 
 
 // "A JSON object", as distinct from everything else `typeof x === 'object'`
@@ -676,6 +713,97 @@ function readOrRefuse(strPath) {
       '  it was readable when this run began, so it changed underneath the record.\n');
     process.exit(3);
   }
+}
+
+// Round 56, reported by Codex. Locates the npm INSTALLATION that backs the
+// executable the PATH prepend will resolve, and refuses rather than guessing.
+//
+// A Node distribution puts npm at lib/node_modules/npm and links bin/npm into
+// it, so the installation is found relative to this Node -- never by asking npm
+// where it lives, which would be taking the word of the program under suspicion.
+// The link is resolved and required to land inside that directory: a fold of a
+// genuine tree proves nothing if some other file is what actually executes, and
+// that gap is this same finding one level in.
+function npmInstallationRootOrRefuse() {
+  const strRoot = join(dirname(process.execPath), '..', 'lib', 'node_modules', 'npm');
+  let strRealRoot;
+  let strRealNpm;
+  try {
+    strRealRoot = realpathSync(strRoot);
+    strRealNpm = realpathSync(join(dirname(process.execPath), 'npm'));
+  } catch (objError) {
+    process.stderr.write(
+      'supply-freeze: refusing to run an npm whose installation cannot be located.\n' +
+      `  node               ${formatUntrustedText(process.execPath)}\n` +
+      `  expected npm at    ${formatUntrustedText(strRoot)}\n` +
+      formatErrorLocation(objError, strRoot) +
+      '  a Node distribution keeps npm at lib/node_modules/npm and links bin/npm into\n' +
+      '  it. Without that layout there is nothing to verify the executable against,\n' +
+      '  and its own --version output is not evidence about itself.\n');
+    process.exit(2);
+  }
+  if (strRealNpm !== strRealRoot && !strRealNpm.startsWith(`${strRealRoot}/`)) {
+    process.stderr.write(
+      'supply-freeze: refusing to run an npm that is not part of this Node installation.\n' +
+      `  node               ${formatUntrustedText(process.execPath)}\n` +
+      `  npm resolves to    ${formatUntrustedText(strRealNpm)}\n` +
+      `  installation is    ${formatUntrustedText(strRealRoot)}\n` +
+      '  the executable that would answer is outside the tree this script can verify,\n' +
+      '  so folding that tree would vouch for bytes that are not the ones running.\n');
+    process.exit(2);
+  }
+  return strRealRoot;
+}
+
+// Content and shape only, deliberately not modes. The reviewed digest has to
+// hold for a tree extracted by CI's `tar -xJf` and for one laid down by a
+// package manager, and the process umask reaches the first of those -- folding
+// permission bits would turn an extraction detail into a refusal. What the
+// attack substitutes is code, and code is content.
+//
+// Directory and symlink entries are folded by name so that adding a file, or
+// replacing a real file with a link to one, cannot leave the digest unmoved.
+function foldNpmInstallation(strRoot) {
+  const objHash = createHash('sha256');
+  let intFiles = 0;
+  let intSymlinks = 0;
+  const walk = (strDirectory, strRelative) => {
+    let arrNames;
+    try {
+      arrNames = readdirSync(strDirectory).sort();
+    } catch (objError) {
+      process.stderr.write(
+        'supply-freeze: refusing to verify an npm installation that cannot be read.\n' +
+        formatErrorLocation(objError, strDirectory));
+      process.exit(2);
+    }
+    for (const strName of arrNames) {
+      const strPath = join(strDirectory, strName);
+      const strKey = strRelative === '' ? strName : `${strRelative}/${strName}`;
+      try {
+        const objStat = lstatSync(strPath);
+        if (objStat.isDirectory()) {
+          objHash.update(`d ${strKey}\n`);
+          walk(strPath, strKey);
+        } else if (objStat.isSymbolicLink()) {
+          intSymlinks += 1;
+          objHash.update(`l ${strKey}\n`);
+        } else if (objStat.isFile()) {
+          intFiles += 1;
+          objHash.update(`f ${strKey} ${sha256(readFileSync(strPath))}\n`);
+        } else {
+          objHash.update(`? ${strKey}\n`);
+        }
+      } catch (objError) {
+        process.stderr.write(
+          'supply-freeze: refusing to verify an npm installation that changed while being read.\n' +
+          formatErrorLocation(objError, strPath));
+        process.exit(2);
+      }
+    }
+  };
+  walk(strRoot, '');
+  return { sha256: objHash.digest('hex'), files: intFiles, symlinks: intSymlinks };
 }
 
 // Round 31, reported. npm ships as `#!/usr/bin/env node`, so the runtime its
@@ -1521,6 +1649,29 @@ function newestChangeTime(strRoot, arrExtraPaths) {
   for (const strPath of arrExtraPaths) {
     considerThroughLinks(strPath, strPath.split('/').pop());
   }
+  // Round 56, reported by Codex, and the reason the workflow DIRECTORY is one of
+  // the swept paths rather than only the files inside it.
+  //
+  // npm reads a PROJECT .npmrc from the directory the child runs in. The audit
+  // child runs here, npm has no flag that relocates that source, and the comment
+  // above the --userconfig/--globalconfig binding says so in as many words: the
+  // static case is caught because the pre-audit `npm config list` runs in this
+  // same directory and would report a planted proxy, but a .npmrc CREATED after
+  // that check and before the audit was covered by nothing. The finding's sharp
+  // half is what came next -- delete it again afterwards and no later check
+  // looked at it either, so a redirected, filtered, schema-valid advisory posture
+  // was recordable at freezeRecord: true with no trace left behind.
+  //
+  // Sweeping the directory's own ctime closes the create-and-remove case that a
+  // content comparison structurally cannot: a file that is gone by the end has no
+  // content to compare, but creating an entry and removing it both move the
+  // ctime of the directory that held it. Measured, create-then-delete of .npmrc
+  // moved this directory's ctime by 164 microseconds -- absent before, absent
+  // after, and the mutation still visible.
+  //
+  // The directory is swept rather than the .npmrc path specifically, because the
+  // defect is not about one filename: anything appearing beside the manifests
+  // mid-run is a write into the directory whose contents this record describes.
   return { ctimeMs: intNewest, path: strNewestPath, entries: objEntryChangeTimes };
 }
 
@@ -1550,9 +1701,101 @@ function newestChangeTime(strRoot, arrExtraPaths) {
 // investigate the tree -- not whether the check fails. The record was corrected
 // one round earlier and this comment was left behind, which is the same partial
 // fix the correction was about.
-function parseAuditOrRefuse(strBody) {
+// Round 56, reported by Codex. JSON.parse builds objects by repeatedly defining
+// properties, so when one object carries the same key twice the LAST value
+// silently wins and the earlier one is gone before any shape check can run.
+// Measured on a two-record `vulnerabilities` object naming one package twice:
+//
+//   {"pkg":{severity:"high", via:["GHSA-real-real-real"]},
+//    "pkg":{severity:"low",  via:["GHSA-fake-fake-fake"]}}
+//   -> Object.keys(...).length === 1, and the HIGH record is the one discarded
+//
+// Every downstream check then sees a complete, well-formed, one-record report:
+// the package count is consistent, the shape validates, and auditSha256 folds
+// only the survivor -- so altering the discarded record does not move the
+// digest. An endpoint can hide an advisory behind a duplicate of its own
+// package name and this script exits 0 with a clean posture.
+//
+// The TEXT is scanned rather than the parsed value, because by the time there
+// is a parsed value the evidence has been destroyed. Only text JSON.parse has
+// already accepted is scanned, so this is looking for a repeat rather than
+// validating grammar. A string is a KEY when the next non-whitespace character
+// after it is a colon, which in well-formed JSON happens only inside an object;
+// array scopes push a null so that strings inside them are never counted.
+//
+// Keys are compared DECODED, not as raw source. "a" and "a" are the same
+// member name and a raw comparison would call them different -- the escape is
+// exactly what an endpoint hiding a duplicate would reach for.
+function firstDuplicateJsonKey(strText) {
+  const arrScopes = [];
+  const intLength = strText.length;
+  let intAt = 0;
+  while (intAt < intLength) {
+    const strChar = strText[intAt];
+    if (strChar === '{') { arrScopes.push(new Set()); intAt += 1; continue; }
+    if (strChar === '[') { arrScopes.push(null); intAt += 1; continue; }
+    if (strChar === '}' || strChar === ']') { arrScopes.pop(); intAt += 1; continue; }
+    if (strChar !== '"') { intAt += 1; continue; }
+    let intEnd = intAt + 1;
+    while (intEnd < intLength && strText[intEnd] !== '"') {
+      intEnd += strText[intEnd] === '\\' ? 2 : 1;
+    }
+    const strLiteral = strText.slice(intAt, intEnd + 1);
+    intAt = intEnd + 1;
+    let intProbe = intAt;
+    while (intProbe < intLength && ' \t\n\r'.includes(strText[intProbe])) intProbe += 1;
+    if (strText[intProbe] !== ':') continue;
+    const objScope = arrScopes[arrScopes.length - 1];
+    if (!(objScope instanceof Set)) continue;
+    const strKey = JSON.parse(strLiteral);
+    if (objScope.has(strKey)) return strKey;
+    objScope.add(strKey);
+  }
+  return null;
+}
+
+// Round 56. Every npm-controlled JSON body this script parses goes through here,
+// rather than the audit alone that was reported. `ls --all --json` decides
+// treeSatisfiesLockfile and `config list --json` decides whether the install and
+// transport settings are the reviewed ones -- both are answers from the same
+// endpoint-fed process, and both are just as lossy on a duplicate key. Fixing
+// only the reported site is the habit this loop keeps reporting against.
+function parseNpmJsonOrRefuse(strBody, strWhat, intExit) {
+  let objParsed;
   try {
-    return JSON.parse(strBody);
+    objParsed = JSON.parse(strBody);
+  } catch (objError) {
+    process.stderr.write(
+      `supply-freeze: ${strWhat} did not return JSON.\n` +
+      `  npm emitted output that is not valid JSON: ${formatUntrustedText(objError.message)}\n` +
+      '  this is an endpoint or format failure; nothing is recorded.\n');
+    process.exit(intExit);
+  }
+  const strDuplicate = firstDuplicateJsonKey(strBody);
+  if (strDuplicate !== null) {
+    process.stderr.write(
+      `supply-freeze: ${strWhat} returned an object with a repeated key.\n` +
+      `  repeated key       ${formatUntrustedText(strDuplicate)}\n` +
+      '  JSON.parse keeps only the last value for a repeated key, so the earlier one\n' +
+      '  is discarded before any shape check or digest sees it. A report can hide an\n' +
+      '  advisory behind a duplicate of its own package name and still look complete.\n' +
+      '  nothing is recorded from a body whose members are ambiguous.\n');
+    process.exit(intExit);
+  }
+  return objParsed;
+}
+
+// The duplicate scan runs AFTER the parse, deliberately, and this order is the
+// whole of its error handling. firstDuplicateJsonKey decodes each key literal
+// with JSON.parse, which is only safe on text already known to be well formed --
+// scanning first would let a malformed body throw out of the scanner as a raw
+// SyntaxError at exit 1, in the one place exit 5 exists to name. That is the
+// round-16 defect this function was written to close, and putting the new check
+// above the parse would have reintroduced it while fixing something else.
+function parseAuditOrRefuse(strBody) {
+  let objParsed;
+  try {
+    objParsed = JSON.parse(strBody);
   } catch (objError) {
     process.stderr.write(
       'supply-freeze: npm audit did not return an audit report.\n' +
@@ -1567,6 +1810,19 @@ function parseAuditOrRefuse(strBody) {
       '  pass --no-audit to record the lockfile-derived fields alone.\n');
     process.exit(5);
   }
+  const strDuplicate = firstDuplicateJsonKey(strBody);
+  if (strDuplicate !== null) {
+    process.stderr.write(
+      'supply-freeze: npm audit returned a report with a repeated key.\n' +
+      `  repeated key       ${formatUntrustedText(strDuplicate)}\n` +
+      '  JSON.parse keeps only the last value for a repeated key, so the earlier one\n' +
+      '  is discarded before the shape guard or auditSha256 sees it -- an endpoint can\n' +
+      '  hide an advisory behind a duplicate of its own package name and the report\n' +
+      '  still validates and still folds to a stable digest.\n' +
+      '  pass --no-audit to record the lockfile-derived fields alone.\n');
+    process.exit(5);
+  }
+  return objParsed;
 }
 
 // Round 51, reported by Codex, and the THIRD round on one expression. Rounds 49
@@ -2089,7 +2345,7 @@ const objBaselineChange = (() => {
     };
   }
   return scanOrRefuse(
-    () => newestChangeTime(strTreeRoot, [strPackagePath, strLockPath]),
+    () => newestChangeTime(strTreeRoot, [strPackagePath, strLockPath, strWorkflowDirectory]),
     'the baseline quiescence scan');
 })();
 
@@ -2119,6 +2375,61 @@ const strNodeVersion = process.version;
 // answer this one decides the provenance of. It is not gated on
 // --any-toolchain: that flag waives which VERSIONS are acceptable, never whether
 // the program answering is the one this process resolved.
+//
+// Round 56, reported by Codex, and the round-55 fix above shown to be worth
+// almost nothing. Existence is not identity either. The reply that shipped it
+// dismissed the residual as "a hostile npm written into the reviewed Node's own
+// bin directory -- requires write access to the toolchain itself", and that
+// dismissal was simply wrong: nobody has to write to the toolchain, because the
+// node binary is world-readable and can be COPIED. Measured end to end, with no
+// privileged access anywhere:
+//
+//   cp /opt/node24/bin/node   /tmp/x/node       # the genuine reviewed binary
+//   cat > /tmp/x/npm <<'SH'   ... 9 lines ...   # replays captured npm output,
+//   chmod +x /tmp/x/npm                         # with the advisories deleted
+//   /tmp/x/node Get-SupplyFreezeDigest.mjs --json
+//
+//   -> freezeRecord: true, notFreezeRecordBecause: [],
+//      treeSatisfiesLockfile: true, matchesReviewedManifest: true,
+//      auditCounts {info:0,low:0,moderate:0,high:0,critical:0,total:0},
+//      auditPackages {}
+//
+// process.version is genuinely v24.18.1 because it IS the reviewed binary, so
+// the toolchain guard is satisfied honestly; existsSync passes because the
+// attacker put a file there; and all seven real advisories are erased from a
+// record that says, in its own output, that it is a freeze record.
+//
+// So npm is authenticated by its bytes. `dirname(execPath)/npm` in a Node
+// distribution is a symlink into `lib/node_modules/npm`, and that whole
+// installation is folded and compared against the digest of the npm shipped
+// inside the reviewed Node archive. Two conditions, and neither alone is
+// sufficient:
+//
+//   containment -- realpath(the npm that will run) must land INSIDE the folded
+//                  tree. Folding a genuine tree while a different file executes
+//                  as npm is exactly the gap this finding is about, one level in.
+//   bytes       -- the folded tree must equal REVIEWED_NPM_TREE_SHA256, so a
+//                  replicated directory layout is not enough; the attacker has
+//                  to supply the real npm, at which point it is the real npm.
+//
+// REVIEWED_NPM_TREE_SHA256 was NOT taken from the container this was developed
+// on. It is derived from node-v24.18.1-linux-x64.tar.xz downloaded from
+// nodejs.org, whose SHA-256 was checked against the digest markdownlint.yml and
+// build.yml already pin before the archive was opened -- so the constant comes
+// from the same bytes CI extracts, not from a local directory of unknown
+// provenance. Both fold to d26b1ad0..., 1916 files and no symlinks.
+//
+// The byte comparison is gated on --any-toolchain and the containment check is
+// not, which is the same line the version guard draws: that flag waives which
+// VERSION is acceptable -- and a digest over a tree IS a version -- while never
+// waiving whether the program answering is the one this process resolved.
+//
+// The residual, stated rather than implied, because the round-55 reply's
+// residual was wrong and this one should not be taken on trust: the tree is
+// folded at one instant and npm executes a moment later, so a replacement
+// landing between them is not caught here. That is the same TOCTOU the script's
+// own compile-to-read window has, it is not closable from inside the process,
+// and it costs the attacker a race they previously did not have to win.
 const strNpmBesideNode = join(dirname(process.execPath), 'npm');
 if (!existsSync(strNpmBesideNode)) {
   process.stderr.write(
@@ -2131,6 +2442,24 @@ if (!existsSync(strNpmBesideNode)) {
     '  printing the reviewed version can fabricate the configuration, the lockfile\n' +
     '  assertion and the advisory posture alike.\n' +
     '  run the recorder with a complete Node installation, not a relocated binary.\n');
+  process.exit(2);
+}
+const strNpmTreeRoot = npmInstallationRootOrRefuse();
+const objNpmTree = foldNpmInstallation(strNpmTreeRoot);
+if (!boolAnyToolchain && objNpmTree.sha256 !== REVIEWED_NPM_TREE_SHA256) {
+  process.stderr.write(
+    'supply-freeze: refusing to trust an npm installation that is not the reviewed one.\n' +
+    `  node               ${formatUntrustedText(process.execPath)}\n` +
+    `  npm installation   ${formatUntrustedText(strNpmTreeRoot)}\n` +
+    `  observed           ${objNpmTree.sha256} (${objNpmTree.files} files, ${objNpmTree.symlinks} symlinks)\n` +
+    `  reviewed           ${REVIEWED_NPM_TREE_SHA256} (${REVIEWED_NPM_TREE_FILES} files, 0 symlinks)\n` +
+    '  the version string npm prints is written by npm, so it cannot establish which\n' +
+    '  program printed it. A copied node with a script named npm beside it passes a\n' +
+    '  version check and an existence check alike, and then supplies the configuration,\n' +
+    '  the lockfile assertion and the advisory posture -- measured, erasing every\n' +
+    '  advisory while the output still said freezeRecord: true.\n' +
+    '  install the reviewed Node distribution whole, or pass --any-toolchain to record\n' +
+    '  explicitly-unreviewed output.\n');
   process.exit(2);
 }
 const strNpmVersion = runNpm(['--version']).trim();
@@ -2624,7 +2953,8 @@ function configDrift(objReviewed, objEffective) {
 }
 
 if (!boolAnyToolchain) {
-  const objEffective = JSON.parse(runNpm(['config', 'list', '--json']));
+  const objEffective = parseNpmJsonOrRefuse(
+    runNpm(['config', 'list', '--json']), 'npm config list', 6);
   const arrDrift = configDrift(REVIEWED_NPM_CONFIG, objEffective);
   if (arrDrift.length > 0) {
     process.stderr.write(
@@ -2664,6 +2994,11 @@ const objRecord = {
   toolchain: {
     node: strNodeVersion,
     npm: strNpmVersion,
+    // Round 56. Emitted because the guard that produced it refuses on mismatch,
+    // so a reader holding this output can see WHICH npm answered rather than
+    // taking on faith that some check passed. `npm` above is what npm says
+    // about itself; this is what its bytes say.
+    npmTree: objNpmTree.sha256,
     platform: process.platform,
     arch: process.arch,
     umask: strObservedUmask,
@@ -2740,7 +3075,7 @@ try {
   // dependency set says whether that tree was filtered on the way out. A future
   // flag that redirects the tree fails the first check; one that empties it
   // fails the second, whatever the flag turns out to be called.
-  const objLs = JSON.parse(strLsOutput);
+  const objLs = parseNpmJsonOrRefuse(strLsOutput, 'npm ls', 7);
   if (typeof objLs.path !== 'string') {
     throw new TypeError('npm ls did not report the path of the tree it examined');
   }
@@ -2993,7 +3328,8 @@ if (boolSkipAudit) {
   // for a reader whose tree is provably byte-identical.
   if (!boolAnyToolchain) {
     const arrTransportDrift = configDrift(
-      REVIEWED_NPM_TRANSPORT, JSON.parse(runNpm(['config', 'list', '--json'])));
+      REVIEWED_NPM_TRANSPORT,
+      parseNpmJsonOrRefuse(runNpm(['config', 'list', '--json']), 'npm config list', 6));
     if (arrTransportDrift.length > 0) {
       process.stderr.write(
         'supply-freeze: npm transport configuration would change where the audit goes.\n' +
@@ -3399,7 +3735,7 @@ if (arrFoldDrift.length > 0) {
 // A filesystem-level snapshot would close it outright and is the right answer
 // for a reader who has one; that is a property of the host, not of this script.
 const objNewestChange = scanOrRefuse(
-  () => newestChangeTime(strTreeRoot, [strPackagePath, strLockPath]), 'the quiescence sweep');
+  () => newestChangeTime(strTreeRoot, [strPackagePath, strLockPath, strWorkflowDirectory]), 'the quiescence sweep');
 // Round 29, reported. This compared a filesystem-stamped ctime against a
 // `Date.now()` ceiling -- two different clocks. Linux stamps inode times from
 // the COARSE clock and truncates to the filesystem's granularity, while

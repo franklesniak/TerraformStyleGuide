@@ -73,15 +73,16 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `2b8246f85456925de17ed8dfced1fec8bde084d9ce18cc514b69c1a6ef266553` | script `script.sha256` |
+| Freeze script SHA-256 | `3e3efbfe2b2b06f7ff260baab80dc1d0174ab897b92751c714e3b6eb3fca1ac0` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
+| npm installation SHA-256 | `d26b1ad0777070b7840445679915da3a55df4896d8cb52c076a6b2093417b029` | script `toolchain.npmTree` |
 | Platform | `linux` | script `toolchain.platform` |
 | Architecture | `x64` | script `toolchain.arch` |
 | Install umask | `0022` | script `toolchain.umask` |
-| `package.json` | blob `2b88a0ac85d3a8b7286040e6b1f6c4ddb4d3bce1` | script `manifestBlobs` |
+| `package.json` blob | `2b88a0ac85d3a8b7286040e6b1f6c4ddb4d3bce1` | script `manifestBlobs` |
 | `package.json` SHA-256 | `e206cdb3562f0397e8eed7fb2c2586269a1f5335cdff2906da8d5e070426321e` | script `manifest` |
-| `package-lock.json` | blob `5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca` | script `manifestBlobs` |
+| `package-lock.json` blob | `5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca` | script `manifestBlobs` |
 | `package-lock.json` SHA-256 | `277f7168ab3a4f1f7a2565de13191d64b1572e7cb92b67b0972b3242bd4de062` | script `manifest` |
 | Installed tree SHA-256 | `6061b674c7dbdaaec16a2c7f7016c70cfcaea32c76490ddd7edf88341ce3c3ce` | script `installedTreeSha256` |
 | Installed tree files | `2177` | script `installedTreeFiles` |
@@ -156,6 +157,30 @@ up a third instance still sitting *here*: the freeze-script row put the path and
 byte-for-byte was wrapped in prose. The path is stated throughout this document and belongs in the
 field name, not in the value. Fixing the instance that was reported, and calling it the class,
 is the specific habit this record keeps having to correct.
+
+**And a fourth instance survived that sweep, in the two rows the sweep was standing next to.** The
+manifest blob rows read `blob 2b88a0ac…`, while `manifestBlobs['package.json']` emits the
+hexadecimal object id alone — so a consumer following [Consumers](#consumers) and comparing each
+script-derived row exactly would have failed on both rows, on every valid run, forever. That is
+worse than the three instances above it: those made a value awkward to compare, this one made two
+values impossible to compare, and a check that can never pass is indistinguishable from a check
+nobody runs. The word `blob` is now part of the field name, and the value cell holds exactly what
+the key emits.
+
+**The npm installation is compared, and the npm version row alone is not enough.** `toolchain.npm`
+is the string npm prints when asked its version, which is written by the program being identified
+and therefore cannot identify it. Measured: the reviewed `node` binary is world-readable, so it can
+be *copied* — no write access to the toolchain required — and a nine-line shell script named `npm`
+placed beside the copy answers `11.16.0`, supplies the configuration, asserts the tree satisfies the
+lockfile, and returns an advisory report with all seven advisories deleted. The run emitted
+`freezeRecord: true` with an empty `notFreezeRecordBecause`.
+
+`toolchain.npmTree` is the digest of the whole npm installation that backs the executable which will
+actually run: the script resolves `npm` through its symlink, requires the resolved file to sit
+inside `lib/node_modules/npm`, folds that tree, and refuses unless it matches. The reviewed value
+was derived from `lib/node_modules/npm` inside `node-v24.18.1-linux-x64.tar.xz`, whose SHA-256 was
+checked against the archive digest the workflows already pin before the archive was opened — so it
+describes the bytes CI extracts rather than any particular developer's machine.
 
 Two tables are deliberately exempt, because they record no comparable values: the entry-kind
 legend under [What is folded, per entry kind](#what-is-folded-per-entry-kind), whose rows group four
