@@ -1971,9 +1971,27 @@ function redactUrl(strValue) {
 // string -- so escaping before the digest would create exactly the collision
 // class rounds 43 and 44 have been closing. The JSON record keeps the raw bytes,
 // where JSON.stringify escapes them losslessly.
+//
+// Round 46, reported by Codex, in the redaction added one round earlier for the
+// unrecognized-argument defect. The prefilter matched lowercase http/https only,
+// so the case of the scheme decided whether a credential was withheld. Measured
+// on the same secret, twice:
+//
+//   --registry=https://registry.example.invalid/path?token=SUPPLYSECRET
+//     -> https://registry.example.invalid/ (path, credentials and query redacted)
+//   --registry=HTTPS://registry.example.invalid/path?token=SUPPLYSECRET
+//     -> printed verbatim, token included
+//
+// The referee, again, is a specification rather than my judgement: RFC 3986
+// section 3.1 says scheme names are case-insensitive, and the WHATWG URL parser
+// lowercases the scheme, so `new URL('HTTPS://h/')` has protocol 'https:'. This
+// prefilter feeds that parser and disagreed with it about what a URL is -- the
+// same shape as round 45's escaper disagreeing with ECMA-262 about what ends a
+// line. A prefilter is allowed to be broader than its parser; it must never be
+// narrower.
 function formatUntrustedText(strText) {
   return formatTreeName(
-    strText.replace(/https?:\/\/[^\s"']+/gu, (strMatch) => redactUrl(strMatch)));
+    String(strText).replace(/https?:\/\/[^\s"']+/giu, (strMatch) => redactUrl(strMatch)));
 }
 
 function configDrift(objReviewed, objEffective) {
@@ -2922,6 +2940,37 @@ if (boolSkipAudit) arrNotFreezeBecause.push('advisory posture not recorded (--no
 objRecord.freezeRecord = arrNotFreezeBecause.length === 0;
 objRecord.notFreezeRecordBecause = arrNotFreezeBecause;
 
+// Round 46, reported by Codex. Round 45 swept the toolchain versions after the
+// unrecognized-argument defect and escaped the exit-2 refusal that prints them --
+// then stopped, because that sweep ranged over REFUSALS rather than over every
+// site that renders the value. This renderer prints the same npm version on the
+// SUCCESS path and did not escape it. Measured, with node relocated so that npm
+// is not beside it and an unreviewed npm answering first on PATH:
+//
+//   T1-SUPPLY-FREEZE-v1 digests -- NOT A FREEZE RECORD
+//     !! guards bypassed with --any-toolchain
+//     npm                  11.16.0
+//   T1-SUPPLY-FREEZE-v1 digests          <- forged, at column 0, exit 0
+//
+// which re-asserts the freeze header three lines under the banner denying it.
+//
+// That also corrects the round-45 reply's reachability claim. I reported the
+// fake-npm path as "not demonstrated" because the PATH pin puts this Node's own
+// directory first and npm ships beside node. Both halves are still true and the
+// conclusion did not follow: the pin only wins when npm is IN that directory,
+// and a copied or relocated node is an ordinary layout, not an exotic one.
+//
+// Fixed as an invariant rather than at the field reported, because "which fields
+// are attacker-reachable" is exactly the argument that failed last round: EVERY
+// value interpolated into the human record passes the formatter. On digests,
+// counts, modes and booleans it is a no-op -- formatTreeName rewrites only
+// Cc/Cf/Zl/Zp and none of them contain those -- so the rule costs nothing and,
+// unlike the sweep it replaces, cannot be applied to some sites and not others.
+// Verified byte-identical against the pre-fix output on a clean run.
+function renderRecordRow(strLabel, objValue) {
+  return `  ${strLabel.padEnd(21)}${formatUntrustedText(objValue)}\n`;
+}
+
 if (boolJson) {
   process.stdout.write(`${JSON.stringify(objRecord, null, 2)}\n`);
 } else {
@@ -2929,25 +2978,26 @@ if (boolJson) {
     (objRecord.freezeRecord
       ? 'T1-SUPPLY-FREEZE-v1 digests\n'
       : `T1-SUPPLY-FREEZE-v1 digests -- NOT A FREEZE RECORD\n${
-        arrNotFreezeBecause.map((strReason) => `  !! ${strReason}\n`).join('')}`) +
-    `  script sha256        ${objRecord.script.sha256}\n` +
-    `  Node                 ${objRecord.toolchain.node}\n` +
-    `  npm                  ${objRecord.toolchain.npm}\n` +
-    `  platform             ${objRecord.toolchain.platform}/${objRecord.toolchain.arch}\n` +
-    `  umask                ${objRecord.toolchain.umask}\n` +
-    `  package.json         ${objRecord.manifest['package.json']}\n` +
-    `  package-lock.json    ${objRecord.manifest['package-lock.json']}\n` +
-    `  matches reviewed     ${objRecord.matchesReviewedManifest}\n` +
-    `  tree satisfies lock  ${objRecord.treeSatisfiesLockfile}\n` +
-    `  installed tree       ${objRecord.installedTreeSha256}\n` +
-    `    (${objRecord.installedTreeFiles} files, ${objRecord.installedTreeSymlinks} symlinks, ${objRecord.installedTreeDirectories} directories, ${objRecord.installedTreeSpecials} special entries on disk)\n` +
-    `    (file permissions ${JSON.stringify(objRecord.installedTreeModes)}; a different shape is consistent with a different install umask, or with modes changed after install)\n` +
-    `    (directory permissions ${JSON.stringify(objRecord.installedTreeDirectoryModes)}, node_modules itself ${objRecord.installedTreeRootMode})\n` +
+        arrNotFreezeBecause.map((strReason) => `  !! ${formatUntrustedText(strReason)}\n`).join('')}`) +
+    renderRecordRow('script sha256', objRecord.script.sha256) +
+    renderRecordRow('Node', objRecord.toolchain.node) +
+    renderRecordRow('npm', objRecord.toolchain.npm) +
+    renderRecordRow('platform', `${objRecord.toolchain.platform}/${objRecord.toolchain.arch}`) +
+    renderRecordRow('umask', objRecord.toolchain.umask) +
+    renderRecordRow('package.json', objRecord.manifest['package.json']) +
+    renderRecordRow('package-lock.json', objRecord.manifest['package-lock.json']) +
+    renderRecordRow('matches reviewed', objRecord.matchesReviewedManifest) +
+    renderRecordRow('tree satisfies lock', objRecord.treeSatisfiesLockfile) +
+    renderRecordRow('installed tree', objRecord.installedTreeSha256) +
+    `    (${formatUntrustedText(objRecord.installedTreeFiles)} files, ${formatUntrustedText(objRecord.installedTreeSymlinks)} symlinks, ${formatUntrustedText(objRecord.installedTreeDirectories)} directories, ${formatUntrustedText(objRecord.installedTreeSpecials)} special entries on disk)\n` +
+    `    (file permissions ${formatUntrustedText(JSON.stringify(objRecord.installedTreeModes))}; a different shape is consistent with a different install umask, or with modes changed after install)\n` +
+    `    (directory permissions ${formatUntrustedText(JSON.stringify(objRecord.installedTreeDirectoryModes))}, node_modules itself ${formatUntrustedText(objRecord.installedTreeRootMode)})\n` +
     (objRecord.auditSha256
-      ? `  registry             ${objRecord.registry}\n` +
-        `  advisory posture     ${objRecord.auditSha256}\n` +
-        `  advisory counts      ${JSON.stringify(objRecord.auditCounts)}\n` +
+      ? renderRecordRow('registry', objRecord.registry) +
+        renderRecordRow('advisory posture', objRecord.auditSha256) +
+        renderRecordRow('advisory counts', JSON.stringify(objRecord.auditCounts)) +
         Object.entries(objRecord.auditPackages)
-          .map(([strName, strValue]) => `    ${formatTreeName(strName).padEnd(20)} ${strValue}\n`).join('')
+          .map(([strName, strValue]) =>
+            `    ${formatUntrustedText(strName).padEnd(20)} ${formatUntrustedText(strValue)}\n`).join('')
       : '  advisory posture     (skipped)\n'));
 }
