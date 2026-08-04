@@ -640,9 +640,21 @@ regardless, because a bypassed run still emits a number, and a number taken over
 changed mid-read is wrong under any flag. The `Bypassed` column below says which is which, per
 row, rather than leaving it to a sentence that has already been wrong once.
 
+**With one exception, which is recorded here rather than smoothed over.** The check that the npm
+installation did not change *while it was being used* sits behind `if (!boolAnyToolchain)`, so a
+bypassed run does not make it. That is an integrity-during-run refusal being waived, which the
+paragraph above says does not happen — and the paragraph was written before this row was read
+closely. The `Bypassed` column is the authority; this sentence exists so the exception is stated
+rather than left for a reader to discover by disagreeing with the prose. Whether that check should
+be waived at all is a question about the script, not about this table: a bypassed run cannot
+compare npm against the reviewed digest, but the before/after comparison needs no reviewed value.
+It is left as-is here because changing a guard is not a documentation fix, and the run it affects
+already declares `freezeRecord: false`.
+
 | Exit | Refusal | Bypassed by `--any-toolchain` | Usual cause |
 | ---: | --- | :---: | --- |
-| `2` | Unreviewed toolchain | yes | different Node, npm, platform or architecture; a symlinked entry point; or `NODE_OPTIONS` set — see [What this script cannot check about itself](#what-this-script-cannot-check-about-itself) |
+| `2` | Unreviewed toolchain | yes | different Node, npm, platform or architecture; a symlinked entry point; `NODE_OPTIONS` set; an npm installation whose digest is not the reviewed one; or that installation changing while it is in use — see [What this script cannot check about itself](#what-this-script-cannot-check-about-itself) |
+| `2` | npm installation cannot be located, read or authenticated | **no** | the launcher beside `node` is missing; npm resolves outside this Node installation or outside `lib/node_modules/npm`; the installation cannot be read; the command line is no longer the file that was authenticated; or npm cannot be spawned at all. These establish *which program answered*, which `--any-toolchain` does not waive — it relaxes **which** toolchain is acceptable, never whether the one present can be identified. Measured: a `node` copied away from its distribution exits `2` under `--any-toolchain --no-audit` exactly as it does without the flag, while the genuine reviewed toolchain under the same flag exits `0` |
 | `2` | Unrecognized invocation | **no** | an argument the script does not support; `--any-toolchain --bogus` still exits `2` |
 | `3` | Recorded input changed mid-run | **no** | `package.json`, `package-lock.json` or the script itself edited while the run was in progress |
 | `4` | Unreviewed manifest | yes | `package.json` or `package-lock.json` has moved |
@@ -661,6 +673,7 @@ row, rather than leaving it to a sentence that has already been wrong once.
 | `11` | Tree contains links that leave it | yes | a symlink under `node_modules` resolving outside it — typically a package directory replaced by a link to an external tree |
 | `11` | Tree contains links it cannot resolve | yes | a symlink under `node_modules` whose resolution fails for any reason, so containment is unproven rather than satisfied |
 | `12` | Tree contains an undecodable entry name | **no** | an entry under `node_modules` whose name is not valid UTF-8. Such a name decodes to U+FFFD, so a sibling named U+FFFD shares the decoded name and both resolve to one file — the other is never read and never reaches the digest. Refused rather than folded, because the alternative is a digest over a tree the script did not measure. The check is a byte round trip, so a file legitimately named U+FFFD still folds |
+| `13` | Project npm configuration is not a regular file | **no** | `.github/workflows/.npmrc` present as a symlink, directory, FIFO, socket or device node. npm reads it as a configuration source, and only a regular file can be held still across the run — a link is opened through a target whose own parent can be swapped mid-run, and a link that does not resolve is indistinguishable from no file at all while its target can still be created for the audit and removed. Measured: `--any-toolchain --no-audit` exits `13` exactly as a plain run does |
 
 A bypassed run marks its own output as explicitly not a freeze record — `freezeRecord: false`
 with the reasons listed — in both output formats.
