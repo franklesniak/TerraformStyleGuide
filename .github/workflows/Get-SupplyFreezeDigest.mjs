@@ -286,7 +286,13 @@ function transportEnvironment() {
   if (arrResidual.length > 0) {
     process.stderr.write(
       'supply-freeze: the transport scrub did not bind the audit environment.\n' +
-      `  still present      ${arrResidual.sort().join(', ')}\n` +
+      // Round 45, swept from the reported argument defect rather than reported.
+      // NOT exploitable: a name carrying a control character cannot survive the
+      // filter above, because it would have to match a reviewed transport key
+      // exactly to be counted residual, so this list is provably a subset of
+      // constants. Escaped anyway -- that argument is non-local, and an invariant
+      // that every non-self-computed value passes the formatter needs no argument.
+      `  still present      ${arrResidual.sort().map((strName) => formatUntrustedText(strName)).join(', ')}\n` +
       '  this is a defect in this script, not in your configuration: those names\n' +
       '  should have been removed from the child environment before the audit ran.\n' +
       '  pass --no-audit to record the lockfile-derived fields without an audit.\n');
@@ -348,7 +354,15 @@ const arrUnsupported = arrArguments.filter((strArg) => !SUPPORTED_ARGUMENTS.has(
 if (arrUnsupported.length > 0) {
   process.stderr.write(
     'supply-freeze: refusing to record digests for an unrecognized invocation.\n' +
-    `  unrecognized       ${arrUnsupported.join(' ')}\n` +
+    // Round 45, reported by Codex. Caller-supplied bytes, written to a retained
+    // log verbatim. Measured with `$'--bogus\\nsupply-freeze: all inputs
+    // quiescent, 0 problems'`: the forged sentence landed at column 0, inside a
+    // refusal, claiming the opposite of what the run had just decided.
+    //
+    // formatUntrustedText rather than bare escaping, because an unrecognized
+    // argument is exactly where a mistyped `--registry=https://host/TOKEN` shows
+    // up, and this line would otherwise print the token it refused to accept.
+    `  unrecognized       ${arrUnsupported.map((strArg) => formatUntrustedText(strArg)).join(' ')}\n` +
     `  supported          ${[...SUPPORTED_ARGUMENTS].join(' ')}\n` +
     '  a mistyped option would otherwise be ignored in silence, and the run would\n' +
     '  record something other than what was asked for.\n');
@@ -419,8 +433,19 @@ function formatErrorLocation(objError, strFallback) {
     + ` at ${formatTreeName(String(objError?.path ?? strFallback))}\n`;
 }
 
+// Round 45, reported by Codex, and a defect in the escaper round 44 made
+// authoritative. Cc and Cf miss U+2028 LINE SEPARATOR and U+2029 PARAGRAPH
+// SEPARATOR, which are categorized Zl and Zp. Measured: both survived this
+// function unchanged and reached the record as raw bytes.
+//
+// The referee is not my judgement about which renderers break lines -- it is the
+// language this file is written in. ECMA-262 defines LineTerminator as exactly
+// LF, CR, U+2028 and U+2029, so two of the four characters the spec calls line
+// terminators were being escaped and two were not. Zl and Zp have no other
+// members today, and naming the categories rather than the two code points keeps
+// that true if Unicode adds one.
 function formatTreeName(strName) {
-  return strName.replace(/[\p{Cc}\p{Cf}]/gu, (strChar) => {
+  return strName.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (strChar) => {
     const intCode = strChar.codePointAt(0);
     return intCode <= 0xff
       ? `\\x${intCode.toString(16).padStart(2, '0')}`
@@ -632,7 +657,7 @@ function runNpm(arrNpmArguments, objEnv) {
     if (typeof objError?.syscall === 'string' && objError.syscall.startsWith('spawnSync')) {
       process.stderr.write(
         'supply-freeze: refusing to record digests on an unreviewed toolchain.\n' +
-        `  npm could not be run: ${objError.code ?? objError.message}\n` +
+        `  npm could not be run: ${formatUntrustedText(String(objError.code ?? objError.message))}\n` +
         `  invocation         npm ${arrNpmArguments.join(' ')}\n` +
         `  reviewed npm       ${REVIEWED_NPM}\n` +
         '  the reviewed npm must be runnable before anything is recorded; its version\n' +
@@ -1467,6 +1492,36 @@ function normalizeAudit(objAudit) {
       if (objVia.cvss !== undefined && objVia.cvss !== null && !isPlainObject(objVia.cvss)) {
         throw new TypeError(`advisory in ${strName} has a non-object cvss`);
       }
+      // Round 45, reported by Codex. `typeof x === 'number'` is true of Infinity,
+      // and JSON.parse produces it from any literal that overflows a double, so
+      // 1e400 reached the record as Infinity -- which canonicalize serializes as
+      // null, the same bytes an absent score produces. Measured, four reports
+      // that differ in what they claim about severity:
+      //
+      //   score 1e400 / -1e400 / null / omitted  -> all posture b7129f7835277b88
+      //
+      // This is the only number the advisory record carries, so finiteness is the
+      // whole of what the digest needs: every finite double has a distinct
+      // JSON.stringify form, and the non-finite ones are exactly those that
+      // collapse to null.
+      //
+      // The 0-10 bound is a second, separate assertion, and it is taken here --
+      // unlike the name-grammar and duplicate-id rejections declined in rounds 43
+      // and 44 -- because CVSS DEFINES its score range as 0.0 to 10.0 in the
+      // specification. That is a normative source, not an npm implementation
+      // detail I would be guessing at, so refusing outside it cannot turn a
+      // legitimate report away.
+      //
+      // Reported with String(), not JSON.stringify(): the latter renders Infinity
+      // as `null`, which would print a refusal saying the score is null while
+      // refusing it for not being a number.
+      const objCvssScore = objVia.cvss?.score;
+      if (objCvssScore !== undefined && objCvssScore !== null
+        && !(Number.isFinite(objCvssScore) && objCvssScore >= 0 && objCvssScore <= 10)) {
+        throw new TypeError(
+          `advisory in ${strName} has a cvss.score of ${String(objCvssScore)},`
+          + ' expected a finite number in the CVSS range 0-10');
+      }
       arrAdvisories.push({
         id: objMatch ? objMatch[0] : `npm-source-${objVia.source}`,
         severity: objVia.severity ?? null,
@@ -1765,7 +1820,14 @@ if (!boolAnyToolchain && (strNodeVersion !== REVIEWED_NODE || strNpmVersion !== 
   || process.platform !== REVIEWED_PLATFORM || process.arch !== REVIEWED_ARCH)) {
   process.stderr.write(
     'supply-freeze: refusing to record digests on an unreviewed toolchain.\n' +
-    `  observed Node ${strNodeVersion}, npm ${strNpmVersion}, ${process.platform}/${process.arch}\n` +
+    // Round 45, swept from the reported argument defect. strNpmVersion is the
+    // stdout of a subprocess, so it is not a value this process computed. NOT
+    // demonstrated exploitable: the PATH pin puts node's own directory first and
+    // npm ships beside node, so a planted npm earlier in the inherited PATH never
+    // wins -- measured, a fake npm printing a forged line was simply not reached.
+    // That is one layout's accident rather than a property of this script, and
+    // this refusal exists precisely to report a toolchain it does not trust.
+    `  observed Node ${formatUntrustedText(strNodeVersion)}, npm ${formatUntrustedText(strNpmVersion)}, ${process.platform}/${process.arch}\n` +
     `  reviewed Node ${REVIEWED_NODE}, npm ${REVIEWED_NPM}, ${REVIEWED_PLATFORM}/${REVIEWED_ARCH}\n` +
     '  pass --any-toolchain to compute anyway; the result is then not a freeze record.\n');
   process.exit(2);
