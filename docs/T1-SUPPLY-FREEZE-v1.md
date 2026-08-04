@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `1aee3d703ea00af48bcd98bc20e8a22347e9f8e4d355c11ab550172b8fa9ab48` | script `script.sha256` |
+| Freeze script SHA-256 | `6434ecb94d94f6d1753932095322132054260f7dd63cb1d2b0ecce7d8121c0f2` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` | script `toolchain.platform` |
@@ -83,7 +83,7 @@ per-row rather than asserted in a sentence.
 | `package.json` SHA-256 | `e206cdb3562f0397e8eed7fb2c2586269a1f5335cdff2906da8d5e070426321e` | script `manifest` |
 | `package-lock.json` | blob `5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca` | script `manifestBlobs` |
 | `package-lock.json` SHA-256 | `277f7168ab3a4f1f7a2565de13191d64b1572e7cb92b67b0972b3242bd4de062` | script `manifest` |
-| Installed tree SHA-256 | `16f42788850678b04361c87009be01eefa2354358d40a30d03d4a23b1298eb2a` | script `installedTreeSha256` |
+| Installed tree SHA-256 | `6061b674c7dbdaaec16a2c7f7016c70cfcaea32c76490ddd7edf88341ce3c3ce` | script `installedTreeSha256` |
 | Installed tree files | `2177` | script `installedTreeFiles` |
 | Installed tree symlinks | `8` | script `installedTreeSymlinks` |
 | Installed tree directories | `336` | script `installedTreeDirectories` |
@@ -103,6 +103,16 @@ git rev-parse 143f54e52075a1ae1e999a6e242073e3d8d4a46b^2  # reviewed head that m
 git rev-parse 143f54e52075a1ae1e999a6e242073e3d8d4a46b   # merge commit
 git rev-parse 143f54e52075a1ae1e999a6e242073e3d8d4a46b^{tree}   # merged tree
 ```
+
+**The installed-tree digest was re-taken when directory read bits were folded in.** The recipe
+changed in the same commit as the value: directories and the `node_modules` root now fold
+`mode & 0o555` rather than `mode & 0o111`, matching what files have folded since the read bits
+were added to them. The previously recorded `16f42788…` was taken under the old mask and this
+script no longer reproduces it from the same tree. Unlike the [advisory
+posture](#advisory-posture), this row is a pure function of the bytes and modes on disk, so it
+was recomputed directly from the reviewed tree rather than left open: the same 2177 files, 8
+symlinks and 336 directories fold to the value above, and every other tree row is unchanged. A
+consumer holding the old digest should expect it to differ and compare against the new one.
 
 **Advisory counts are recorded in the shape the script emits**, not as prose. An earlier draft
 wrote them as `0 critical, 5 high, 2 moderate, 0 low, 0 info`, which omitted npm's own `total`
@@ -449,6 +459,7 @@ row, rather than leaving it to a sentence that has already been wrong once.
 | `11` | Tree contains special files | yes | a FIFO, socket or device node under `node_modules` |
 | `11` | Tree contains links that leave it | yes | a symlink under `node_modules` resolving outside it — typically a package directory replaced by a link to an external tree |
 | `11` | Tree contains links it cannot resolve | yes | a symlink under `node_modules` whose resolution fails for any reason, so containment is unproven rather than satisfied |
+| `12` | Tree contains an undecodable entry name | **no** | an entry under `node_modules` whose name is not valid UTF-8. Such a name decodes to U+FFFD, so a sibling named U+FFFD shares the decoded name and both resolve to one file — the other is never read and never reaches the digest. Refused rather than folded, because the alternative is a digest over a tree the script did not measure. The check is a byte round trip, so a file legitimately named U+FFFD still folds |
 
 A bypassed run marks its own output as explicitly not a freeze record — `freezeRecord: false`
 with the reasons listed — in both output formats.
@@ -688,9 +699,9 @@ not a freeze record.
 
 Folds the bytes actually present under `node_modules`: every file's path, normalized **read and
 execute** bits and content; every symlink's path and raw target; every directory's path and
-normalized execute bits; every special file's path, kind and device number; and the root's own
-execute bits — in sorted order. The table below is the exact definition; this sentence is a
-summary of it and has twice been left behind when the fold changed.
+normalized **read and execute** bits; every special file's path, kind and device number; and the
+root's own **read and execute** bits — in sorted order. The table below is the exact definition;
+this sentence is a summary of it and has three times been left behind when the fold changed.
 
 ### What is folded, per entry kind
 
@@ -725,17 +736,27 @@ is what makes the encoding injective.
 
 | Entry kind | Tag | Fields folded, in order |
 | --- | --- | --- |
-| The `node_modules` root | `R` | the normalized execute bits (`mode & 0o111`) of the directory **the walk actually traverses**, resolved through a symlink if the root is one; then, **only if the root itself is not a directory**, tag `K`, the kind letter, and for a symlink its raw target bytes |
+| The `node_modules` root | `R` | the normalized **read and execute** bits (`mode & 0o555`) of the directory **the walk actually traverses**, resolved through a symlink if the root is one; then, **only if the root itself is not a directory**, tag `K`, the kind letter, and for a symlink its raw target bytes |
 | File | `F` | relative path, normalized **read and execute** bits (`mode & 0o555`), content |
-| Directory | `D` | relative path, normalized execute bits (`mode & 0o111`), then its entries |
+| Directory | `D` | relative path, normalized **read and execute** bits (`mode & 0o555`), then its entries |
 | Symlink | `L` | relative path, raw target bytes |
 | FIFO / socket / char device / block device | `P` / `S` / `C` / `B` | relative path, device number (`rdev`) |
 | Any other entry kind | `?` | relative path, device number |
 
-**Files carry read bits; directories carry only execute bits.** That asymmetry is deliberate. For
-a file, read permission is what determines whether a class can load it, so it belongs in the
-digest. For a directory, the execute bit is the traverse permission and read permission only
-controls listing, which does not affect whether code beneath it loads.
+**Files, directories and the root all carry read and execute bits.** For a file, read permission
+is what determines whether a class can load it. For a directory the two bits are different
+powers: execute is traverse-to-a-known-name, and read is permission to *list*.
+
+This document previously said the asymmetry was deliberate — "directories carry only execute
+bits… read permission only controls listing, which does not affect whether code beneath it
+loads" — and that reasoning was wrong on its own terms. Listing is how package discovery works.
+Measured on `node_modules/glob`, `0755` → `0711` left the digest and every compared field
+unchanged while a non-owner got `EACCES` from `readdir` on it and could still read a known path
+through it: the tree stayed loadable by exact path and stopped being enumerable, so any
+glob-based discovery breaks for that class while the record still certifies the freeze. The
+`node_modules` root is the same defect at full scale — at `0711` no other class can list *any*
+package. Both now fold `mode & 0o555`, the same mask as files, for the same "can each permission
+class still use this" property.
 
 **Write bits are folded for nothing.** They do not affect loadability and are the most
 machine-variable of the three.
@@ -801,6 +822,13 @@ counts completely unchanged. The `node_modules` root is folded as well — the w
 it, so it was the one directory the fold could never have noticed, and clearing its traverse bit
 locks out the whole tree at once. This is the same argument that put execute bits on files, one
 entry kind over, and it moved the recorded digest.
+
+**Their read bits followed a round later, and the gap had the same shape.** Adding execute bits
+to directories closed traverse and left *listing* open: measured, `0755` → `0711` on a package
+directory moved nothing compared, while a non-owner got `EACCES` from `readdir` and could still
+read a known path through it. Directories and the root now fold `mode & 0o555` like files. This
+moved the recorded digest a second time, and the reasoning for that re-take is recorded with
+the [compared fields](#compared-fields).
 
 **Read permission is folded alongside execute, and for one round it was not.** The fold masked
 `mode & 0o111`, so `0644` → `0600` on an installed module was invisible: the owner running the
@@ -922,7 +950,10 @@ The fold is verified to move for each of these, and to return exactly to baselin
 | Only the owner's execute bit cleared (`0o755` → `0o655`) | yes |
 | A FIFO, socket or device node added under `node_modules` | yes, differently for each kind, and a reviewed run refuses with exit `11` |
 | A directory's execute bit cleared for group or other (`0755` → `0745`) | yes |
+| A directory's **read** bit cleared for group and other (`0755` → `0711`) | yes — measured `6061b674…` → `2ba573b2…`; before the read bits were folded this moved nothing compared |
+| The `node_modules` root's own **read** bits cleared (`0755` → `0711`) | yes — measured `6061b674…` → `01cf16f0…` |
 | A file's read bit cleared for group and other (`0644` → `0600`) | yes |
+| An entry whose name is not valid UTF-8, beside a sibling named U+FFFD | refused with exit `12`; both names decode alike, so one file would be folded twice and the other never read |
 | `node_modules` replaced by a symlink to a byte-identical tree | yes, and a reviewed run refuses with exit `7` |
 | The `node_modules` root's own execute bits changed | yes |
 | `node_modules` is a symlink and the **target directory's** execute bits change (`0755` → `0700`) | yes — measured `59799ca3…` → `48dac79b…` under `--any-toolchain` |
@@ -999,8 +1030,9 @@ its own standing in the artifact; the procedure has to read it.
 [Why a run was refused](#why-a-run-was-refused) already corrects for itself, left standing here —
 a correction applied at the site that was reported and not swept to its sibling. A bypassed run
 still exits `2` on an unrecognized argument or an npm it cannot run, `5` on an audit response that
-is not a report, `3` if a recorded input changes mid-run, and `7` on a missing or non-walkable
-`node_modules`. All measured, not inferred. Those exits mean **no record was produced at all**,
+is not a report, `3` if a recorded input changes mid-run, `7` on a missing or non-walkable
+`node_modules`, and `12` on an entry name that is not valid UTF-8. All measured, not inferred.
+Those exits mean **no record was produced at all**,
 which is a different outcome from a record the script produced and disowned, and a consumer who
 expects the bypass to always yield a comparable artifact will misdiagnose the difference.
 

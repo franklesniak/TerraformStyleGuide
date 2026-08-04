@@ -758,6 +758,75 @@ function hashField(objHash, objField) {
   objHash.update(objBytes);
 }
 
+// Round 48, reported by Codex, and it is a hiding place rather than a collision
+// in the recorded value. POSIX filenames are bytes; `readdirSync` decodes them as
+// UTF-8, and every byte sequence that is not valid UTF-8 decodes to U+FFFD. Two
+// entries in one directory therefore share a decoded name whenever one has an
+// undecodable name and the other is literally named U+FFFD -- and `join` then
+// resolves BOTH loop iterations to the second file.
+//
+// Measured, with a directory holding one entry named 0x80 and one named
+// 0xEF 0xBF 0xBD (U+FFFD's own encoding):
+//
+//   readdir decoded names   ["�", "�"]   -- equal
+//   readdir raw names       80 , efbfbd            -- distinct
+//   mutating the 0x80 file  digest 4ec884fe... -> 4ec884fe...   (unmoved)
+//   mutating the other file digest 4ec884fe... -> d3335220...   (moved)
+//
+// So the 0x80 file's bytes were never read: the count said 2179 while one file
+// was hashed twice and another not at all. The ctime sweep is blind for the same
+// reason -- it decodes names the same way, so both entries collapse to one label
+// and it lstats the same file twice -- which is why the run above completed and
+// reported a tree it had not measured. A file whose content never reaches the
+// digest is content an attacker may choose freely.
+//
+// REFUSED rather than folded as raw bytes. Both were offered; the deciding factor
+// is that this cannot turn away a legitimate artifact. `npm ci` from the reviewed
+// lockfile produces no such name -- the reviewed tree folds byte-identically with
+// this check in place -- so the refusal fires only for a tree this script has just
+// proven it cannot measure. Folding raw bytes would let it RECORD such a tree,
+// which is a capability this record does not need and would buy by threading
+// Buffers through the symlink, special-file and label paths of the one function
+// least safe to rewrite for a case npm does not produce.
+//
+// The check is the round trip, not a search for U+FFFD: a name that decodes and
+// re-encodes to its own bytes is unambiguous, so a file legitimately named U+FFFD
+// still folds. Only the names that LOSE information are refused.
+//
+// Used by both walkers. The fold is the site that was reported; the quiescence
+// sweep enumerates the same tree with the same decode, and rounds 36 and 37 are
+// this file's record of what fixing only the reported site costs.
+function readdirOrRefuseUndecodable(strDirectory, strRelative) {
+  return readdirSync(strDirectory, { withFileTypes: true, encoding: 'buffer' }).map((objEntry) => {
+    const strName = objEntry.name.toString('utf8');
+    if (!Buffer.from(strName, 'utf8').equals(objEntry.name)) {
+      process.stderr.write(
+        'supply-freeze: refusing to fold a tree with an undecodable entry name.\n' +
+        `  directory          node_modules${strRelative ? `/${formatTreeName(strRelative)}` : ''}\n` +
+        `  entry              ${objEntry.name.toString('hex')} `
+          + `(${objEntry.name.length} byte${objEntry.name.length === 1 ? '' : 's'}, hex; `
+          + 'not valid UTF-8)\n' +
+        '  such a name decodes to U+FFFD, so a sibling named U+FFFD shares it and both\n' +
+        '  resolve to one file -- the other file is never read and never reaches the\n' +
+        '  digest, which would report a tree it did not measure.\n' +
+        '  npm ci from the reviewed lockfile does not produce such a name; reinstall\n' +
+        '  with the documented command:\n' +
+        '    npm ci --ignore-scripts --no-audit --no-fund\n');
+      process.exit(12);
+    }
+    // A faithful stand-in for the Dirent: the walkers use the name and the three
+    // type predicates and nothing else, and the predicates are delegated rather
+    // than recomputed so a DT_UNKNOWN hint still answers false to all three and
+    // still falls through to the lstat below.
+    return {
+      name: strName,
+      isFile: () => objEntry.isFile(),
+      isDirectory: () => objEntry.isDirectory(),
+      isSymbolicLink: () => objEntry.isSymbolicLink(),
+    };
+  });
+}
+
 function foldInstalledTree(strRoot) {
   const objHash = createHash('sha256');
   let intFiles = 0;
@@ -800,7 +869,7 @@ function foldInstalledTree(strRoot) {
   // diagnostic than either alone.
   const objDirectoryModeHistogram = new Map();
   const walk = (strDirectory, strRelative) => {
-    const arrEntries = [...readdirSync(strDirectory, { withFileTypes: true })]
+    const arrEntries = [...readdirOrRefuseUndecodable(strDirectory, strRelative)]
       .sort((objLeft, objRight) => (objLeft.name < objRight.name ? -1 : objLeft.name > objRight.name ? 1 : 0));
     for (const objEntryHint of arrEntries) {
       const strPath = join(strDirectory, objEntryHint.name);
@@ -1052,9 +1121,30 @@ function foldInstalledTree(strRoot) {
         // this record claims to have measured" argument that put execute bits
         // on files in round 2, one entry kind over.
         //
-        // Normalized execute bits, matching the file branch, for the same
-        // reason: the read and write bits are a property of the extracting
-        // machine, and folding the full mode would reintroduce umask drift.
+        // Round 48, reported by Codex, and it is round 12 arriving at the entry
+        // kind round 11 had just added. This comment used to say "normalized
+        // execute bits, matching the file branch" -- but the file branch stopped
+        // being execute-only in round 12, when READ was folded in because a file
+        // a class cannot read is a file that class cannot load. The sentence
+        // claimed to match a branch it no longer matched, and the mask was the
+        // one round 12 had already rejected.
+        //
+        // For a directory the two bits are different powers: `x` is traverse to a
+        // KNOWN name, `r` is permission to LIST. Measured on node_modules/glob,
+        // 0755 -> 0711: the digest stayed at 16f42788... and every compared field
+        // with it, while only the directory-mode histogram moved -- and that is
+        // marked non-compared in the record, so a reviewed run still emitted the
+        // freeze. Measured on the consequence, as a non-owner: readdir on that
+        // directory is EACCES while reading a known path through it still
+        // succeeds. So the tree stays loadable by exact path and stops being
+        // ENUMERABLE, which is what every glob-based package discovery does.
+        //
+        // `mode & 0o555` -- read and execute, the same mask as files, for the
+        // same "can each permission class still use this" property. Write bits
+        // stay out for the reason they do on files. This MOVES the frozen tree
+        // digest, because 0755 masks to 555 where it used to mask to 111; the
+        // record's tree row was re-taken in the same commit and the reasoning is
+        // recorded there.
         intDirectories += 1;
         const intDirectoryMode = lstatSync(strPath).mode;
         objDirectoryModeHistogram.set(
@@ -1062,7 +1152,7 @@ function foldInstalledTree(strRoot) {
           (objDirectoryModeHistogram.get((intDirectoryMode & 0o777).toString(8).padStart(3, '0')) ?? 0) + 1);
         objHash.update('D', 'utf8');
         hashField(objHash, strChild);
-        hashField(objHash, (intDirectoryMode & 0o111).toString(8).padStart(3, '0'));
+        hashField(objHash, (intDirectoryMode & 0o555).toString(8).padStart(3, '0'));
         walk(strPath, strChild);
         continue;
       }
@@ -1087,9 +1177,18 @@ function foldInstalledTree(strRoot) {
         // which in a real install is none of them.
         //
         // Folding this correctly matters independently of the exit-11 refusal
-        // below, because --any-toolchain bypasses every guard and still runs
-        // the fold. A digest whose injectivity depends on a guard is not
-        // injective in exactly the runs where nothing else is checking.
+        // below, because --any-toolchain waives that refusal and still runs the
+        // fold. A digest whose injectivity depends on a guard is not injective
+        // in exactly the runs where nothing else is checking.
+        //
+        // Round 48, swept rather than reported. This said the bypass "bypasses
+        // every guard" -- the same overclaim round 47 corrected in the record's
+        // Consumers section, left standing here because that round fixed the
+        // sentence it was shown rather than the claim. It does not: unsupported
+        // arguments, a missing or non-walkable root, malformed audit output, an
+        // undecodable entry name and integrity-during-run failures all still
+        // refuse. What is true is the narrow thing this argument actually needs
+        // -- the exit-11 refusal is waived and the fold still runs.
         intSpecials += 1;
         arrSpecialPaths.push(formatTreeName(strChild));
         const objSpecial = lstatSync(strPath);
@@ -1179,7 +1278,15 @@ function foldInstalledTree(strRoot) {
   // regardless of --any-toolchain, any root stat cannot resolve to a directory.
   const intRootMode = statSync(strRoot).mode;
   objHash.update('R', 'utf8');
-  hashField(objHash, (intRootMode & 0o111).toString(8).padStart(3, '0'));
+  // Round 48, same report and same mask as the directory branch above, applied
+  // here because the root is a directory too and this is the one whose loss is
+  // total: `node_modules` at 0711 stops every class but the owner from listing
+  // ANY package, which is the whole tree at once rather than one package. Folded
+  // through the same `0o555` for the same reason. Fixed at both sites in one
+  // change rather than at the branch that happened to be quoted -- the mask
+  // appeared in exactly these two places, and rounds 36 and 37 are this file's
+  // record of what fixing only the reported site costs.
+  hashField(objHash, (intRootMode & 0o555).toString(8).padStart(3, '0'));
   // Round 12, reported. lstat sees the root itself, but only its execute mask
   // was folded -- and a 0755 directory and a 0777 symlink both mask to 111, so
   // a `node_modules` that is a SYMLINK to a byte-identical tree elsewhere folded
@@ -1267,7 +1374,7 @@ function newestChangeTime(strRoot, arrExtraPaths) {
     return objStats;
   };
   const walk = (strDirectory, strRelative) => {
-    for (const objEntryHint of readdirSync(strDirectory, { withFileTypes: true })) {
+    for (const objEntryHint of readdirOrRefuseUndecodable(strDirectory, strRelative)) {
       const strPath = join(strDirectory, objEntryHint.name);
       const strChild = strRelative ? `${strRelative}/${objEntryHint.name}` : objEntryHint.name;
       const objStats = consider(strPath, `node_modules/${strChild}`);
@@ -1945,7 +2052,31 @@ function normalizeConfigValue(objValue) {
 // The REVIEWED value is always printed, for every key. Those are literals in
 // this file, visible to anyone reading the source, so redacting them would cost
 // the reader the comparison while protecting nothing.
-const SENSITIVE_CONFIG_KEYS = Object.freeze(['proxy', 'https-proxy', 'ca', 'cafile']);
+//
+// Round 48, reported by Codex. `noproxy` was missing, and it is the one key in
+// REVIEWED_NPM_TRANSPORT whose value is LITERALLY A LIST OF HOSTS. Measured on
+// the drift line this set feeds:
+//
+//   NPM_CONFIG_NOPROXY=private-user.internal,SUPPLYSECRET.example
+//     -> noproxy  observed ["private-user.internal","SUPPLYSECRET.example"], …
+//
+// Applying the membership test written two paragraphs up decides this on its own
+// -- "a key belongs here when its value can carry a host" -- so the omission was
+// not a judgement that noproxy is safe, it was the test not being run over the
+// whole table. Four of the six transport keys were covered; `strict-ssl` is a
+// boolean and needs no cover; `noproxy` was the gap.
+//
+// The paragraph above also said REVIEWED_NPM_CONFIG's keys "are booleans, small
+// enumerations and an integer umask", which is true of that table and was doing
+// duty as if it described both. configDrift formats BOTH tables -- the transport
+// one at its own call site -- and that is exactly the "the membership test is the
+// value's shape, NOT WHICH TABLE IT LIVES IN" sentence failing on the table it
+// was written to distinguish.
+//
+// Every reviewed value in this set is null except noproxy's, which is []. Neither
+// can leak, so the null-vs-set rendering below still says which side differs
+// without printing a host.
+const SENSITIVE_CONFIG_KEYS = Object.freeze(['proxy', 'https-proxy', 'noproxy', 'ca', 'cafile']);
 
 // Round 37, reported by Codex, and the third round running on one class. Rounds
 // 35 and 36 each fixed the reported site: NODE_OPTIONS, then the transport
@@ -2040,9 +2171,36 @@ function redactUrl(strValue) {
 // same shape as round 45's escaper disagreeing with ECMA-262 about what ends a
 // line. A prefilter is allowed to be broader than its parser; it must never be
 // narrower.
+//
+// Round 48, reported by Codex, and it is the sentence directly above being
+// violated by the same expression two rounds later. The class excluded the two
+// quote characters, so a quote inside a URL ENDED the match and everything after
+// it was printed untouched. Measured on the unrecognized-argument refusal:
+//
+//   --registry=https://host/a'b?token=SUPPLYSECRET
+//     -> https://host/ (path, credentials and query redacted)'b?token=SUPPLYSECRET
+//   --registry=https://host/a"b?token=SUPPLYSECRET
+//     -> https://host/ (path, credentials and query redacted)"b?token=SUPPLYSECRET
+//   --registry=https://host/ab?token=SUPPLYSECRET        (the control)
+//     -> https://host/ (path, credentials and query redacted)
+//
+// That output is worse than no redaction: it carries the parenthetical that says
+// the query was withheld and then prints the query. `'` is a sub-delim under RFC
+// 3986 section 2.2 and legal in a path; `"` is not, but the WHATWG parser accepts
+// it and percent-encodes it, and `new URL()` -- the parser this prefilter feeds
+// -- takes both. So both were narrower than the parser, which is the one thing
+// the rule above forbids.
+//
+// The class is now whitespace-delimited: a run of non-space characters after the
+// scheme. That is broader than the parser by construction, which is the safe
+// direction -- trailing punctuation gets swallowed into the redaction rather than
+// left outside it, and redactUrl fails CLOSED on anything it cannot parse, so an
+// over-broad match is withheld rather than printed. There is no character this
+// can now stop at except whitespace, so there is no third quote-like character
+// waiting to be found in round 49.
 function formatUntrustedText(strText) {
   return formatTreeName(
-    String(strText).replace(/https?:\/\/[^\s"']+/giu, (strMatch) => redactUrl(strMatch)));
+    String(strText).replace(/https?:\/\/\S+/giu, (strMatch) => redactUrl(strMatch)));
 }
 
 function configDrift(objReviewed, objEffective) {
@@ -2054,8 +2212,13 @@ function configDrift(objReviewed, objEffective) {
       const objObserved = objEffective[strKey] ?? null;
       const strObserved = SENSITIVE_CONFIG_KEYS.includes(strKey)
         // Null is printed as itself: it is the reviewed value for every key in
-        // this set, so "observed null" cannot leak anything and saying so is
-        // more useful than a redaction marker that hides which side differs.
+        // this set except noproxy, whose reviewed value is the empty list, so
+        // "observed null" cannot leak anything and saying so is more useful than
+        // a redaction marker that hides which side differs. Neither an absent
+        // value nor an empty one carries a host, and any noproxy that DRIFTS is
+        // populated by definition -- '', [] and [''] all normalize to "no
+        // exclusions" and so never reach this line -- which is why the populated
+        // case is the only one that has to be withheld.
         ? (objObserved === null ? 'null' : 'set (value not shown)')
         : JSON.stringify(objObserved);
       return `  ${strKey.padEnd(18)} observed ${strObserved}, reviewed ${JSON.stringify(objExpected)}`;
