@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `70695c4c7f0f8e92be4a76e701f16ec9240f0cce948ce9462d0556c9028a8050` | script `script.sha256` |
+| Freeze script SHA-256 | `b20ebb74910223248824fd8988ae1858d4cfa396047384f7fbaf88f6fef25d42` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -390,6 +390,24 @@ modifying Node itself, and it is outside what a script can close about its own i
 constant *before* extracting it, and then invoke the extracted binary by absolute path. The trust
 in a CI-produced record rests on that step, not on anything the script says about itself.
 
+**One further precondition, corrected here because an earlier revision justified it wrongly.** The
+recorder folds every directory from the Node distribution root down to the npm installation and
+the launcher, and stops there. A previous revision defended stopping on the grounds that anyone
+able to rewrite the directory *containing* the distribution could replace `node` itself — which is
+false in the way that matters: replacing `node` **on disk does not replace the running process**.
+The active interpreter stays the authenticated one while the npm subprocess is redirected, so that
+argument did not cover the interval it claimed to.
+
+What actually holds is narrower and is a precondition rather than a check: **the distribution must
+live where it cannot be renamed during the run.** A rename of the distribution aside and back
+leaves the folded root and every descendant with their inodes and change times intact, and only the
+containing directory records it — and that directory cannot be folded without refusing ordinary
+runs, since in CI it is the runner's temporary directory, which other work writes to throughout.
+The recorder narrows the exposure by re-checking the npm command line's inode immediately before
+every invocation, which reduces the window from the whole run to the gap between that check and the
+`exec`; it does not eliminate it. CI satisfies the precondition because the extraction directory is
+job-private.
+
 A manual run must do the same, which is why [How to reproduce](#how-to-reproduce) below obtains
 the distribution by digest and invokes it by absolute path. Running `node Get-SupplyFreezeDigest.mjs`
 with a bare `node` resolves through the ambient `PATH` and **does not** satisfy this: the
@@ -697,11 +715,16 @@ because npm rejects the same config file twice with `double-loading config`, and
 directory the audit child runs in, and npm offers no flag that relocates that source. What covers
 it is a check rather than a construction: the transport comparison runs `npm config list --json`
 in the same directory, so a committed `.github/workflows/.npmrc` is visible to it — measured, a
-proxy set there appears in that output — and the run refuses with exit `6`. What remains is a
-project `npmrc` **created in the window between that check and the audit invocation**, which
-requires writing into the repository working directory mid-run. That is the same residual class as
-the preload above: an actor who can do it already runs code on the host, and the check is worth
-what it is worth against the accidental case.
+proxy set there appears in that output — and the run refuses with exit `6`.
+
+**The mid-run window this section used to name as an open residual is closed, and the text saying
+otherwise was stale.** A project `npmrc` written after that check and removed again before the end
+was once invisible to everything downstream. Two sweeps now cover it, and neither subsumes the
+other: the **workflow directory** is swept, so creating an entry and removing it is caught even
+though the file is gone by the end — both operations move the directory's change time — and
+`.npmrc` **itself** is swept as an optional path, so rewriting an existing file in place is caught
+by the file's own change time, which the directory's does not record. Either refuses at exit `10`.
+Measured both ways against a live run, including create-and-delete leaving nothing on disk.
 
 **A symlink under `node_modules` may not resolve outside it.** The fold hashes a link's target
 *text*, never the bytes behind it, which is right for the eight `.bin` shims a normal install

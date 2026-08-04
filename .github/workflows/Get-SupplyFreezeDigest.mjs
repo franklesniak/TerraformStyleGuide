@@ -784,7 +784,7 @@ function npmInstallationRootOrRefuse() {
       '  so folding that tree would vouch for bytes that are not the ones running.\n');
     process.exit(2);
   }
-  return strRealRoot;
+  return { root: strRealRoot, cli: strRealNpm };
 }
 
 // Content and shape only, deliberately not modes. The reviewed digest has to
@@ -959,17 +959,72 @@ function foldNpmInstallation(strRoot, strLauncherPath) {
 // symlink to a .js file here but a shell wrapper on other installs, and the
 // wrapper case would silently keep the old behaviour. Putting this Node's own
 // directory first makes `env node` resolve to it however npm is packaged.
+//
+// Round 60, reported by Codex twice over, and the round-31 reasoning above is
+// what has to change rather than be extended.
+//
+// That comment chose PATH over exec'ing npm-cli.js "because npm is a symlink to
+// a .js file here but a shell wrapper on other installs". True in general, and
+// no longer relevant here: the installation is now pinned by digest, so the
+// layout is not a guess -- bin/npm is known to resolve to a .js file inside
+// lib/node_modules/npm, and that resolved path is what the fold authenticates.
+//
+// PATH resolution turned out to be attacker-influenceable in two separate ways:
+//
+//   a colon in the path. PATH is colon-SEPARATED, so prepending a directory
+//   whose name contains ':' inserts two entries instead of one. A distribution
+//   at /tmp/reviewed:copy/bin puts /tmp/reviewed first, and an attacker's
+//   /tmp/reviewed/npm answers every call while the genuine
+//   /tmp/reviewed:copy/bin/npm is the file both folds authenticate. A legal
+//   POSIX path silently redirects the executable.
+//
+//   a different basename. npm's shebang is `#!/usr/bin/env node`, so the
+//   prepend only binds the runtime if a file literally named `node` sits in
+//   that directory. Invoke the reviewed binary as bin/node24 and `env node`
+//   falls through to the ambient PATH, so the genuine npm CLI runs under an
+//   attacker's runtime -- and both folds still pass, because the launcher and
+//   the installation really are genuine.
+//
+// Both disappear if nothing is resolved by name. The child is now this
+// process's OWN executable, running the resolved npm CLI by absolute path:
+// no PATH lookup for the program, and no shebang to interpret, so the runtime
+// is the same authenticated binary that is executing this line.
+//
+// The prepend is kept for npm's own internal lookups, and skipped when the
+// directory contains a colon -- there it corrupts PATH rather than extending
+// it, and with the direct invocation above it is no longer load-bearing.
 function npmChildEnv(objEnv) {
   const objBase = objEnv ?? process.env;
+  const strNodeDirectory = dirname(process.execPath);
+  if (strNodeDirectory.includes(delimiter)) return { ...objBase };
   return {
     ...objBase,
-    PATH: `${dirname(process.execPath)}${delimiter}${objBase.PATH ?? ''}`,
+    PATH: `${strNodeDirectory}${delimiter}${objBase.PATH ?? ''}`,
   };
 }
 
 function runNpm(arrNpmArguments, objEnv) {
+  // Round 60. Re-checked before every invocation rather than only at the fold,
+  // because the path is re-resolved by the operating system at exec time: an
+  // ancestor renamed aside between the fold and this call would send the same
+  // path string to a different file. This does not close that race -- nothing
+  // inside the process can -- but it reduces the window from the whole run to
+  // the gap between this stat and the exec.
+  const intInodeNow = (() => {
+    try { return lstatSync(strNpmCli).ino; } catch { return null; }
+  })();
+  if (intInodeNow !== intNpmCliInode) {
+    process.stderr.write(
+      'supply-freeze: the npm command line is no longer the file that was authenticated.\n' +
+      `  npm cli            ${formatUntrustedText(strNpmCli)}\n` +
+      `  authenticated      inode ${intNpmCliInode}\n` +
+      `  resolves now to    ${intInodeNow === null ? 'nothing' : `inode ${intInodeNow}`}\n` +
+      '  the path was redirected after the installation was folded, so the program\n' +
+      '  about to answer is not the program this run verified.\n');
+    process.exit(2);
+  }
   try {
-    return execFileSync('npm', arrNpmArguments, {
+    return execFileSync(process.execPath, [strNpmCli, ...arrNpmArguments], {
       cwd: strWorkflowDirectory,
       env: npmChildEnv(objEnv),
       encoding: 'utf8',
@@ -1056,6 +1111,24 @@ function runNpmOrRefuse(arrNpmArguments, objEnv, intFailureExit, strMeaning) {
       '  produced; nothing is recorded from a call that did not answer.\n');
     process.exit(intFailureExit);
   }
+}
+
+// Round 60. npm writes its ls problems as `<kind>: <spec>, required by <x>`,
+// and the round-59 redactor treats any RFC 3986 scheme token as the start of a
+// URL -- so `extraneous:` reads as a scheme and the entire diagnostic is
+// withheld. Measured, every line of a real refusal came back as
+// `extraneous:/// (path, credentials and query redacted)`, which names nothing.
+//
+// That over-matching was a deliberate trade and it is still the right one; what
+// was wrong is feeding this string to the funnel whole. The kind is a fixed
+// lowercase vocabulary npm controls, so it is separated and checked rather than
+// redacted, and everything after it -- the part that can carry a registry URL
+// with credentials -- goes through the funnel unchanged.
+const RE_LS_PROBLEM_KIND = /^([a-z]+): ([\s\S]*)$/u;
+function formatLsProblem(strProblem) {
+  const arrParts = RE_LS_PROBLEM_KIND.exec(strProblem);
+  if (arrParts === null) return formatUntrustedText(strProblem);
+  return `${arrParts[1]}: ${formatUntrustedText(arrParts[2])}`;
 }
 
 function runNpmAllowingFailure(arrNpmArguments, objEnv) {
@@ -2660,7 +2733,10 @@ if (!existsSync(strNpmBesideNode)) {
     '  run the recorder with a complete Node installation, not a relocated binary.\n');
   process.exit(2);
 }
-const strNpmTreeRoot = npmInstallationRootOrRefuse();
+const objNpmInstallation = npmInstallationRootOrRefuse();
+const strNpmTreeRoot = objNpmInstallation.root;
+const strNpmCli = objNpmInstallation.cli;
+const intNpmCliInode = lstatSync(strNpmCli).ino;
 const objNpmTree = foldNpmInstallation(strNpmTreeRoot, strNpmBesideNode);
 // Round 58, reported by Codex: REVIEWED_NPM_TREE_FILES was printed in the
 // refusal and never compared, so it documented a number rather than asserting
@@ -3293,10 +3369,53 @@ try {
   // throw escaped uncaught and a problematic tree ended the run at exit 1 with a
   // stack trace; now the output is classified by parseNpmJsonOrRefuse, which
   // refuses at the documented exit 7 when what came back is not a tree report.
-  const strLsOutput = runNpmAllowingFailure(['ls', '--all', '--json', '--long',
-    '--package-lock-only=false', '--depth=4294967295',
-    '--include=dev', '--include=optional', '--include=peer',
-    '--global=false', '--link=false']);
+  // Round 60, reported by Codex, and a regression I introduced one round
+  // earlier. Round 59 moved this call to runNpmAllowingFailure so that a
+  // problematic tree would stop crashing the run -- and that wrapper DISCARDS
+  // the exit status. `npm ls` documents its non-zero exit as "extraneous,
+  // missing, and invalid packages" and still prints a complete tree object,
+  // so the checks below saw a report with the right root path and the right
+  // top-level key set and passed it. Measured, against a manifest whose only
+  // dependency is not installed:
+  //
+  //   exit status 1, stdout a valid tree object, .path present,
+  //   top-level keys unchanged, the missing entry present with missing: true
+  //
+  // treeSatisfiesLockfile: true, for a tree that does not satisfy the lockfile.
+  // Fixing the crash by widening what counts as success turned a stack trace
+  // into a wrong answer, which is exactly what the round-29 comment warned
+  // against two functions up and what I did anyway.
+  //
+  // The status is authoritative and the JSON is only evidence for the message.
+  // A non-zero exit IS the tree failing to satisfy the lockfile, which is what
+  // exit 7 names.
+  let strLsOutput;
+  try {
+    strLsOutput = runNpm(['ls', '--all', '--json', '--long',
+      '--package-lock-only=false', '--depth=4294967295',
+      '--include=dev', '--include=optional', '--include=peer',
+      '--global=false', '--link=false']);
+  } catch (objLsError) {
+    const arrProblems = (() => {
+      try {
+        const objBody = JSON.parse(typeof objLsError?.stdout === 'string' ? objLsError.stdout : '');
+        return Array.isArray(objBody?.problems) ? objBody.problems : [];
+      } catch { return []; }
+    })();
+    process.stderr.write(
+      'supply-freeze: refusing to record digests for a tree that is not the installed tree.\n' +
+      '  npm ls exit status ' + formatUntrustedText(String(objLsError?.status ?? 'unknown')) + '\n' +
+      (arrProblems.length > 0
+        ? arrProblems.slice(0, 8).map((strProblem) =>
+          `  problem            ${formatLsProblem(String(strProblem))}\n`).join('')
+          + (arrProblems.length > 8 ? `  (and ${arrProblems.length - 8} more)\n` : '')
+        : '  npm reported no problem list with the failure.\n') +
+      '  npm ls exits non-zero for extraneous, missing and invalid packages, and\n' +
+      '  still prints a tree, so the report cannot be read as agreement.\n' +
+      '  install first with the documented command, then record:\n' +
+      '    npm ci --ignore-scripts --no-audit --no-fund\n');
+    process.exit(7);
+  }
   // The exit code alone has now been wrong four times, in rounds 19, 20, 22 and
   // 24, each time because a different ambient input changed which tree npm was
   // describing. Naming one more flag would close this instance and leave the
@@ -3666,7 +3785,10 @@ if (boolSkipAudit) {
     // the transport check above runs `npm config list --json` in the same
     // directory, and a committed .github/workflows/.npmrc is visible there --
     // measured, its proxy appears in that output -- so the static case exits 6.
-    // What remains is a project npmrc created in the window between that check
+    // Round 56/57 closed the window this comment used to leave open: the
+    // quiescence sweep now covers the workflow directory AND .npmrc itself, so
+    // a project npmrc created mid-run, or rewritten in place and restored, is
+    // refused at exit 10. What remains is a project npmrc created in the window between that check
     // and this line, which is a write into the repository working directory
     // mid-run: the same residual class as the preload the NODE_OPTIONS refusal
     // documents, and named in the record rather than papered over.
