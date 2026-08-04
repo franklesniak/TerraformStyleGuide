@@ -794,6 +794,7 @@ function npmInstallationRootOrRefuse() {
 // replacing a real file with a link to one, cannot leave the digest unmoved.
 function foldNpmInstallation(strRoot) {
   const objHash = createHash('sha256');
+  const objChangeHash = createHash('sha256');
   let intFiles = 0;
   let intSymlinks = 0;
   const walk = (strDirectory, strRelative) => {
@@ -823,6 +824,25 @@ function foldNpmInstallation(strRoot) {
         } else {
           objHash.update(`? ${strKey}\n`);
         }
+        // Round 57, and this half exists because the reply that shipped the
+        // content fold argued its way out of it and was wrong.
+        //
+        // That argument was: a replacement restored before the end must be
+        // restored byte-identically, so the npm that answered every call IS the
+        // reviewed npm and nothing was forged. The second clause does not
+        // follow from the first. The npm that ANSWERED was the replacement; only
+        // the npm ON DISK AT THE END is the reviewed one, and the forged
+        // configuration, lockfile assertion and advisory posture are already in
+        // the record by then. Restoring bytes does not un-forge an answer that
+        // was already given -- exactly the reasoning used one finding over for
+        // .npmrc, applied there and then denied here.
+        //
+        // Content alone therefore catches only a replacement that PERSISTS.
+        // Inode change times catch replace-and-restore, because both writes move
+        // ctime and neither moves it back. Neither observable covers the other's
+        // case, which is the same conclusion the .npmrc sweep reached, and the
+        // two are folded separately so a mismatch says which one moved.
+        objChangeHash.update(`${strKey} ${objStat.ctimeMs}\n`);
       } catch (objError) {
         process.stderr.write(
           'supply-freeze: refusing to verify an npm installation that changed while being read.\n' +
@@ -832,7 +852,12 @@ function foldNpmInstallation(strRoot) {
     }
   };
   walk(strRoot, '');
-  return { sha256: objHash.digest('hex'), files: intFiles, symlinks: intSymlinks };
+  return {
+    sha256: objHash.digest('hex'),
+    changeSha256: objChangeHash.digest('hex'),
+    files: intFiles,
+    symlinks: intSymlinks,
+  };
 }
 
 // Round 31, reported. npm ships as `#!/usr/bin/env node`, so the runtime its
@@ -3945,12 +3970,15 @@ if (!readOrRefuse(strScriptPath).equals(objScriptBefore)) {
 // no freeze record here to protect.
 if (!boolAnyToolchain) {
   const objNpmTreeAfter = foldNpmInstallation(strNpmTreeRoot);
-  if (objNpmTreeAfter.sha256 !== objNpmTree.sha256) {
+  if (objNpmTreeAfter.sha256 !== objNpmTree.sha256
+    || objNpmTreeAfter.changeSha256 !== objNpmTree.changeSha256) {
     process.stderr.write(
       'supply-freeze: the npm installation changed while it was being used.\n' +
       `  npm installation   ${formatUntrustedText(strNpmTreeRoot)}\n` +
       `  when checked       ${objNpmTree.sha256} (${objNpmTree.files} files)\n` +
       `  after the run      ${objNpmTreeAfter.sha256} (${objNpmTreeAfter.files} files)\n` +
+      `  what moved         ${objNpmTreeAfter.sha256 !== objNpmTree.sha256
+        ? 'contents' : 'inode change times, with the contents restored'}\n` +
       '  the npm verified before the first subprocess is not the npm on disk now, so\n' +
       '  the configuration, the lockfile assertion and the advisory posture were not\n' +
       '  necessarily answered by the installation this run authenticated.\n');
