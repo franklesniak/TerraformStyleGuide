@@ -2419,10 +2419,34 @@ function redactUrl(strValue) {
 // line" -- which the paragraph above still claimed -- to "every following line".
 // Swept here rather than waiting to be told. Measured, an npm failure block lost
 // all three of its `npm ERR!` lines with nothing in the output saying so.
+// Swept in round 52, before a reviewer reached it, and it is the sentence three
+// paragraphs up being wrong in the round that wrote it. That sentence claimed the
+// scan is "broader than the parser on both axes the parser is permissive about".
+// There is a THIRD axis. For a special scheme the parser does not require `//` at
+// all: its special-authority-ignore-slashes state skips any run of U+002F and
+// U+005C, including an empty run. Measured, all four accepted and all four
+// leaking through a scan that demanded exactly two forward slashes:
+//
+//   https:host/a?token=...    -> https://host/a?token=...   (accepted, leaked)
+//   https:/host/a?token=...   -> https://host/a?token=...   (accepted, leaked)
+//   https:\\host/a?token=...  -> https://host/a?token=...   (accepted, leaked)
+//   https:/\host/a?token=...  -> https://host/a?token=...   (accepted, leaked)
+//
+// So the separator is any run of either slash, or none, with the deleted
+// characters interleaved -- the parser's own rule rather than a slash count I
+// picked. Backslashes are NOT stripped before redactUrl the way tab, LF and CR
+// are: the parser converts those itself, and removing them here would be this
+// file editing a url rather than reading one.
+//
+// The cost of allowing an EMPTY run is real and accepted on the standing
+// reasoning: prose containing a bare `https:` now has the rest of its line
+// withheld, because nothing distinguishes that from a url this parser accepts.
+// redactUrl fails closed on it and prints a length rather than the text. A
+// withheld diagnostic is recoverable by rerunning; a published credential is not.
 const RE_PARSER_DELETES = /[\t\n\r]/gu;
 const RE_URL_IN_TEXT = new RegExp(
   'h[\\t\\n\\r]*t[\\t\\n\\r]*t[\\t\\n\\r]*p[\\t\\n\\r]*(?:s[\\t\\n\\r]*)?'
-  + ':[\\t\\n\\r]*/[\\t\\n\\r]*/[\\s\\S]*', 'iu');
+  + ':[/\\\\\\t\\n\\r]*[\\s\\S]*', 'iu');
 const RE_LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/gu;
 function formatUntrustedText(strText) {
   const strRaw = String(strText);
@@ -2431,7 +2455,15 @@ function formatUntrustedText(strText) {
     return formatTreeName(strRaw);
   }
   const strTail = strRaw.slice(intUrlAt);
-  const intWithheld = (strTail.match(RE_LINE_BREAK) ?? []).length;
+  // The count was overstated until round 52 swept it: a tail ending in a line
+  // terminator reported one further line withheld when no further line existed.
+  // Counted by segment now, with a trailing empty one dropped, so the number is
+  // the count of lines that actually carried text.
+  const arrLines = strTail.split(RE_LINE_BREAK);
+  if (arrLines[arrLines.length - 1] === '') {
+    arrLines.pop();
+  }
+  const intWithheld = arrLines.length - 1;
   return formatTreeName(strRaw.slice(0, intUrlAt))
     + formatTreeName(redactUrl(strTail.replace(RE_PARSER_DELETES, '')))
     + (intWithheld > 0
