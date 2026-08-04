@@ -43,9 +43,38 @@ import { fileURLToPath } from 'node:url';
 // rules are the specification's, not a guess; the reasoning is at
 // formatUntrustedText, which is where they are used.
 const RE_PARSER_DELETES = /[\t\n\r]/gu;
-const RE_URL_IN_TEXT = new RegExp(
-  'h[\\t\\n\\r]*t[\\t\\n\\r]*t[\\t\\n\\r]*p[\\t\\n\\r]*(?:s[\\t\\n\\r]*)?'
-  + ':[/\\\\\\t\\n\\r]*[\\s\\S]*', 'iu');
+// Round 57, reported by Codex, and the SEVENTH round on this one expression.
+// Rounds 47 through 52 each widened it within http and https -- tolerating the
+// characters the parser deletes, then the slash runs it ignores -- and every one
+// of those fixes was still answering "how is an http url spelled". It only ever
+// matched two schemes, while formatUntrustedText is the general funnel for
+// caller- and subprocess-controlled text. Measured, all five printed verbatim
+// with both credentials intact:
+//
+//   ftp://user:SECRET@host/p?token=S2      file:///etc/x?token=SECRET
+//   ftps://user:SECRET@host/               ws://user:SECRET@host/
+//   git+ssh://user:SECRET@host/r.git
+//
+// redactUrl() handles every one of them correctly -- new URL() parses all five
+// and the credentials come out -- so the prefilter was the only thing standing
+// between them and a retained log. Six rounds of widening a scheme allowlist
+// that was never the right shape.
+//
+// So the scheme is no longer enumerated. RFC 3986 defines it as
+// ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ), and that is what this matches,
+// with the three parser-deleted characters tolerated anywhere inside it for the
+// reason round 51 established. Everything from the scheme onward goes to
+// redactUrl, which has failed CLOSED since round 38 -- an unparseable tail is
+// withheld rather than trusted.
+//
+// The cost, stated rather than discovered later: this over-matches. A path or
+// argument containing a colon after a letter -- `/tmp/a:b/npm` -- is treated as
+// a scheme and its tail is withheld. That is deliberate. A refusal message that
+// renders an unusual path awkwardly is a nuisance; one that prints a credential
+// is the defect this funnel exists to prevent, and the asymmetry decides it.
+// The compared registry row is unaffected: https://registry.npmjs.org/ parses,
+// its pathname is exactly '/', and redactUrl returns it character-identical.
+const RE_URL_IN_TEXT = /[A-Za-z][A-Za-z0-9+.\-\t\n\r]*:[\s\S]*/u;
 const RE_LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/gu;
 
 // Round 56, reported by Codex, and the round-55 fix caught in its own turn.
@@ -1585,6 +1614,21 @@ function newestChangeTime(strRoot, arrExtraPaths) {
     }
     return objStats;
   };
+  // Round 57, reported by Codex. A path that is allowed not to exist, recorded
+  // as -1 when it does not. The sweep comparison already distinguishes a moved
+  // change time from an entry appearing or disappearing, and -1 makes all four
+  // transitions fall out of the same equality test: absent-to-absent matches,
+  // while absent-to-present, present-to-absent and rewritten-in-place all
+  // differ. Throwing on a missing optional path would refuse every ordinary run
+  // instead, since this repository ships no .npmrc.
+  const considerOptional = (strPath, strLabel) => {
+    try {
+      consider(strPath, strLabel);
+    } catch (objError) {
+      if (objError?.code !== 'ENOENT') throw objError;
+      objEntryChangeTimes.set(strLabel, -1);
+    }
+  };
   const walk = (strDirectory, strRelative) => {
     for (const objEntryHint of readdirOrRefuseUndecodable(strDirectory, strRelative)) {
       const strPath = join(strDirectory, objEntryHint.name);
@@ -1672,6 +1716,28 @@ function newestChangeTime(strRoot, arrExtraPaths) {
   // The directory is swept rather than the .npmrc path specifically, because the
   // defect is not about one filename: anything appearing beside the manifests
   // mid-run is a write into the directory whose contents this record describes.
+  //
+  // Round 57, reported by Codex, and the round-56 fix directly above caught one
+  // case short. A directory's ctime moves when an ENTRY is created or removed --
+  // it does not move when an existing file's CONTENTS are rewritten, because
+  // that changes the file's inode and not the directory's. Measured on a
+  // pre-existing .npmrc, rewritten hostile and restored benign:
+  //
+  //   directory ctime moved: false   <- all the round-56 sweep watched
+  //   file      ctime moved: true    <- what nothing watched
+  //
+  // So a committed or pre-existing .npmrc could be rewritten after the transport
+  // check, consumed by the audit, and restored, with the directory sweep seeing
+  // nothing. npm documents the per-project .npmrc as a configuration source
+  // distinct from the user and global files the audit call redirects, so this is
+  // a live source rather than a theoretical one.
+  //
+  // The file is therefore swept in its own right, as an OPTIONAL path: it does
+  // not exist in this repository today, and a check that refused every run for
+  // the absence of a file nobody ships would be worse than the hole it closed.
+  // Both halves are needed and neither subsumes the other -- the directory
+  // catches create-and-remove, the file catches rewrite-in-place.
+  considerOptional(join(strWorkflowDirectory, '.npmrc'), '.npmrc');
   return { ctimeMs: intNewest, path: strNewestPath, entries: objEntryChangeTimes };
 }
 
@@ -3851,6 +3917,45 @@ if (!readOrRefuse(strScriptPath).equals(objScriptBefore)) {
     `  reported digest    ${strScriptSha256}\n` +
     '  the file on disk no longer matches the source that derived these values.\n');
   process.exit(3);
+}
+
+// Round 57, reported by Codex, and the round-56 npm authentication caught being
+// a snapshot where it needed to be an interval.
+//
+// That round folded the npm installation once, before the first npm subprocess,
+// and my reply called the remaining gap a TOCTOU the attacker "has to win a race"
+// for. That undersold it by the width of the whole run. The fold happened around
+// line 2450 and the last npm subprocess -- the audit -- runs roughly 950 lines
+// later, so the window was not microseconds: it was every npm call in the
+// program. With a writable copied distribution an actor could present the
+// genuine tree to the check, replace bin/npm-cli.js immediately afterwards, and
+// have the replacement answer the version, config, ls and audit calls. Nothing
+// looked at the installation again -- not the tree folds, which walk
+// node_modules, and not the quiescence sweep, which walks node_modules, the two
+// manifests and the workflow directory.
+//
+// So the installation is folded a SECOND time, here, after every npm subprocess
+// has run. Bytes rather than a stamp, because that is what the first fold
+// compared and a replacement restored before this point must still be caught by
+// the same measure. Refusing at exit 2 keeps this on the toolchain refusal, which
+// is what it is: the program that answered was not the program that was checked.
+//
+// Gated the same way the first fold's byte comparison is. --any-toolchain waives
+// which npm is acceptable and marks the output not a freeze record, so there is
+// no freeze record here to protect.
+if (!boolAnyToolchain) {
+  const objNpmTreeAfter = foldNpmInstallation(strNpmTreeRoot);
+  if (objNpmTreeAfter.sha256 !== objNpmTree.sha256) {
+    process.stderr.write(
+      'supply-freeze: the npm installation changed while it was being used.\n' +
+      `  npm installation   ${formatUntrustedText(strNpmTreeRoot)}\n` +
+      `  when checked       ${objNpmTree.sha256} (${objNpmTree.files} files)\n` +
+      `  after the run      ${objNpmTreeAfter.sha256} (${objNpmTreeAfter.files} files)\n` +
+      '  the npm verified before the first subprocess is not the npm on disk now, so\n' +
+      '  the configuration, the lockfile assertion and the advisory posture were not\n' +
+      '  necessarily answered by the installation this run authenticated.\n');
+    process.exit(2);
+  }
 }
 // Round 18, reported, and the same defect round 15 fixed for the umask. The
 // value compared and the value printed were two separate stat calls, so a

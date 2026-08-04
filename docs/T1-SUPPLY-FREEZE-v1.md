@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `3e3efbfe2b2b06f7ff260baab80dc1d0174ab897b92751c714e3b6eb3fca1ac0` | script `script.sha256` |
+| Freeze script SHA-256 | `5f1f523d5c92582270bd23ce26c7f3bbe4954a6ab508031ce10fc249a7e1f5d9` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `d26b1ad0777070b7840445679915da3a55df4896d8cb52c076a6b2093417b029` | script `toolchain.npmTree` |
@@ -362,6 +362,39 @@ document was written to remove. It belongs in
 | `minimatch` | high | GHSA-23c5-xmqv-rm74, GHSA-3ppc-4f35-3m26, GHSA-7r86-cg39-jmmj |
 | `picomatch` | high | GHSA-3v7f-55p6-f55p, GHSA-c2c7-rcm5-vvqj |
 
+## Trust boundary
+
+**Everything this script verifies, it verifies using Node — so it cannot verify Node.**
+
+The recorder authenticates a great deal: it folds its own bytes, folds the npm installation and
+compares it against the digest of the npm shipped inside the reviewed Node archive, refuses an
+npm that resolves outside that installation, and refuses install-shaping or transport
+configuration that differs from the reviewed values. Every one of those checks is performed by
+calling `node:fs`, `node:crypto` and `node:child_process`.
+
+A Node executable that has been modified supplies those modules. It can report `v24.18.1` from
+`process.version`, return whatever bytes it likes from `readFileSync`, produce whatever digest it
+likes from `createHash`, and answer every `execFileSync` itself without launching anything. Under
+such a Node the script's self-hash, the npm-installation digest, both installed-tree folds and
+the advisory posture are all forgeable, and **no check that could be added to this file would
+detect it**, because the check would run under the same modified runtime. Hashing the `node`
+binary from inside that binary is not an exception — it is the clearest case of the same problem.
+
+Note what this is *not*. It is not the round-56 finding, where the reviewed Node binary was
+**copied** unmodified and a fake `npm` was placed beside it: that required no change to Node, and
+it is refused now because npm is authenticated by its bytes. This is the strictly harder attack of
+modifying Node itself, and it is outside what a script can close about its own interpreter.
+
+**The anchor is therefore external, and it already exists.** Both workflows fetch
+`node-v24.18.1-linux-x64.tar.xz` from `nodejs.org`, compare its SHA-256 against a reviewed
+constant *before* extracting it, and then invoke the extracted binary by absolute path. The trust
+in a CI-produced record rests on that step, not on anything the script says about itself.
+
+A manual run must do the same, which is why [How to reproduce](#how-to-reproduce) below obtains
+the distribution by digest and invokes it by absolute path. Running `node Get-SupplyFreezeDigest.mjs`
+with a bare `node` resolves through the ambient `PATH` and **does not** satisfy this: the
+environment chooses the interpreter, and the record has no way to say which one answered.
+
 ## How to reproduce
 
 The script is **not** present at the recorded T1 merge commit — it is added by the change that
@@ -376,10 +409,19 @@ git checkout main            # or any revision containing Get-SupplyFreezeDigest
 git rev-parse HEAD:.github/workflows/package.json          # must equal the recorded blob
 git rev-parse HEAD:.github/workflows/package-lock.json     # must equal the recorded blob
 
+# Obtain the toolchain by digest rather than by name. `node` on PATH is chosen by
+# the environment, and the script cannot check what it is -- see Trust boundary.
+curl -fsSLo /tmp/node24.tar.xz \
+  https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz
+sha256sum /tmp/node24.tar.xz
+# must print d6c664df3f3f61458e8c277585571328522d705166723a7c7823a9253a4d15a0
+mkdir -p /tmp/node24 && tar -xJf /tmp/node24.tar.xz -C /tmp/node24 --strip-components=1
+strNode=/tmp/node24/bin/node   # absolute, and npm is the one beside it
+
 cd .github/workflows
 umask 0022                   # the recorded tree was installed under this
-npm ci --ignore-scripts --no-audit --no-fund
-env -u NODE_OPTIONS node Get-SupplyFreezeDigest.mjs
+env -u NODE_OPTIONS "$strNode" /tmp/node24/bin/npm ci --ignore-scripts --no-audit --no-fund
+env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs
 ```
 
 **Ambient npm configuration changes what `npm ci` produces.** A `bin-links=false` or `omit=dev`
@@ -430,8 +472,8 @@ strIsolationDirectory="$(mktemp -d)"
 : > "$strIsolationDirectory/npm-global-empty"
 export NPM_CONFIG_USERCONFIG="$strIsolationDirectory/npm-user-empty"
 export NPM_CONFIG_GLOBALCONFIG="$strIsolationDirectory/npm-global-empty"
-npm ci --ignore-scripts --no-audit --no-fund
-env -u NODE_OPTIONS node Get-SupplyFreezeDigest.mjs
+env -u NODE_OPTIONS "$strNode" /tmp/node24/bin/npm ci --ignore-scripts --no-audit --no-fund
+env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs
 ```
 
 **The isolation must cover the recorder, not just the install.** An earlier draft passed
