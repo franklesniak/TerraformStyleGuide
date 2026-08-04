@@ -728,8 +728,24 @@ function runNpmAllowingFailure(arrNpmArguments, objEnv) {
 // the reported fix was to write "multiple" so the two could not disagree. The
 // count IS the evidence here, so the disagreement was settled by re-running the
 // experiment rather than by deleting the number: four installs, in four paths of
-// deliberately differing lengths, all folded to 16f42788... Recorded as four
+// deliberately differing lengths, all folding to one value. Recorded as four
 // because four were run and observed, not because the larger number was chosen.
+//
+// Round 49, reported by Codex. That sentence used to name the value, and the
+// value went stale the moment directory read bits were folded in one round
+// earlier -- leaving a reader two different expected results for one recipe, in
+// a file whose whole argument is that a hand-copied digest rots while looking
+// authoritative. The count is kept because the count is what this paragraph is
+// evidence for; the digest is dropped rather than restated because THE CLAIM
+// HERE IS AGREEMENT, not the particular number they agreed on. Four installs in
+// four paths folding identically is what proves no path leaks into the hashed
+// bytes, and that survives any change to the fold. The current value has exactly
+// one home, and it is the record.
+//
+// Re-running the four installs under the new fold would have let the number stay,
+// and it is not restated from a single run instead: this host has no registry
+// access, so four independent `npm ci` installs cannot be performed here, and a
+// number copied from one run would assert an agreement nobody measured.
 //
 // Every variable-length field is length-prefixed, and that is load-bearing
 // rather than tidiness. Reported and confirmed: the first framing wrote
@@ -1588,7 +1604,26 @@ function normalizeAudit(objAudit) {
           + ` nor an advisory object (got ${objVia === null ? 'null' : typeof objVia})`);
       }
       const strUrl = typeof objVia.url === 'string' ? objVia.url : '';
-      const objMatch = strUrl.match(/GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}/u);
+      // Round 49, reported by Codex. This was unanchored at both ends, so a
+      // longer token that merely BEGINS with a GHSA-shaped prefix matched its
+      // prefix and the remainder was discarded. Measured on three urls:
+      //
+      //   .../GHSA-aaaa-bbbb-ccccx  -> GHSA-aaaa-bbbb-cccc
+      //   .../GHSA-aaaa-bbbb-ccccy  -> GHSA-aaaa-bbbb-cccc
+      //   .../GHSA-aaaa-bbbb-cccc   -> GHSA-aaaa-bbbb-cccc
+      //
+      // Two reports naming different advisories therefore recorded one identity
+      // and one auditSha256 -- the same collision class as the round-43 source
+      // ids, in the field this record exists to compare exactly, and reached
+      // instead of the exit-5 refusal the paragraph below documents.
+      //
+      // Boundaries on both sides. A trailing `-` is excluded as well as a
+      // trailing alphanumeric, so `GHSA-aaaa-bbbb-cccc-dddd` does not match its
+      // own prefix either. With no match the identity falls through to the
+      // source-id test below, which either finds a real identity or refuses --
+      // both correct, and neither is a truncated name npm never emitted.
+      const objMatch = strUrl.match(
+        /(?<![0-9a-z])GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}(?![0-9a-z-])/u);
       // Round 29, reported, and the fifth widening of this guard -- the comment
       // above already counted four. Rounds 22 and 24 checked the container and
       // then the member TYPE, and left the member's FIELDS unchecked, so `{}`
@@ -2191,16 +2226,51 @@ function redactUrl(strValue) {
 // -- takes both. So both were narrower than the parser, which is the one thing
 // the rule above forbids.
 //
-// The class is now whitespace-delimited: a run of non-space characters after the
-// scheme. That is broader than the parser by construction, which is the safe
-// direction -- trailing punctuation gets swallowed into the redaction rather than
-// left outside it, and redactUrl fails CLOSED on anything it cannot parse, so an
-// over-broad match is withheld rather than printed. There is no character this
+// The class was made whitespace-delimited: a run of non-space characters after
+// the scheme, on the reasoning that trailing punctuation gets swallowed into the
+// redaction rather than left outside it, and that redactUrl fails CLOSED on
+// anything it cannot parse. That comment then claimed "there is no character this
 // can now stop at except whitespace, so there is no third quote-like character
-// waiting to be found in round 49.
+// waiting to be found in round 49."
+//
+// Round 49, reported by Codex, and that sentence was wrong in the round it named.
+// Whitespace IS a character the parser accepts inside a URL: the WHATWG parser
+// percent-encodes an internal space rather than ending the URL there. Measured
+// through the same refusal:
+//
+//   new URL('https://host/a b?token=SUPPLYSECRET')
+//     -> https://host/a%20b?token=SUPPLYSECRET        (accepted)
+//   --registry=https://host/a b?token=SUPPLYSECRET
+//     -> https://host/ (path, credentials and query redacted) b?token=SUPPLYSECRET
+//
+// The tab form behaves the same way. So the previous fix moved the boundary from
+// two characters to one and left the shape of the defect exactly as it was.
+//
+// The real lesson is that NO delimiter works. A scanner has to decide where a URL
+// ends, and the parser this scanner feeds accepts every character including
+// whitespace -- so for any terminator chosen, a URL containing it is narrower than
+// the parser, which is the one thing the rule above forbids. Enumerating
+// terminators was never going to converge; that is why this is the third round on
+// one expression.
+//
+// The only rule that is broader than the parser is to stop at nothing: from the
+// scheme to the END OF THE LINE. A line terminator is the one thing that cannot
+// sit inside a URL in this output, because the escaper below turns every line
+// separator into a printable escape before anything is written.
+//
+// This also settles the case reported as "match the complete option value". Each
+// argv element is formatted by its OWN call -- the callers map over arguments and
+// join afterwards -- so for an argument, end-of-line and end-of-value are the same
+// boundary, and the whole value is redacted without a separate code path.
+//
+// The cost is real and is accepted rather than hidden: text AFTER a url on the
+// same line is withheld too, so npm's `request to <url> failed, reason: ECONNREFUSED`
+// now reports the host and loses the reason. A withheld diagnostic is recoverable
+// by rerunning; a published credential is not, and this output goes to CI logs.
 function formatUntrustedText(strText) {
   return formatTreeName(
-    String(strText).replace(/https?:\/\/\S+/giu, (strMatch) => redactUrl(strMatch)));
+    String(strText).replace(
+      /https?:\/\/[^\n\r\u2028\u2029]*/giu, (strMatch) => redactUrl(strMatch)));
 }
 
 function configDrift(objReviewed, objEffective) {
