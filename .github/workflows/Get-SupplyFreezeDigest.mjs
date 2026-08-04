@@ -558,6 +558,24 @@ function formatWithheldValue(strValue) {
   return `(value withheld, ${strValue.length} characters)`;
 }
 
+// Renders one quiescence-sweep reading. Round 67: the sweep began recording
+// `${ino}:${ctimeMs}` rather than a bare timestamp, and this message still fed
+// the value to `new Date(...).toISOString()`. Measured before this was added --
+// the sweep DETECTED the change correctly and then died formatting its own
+// refusal with `RangeError: Invalid time value`, turning a clean exit 10 into an
+// exit 1 stack trace. A refusal that cannot print itself is not a refusal, and
+// the reading is the thing an operator uses to tell a rewrite-in-place from a
+// swap, so both halves are shown.
+function formatSweepReading(objReading) {
+  if (objReading === -1) return 'absent';
+  const strReading = String(objReading);
+  const intSeparator = strReading.indexOf(':');
+  if (intSeparator < 0) return new Date(Number(strReading)).toISOString();
+  const strInode = strReading.slice(0, intSeparator);
+  const intChangedAt = Number(strReading.slice(intSeparator + 1));
+  return `inode ${strInode}, ctime ${new Date(intChangedAt).toISOString()}`;
+}
+
 // Round 67, reported by Copilot. The rule below said "the VALUE is never
 // rendered", and one spelling still rendered it: a value passed as its own argv
 // token that happens to begin with `-`. `--token -sekrit` printed `--token
@@ -1948,6 +1966,21 @@ function foldInstalledTree(strRoot) {
   // whose total does not match the count beside it is a diagnostic that costs
   // the reader time to reconcile.
   const objRootStats = lstatSync(strRoot);
+  // Round 67, reported by Codex, and the round-66 metadata refusal stopping one
+  // inode short. Every directory and file INSIDE the tree was checked for a
+  // foreign owner, a second hard link and special mode bits; `node_modules`
+  // itself was only mode-hashed. The root is the entry whose owner matters most,
+  // because whoever owns a directory can replace the top-level package entries
+  // within it after the final sweep -- the exact capability the child checks
+  // exist to refuse, left open on the one directory that contains all of them.
+  //
+  // Applied only when lstat says this is a real directory. A symlinked root is a
+  // different case with its own refusal and its own bypass behaviour above, and
+  // folding an ownership check into that path would change which of the two
+  // refusals a reader sees for an unchanged condition.
+  if (objRootStats.isDirectory()) {
+    refuseUnreviewedInodeMetadata(strRoot, 'node_modules', objRootStats, 'directory');
+  }
   // Round 24, reported and measured. The mode folded here came from lstat, which
   // for a symlinked root describes the LINK -- 0777 on Linux, always -- and never
   // the directory `walk` actually traverses. With node_modules symlinked to a real
@@ -2047,9 +2080,17 @@ function newestChangeTime(strRoot, arrExtraPaths) {
   // not just the maximum over them. See the comparison for why the maximum was
   // not safe.
   const objEntryChangeTimes = new Map();
+  // Round 67, reported by Codex. This recorded ctimeMs alone, so an entry
+  // replaced within a single filesystem timestamp tick compared EQUAL to its
+  // baseline while the path resolved to a different inode. My round-66 reply
+  // declined exactly this hardening and said a swap that moves neither change
+  // time would be a live finding; timestamp granularity is that swap, and this
+  // is me taking the option I declined. The precedent was already in this file:
+  // the npm-installation fold has hashed `${ino}:${ctimeMs}` since round 56 for
+  // this reason, so the sweep was the weaker of two checks against one attack.
   const consider = (strPath, strLabel) => {
     const objStats = lstatSync(strPath);
-    objEntryChangeTimes.set(strLabel, objStats.ctimeMs);
+    objEntryChangeTimes.set(strLabel, `${objStats.ino}:${objStats.ctimeMs}`);
     if (objStats.ctimeMs > intNewest) {
       intNewest = objStats.ctimeMs;
       strNewestPath = strLabel;
@@ -2215,8 +2256,19 @@ function newestChangeTime(strRoot, arrExtraPaths) {
   };
   considerThroughLinks(strRoot, 'node_modules');
   walk(strRoot, '');
-  for (const strPath of arrExtraPaths) {
-    considerThroughLinks(strPath, strPath.split('/').pop());
+  // Round 67, reported by Codex, and a defect in the round-66 ancestor sweep
+  // added one commit earlier. The label was the path's BASENAME, so two swept
+  // paths sharing a basename collapsed to one map key and the later write won.
+  // Cloning this repository into a directory named `workflows` makes the
+  // repository-root ancestor and the workflow directory collide exactly that
+  // way, and the entry that survives is the ancestor -- so creating and deleting
+  // `.github/workflows/.npmrc` during the audit window would move a change time
+  // that no longer appears in the compared map. That is the precise injection
+  // the workflow-directory entry was added to catch, defeated by the checkout's
+  // name. Labels are now supplied by the caller and are unique by construction
+  // rather than by luck of the directory names.
+  for (const [strPath, strLabel] of arrExtraPaths) {
+    considerThroughLinks(strPath, strLabel);
   }
   // Round 56, reported by Codex, and the reason the workflow DIRECTORY is one of
   // the swept paths rather than only the files inside it.
@@ -3002,7 +3054,13 @@ const objBaselineChange = (() => {
     };
   }
   return scanOrRefuse(
-    () => newestChangeTime(strTreeRoot, [strPackagePath, strLockPath, strWorkflowDirectory, ...arrWorkflowAncestors]),
+    () => newestChangeTime(strTreeRoot, [
+    [strPackagePath, 'package.json'],
+    [strLockPath, 'package-lock.json'],
+    [strWorkflowDirectory, 'workflow directory'],
+    [arrWorkflowAncestors[0], 'workflow parent directory'],
+    [arrWorkflowAncestors[1], 'repository root'],
+  ]),
     'the baseline quiescence scan');
 })();
 
@@ -4577,7 +4635,13 @@ if (!boolAnyToolchain) {
 // A filesystem-level snapshot would close it outright and is the right answer
 // for a reader who has one; that is a property of the host, not of this script.
 const objNewestChange = scanOrRefuse(
-  () => newestChangeTime(strTreeRoot, [strPackagePath, strLockPath, strWorkflowDirectory, ...arrWorkflowAncestors]), 'the quiescence sweep');
+  () => newestChangeTime(strTreeRoot, [
+    [strPackagePath, 'package.json'],
+    [strLockPath, 'package-lock.json'],
+    [strWorkflowDirectory, 'workflow directory'],
+    [arrWorkflowAncestors[0], 'workflow parent directory'],
+    [arrWorkflowAncestors[1], 'repository root'],
+  ]), 'the quiescence sweep');
 // Round 29, reported. This compared a filesystem-stamped ctime against a
 // `Date.now()` ceiling -- two different clocks. Linux stamps inode times from
 // the COARSE clock and truncates to the filesystem's granularity, while
@@ -4648,10 +4712,10 @@ if (objSweepDifference) {
     `  what changed       ${objSweepDifference.kind}\n` +
     (objSweepDifference.was === undefined
       ? ''
-      : `  baseline ctime     ${new Date(objSweepDifference.was).toISOString()}\n`) +
+      : `  baseline reading   ${formatSweepReading(objSweepDifference.was)}\n`) +
     (objSweepDifference.now === undefined
       ? ''
-      : `  final ctime        ${new Date(objSweepDifference.now).toISOString()}\n`) +
+      : `  final reading      ${formatSweepReading(objSweepDifference.now)}\n`) +
     `  entries swept      ${objBaselineChange.entries.size} at baseline, ` +
       `${objNewestChange.entries.size} at the end\n` +
     `  recording began    ${new Date(intRecordingStartedAt).toISOString()}\n` +
