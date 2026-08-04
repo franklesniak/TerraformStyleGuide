@@ -89,16 +89,8 @@ per-row rather than asserted in a sentence.
 | Installed tree directories | `336` | script `installedTreeDirectories` |
 | Installed tree special entries | `0` | script `installedTreeSpecials` |
 | Advisory registry | `https://registry.npmjs.org/` | script `registry` |
-| Advisory posture SHA-256 | `ea559555c8c18bd2488219d977a994fabc868c2d46efb05bbaf92405c53488e1` | script `auditSha256` |
+| Advisory posture SHA-256 | `925751f8c4d131a9403a2d9ea6536c1d9c508a62d3a993c76b860375bac732ba` | script `auditSha256` |
 | Advisory counts | `{"info":0,"low":0,"moderate":2,"high":5,"critical":0,"total":7}` | script `auditCounts` |
-
-> **One compared row cannot be discharged as recorded.** `Advisory posture SHA-256` was taken under
-> the advisory normalization that preceded round 47, and the committed script does not reproduce it
-> from any report, including a byte-identical one. The row is still compared and a mismatch is still
-> an equality failure — but the check cannot pass until the value is re-taken on a networked run.
-> A consumer reaching this row today should treat it as **blocked pending re-record**, not as
-> passing and not as waived. The full reasoning, and what does *not* follow from it for the
-> lockfile-derived rows around it, is in [Advisory posture](#advisory-posture).
 
 The three `git` rows are derived from the repository, not from a run of the script, and this is
 how. Note the **`^2`**: an earlier draft wrote `git rev-parse <the recorded head>`, which takes
@@ -306,11 +298,11 @@ document was written to remove. It belongs in
 
 | Package | Severity | Advisories |
 | --- | --- | --- |
-| `brace-expansion` | high | GHSA-3jxr-9vmj-r5cp, GHSA-f886-m6hf-6m8v, GHSA-mh99-v99m-4gvg |
+| `brace-expansion` | high | GHSA-3jxr-9vmj-r5cp, GHSA-f886-m6hf-6m8v, GHSA-mh99-v99m-4gvg, GHSA-rgw5-rvv9-x895 |
 | `js-yaml` | high | GHSA-52cp-r559-cp3m, GHSA-h67p-54hq-rp68 |
 | `linkify-it` | high | GHSA-22p9-wv53-3rq4, GHSA-v245-v573-v5vm |
 | `markdown-it` | moderate | GHSA-38c4-r59v-3vqw, GHSA-6v5v-wf23-fmfq |
-| `markdownlint-cli2` | moderate | inherited through dependencies |
+| `markdownlint-cli2` | moderate | inherited through `js-yaml`, `markdown-it` |
 | `minimatch` | high | GHSA-23c5-xmqv-rm74, GHSA-3ppc-4f35-3m26, GHSA-7r86-cg39-jmmj |
 | `picomatch` | high | GHSA-3v7f-55p6-f55p, GHSA-c2c7-rcm5-vvqj |
 
@@ -1003,35 +995,42 @@ fix: three reports differing only in that name folded to one posture digest, and
 identical `inherited through dependencies` line. Distinct claims about causation must not become
 one record.
 
-**The recorded digest above predates this change.** It was taken under the normalization that
-dropped those names, so the current script does not reproduce it even from a byte-identical
-report. That holds for **every** report, not only ones carrying an inherited package: the field is
-emitted for each package whether or not the report supplied any names, because an empty list is a
-value — it asserts the report named nothing — and a key present only sometimes would blur absence
-into emptiness, the same conflation refused for a missing `via` key and for
+**The recorded digest has been re-taken under this normalization, and the row is discharged.**
+The previous value, `ea559555…`, was taken before the inherited-through names were recorded, so the
+committed script could not reproduce it from any report — not only from ones carrying an inherited
+package, because the field is emitted for every package whether or not the report supplied names.
+An empty list is a value: it asserts the report named nothing, and a key present only sometimes
+would blur absence into emptiness, the same conflation refused for a missing `via` key and for
 `auditEnvironmentScrubbed`. Measured on a fixture with no string `via` entries at all, the posture
 moved from `b169ecf8…` to `e1009b90…`.
 
-This is stated rather than papered over: a value whose recipe has moved is the failure this whole
-record exists to prevent, and inventing a recomputed number without the registry response that
-produced it would be the fabrication the advisory-identity guard was tightened to refuse. The row
-must be re-taken on a networked run, under `T1-ADVISORY-DISPOSITION-v1`.
+For four rounds this document carried that value with the row marked as un-dischargeable, because
+inventing a recomputed number without the registry response that produced it would have been the
+fabrication the advisory-identity guard was tightened to refuse. The re-take was performed on the
+reviewed toolchain against the public registry, unproxied, and produced `freezeRecord: true` with
+an empty `notFreezeRecordBecause`. Every other recorded field re-derived byte-identically in the
+same run — both manifest digests, both blob ids, the tree digest and the whole census — which is
+what establishes that only the advisory normalization had moved.
 
-**An earlier version of this paragraph ended by calling it "a policy re-decision row rather than a
+**The re-take also moved two rows in [Advisory detail](#advisory-detail), and that is a real
+change rather than a normalization artifact.** `brace-expansion` now carries a fourth advisory,
+`GHSA-rgw5-rvv9-x895`, which was not published when the original freeze was taken; and
+`markdownlint-cli2` now names the packages it inherits through rather than saying "dependencies",
+which is the round-47 change working as intended. The package count and the severity counts are
+unchanged at seven packages, two moderate and five high, so `auditCounts` did not move.
+
+A newly published advisory is exactly the drift this row exists to surface, and it is a policy
+matter rather than a tree matter: the disposition recorded under `T1-ADVISORY-DISPOSITION-v1` was
+decided before `GHSA-rgw5-rvv9-x895` existed, so that decision has not been taken against it. That
+is bounded through issue #24 and is called out here rather than absorbed silently into a re-taken
+baseline.
+
+**An earlier version of this section called the row "a policy re-decision row rather than a
 compared one", and that clause was false in two directions at once.** The
 [compared fields](#compared-fields) table lists this row as compared, and the paragraph below
 states that a mismatch *is* an equality failure — so the document asserted, in three places, that
 the row both is and is not subject to exact equality. What is a policy re-decision is the
-**response** to a mismatch, never the question of whether the check applies. That distinction is
-made two paragraphs down and this clause contradicted it.
-
-The row's real status is narrower and worse than "not compared", and is stated plainly rather than
-softened: **it is a compared row whose recorded value the current script cannot reproduce, so the
-equality check cannot pass today even against an unchanged advisory database.** That is not a
-property of the advisory database drifting; it is this record carrying a value taken under a
-normalization the committed script no longer implements. Until the row is re-taken, a consumer
-cannot discharge it, and no wording here can change that — which is precisely why it is flagged
-instead of being left for a reader to discover at check time.
+**response** to a mismatch, never whether the check applies.
 
 **This digest is not reproducible from the lockfile alone, and is not meant to be.** It is a
 snapshot of a published advisory database that changes over time. Drift here means the published
