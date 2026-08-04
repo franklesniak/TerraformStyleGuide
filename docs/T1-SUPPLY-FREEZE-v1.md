@@ -443,8 +443,19 @@ git checkout main            # or any revision containing Get-SupplyFreezeDigest
 
 # <rev>:<path> is always resolved from the repository root, never the current
 # directory, so this runs before the cd and keeps the path unambiguous.
-git rev-parse HEAD:.github/workflows/package.json          # must equal the recorded blob
-git rev-parse HEAD:.github/workflows/package-lock.json     # must equal the recorded blob
+#
+# `git rev-parse` PRINTS a blob id and exits 0 whatever that id turns out to be,
+# so a bare invocation with "must equal the recorded blob" beside it is a check
+# that cannot fail -- the same defect as `sha256sum` without `-c` below. There is
+# no `-c` for rev-parse, so the comparison is made explicit and `&&`-chained, and
+# a mismatch stops the procedure here rather than at a digest much further down.
+#
+# Paste the two blob rows from Compared fields above; they are deliberately not
+# repeated here, for the reason given at the script digest below.
+strReviewedPackageBlob='PASTE the `package.json` blob row here'
+strReviewedLockBlob='PASTE the `package-lock.json` blob row here'
+test "$(git rev-parse HEAD:.github/workflows/package.json)" = "$strReviewedPackageBlob" \
+  && test "$(git rev-parse HEAD:.github/workflows/package-lock.json)" = "$strReviewedLockBlob"
 
 # Obtain the toolchain by digest rather than by name. `node` on PATH is chosen by
 # the environment, and the script cannot check what it is -- see Trust boundary.
@@ -994,8 +1005,17 @@ added to it. A reader with a correct tree, a correct lockfile and a different sc
 would otherwise see a mismatch with nothing to explain it.
 
 ```bash
-sha256sum Get-SupplyFreezeDigest.mjs   # must equal the recorded value
+# Paste the "Freeze script SHA-256" value from Compared fields above -- held once
+# in this document, for the reason given beside the same check in Reproducing.
+strReviewedScript='PASTE the Freeze script SHA-256 row here'
+echo "$strReviewedScript  Get-SupplyFreezeDigest.mjs" | sha256sum -c -
 ```
+
+`sha256sum` **without** `-c` only prints; it exits 0 whatever the digest turns out to be, so the
+earlier form of this block — a bare `sha256sum` with `# must equal the recorded value` beside it —
+was a check that could not fail. Reported by Copilot in round 68, and it was the third instance of
+that shape in this document rather than the first: the two `git rev-parse` blob lines in
+[How to reproduce](#how-to-reproduce) had it too and are fixed in the same commit.
 
 The script refuses to report on any toolchain other than Node `v24.18.1` with npm `11.16.0` on
 `linux`/`x64`, because a digest taken on a different combination is not this record. Pass
