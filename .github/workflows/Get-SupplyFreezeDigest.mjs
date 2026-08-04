@@ -554,17 +554,57 @@ const boolSkipAudit = arrArguments.includes('--no-audit');
 // argument after the first unrecognized one, which loses the diagnostic that
 // makes this refusal useful -- a caller who typed `--no-audti` needs to see
 // which flag was rejected.
-function formatUnsupportedArgument(strArg) {
-  const intEquals = strArg.indexOf('=');
-  if (intEquals >= 0) {
-    const intValueLength = strArg.length - intEquals - 1;
-    return `${formatUntrustedText(strArg.slice(0, intEquals))}`
-      + `=(value withheld, ${intValueLength} characters)`;
+function formatWithheldValue(strValue) {
+  return `(value withheld, ${strValue.length} characters)`;
+}
+
+// Round 67, reported by Copilot. The rule below said "the VALUE is never
+// rendered", and one spelling still rendered it: a value passed as its own argv
+// token that happens to begin with `-`. `--token -sekrit` printed `--token
+// -sekrit` verbatim, because the second token looked like a flag. Measured, with
+// the two working spellings as controls: `--token sekrit` and `--token=sekrit`
+// both withheld, `--token -sekrit` leaked into a retained log.
+//
+// Shape cannot decide this. `-sekrit` is indistinguishable from a short flag by
+// any pattern -- it is alphanumeric after the dash, exactly like a real option --
+// and the comment below already records that widening a pattern has found the
+// next gap five times running. What DOES decide it is POSITION: a token's role
+// comes from the token before it, not from how it is spelled. So the walk is
+// positional, and the first token after an unrecognized bare flag is treated as
+// that flag's value whatever it looks like.
+//
+// The cost is that a second unknown flag written straight after a first --
+// `--bogus --alsobogus` -- has its name withheld too, since nothing here can tell
+// that spelling apart from a flag followed by its value. That is the fail-closed
+// direction, and the diagnostic still names the FIRST rejected flag, which is
+// what a caller needs to fix the invocation.
+function formatUnsupportedInvocation(arrAllArguments, objSupportedArguments) {
+  const arrRendered = [];
+  let boolPreviousWasBareUnsupportedFlag = false;
+  for (const strArg of arrAllArguments) {
+    if (objSupportedArguments.has(strArg)) {
+      boolPreviousWasBareUnsupportedFlag = false;
+      continue;
+    }
+    if (boolPreviousWasBareUnsupportedFlag) {
+      arrRendered.push(formatWithheldValue(strArg));
+      boolPreviousWasBareUnsupportedFlag = false;
+      continue;
+    }
+    const intEquals = strArg.indexOf('=');
+    if (intEquals >= 0) {
+      arrRendered.push(`${formatUntrustedText(strArg.slice(0, intEquals))}`
+        + `=${formatWithheldValue(strArg.slice(intEquals + 1))}`);
+      continue;
+    }
+    if (!strArg.startsWith('-')) {
+      arrRendered.push(formatWithheldValue(strArg));
+      continue;
+    }
+    arrRendered.push(formatUntrustedText(strArg));
+    boolPreviousWasBareUnsupportedFlag = true;
   }
-  if (!strArg.startsWith('-')) {
-    return `(value withheld, ${strArg.length} characters)`;
-  }
-  return formatUntrustedText(strArg);
+  return arrRendered.join(' ');
 }
 
 const SUPPORTED_ARGUMENTS = new Set(['--json', '--any-toolchain', '--no-audit']);
@@ -598,7 +638,7 @@ if (arrUnsupported.length > 0) {
     // construction rather than by pattern, and it holds for a secret that is not
     // URL-shaped at all -- `--token=hunter2` was never covered by any of this.
     // The diagnostic keeps what a caller needs, which is which flag was rejected.
-    `  unrecognized       ${arrUnsupported.map(formatUnsupportedArgument).join(' ')}\n` +
+    `  unrecognized       ${formatUnsupportedInvocation(arrArguments, SUPPORTED_ARGUMENTS)}\n` +
     `  supported          ${[...SUPPORTED_ARGUMENTS].join(' ')}\n` +
     '  a mistyped option would otherwise be ignored in silence, and the run would\n' +
     '  record something other than what was asked for.\n');
