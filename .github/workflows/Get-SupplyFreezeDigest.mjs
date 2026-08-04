@@ -392,6 +392,33 @@ function sha256(strText) {
 // sixth was at a site my own round-39 sweep had listed and not opened. A name
 // that is escaped on the way into the array cannot be un-escaped by a later edit
 // that adds a print site.
+// Round 43, reported by Codex. The single way this file renders "where an errno
+// happened", so the escaping cannot be present at some sites and absent at
+// others.
+//
+// It was absent at three of five. Round 41 escaped this class by replacing one
+// exact template string containing `strPath`; the sites spelling their fallback
+// `strScriptPath` or `'(path not reported)'` never matched, and I described that
+// as a mechanical sweep. It was a pattern match, for the third round running.
+// The mechanical sweep is over the VALUE -- `grep -n 'objError.path'` -- and the
+// durable fix is to stop hand-building the line at all: `grep formatErrorLocation`
+// now audits every site completely, and a new refusal that reports an errno
+// location has one obvious thing to call.
+//
+// objError.path carries whatever bytes the failing path had. Measured:
+//
+//   lstatSync('/tmp/gone43\nsupply-freeze: all inputs quiescent, 0 problems')
+//   ->  error              ENOENT at /tmp/gone43
+//       supply-freeze: all inputs quiescent, 0 problems     <-- column 0
+//
+// String() before escaping because objError.path is not guaranteed to be a
+// string; a Buffer path would otherwise reach String.prototype.replace as an
+// object.
+function formatErrorLocation(objError, strFallback) {
+  return `  error              ${objError?.code ?? 'unknown'}`
+    + ` at ${formatTreeName(String(objError?.path ?? strFallback))}\n`;
+}
+
 function formatTreeName(strName) {
   return strName.replace(/[\p{Cc}\p{Cf}]/gu, (strChar) => {
     const intCode = strChar.codePointAt(0);
@@ -465,7 +492,7 @@ const intScriptChangedAtStart = (() => {
   } catch (objError) {
     process.stderr.write(
       'supply-freeze: this script became unreadable during the run; refusing to report.\n' +
-      `  error              ${objError.code ?? 'unknown'} at ${objError.path ?? strScriptPath}\n`);
+      formatErrorLocation(objError, strScriptPath));
     process.exit(3);
   }
 })();
@@ -552,7 +579,7 @@ function readOrRefuse(strPath) {
   } catch (objError) {
     process.stderr.write(
       'supply-freeze: a recorded input could not be re-read; refusing to report.\n' +
-      `  error              ${objError.code ?? 'unknown'} at ${formatTreeName(String(objError.path ?? strPath))}\n` +
+      formatErrorLocation(objError, strPath) +
       '  it was readable when this run began, so it changed underneath the record.\n');
     process.exit(3);
   }
@@ -1399,10 +1426,27 @@ function normalizeAudit(objAudit) {
       // rather than recording absence, and it is gone. An advisory with no GHSA
       // url and no integer source has no identity to record, so the report is
       // refused as malformed rather than described with a name npm never gave it.
-      if (!objMatch && !Number.isInteger(objVia.source)) {
+      // Round 43, reported by Codex. SAFE integer, and positive. Number.isInteger
+      // accepts any integral double, including values past 2^53-1 where distinct
+      // JSON integers stop having distinct doubles. Measured, two reports
+      // differing only in that last digit:
+      //
+      //   source 9007199254740992 -> npm-source-9007199254740992, ce8b43dd...
+      //   source 9007199254740993 -> npm-source-9007199254740992, ce8b43dd...
+      //
+      // Two different malformed reports, one identity, one advisory posture, both
+      // recorded at exit 0 -- a collision in the single field this record exists
+      // to compare exactly, reached instead of the documented exit-5 refusal.
+      //
+      // Number.isSafeInteger is not an approximation of the property wanted here;
+      // it IS the property, defined as the range over which an integer round-trips
+      // through a double unambiguously. Real npm source ids are around 10^6, so
+      // nothing npm emits is refused by this.
+      if (!objMatch
+        && !(Number.isSafeInteger(objVia.source) && objVia.source > 0)) {
         throw new TypeError(
-          `advisory in ${strName} carries neither a GHSA url nor an integer source,`
-          + ' so it has no identity to record');
+          `advisory in ${strName} carries neither a GHSA url nor a positive`
+          + ' safe-integer source, so it has no identity to record');
       }
       // The remaining recorded fields are absence-or-type: npm may legitimately
       // omit any of them, and `null` records that honestly. What is refused is a
@@ -1446,7 +1490,34 @@ function normalizeAudit(objAudit) {
         range: objVia.range ?? null,
       });
     }
-    arrAdvisories.sort((objLeft, objRight) => (objLeft.id < objRight.id ? -1 : objLeft.id > objRight.id ? 1 : 0));
+    // Round 43, reported by Codex. Ordered by the WHOLE normalized advisory, not
+    // by its id alone. Sorting on id left same-id advisories tied, and a tie in a
+    // stable sort keeps whatever order the endpoint happened to send. Measured,
+    // the same two advisories under one id, submitted in both orders:
+    //
+    //   [alpha, beta] -> advisory posture f26e6366d0ebee4f...
+    //   [beta, alpha] -> advisory posture bfeb78bead8e8a85...
+    //
+    // Normalization exists to erase exactly that difference, so this was the one
+    // guarantee the advisory fold makes, failing on its own terms.
+    //
+    // Codex offered "reject duplicate ids OR tie-break". Tie-breaking, because I
+    // cannot establish that npm never legitimately reports one source id against
+    // more than one path, and refusing a real report is worse than ordering it.
+    //
+    // Keyed on the serialization rather than a hand-written field-by-field
+    // comparator so the ordering stays TOTAL when a field is added later. A
+    // comparator listing today's fields silently stops being total the moment
+    // someone adds tomorrow's. Key order is fixed by the construction above, so
+    // the serialization is deterministic, and `id` is written first, so comparing
+    // serializations lexicographically still orders by id and only then by the
+    // remaining fields -- the previous ordering, with its ties resolved.
+    const funcAdvisoryKey = (objAdvisory) => JSON.stringify(objAdvisory);
+    arrAdvisories.sort((objLeft, objRight) => {
+      const strLeft = funcAdvisoryKey(objLeft);
+      const strRight = funcAdvisoryKey(objRight);
+      return strLeft < strRight ? -1 : strLeft > strRight ? 1 : 0;
+    });
     // Round 33, swept rather than reported. The reported defect was an
     // unvalidated advisory severity; these three package fields -- the object
     // those advisories hang on -- had NO validation at all, which is the same
@@ -1510,7 +1581,7 @@ function snapshotOrRefuse(strPath) {
     process.stderr.write(
       'supply-freeze: refusing to record digests for an unreviewed manifest.\n' +
       `  ${strPath.split('/').pop().padEnd(18)} could not be read\n` +
-      `  error              ${objError.code ?? 'unknown'} at ${formatTreeName(String(objError.path ?? strPath))}\n` +
+      formatErrorLocation(objError, strPath) +
       '  the reviewed manifest must be present and readable before anything is recorded.\n');
     process.exit(4);
   }
@@ -2023,7 +2094,7 @@ function scanOrRefuse(fnScan, strWhat) {
     process.stderr.write(
       'supply-freeze: the recorded inputs changed while recording; refusing to report.\n' +
       `  detected by        ${strWhat} could not complete\n` +
-      `  error              ${objError.code ?? 'unknown'} at ${objError.path ?? '(path not reported)'}\n` +
+      formatErrorLocation(objError, '(path not reported)') +
       '  an entry vanished or became unreadable while it was being read, so no\n' +
       '  complete measurement of the tree exists. record against a quiescent tree.\n');
     process.exit(10);
@@ -2680,7 +2751,7 @@ const intScriptChangedAt = (() => {
   } catch (objError) {
     process.stderr.write(
       'supply-freeze: this script became unreadable during the run; refusing to report.\n' +
-      `  error              ${objError.code ?? 'unknown'} at ${objError.path ?? strScriptPath}\n`);
+      formatErrorLocation(objError, strScriptPath));
     process.exit(3);
   }
 })();
