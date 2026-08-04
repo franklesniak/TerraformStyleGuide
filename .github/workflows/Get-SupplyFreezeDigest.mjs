@@ -1501,6 +1501,60 @@ function parseAuditOrRefuse(strBody) {
   }
 }
 
+// Round 51, reported by Codex, and the THIRD round on one expression. Rounds 49
+// and 50 each widened a character class -- first anchoring the match, then making
+// the boundary case-blind -- and both were still asking "what character ends this
+// token" of a string that is still PERCENT-ENCODED. Measured:
+//
+//   .../GHSA-aaaa-bbbb-cccc%78  -> GHSA-aaaa-bbbb-cccc   (segment is ...ccccx)
+//   .../GHSA-aaaa-bbbb-cccc%79  -> GHSA-aaaa-bbbb-cccc   (segment is ...ccccy)
+//   .../GHSA-aaaa-bbbb-cccc%2D64 -> GHSA-aaaa-bbbb-cccc  (segment is ...cccc-64)
+//
+// `%` is not in the boundary class, so the encoded suffix reads as a delimiter and
+// two urls naming different advisories collapse to one identity and one
+// auditSha256 -- reached instead of the exit-5 refusal, in the field this record
+// exists to compare exactly. The hyphen case shows the encoding reaches even the
+// boundary character round 49 added.
+//
+// The lesson the url scanner took four rounds to learn applies here too, and this
+// is it applied rather than restated: STOP ASKING WHAT DELIMITS THE TOKEN. The id
+// is not a substring to be found in a blob of text, it is a complete PATH SEGMENT
+// of a url. So the url is parsed, its path split into segments, each segment
+// decoded, and a segment must equal the identifier EXACTLY. There is no boundary
+// character left to guess, because there is no boundary -- a segment either is the
+// identifier or is not, and any extra character, raw or encoded, makes it not.
+//
+// Fails closed twice, matching redactUrl's round-38 lesson: a url `new URL()`
+// cannot parse yields no identity, and so does a segment that will not decode.
+// Both fall through to the source-id test, which finds a real identity or refuses.
+//
+// Every segment is examined rather than only the last, so a trailing slash and any
+// future path shape still work. The 14 ids recorded in T1-SUPPLY-FREEZE-v1 all
+// extract byte-identically under this, which is the constraint it was measured
+// against: their urls are https://github.com/advisories/<id>, whose final segment
+// decodes to itself.
+const RE_GHSA_EXACT = /^GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}$/u;
+function ghsaIdFromUrl(strUrl) {
+  let objUrl;
+  try {
+    objUrl = new URL(strUrl);
+  } catch {
+    return null;
+  }
+  for (const strSegment of objUrl.pathname.split('/')) {
+    let strDecoded;
+    try {
+      strDecoded = decodeURIComponent(strSegment);
+    } catch {
+      return null;
+    }
+    if (RE_GHSA_EXACT.test(strDecoded)) {
+      return strDecoded;
+    }
+  }
+  return null;
+}
+
 function normalizeAudit(objAudit) {
   const objVulnerabilities = objAudit.vulnerabilities ?? {};
   const objOutput = {
@@ -1648,8 +1702,10 @@ function normalizeAudit(objAudit) {
       // this is measured against rather than an aspiration:
       // https://github.com/advisories/GHSA-vh95-rmgr-6w4m is bounded by `/` and
       // end-of-string, neither of which is an identifier character.
-      const objMatch = strUrl.match(
-        /(?<![0-9A-Za-z-])GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}(?![0-9A-Za-z-])/u);
+      // Round 51 replaced the boundary lookarounds with a decoded whole-segment
+      // test. See ghsaIdFromUrl above for why the boundary question was the wrong
+      // one to keep answering.
+      const strGhsaId = ghsaIdFromUrl(strUrl);
       // Round 29, reported, and the fifth widening of this guard -- the comment
       // above already counted four. Rounds 22 and 24 checked the container and
       // then the member TYPE, and left the member's FIELDS unchecked, so `{}`
@@ -1681,7 +1737,7 @@ function normalizeAudit(objAudit) {
       // it IS the property, defined as the range over which an integer round-trips
       // through a double unambiguously. Real npm source ids are around 10^6, so
       // nothing npm emits is refused by this.
-      if (!objMatch
+      if (!strGhsaId
         && !(Number.isSafeInteger(objVia.source) && objVia.source > 0)) {
         throw new TypeError(
           `advisory in ${strName} carries neither a GHSA url nor a positive`
@@ -1737,7 +1793,7 @@ function normalizeAudit(objAudit) {
           + ' expected a finite number in the CVSS range 0-10');
       }
       arrAdvisories.push({
-        id: objMatch ? objMatch[0] : `npm-source-${objVia.source}`,
+        id: strGhsaId ?? `npm-source-${objVia.source}`,
         severity: objVia.severity ?? null,
         cwe: (() => {
           const arrCwe = objVia.cwe ?? [];
@@ -2326,9 +2382,61 @@ function redactUrl(strValue) {
 // other Cc/Cf/Zl/Zp code point, so protocol and host are printable ASCII, and the
 // unparseable branch prints a length rather than a value. Probed over twelve such
 // code points in three host positions -- every one either vanished or threw.
+// Round 51, reported by Codex, and it is the round-50 fix directly above opening
+// the hole it was written to close. Escaping FIRST rewrites tab, LF and CR into
+// printable `\xNN`, which breaks the literal `https` the prefilter matches --
+// while the parser DELETES those same three characters and parses happily.
+// Measured on the unrecognized-argument refusal:
+//
+//   --registry=ht<LF>tps://host/a?token=ROUND51SECRET
+//     new URL() -> https://host/a?token=ROUND51SECRET   (accepted)
+//     printed   -> --registry=ht\x0atps://host/a?token=ROUND51SECRET
+//
+// CR and TAB behave the same, at every position inside the scheme. So the
+// prefilter was narrower than its parser for the FOURTH round running, this time
+// because the previous round's fix put an escaper in front of it.
+//
+// The referee is normative rather than mine. The WHATWG URL Standard's basic URL
+// parser removes "all ASCII tab or newline" from its input and defines that set
+// as exactly U+0009, U+000A and U+000D. Enumerating a set a specification CLOSES
+// is not the guessing rounds 47-49 lost to -- it is reading the parser's own rule.
+//
+// The scan therefore runs on the RAW text and is broader than the parser on both
+// axes the parser is permissive about: the scheme tolerates those three
+// characters interleaved anywhere inside it, and the body is `[\s\S]*`, every
+// character to end of string. That second half is what round 50 bought by
+// escaping first, kept here without an escaper standing in front of the scan.
+// The three characters are then removed before redactUrl, exactly as the parser
+// removes them, so the span scanned and the string the parser sees are one URL.
+//
+// Escaping is applied LAST again -- to the untouched prefix, and to redactUrl's
+// output as belt and braces. The latter is a no-op today, since that output is
+// printable ASCII, but it means a future edit to redactUrl cannot forge a line.
+//
+// One redaction per call, because the body runs to end of string. That makes the
+// withheld-line count exact, and it is now REPORTED rather than left silent:
+// round 50 quietly widened the accepted cost from "text after a url on the same
+// line" -- which the paragraph above still claimed -- to "every following line".
+// Swept here rather than waiting to be told. Measured, an npm failure block lost
+// all three of its `npm ERR!` lines with nothing in the output saying so.
+const RE_PARSER_DELETES = /[\t\n\r]/gu;
+const RE_URL_IN_TEXT = new RegExp(
+  'h[\\t\\n\\r]*t[\\t\\n\\r]*t[\\t\\n\\r]*p[\\t\\n\\r]*(?:s[\\t\\n\\r]*)?'
+  + ':[\\t\\n\\r]*/[\\t\\n\\r]*/[\\s\\S]*', 'iu');
+const RE_LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/gu;
 function formatUntrustedText(strText) {
-  return formatTreeName(String(strText)).replace(
-    /https?:\/\/[^\n\r\u2028\u2029]*/giu, (strMatch) => redactUrl(strMatch));
+  const strRaw = String(strText);
+  const intUrlAt = strRaw.search(RE_URL_IN_TEXT);
+  if (intUrlAt < 0) {
+    return formatTreeName(strRaw);
+  }
+  const strTail = strRaw.slice(intUrlAt);
+  const intWithheld = (strTail.match(RE_LINE_BREAK) ?? []).length;
+  return formatTreeName(strRaw.slice(0, intUrlAt))
+    + formatTreeName(redactUrl(strTail.replace(RE_PARSER_DELETES, '')))
+    + (intWithheld > 0
+      ? ` (and ${intWithheld} further line${intWithheld === 1 ? '' : 's'} withheld)`
+      : '');
 }
 
 function configDrift(objReviewed, objEffective) {

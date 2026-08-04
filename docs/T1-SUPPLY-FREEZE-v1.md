@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `979d73127adb94fee9aca52b47474a53537819eb6722220d5a8479956df3be7f` | script `script.sha256` |
+| Freeze script SHA-256 | `18152fa0ad5ea25e315affa53820b676788dbc380c355c06177dff7d6c934909` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` | script `toolchain.platform` |
@@ -91,6 +91,14 @@ per-row rather than asserted in a sentence.
 | Advisory registry | `https://registry.npmjs.org/` | script `registry` |
 | Advisory posture SHA-256 | `ea559555c8c18bd2488219d977a994fabc868c2d46efb05bbaf92405c53488e1` | script `auditSha256` |
 | Advisory counts | `{"info":0,"low":0,"moderate":2,"high":5,"critical":0,"total":7}` | script `auditCounts` |
+
+> **One compared row cannot be discharged as recorded.** `Advisory posture SHA-256` was taken under
+> the advisory normalization that preceded round 47, and the committed script does not reproduce it
+> from any report, including a byte-identical one. The row is still compared and a mismatch is still
+> an equality failure — but the check cannot pass until the value is re-taken on a networked run.
+> A consumer reaching this row today should treat it as **blocked pending re-record**, not as
+> passing and not as waived. The full reasoning, and what does *not* follow from it for the
+> lockfile-derived rows around it, is in [Advisory posture](#advisory-posture).
 
 The three `git` rows are derived from the repository, not from a run of the script, and this is
 how. Note the **`^2`**: an earlier draft wrote `git rev-parse <the recorded head>`, which takes
@@ -864,15 +872,26 @@ arbitrary byte string, and decoding it as UTF-8 first is lossy: targets of the s
 `0x80` and `0x81` both decode to U+FFFD and hashed identically — a real collision, measured on
 ext4, in the very property this fold claims.
 
-**Path components are the one exception, and are folded as UTF-8-decoded names.** Directory
-entries come from `readdirSync`, which decodes names the same lossy way, so a filename holding
-non-UTF-8 bytes would collide by the identical mechanism. It is left as it stands rather than
-quietly fixed: reading entries as raw bytes changes how every path in the tree sorts and hashes,
-which would move the recorded digest to guard a case npm cannot produce — package names are
-constrained to a subset of ASCII, and all 2177 entries in the reviewed tree are ASCII. A symlink
-target is different in kind, being an arbitrary string npm writes rather than a validated name,
-which is why that one is byte-exact. Stated here so the fold's injectivity claim is read with
-the boundary attached rather than as an unqualified guarantee.
+**Path components are folded as UTF-8-decoded names, and a name that does not survive that
+decode is refused rather than folded.** Directory entries would otherwise come back from
+`readdirSync` decoded the same lossy way, so a filename holding non-UTF-8 bytes would collide by
+the identical mechanism — a sibling genuinely named U+FFFD would share the decoded name, both
+would resolve to one file, and the other would never be read or reach the digest.
+
+An earlier version of this paragraph said that case was **knowingly left to collide**, on the
+reasoning that reading entries as raw bytes would move the recorded digest to guard something npm
+cannot produce. That is no longer what the script does, and the paragraph outlived the change: both
+walkers now enumerate entries as raw buffers and refuse with exit `12` when a name fails a **byte
+round trip** — decode to UTF-8, re-encode, compare against the original bytes. The check is the
+round trip rather than a U+FFFD search, so a file *legitimately* named U+FFFD re-encodes to its own
+bytes and still folds; only names that lose information are refused. See the exit `12` row in
+[Why a run was refused](#why-a-run-was-refused) and the corresponding mutation-table row, which
+describe the same refusal.
+
+A symlink target remains different in kind, being an arbitrary byte string npm writes rather than a
+validated name, which is why that one is folded byte-exact instead of being refused. The fold's
+injectivity claim can therefore be read without a decoding caveat attached: a tree whose names
+cannot be decoded unambiguously is not folded at all.
 
 **Special files were a second unstated exception, and are no longer one.** Entries that are
 neither file, directory nor symlink used to fold to a bare tag and a path, so every such entry
@@ -996,9 +1015,23 @@ moved from `b169ecf8…` to `e1009b90…`.
 This is stated rather than papered over: a value whose recipe has moved is the failure this whole
 record exists to prevent, and inventing a recomputed number without the registry response that
 produced it would be the fabrication the advisory-identity guard was tightened to refuse. The row
-must be re-taken on a networked run, under `T1-ADVISORY-DISPOSITION-v1`; it is a policy
-re-decision row rather than a compared one, which is why this does not invalidate the
-lockfile-derived fields around it.
+must be re-taken on a networked run, under `T1-ADVISORY-DISPOSITION-v1`.
+
+**An earlier version of this paragraph ended by calling it "a policy re-decision row rather than a
+compared one", and that clause was false in two directions at once.** The
+[compared fields](#compared-fields) table lists this row as compared, and the paragraph below
+states that a mismatch *is* an equality failure — so the document asserted, in three places, that
+the row both is and is not subject to exact equality. What is a policy re-decision is the
+**response** to a mismatch, never the question of whether the check applies. That distinction is
+made two paragraphs down and this clause contradicted it.
+
+The row's real status is narrower and worse than "not compared", and is stated plainly rather than
+softened: **it is a compared row whose recorded value the current script cannot reproduce, so the
+equality check cannot pass today even against an unchanged advisory database.** That is not a
+property of the advisory database drifting; it is this record carrying a value taken under a
+normalization the committed script no longer implements. Until the row is re-taken, a consumer
+cannot discharge it, and no wording here can change that — which is precisely why it is flagged
+instead of being left for a reader to discover at check time.
 
 **This digest is not reproducible from the lockfile alone, and is not meant to be.** It is a
 snapshot of a published advisory database that changes over time. Drift here means the published
