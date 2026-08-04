@@ -558,6 +558,30 @@ function formatWithheldValue(strValue) {
   return `(value withheld, ${strValue.length} characters)`;
 }
 
+// The identity of an inode, for the checks that ask "is this the same file it
+// was a moment ago". Round 71, reported by Codex, and this is the round-67
+// inode half caught being only as wide as the type carrying it. Those sites
+// recorded `objStat.ino` from a default stat, where ino is a JS number -- so an
+// inode above 2^53 arrives ALREADY ROUNDED. Measured on node 22.22.2:
+//
+//   Number(2n ** 53n + 1n) === Number(2n ** 53n)   // true, both 9007199254740992
+//
+// Two distinct inodes therefore collapse to one reading, and a replacement
+// within one timestamp tick compares EQUAL -- exactly the hole round 67 added
+// the inode half to close, reopened by the width of the number. This container
+// hands out small inodes (the repository root measured 475146), so the check was
+// correct here by accident of filesystem rather than by construction; XFS, ZFS,
+// btrfs and NFS all expose 64-bit inode numbers.
+//
+// ctimeNs comes with bigint stats and is what the same-tick argument wanted all
+// along: nanoseconds rather than milliseconds narrows the window by six orders
+// of magnitude. Callers take ONE bigint lstat and pass the result here -- two
+// stats of the same path can disagree, which would be a race inside the race
+// detector.
+function statIdentity(objStats) {
+  return `${objStats.ino}:${objStats.ctimeNs}`;
+}
+
 // Renders one quiescence-sweep reading. Round 67: the sweep began recording
 // `${ino}:${ctimeMs}` rather than a bare timestamp, and this message still fed
 // the value to `new Date(...).toISOString()`. Measured before this was added --
@@ -566,13 +590,21 @@ function formatWithheldValue(strValue) {
 // exit 1 stack trace. A refusal that cannot print itself is not a refusal, and
 // the reading is the thing an operator uses to tell a rewrite-in-place from a
 // swap, so both halves are shown.
+//
+// Round 71: the reading became `${ino}:${ctimeNs}`, and this is the round-67
+// crash above being deliberately NOT repeated. Nanoseconds break the old
+// arithmetic twice over -- a current ctimeNs is about 1.78e18, which is past
+// Number.MAX_SAFE_INTEGER (9.007e15) so Number() rounds it, and past the ±8.64e15
+// milliseconds Date accepts so the same `RangeError: Invalid time value` returns.
+// The division is therefore BigInt, before any conversion to Number: exact, and
+// the quotient is a millisecond count Date has always accepted.
 function formatSweepReading(objReading) {
   if (objReading === -1) return 'absent';
   const strReading = String(objReading);
   const intSeparator = strReading.indexOf(':');
   if (intSeparator < 0) return new Date(Number(strReading)).toISOString();
   const strInode = strReading.slice(0, intSeparator);
-  const intChangedAt = Number(strReading.slice(intSeparator + 1));
+  const intChangedAt = Number(BigInt(strReading.slice(intSeparator + 1)) / 1000000n);
   return `inode ${strInode}, ctime ${new Date(intChangedAt).toISOString()}`;
 }
 
@@ -969,9 +1001,9 @@ function foldNpmInstallation(strRoot, strLauncherPath) {
   let intSymlinks = 0;
   const considerRootOrLauncher = (strPath, strLabel) => {
     try {
-      const objStat = lstatSync(strPath);
+      const objStat = lstatSync(strPath, { bigint: true });
       hashField(objChangeHash, strLabel);
-      hashField(objChangeHash, `${objStat.ino}:${objStat.ctimeMs}:${objStat.mode}`);
+      hashField(objChangeHash, `${statIdentity(objStat)}:${objStat.mode}`);
       // The launcher's target is part of its identity: repointing a symlink
       // moves its ctime, but recording where it points makes the refusal say so
       // and covers a filesystem that does not.
@@ -1038,7 +1070,7 @@ function foldNpmInstallation(strRoot, strLauncherPath) {
       const strPath = join(strDirectory, strName);
       const strKey = strRelative === '' ? strName : `${strRelative}/${strName}`;
       try {
-        const objStat = lstatSync(strPath);
+        const objStat = lstatSync(strPath, { bigint: true });
         if (objStat.isDirectory()) {
           hashField(objHash, 'd');
           hashField(objHash, strKey);
@@ -1076,7 +1108,7 @@ function foldNpmInstallation(strRoot, strLauncherPath) {
         // case, which is the same conclusion the .npmrc sweep reached, and the
         // two are folded separately so a mismatch says which one moved.
         hashField(objChangeHash, strKey);
-        hashField(objChangeHash, `${objStat.ino}:${objStat.ctimeMs}`);
+        hashField(objChangeHash, statIdentity(objStat));
       } catch (objError) {
         process.stderr.write(
           'supply-freeze: refusing to verify an npm installation that changed while being read.\n' +
@@ -1158,7 +1190,7 @@ function runNpm(arrNpmArguments, objEnv) {
   // inside the process can -- but it reduces the window from the whole run to
   // the gap between this stat and the exec.
   const intInodeNow = (() => {
-    try { return lstatSync(strNpmCli).ino; } catch { return null; }
+    try { return lstatSync(strNpmCli, { bigint: true }).ino; } catch { return null; }
   })();
   if (intInodeNow !== intNpmCliInode) {
     process.stderr.write(
@@ -2086,13 +2118,20 @@ function newestChangeTime(strRoot, arrExtraPaths) {
   // declined exactly this hardening and said a swap that moves neither change
   // time would be a live finding; timestamp granularity is that swap, and this
   // is me taking the option I declined. The precedent was already in this file:
-  // the npm-installation fold has hashed `${ino}:${ctimeMs}` since round 56 for
+  // the npm-installation fold has hashed inode-and-change-time since round 56 for
   // this reason, so the sweep was the weaker of two checks against one attack.
+  // Round 71 widened both to `${ino}:${ctimeNs}` from a bigint stat -- see
+  // statIdentity for why the number-typed version was lossy.
   const consider = (strPath, strLabel) => {
-    const objStats = lstatSync(strPath);
-    objEntryChangeTimes.set(strLabel, `${objStats.ino}:${objStats.ctimeMs}`);
-    if (objStats.ctimeMs > intNewest) {
-      intNewest = objStats.ctimeMs;
+    const objStats = lstatSync(strPath, { bigint: true });
+    objEntryChangeTimes.set(strLabel, statIdentity(objStats));
+    // Deliberately back to a Number for the "newest" tracking alone. That value
+    // is returned as `ctimeMs` and consumed by callers that do Number things
+    // with it; widening the identity comparison is not a licence to change a
+    // type two call sites away.
+    const intChangedAt = Number(objStats.ctimeMs);
+    if (intChangedAt > intNewest) {
+      intNewest = intChangedAt;
       strNewestPath = strLabel;
     }
     return objStats;
@@ -3168,7 +3207,7 @@ if (!existsSync(strNpmBesideNode)) {
 const objNpmInstallation = npmInstallationRootOrRefuse();
 const strNpmTreeRoot = objNpmInstallation.root;
 const strNpmCli = objNpmInstallation.cli;
-const intNpmCliInode = lstatSync(strNpmCli).ino;
+const intNpmCliInode = lstatSync(strNpmCli, { bigint: true }).ino;
 const objNpmTree = foldNpmInstallation(strNpmTreeRoot, strNpmBesideNode);
 // Round 58, reported by Codex: REVIEWED_NPM_TREE_FILES was printed in the
 // refusal and never compared, so it documented a number rather than asserting
@@ -4580,10 +4619,34 @@ if (arrFoldDrift.length > 0) {
 // the same measure. Refusing at exit 2 keeps this on the toolchain refusal, which
 // is what it is: the program that answered was not the program that was checked.
 //
-// Gated the same way the first fold's byte comparison is. --any-toolchain waives
+// Round 71, reported by Codex, and this gate was wrong. It used to read: "gated
+// the same way the first fold's byte comparison is -- --any-toolchain waives
 // which npm is acceptable and marks the output not a freeze record, so there is
-// no freeze record here to protect.
-if (!boolAnyToolchain) {
+// no freeze record here to protect." Both halves of that were true and the
+// conclusion did not follow.
+//
+// The first fold's COMPARISON is gated because it tests this installation
+// against REVIEWED_NPM_TREE_SHA256, a constant a bypassed run has explicitly
+// waived. This check tests nothing of the kind: it compares the run's OWN
+// before value against its OWN after value, so it needs no reviewed digest and
+// nothing about --any-toolchain makes it inapplicable. The fold itself
+// (foldNpmInstallation, above) already runs unconditionally, so the baseline
+// was being computed and then thrown away under bypass.
+//
+// What that cost: `npmTree` is emitted in the toolchain block of every run,
+// bypassed ones included. Codex verified with a dummy npm CLI that writes into
+// its own installation during `--version` -- the bypassed run exits 0 and
+// reports the npmTree hash from BEFORE the write, so the record pairs one
+// installation's hash with another installation's version, `ls` and audit
+// answers. An explicitly-non-freeze record is still a record, and a value that
+// describes a program that stopped existing mid-run is wrong rather than merely
+// unblessed.
+//
+// This is round 66's finding AR again -- the npm ls exit 7 was bypassed by the
+// same reasoning and corrected the same way -- so the rule is now explicit:
+// --any-toolchain waives comparisons against REVIEWED_* constants, and nothing
+// else. Self-consistency checks run in every mode.
+{
   const objNpmTreeAfter = foldNpmInstallation(strNpmTreeRoot, strNpmBesideNode);
   if (objNpmTreeAfter.sha256 !== objNpmTree.sha256
     || objNpmTreeAfter.changeSha256 !== objNpmTree.changeSha256) {
@@ -4594,9 +4657,17 @@ if (!boolAnyToolchain) {
       `  after the run      ${objNpmTreeAfter.sha256} (${objNpmTreeAfter.files} files)\n` +
       `  what moved         ${objNpmTreeAfter.sha256 !== objNpmTree.sha256
         ? 'contents' : 'inode change times, with the contents restored'}\n` +
-      '  the npm verified before the first subprocess is not the npm on disk now, so\n' +
+      '  the npm measured before the first subprocess is not the npm on disk now, so\n' +
       '  the configuration, the lockfile assertion and the advisory posture were not\n' +
-      '  necessarily answered by the installation this run authenticated.\n');
+      '  necessarily answered by the installation whose hash this run recorded.\n' +
+      // Round 71. This refusal now fires under --any-toolchain too, where the
+      // installation was never checked against a reviewed digest -- so the
+      // wording says "measured" and "recorded" rather than "verified" and
+      // "authenticated", which would have been a claim a bypassed run is not
+      // entitled to make.
+      '  this check compares the run against itself, so --any-toolchain does not\n' +
+      '  waive it: the recorded npmTree would otherwise describe a program that\n' +
+      '  stopped existing while it was still answering questions.\n');
     process.exit(2);
   }
 }
