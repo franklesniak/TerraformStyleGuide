@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `b20ebb74910223248824fd8988ae1858d4cfa396047384f7fbaf88f6fef25d42` | script `script.sha256` |
+| Freeze script SHA-256 | `72ad07bf3b2ebe0dc69d5c23907b15dcf40478d781ddbbe54c7c0bf18b61b1aa` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -429,16 +429,22 @@ git rev-parse HEAD:.github/workflows/package-lock.json     # must equal the reco
 
 # Obtain the toolchain by digest rather than by name. `node` on PATH is chosen by
 # the environment, and the script cannot check what it is -- see Trust boundary.
-curl -fsSLo /tmp/node24.tar.xz \
+# mktemp -d, not a fixed /tmp path: on a shared host another user can
+# pre-create /tmp/node24.tar.xz as a symlink and `curl -o` will follow it and
+# truncate the target, or pre-create /tmp/node24 as a directory symlink and
+# `tar -C` will extract through it -- both before any digest is checked.
+strWork="$(mktemp -d)"
+curl -fsSLo "$strWork/node24.tar.xz" \
   https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz
-sha256sum /tmp/node24.tar.xz
+sha256sum "$strWork/node24.tar.xz"
 # must print d6c664df3f3f61458e8c277585571328522d705166723a7c7823a9253a4d15a0
-mkdir -p /tmp/node24 && tar -xJf /tmp/node24.tar.xz -C /tmp/node24 --strip-components=1
-strNode=/tmp/node24/bin/node   # absolute, and npm is the one beside it
+mkdir "$strWork/node24"
+tar -xJf "$strWork/node24.tar.xz" -C "$strWork/node24" --strip-components=1
+strNode="$strWork/node24/bin/node"   # absolute, and npm is the one beside it
 
 cd .github/workflows
 umask 0022                   # the recorded tree was installed under this
-env -u NODE_OPTIONS "$strNode" /tmp/node24/bin/npm ci --ignore-scripts --no-audit --no-fund
+env -u NODE_OPTIONS "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund
 env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs --json
 ```
 
@@ -496,7 +502,7 @@ strIsolationDirectory="$(mktemp -d)"
 : > "$strIsolationDirectory/npm-global-empty"
 export NPM_CONFIG_USERCONFIG="$strIsolationDirectory/npm-user-empty"
 export NPM_CONFIG_GLOBALCONFIG="$strIsolationDirectory/npm-global-empty"
-env -u NODE_OPTIONS "$strNode" /tmp/node24/bin/npm ci --ignore-scripts --no-audit --no-fund
+env -u NODE_OPTIONS "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund
 env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs --json
 ```
 

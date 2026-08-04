@@ -2725,11 +2725,17 @@ if (!existsSync(strNpmBesideNode)) {
     'supply-freeze: refusing to run npm that is not bound to this Node installation.\n' +
     `  node               ${formatUntrustedText(process.execPath)}\n` +
     `  expected npm at    ${formatUntrustedText(strNpmBesideNode)}\n` +
-    '  npm is resolved by prepending this Node\'s directory to the child PATH, so\n' +
-    '  with no npm there the ambient PATH decides which program answers -- and its\n' +
-    '  --version output is the only thing that would vouch for it. A replacement\n' +
-    '  printing the reviewed version can fabricate the configuration, the lockfile\n' +
-    '  assertion and the advisory posture alike.\n' +
+    // Round 61, reported by Codex, and this text is my own round-60 change left
+    // undescribed. It still explained the PATH forgery that round 60 removed:
+    // npm is no longer resolved through PATH at all, so "the ambient PATH
+    // decides which program answers" stopped being true in the same commit that
+    // made this refusal matter for a different reason.
+    '  the launcher is how this script LOCATES and authenticates the npm command\n' +
+    '  line: it resolves bin/npm through its symlink, requires the result to sit\n' +
+    '  inside lib/node_modules/npm, and folds that installation against the npm\n' +
+    '  shipped in the reviewed Node archive. Without it there is nothing to\n' +
+    '  resolve, so there is nothing to authenticate -- and a version string npm\n' +
+    '  prints about itself is not evidence about which program printed it.\n' +
     '  run the recorder with a complete Node installation, not a relocated binary.\n');
   process.exit(2);
 }
@@ -3246,7 +3252,20 @@ function configDrift(objReviewed, objEffective) {
         // exclusions" and so never reach this line -- which is why the populated
         // case is the only one that has to be withheld.
         ? (objObserved === null ? 'null' : 'set (value not shown)')
-        : JSON.stringify(objObserved);
+        // Round 61, reported by Codex. These are the INSTALL-shaping keys, and
+        // the transport branch above was withheld while this one was rendered
+        // raw -- on the assumption that omit, include, install-strategy and the
+        // rest cannot carry a secret. npm does not enforce that. Measured on npm
+        // 11.16.0, `NPM_CONFIG_OMIT=https://user:SECRET@host/p?token=X` is
+        // accepted and comes back verbatim in the omit array, so the exit-6
+        // refusal published both credentials into a retained log.
+        //
+        // The rule this file already applies everywhere else is that a value
+        // this process did not compute goes through the funnel, whatever key it
+        // arrived under. An argument about which keys can hold a URL is the same
+        // shape as the scheme allowlist rounds 47-59 spent seven rounds
+        // retiring: a list of safe cases that npm, not this script, decides.
+        : formatUntrustedText(JSON.stringify(objObserved));
       return `  ${strKey.padEnd(18)} observed ${strObserved}, reviewed ${JSON.stringify(objExpected)}`;
     });
 }
@@ -4055,6 +4074,56 @@ if (arrFoldDrift.length > 0) {
   process.exit(10);
 }
 
+// Round 61, reported by Codex: this recheck used to run AFTER the quiescence
+// sweep, the final manifest comparison and the script self-check. Folding 1916
+// files takes real time, and anything written to a manifest or to node_modules
+// during that walk landed after every input check had already passed -- so the
+// run could emit freezeRecord: true while its manifest and tree digests
+// described bytes no longer on disk. Moved ahead of those checks, so the last
+// thing to touch the filesystem before the sweep is this fold and the sweep
+// still gets the final word on the inputs.
+// Round 57, reported by Codex, and the round-56 npm authentication caught being
+// a snapshot where it needed to be an interval.
+//
+// That round folded the npm installation once, before the first npm subprocess,
+// and my reply called the remaining gap a TOCTOU the attacker "has to win a race"
+// for. That undersold it by the width of the whole run. The fold happened around
+// line 2450 and the last npm subprocess -- the audit -- runs roughly 950 lines
+// later, so the window was not microseconds: it was every npm call in the
+// program. With a writable copied distribution an actor could present the
+// genuine tree to the check, replace bin/npm-cli.js immediately afterwards, and
+// have the replacement answer the version, config, ls and audit calls. Nothing
+// looked at the installation again -- not the tree folds, which walk
+// node_modules, and not the quiescence sweep, which walks node_modules, the two
+// manifests and the workflow directory.
+//
+// So the installation is folded a SECOND time, here, after every npm subprocess
+// has run. Bytes rather than a stamp, because that is what the first fold
+// compared and a replacement restored before this point must still be caught by
+// the same measure. Refusing at exit 2 keeps this on the toolchain refusal, which
+// is what it is: the program that answered was not the program that was checked.
+//
+// Gated the same way the first fold's byte comparison is. --any-toolchain waives
+// which npm is acceptable and marks the output not a freeze record, so there is
+// no freeze record here to protect.
+if (!boolAnyToolchain) {
+  const objNpmTreeAfter = foldNpmInstallation(strNpmTreeRoot, strNpmBesideNode);
+  if (objNpmTreeAfter.sha256 !== objNpmTree.sha256
+    || objNpmTreeAfter.changeSha256 !== objNpmTree.changeSha256) {
+    process.stderr.write(
+      'supply-freeze: the npm installation changed while it was being used.\n' +
+      `  npm installation   ${formatUntrustedText(strNpmTreeRoot)}\n` +
+      `  when checked       ${objNpmTree.sha256} (${objNpmTree.files} files)\n` +
+      `  after the run      ${objNpmTreeAfter.sha256} (${objNpmTreeAfter.files} files)\n` +
+      `  what moved         ${objNpmTreeAfter.sha256 !== objNpmTree.sha256
+        ? 'contents' : 'inode change times, with the contents restored'}\n` +
+      '  the npm verified before the first subprocess is not the npm on disk now, so\n' +
+      '  the configuration, the lockfile assertion and the advisory posture were not\n' +
+      '  necessarily answered by the installation this run authenticated.\n');
+    process.exit(2);
+  }
+}
+
 // Round 9, reported by Codex. The comparison above answers "did two reads of
 // the same entry agree", and a write that lands after the SECOND fold read an
 // entry escapes it -- demonstrated, with the recorded digest emitted at exit 0
@@ -4207,47 +4276,6 @@ if (!readOrRefuse(strScriptPath).equals(objScriptBefore)) {
   process.exit(3);
 }
 
-// Round 57, reported by Codex, and the round-56 npm authentication caught being
-// a snapshot where it needed to be an interval.
-//
-// That round folded the npm installation once, before the first npm subprocess,
-// and my reply called the remaining gap a TOCTOU the attacker "has to win a race"
-// for. That undersold it by the width of the whole run. The fold happened around
-// line 2450 and the last npm subprocess -- the audit -- runs roughly 950 lines
-// later, so the window was not microseconds: it was every npm call in the
-// program. With a writable copied distribution an actor could present the
-// genuine tree to the check, replace bin/npm-cli.js immediately afterwards, and
-// have the replacement answer the version, config, ls and audit calls. Nothing
-// looked at the installation again -- not the tree folds, which walk
-// node_modules, and not the quiescence sweep, which walks node_modules, the two
-// manifests and the workflow directory.
-//
-// So the installation is folded a SECOND time, here, after every npm subprocess
-// has run. Bytes rather than a stamp, because that is what the first fold
-// compared and a replacement restored before this point must still be caught by
-// the same measure. Refusing at exit 2 keeps this on the toolchain refusal, which
-// is what it is: the program that answered was not the program that was checked.
-//
-// Gated the same way the first fold's byte comparison is. --any-toolchain waives
-// which npm is acceptable and marks the output not a freeze record, so there is
-// no freeze record here to protect.
-if (!boolAnyToolchain) {
-  const objNpmTreeAfter = foldNpmInstallation(strNpmTreeRoot, strNpmBesideNode);
-  if (objNpmTreeAfter.sha256 !== objNpmTree.sha256
-    || objNpmTreeAfter.changeSha256 !== objNpmTree.changeSha256) {
-    process.stderr.write(
-      'supply-freeze: the npm installation changed while it was being used.\n' +
-      `  npm installation   ${formatUntrustedText(strNpmTreeRoot)}\n` +
-      `  when checked       ${objNpmTree.sha256} (${objNpmTree.files} files)\n` +
-      `  after the run      ${objNpmTreeAfter.sha256} (${objNpmTreeAfter.files} files)\n` +
-      `  what moved         ${objNpmTreeAfter.sha256 !== objNpmTree.sha256
-        ? 'contents' : 'inode change times, with the contents restored'}\n` +
-      '  the npm verified before the first subprocess is not the npm on disk now, so\n' +
-      '  the configuration, the lockfile assertion and the advisory posture were not\n' +
-      '  necessarily answered by the installation this run authenticated.\n');
-    process.exit(2);
-  }
-}
 // Round 18, reported, and the same defect round 15 fixed for the umask. The
 // value compared and the value printed were two separate stat calls, so a
 // message could quote a timestamp that was never the one refused.
