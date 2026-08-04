@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `e7efdd49a92640da944b85f0df880f63f745cfe61e3448de3a66b12bb6096f4b` | script `script.sha256` |
+| Freeze script SHA-256 | `70695c4c7f0f8e92be4a76e701f16ec9240f0cce948ce9462d0556c9028a8050` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -421,8 +421,14 @@ strNode=/tmp/node24/bin/node   # absolute, and npm is the one beside it
 cd .github/workflows
 umask 0022                   # the recorded tree was installed under this
 env -u NODE_OPTIONS "$strNode" /tmp/node24/bin/npm ci --ignore-scripts --no-audit --no-fund
-env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs
+env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs --json
 ```
+
+**`--json` is not optional here.** The default renderer is a human summary and does not print
+every compared field — `toolchain.npmTree`, which authenticates npm's bytes, and the two
+`manifestBlobs` object ids are all absent from it. A reader following this procedure without
+`--json` cannot supply the values [Consumers](#consumers) requires comparing, which is the shape
+the procedure exists to produce.
 
 **Ambient npm configuration changes what `npm ci` produces.** A `bin-links=false` or `omit=dev`
 setting in an environment variable or a user/global `.npmrc` yields a different tree from the
@@ -473,7 +479,7 @@ strIsolationDirectory="$(mktemp -d)"
 export NPM_CONFIG_USERCONFIG="$strIsolationDirectory/npm-user-empty"
 export NPM_CONFIG_GLOBALCONFIG="$strIsolationDirectory/npm-global-empty"
 env -u NODE_OPTIONS "$strNode" /tmp/node24/bin/npm ci --ignore-scripts --no-audit --no-fund
-env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs
+env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs --json
 ```
 
 **The isolation must cover the recorder, not just the install.** An earlier draft passed

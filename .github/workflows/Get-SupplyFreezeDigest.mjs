@@ -838,6 +838,45 @@ function foldNpmInstallation(strRoot, strLauncherPath) {
   };
   considerRootOrLauncher(strRoot, '(installation root)');
   if (strLauncherPath !== undefined) considerRootOrLauncher(strLauncherPath, '(npm launcher)');
+  // Round 59, reported by Codex, and the round-58 fix caught one level up.
+  //
+  // Folding an inode says "this directory was not replaced". It says nothing
+  // about the PATH used to reach it. Rename lib/node_modules aside, put a
+  // hostile tree at that name, let npm answer every call, rename the original
+  // back: the renamed parent's ctime moves, and the genuine npm root and every
+  // descendant keep their inode and ctime exactly. Both folds match. Swapping
+  // `bin` does the same to the launcher.
+  //
+  // So every directory on the way down is folded too, from the distribution
+  // root to each authenticated leaf -- typically <dist>, <dist>/bin,
+  // <dist>/lib and <dist>/lib/node_modules.
+  //
+  // It stops AT the distribution root deliberately. Above it the ancestors are
+  // /tmp, /opt, / and so on, whose change times move for reasons that have
+  // nothing to do with this record -- the same over-sensitivity the quiescence
+  // sweep's round-36 note refused to take on, and an over-sensitive check that
+  // refuses real runs is not a stricter check. A caller who can rewrite the
+  // directory CONTAINING the Node distribution can also replace node itself,
+  // which is the trust boundary the record documents and not something a fold
+  // can close.
+  const strDistributionRoot = dirname(dirname(realpathSync(process.execPath)));
+  const arrSeen = [];
+  const foldAncestors = (strLeaf) => {
+    let strCurrent = dirname(strLeaf);
+    for (let intHop = 0; intHop < 64; intHop += 1) {
+      if (!strCurrent.startsWith(strDistributionRoot)) return;
+      if (!arrSeen.includes(strCurrent)) {
+        arrSeen.push(strCurrent);
+        considerRootOrLauncher(strCurrent, `(ancestor) ${strCurrent.slice(strDistributionRoot.length) || '/'}`);
+      }
+      if (strCurrent === strDistributionRoot) return;
+      const strParent = dirname(strCurrent);
+      if (strParent === strCurrent) return;
+      strCurrent = strParent;
+    }
+  };
+  foldAncestors(strRoot);
+  if (strLauncherPath !== undefined) foldAncestors(strLauncherPath);
   const walk = (strDirectory, strRelative) => {
     let arrNames;
     try {
@@ -978,6 +1017,44 @@ function runNpm(arrNpmArguments, objEnv) {
       process.exit(2);
     }
     throw objError;
+  }
+}
+
+// Round 59, reported by Codex. runNpm classifies a SPAWN failure and rethrows
+// everything else, which was deliberate -- a non-zero exit means npm ran and
+// disagreed, and `npm audit` uses exit 1 to report advisories. But nothing
+// caught that rethrow for the calls that MUST succeed, so an npm which starts
+// and then exits non-zero ended the run at exit 1 with an uncaught stack trace,
+// in the case the refusal table calls exit 2. Measured, with the user and global
+// config pointed at one file:
+//
+//   NPM_CONFIG_USERCONFIG=/tmp/c NPM_CONFIG_GLOBALCONFIG=/tmp/c node Get-...mjs
+//     -> node:internal/errors:985 ... Error: Command failed: npm --version
+//        Exit prior to config file resolving
+//        exit 1, where the record documents exit 2
+//
+// And npm's stderr reached the log unescaped, so a config path carrying a
+// newline forges a line there -- the CWE-117 class this file funnels everything
+// else through formatUntrustedText to avoid.
+//
+// A wrapper rather than a change to runNpm, because runNpmAllowingFailure needs
+// the throw: the audit's exit 1 is data, not a failure. Every call that must
+// succeed goes through here and names the refusal its own failure means, so a
+// broken `ls` is still a tree problem and a broken `config` is still a
+// configuration problem, rather than everything becoming "unreviewed toolchain".
+function runNpmOrRefuse(arrNpmArguments, objEnv, intFailureExit, strMeaning) {
+  try {
+    return runNpm(arrNpmArguments, objEnv);
+  } catch (objError) {
+    const strStderr = typeof objError?.stderr === 'string' ? objError.stderr.trim() : '';
+    process.stderr.write(
+      `supply-freeze: ${strMeaning}\n` +
+      `  invocation         npm ${arrNpmArguments.map((strArgument) => formatUntrustedText(strArgument)).join(' ')}\n` +
+      `  npm exit status    ${formatUntrustedText(String(objError?.status ?? objError?.code ?? 'unknown'))}\n` +
+      (strStderr ? `  npm said           ${formatUntrustedText(strStderr)}\n` : '') +
+      '  npm ran and refused the invocation, so the value this run needed was never\n' +
+      '  produced; nothing is recorded from a call that did not answer.\n');
+    process.exit(intFailureExit);
   }
 }
 
@@ -2607,7 +2684,8 @@ if (!boolAnyToolchain && (objNpmTree.sha256 !== REVIEWED_NPM_TREE_SHA256
     '  explicitly-unreviewed output.\n');
   process.exit(2);
 }
-const strNpmVersion = runNpm(['--version']).trim();
+const strNpmVersion = runNpmOrRefuse(['--version'], undefined, 2,
+  'the reviewed npm could not report its version.').trim();
 
 // Round 26, reported, and the most serious finding this script has taken.
 // NODE_OPTIONS=--require runs a module before the first statement of this file,
@@ -3099,7 +3177,8 @@ function configDrift(objReviewed, objEffective) {
 
 if (!boolAnyToolchain) {
   const objEffective = parseNpmJsonOrRefuse(
-    runNpm(['config', 'list', '--json']), 'npm config list', 6);
+    runNpmOrRefuse(['config', 'list', '--json'], undefined, 6,
+      'npm could not report its effective configuration.'), 'npm config list', 6);
   const arrDrift = configDrift(REVIEWED_NPM_CONFIG, objEffective);
   if (arrDrift.length > 0) {
     process.stderr.write(
@@ -3208,7 +3287,13 @@ try {
   // entirely -- and with NPM_CONFIG_LINK=true it exited 0 having reported the
   // root and zero dependencies. Either would have recorded
   // treeSatisfiesLockfile: true for a tree containing nothing.
-  const strLsOutput = runNpm(['ls', '--all', '--json', '--long',
+  // Round 59. `npm ls` uses a non-zero exit to mean "the tree has problems",
+  // which is a fact about the tree and not a failure of the call -- the same
+  // distinction `npm audit` needs, so it takes the same path. Previously the
+  // throw escaped uncaught and a problematic tree ended the run at exit 1 with a
+  // stack trace; now the output is classified by parseNpmJsonOrRefuse, which
+  // refuses at the documented exit 7 when what came back is not a tree report.
+  const strLsOutput = runNpmAllowingFailure(['ls', '--all', '--json', '--long',
     '--package-lock-only=false', '--depth=4294967295',
     '--include=dev', '--include=optional', '--include=peer',
     '--global=false', '--link=false']);
@@ -3474,7 +3559,8 @@ if (boolSkipAudit) {
   if (!boolAnyToolchain) {
     const arrTransportDrift = configDrift(
       REVIEWED_NPM_TRANSPORT,
-      parseNpmJsonOrRefuse(runNpm(['config', 'list', '--json']), 'npm config list', 6));
+      parseNpmJsonOrRefuse(runNpmOrRefuse(['config', 'list', '--json'], undefined, 6,
+        'npm could not report its effective configuration.'), 'npm config list', 6));
     if (arrTransportDrift.length > 0) {
       process.stderr.write(
         'supply-freeze: npm transport configuration would change where the audit goes.\n' +
@@ -3485,7 +3571,8 @@ if (boolSkipAudit) {
       process.exit(6);
     }
   }
-  const strRegistry = runNpm(['config', 'get', 'registry']).trim();
+  const strRegistry = runNpmOrRefuse(['config', 'get', 'registry'], undefined, 9,
+    'npm could not report the registry the audit would use.').trim();
   if (!boolAnyToolchain && strRegistry !== REVIEWED_REGISTRY) {
     process.stderr.write(
       'supply-freeze: refusing to record an advisory posture from an unreviewed registry.\n' +
