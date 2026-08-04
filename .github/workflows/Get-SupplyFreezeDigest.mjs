@@ -375,6 +375,53 @@ const boolSkipAudit = arrArguments.includes('--no-audit');
 //
 // Refused rather than warned: a warning on stderr is invisible to `--json`
 // consumers, which are the callers most likely to be scripted.
+// Round 55, reported by Codex, and it is the round-12 comment being wrong about
+// its own position. That comment says "the read is now the first thing this
+// script does, so the window between Node's load and the read contains no code
+// of ours" -- but argument membership and the unsupported-argument filter ran
+// first, roughly 150 lines of code and one refusal ahead of it. A long argument
+// list widens that window, and the ctime baseline was captured after it too, so
+// a replacement landing inside it could be read as the reviewed bytes while the
+// process kept executing the source Node had already compiled.
+//
+// The window between Node's compile and this read cannot be closed from inside
+// the script -- the record says so -- but it can be kept as small as the
+// language allows, which is what the comment claimed and did not deliver. The
+// snapshot and its ctime baseline now genuinely precede every other statement.
+const strInvokedPath = fileURLToPath(import.meta.url);
+const strScriptPath = realpathSync(strInvokedPath);
+const boolEntryPointIsLink = strInvokedPath !== strScriptPath;
+const objScriptBefore = readFileSync(strScriptPath);
+const strScriptSha256 = sha256(objScriptBefore);
+// Round 18, reported. Math.round can round the uptime DOWN, which places the
+// computed start LATER than the real one -- and anything changed inside that
+// sliver carries a ctime below the ceiling and escapes the check. Math.ceil can
+// only place the computed start earlier, which is the direction that fails safe:
+// it can raise a false alarm, never miss a replacement.
+const intProcessStartedAt = Date.now() - Math.ceil(process.uptime() * 1000);
+// Round 29, swept rather than reported. The quiescence sweep's cross-clock
+// comparison was the reported finding; this is the same defect one comparison
+// over, on the script's own identity, and no reviewer named it.
+//
+// The round-18 note above chose Math.ceil to bias the ceiling earlier because
+// that direction fails safe. It does -- but it buys at most 1 ms, and the
+// backdating measured this round is up to 4.13 ms, so the margin is smaller than
+// the error it was protecting against. A replacement landing within roughly 3 ms
+// of process start carried a ctime below the ceiling and passed.
+//
+// Same remedy as the sweep: read the stamp from the filesystem now and compare
+// it against the filesystem later, so no clock enters the comparison at all.
+const intScriptChangedAtStart = (() => {
+  try {
+    return lstatSync(strScriptPath).ctimeMs;
+  } catch (objError) {
+    process.stderr.write(
+      'supply-freeze: this script became unreadable during the run; refusing to report.\n' +
+      formatErrorLocation(objError, strScriptPath));
+    process.exit(3);
+  }
+})();
+
 const SUPPORTED_ARGUMENTS = new Set(['--json', '--any-toolchain', '--no-audit']);
 const arrUnsupported = arrArguments.filter((strArg) => !SUPPORTED_ARGUMENTS.has(strArg));
 if (arrUnsupported.length > 0) {
@@ -539,39 +586,9 @@ function formatTreeName(strName) {
 // re-comparison and the ctime ceiling -- describe the bytes that were compiled.
 // That alone closes the attack, because restoring a modified target during the
 // run moves the TARGET's ctime past process start.
-const strInvokedPath = fileURLToPath(import.meta.url);
-const strScriptPath = realpathSync(strInvokedPath);
-const boolEntryPointIsLink = strInvokedPath !== strScriptPath;
-const objScriptBefore = readFileSync(strScriptPath);
-const strScriptSha256 = sha256(objScriptBefore);
-// Round 18, reported. Math.round can round the uptime DOWN, which places the
-// computed start LATER than the real one -- and anything changed inside that
-// sliver carries a ctime below the ceiling and escapes the check. Math.ceil can
-// only place the computed start earlier, which is the direction that fails safe:
-// it can raise a false alarm, never miss a replacement.
-const intProcessStartedAt = Date.now() - Math.ceil(process.uptime() * 1000);
-// Round 29, swept rather than reported. The quiescence sweep's cross-clock
-// comparison was the reported finding; this is the same defect one comparison
-// over, on the script's own identity, and no reviewer named it.
-//
-// The round-18 note above chose Math.ceil to bias the ceiling earlier because
-// that direction fails safe. It does -- but it buys at most 1 ms, and the
-// backdating measured this round is up to 4.13 ms, so the margin is smaller than
-// the error it was protecting against. A replacement landing within roughly 3 ms
-// of process start carried a ctime below the ceiling and passed.
-//
-// Same remedy as the sweep: read the stamp from the filesystem now and compare
-// it against the filesystem later, so no clock enters the comparison at all.
-const intScriptChangedAtStart = (() => {
-  try {
-    return lstatSync(strScriptPath).ctimeMs;
-  } catch (objError) {
-    process.stderr.write(
-      'supply-freeze: this script became unreadable during the run; refusing to report.\n' +
-      formatErrorLocation(objError, strScriptPath));
-    process.exit(3);
-  }
-})();
+// The self-snapshot block that used to sit here now runs BEFORE argument
+// processing; see its note above SUPPORTED_ARGUMENTS.
+
 
 // "A JSON object", as distinct from everything else `typeof x === 'object'`
 // admits. Both `null` and an array answer 'object', and each of those has now
@@ -2077,6 +2094,45 @@ const objBaselineChange = (() => {
 })();
 
 const strNodeVersion = process.version;
+
+// Round 55, reported by Codex. npmChildEnv prepends this Node's own directory to
+// the child PATH, which binds `npm` to the reviewed installation -- but only when
+// npm is actually THERE. Copy or relocate the reviewed node binary without its
+// npm beside it and that prepend resolves nothing, the inherited PATH decides,
+// and the only thing authenticating the executable that answers is its own
+// `--version` output.
+//
+// A replacement that prints `11.16.0` therefore passes the toolchain guard and
+// then supplies every subsequent answer: the `config list` this script checks
+// for install-shaping settings, the `ls` that asserts the tree satisfies the
+// lockfile, and the `audit` that becomes the recorded advisory posture. That is
+// a full forged record at `freezeRecord: true`, with an attacker-chosen set of
+// advisories, and no field in the output would look wrong.
+//
+// Version text is not identity. The binding is positional and is now asserted
+// rather than assumed: the npm that will run must exist in this Node's own
+// directory, which is what the PATH prepend was always relying on. If it is not
+// there, the run refuses instead of silently falling through to whatever the
+// ambient PATH offers.
+//
+// Checked before the first npm subprocess, because every later guard reads an
+// answer this one decides the provenance of. It is not gated on
+// --any-toolchain: that flag waives which VERSIONS are acceptable, never whether
+// the program answering is the one this process resolved.
+const strNpmBesideNode = join(dirname(process.execPath), 'npm');
+if (!existsSync(strNpmBesideNode)) {
+  process.stderr.write(
+    'supply-freeze: refusing to run npm that is not bound to this Node installation.\n' +
+    `  node               ${formatUntrustedText(process.execPath)}\n` +
+    `  expected npm at    ${formatUntrustedText(strNpmBesideNode)}\n` +
+    '  npm is resolved by prepending this Node\'s directory to the child PATH, so\n' +
+    '  with no npm there the ambient PATH decides which program answers -- and its\n' +
+    '  --version output is the only thing that would vouch for it. A replacement\n' +
+    '  printing the reviewed version can fabricate the configuration, the lockfile\n' +
+    '  assertion and the advisory posture alike.\n' +
+    '  run the recorder with a complete Node installation, not a relocated binary.\n');
+  process.exit(2);
+}
 const strNpmVersion = runNpm(['--version']).trim();
 
 // Round 26, reported, and the most serious finding this script has taken.

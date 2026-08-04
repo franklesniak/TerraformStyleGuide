@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `198807ec584c787b98acdb08f64add2a19a0de607226fd93e36b8016434ba5f7` | script `script.sha256` |
+| Freeze script SHA-256 | `2b8246f85456925de17ed8dfced1fec8bde084d9ce18cc514b69c1a6ef266553` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | Platform | `linux` | script `toolchain.platform` |
@@ -192,9 +192,10 @@ that table exists at all — the reasoning is in
 ### Recorded, not compared
 
 Recorded so a reader can diagnose a mismatch or understand the context. **Not** subject to
-exact equality. Every row below carries a value. One field the script emits has none for this
-record, and it is described in [How `auditEnvironmentScrubbed` came to have a value](#how-auditenvironmentscrubbed-came-to-have-a-value)
-rather than given a row here.
+exact equality. Every row below carries a value, including `auditEnvironmentScrubbed`, which
+gained one when the advisory posture was re-taken — it had correctly carried none before, and
+[How `auditEnvironmentScrubbed` came to have a value](#how-auditenvironmentscrubbed-came-to-have-a-value)
+is the history of why.
 
 | Field | Value | Derived by | Why it is not compared |
 | --- | --- | --- | --- |
@@ -1024,7 +1025,11 @@ fix: three reports differing only in that name folded to one posture digest, and
 identical `inherited through dependencies` line. Distinct claims about causation must not become
 one record.
 
-**The recorded digest has been re-taken under this normalization, and the row is discharged.**
+**The recorded digest has been re-taken under this normalization, which discharges the
+reproducibility problem and nothing else.** The row is still **not dischargeable**, for the
+separate reason given at the [compared-fields table](#compared-fields): the re-taken value folds
+`GHSA-rgw5-rvv9-x895`, which no recorded disposition covers. Two different obstacles sat on this
+one row, they were never the same obstacle, and clearing the first is not clearing the second.
 The previous value, `ea559555…`, was taken before the inherited-through names were recorded, so the
 committed script could not reproduce it from any report — not only from ones carrying an inherited
 package, because the field is emitted for every package whether or not the report supplied names.
@@ -1075,14 +1080,25 @@ it must not therefore be treated as non-blocking.
 
 ## Consumers
 
-Issue #22 consumes this record. Its equality requirement is discharged by **all three** of the
-following, with the caveat on the advisory posture noted directly above:
+Issue #22 consumes this record. Its equality requirement is discharged by **all four** of the
+following:
 
 1. Re-running the script and confirming its `--json` output has `freezeRecord: true` with an empty
    `notFreezeRecordBecause`.
 2. Comparing that output against every script-derived row.
 3. Running the three `git rev-parse` commands in [Compared fields](#compared-fields) and comparing
    their output against the three `git`-derived rows.
+4. **Confirming that a disposition recorded under `T1-ADVISORY-DISPOSITION-v1` covers every
+   advisory folded into the recorded posture — today that means `GHSA-rgw5-rvv9-x895`, which no
+   decision yet covers.** Until it does, this record **cannot** discharge #22, and steps 1 to 3
+   passing does not change that.
+
+**Step 4 exists because the first three cannot detect what it checks.** An earlier version of this
+procedure listed only three and pointed at a caveat "directly above" describing how to respond to
+an advisory *mismatch* — but after the posture was re-taken there is no mismatch, so nothing in
+steps 1 to 3 fires, and a consumer following them to the letter would discharge #22 over a
+vulnerability nobody has ruled on. A gate that only fires on drift is no gate at all once the
+drift has been folded into the baseline.
 
 **Step 1 is a gate on the other two, not a fourth row to check.** Without it the procedure can
 report itself satisfied over output the script has explicitly disowned: `--any-toolchain` waives
