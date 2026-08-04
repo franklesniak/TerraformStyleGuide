@@ -22,6 +22,32 @@ import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpat
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// Round 52, reported by Codex. These three lived beside formatUntrustedText,
+// two thousand lines below the unrecognized-argument refusal that CALLS it.
+// Function declarations hoist; `const` bindings do not -- they sit in the
+// temporal dead zone until their line executes. So the one refusal most likely
+// to carry a mistyped credential threw instead of redacting it. Measured:
+//
+//   node Get-SupplyFreezeDigest.mjs --bogus
+//     -> ReferenceError: Cannot access 'RE_URL_IN_TEXT' before initialization
+//        exit 1, where the record documents exit 2
+//
+// A regression from round 51, which hoisted the expressions out of the function
+// for reuse without checking that every caller runs after them. Declared here,
+// above every use, because the top of the module is the only position where
+// that cannot silently become false again as call sites move.
+//
+// The scheme tolerates the three characters the WHATWG URL parser deletes from
+// its input -- U+0009, U+000A, U+000D -- and the authority separator is any run
+// of forward or back slashes, or none, which is what that parser accepts. Both
+// rules are the specification's, not a guess; the reasoning is at
+// formatUntrustedText, which is where they are used.
+const RE_PARSER_DELETES = /[\t\n\r]/gu;
+const RE_URL_IN_TEXT = new RegExp(
+  'h[\\t\\n\\r]*t[\\t\\n\\r]*t[\\t\\n\\r]*p[\\t\\n\\r]*(?:s[\\t\\n\\r]*)?'
+  + ':[/\\\\\\t\\n\\r]*[\\s\\S]*', 'iu');
+const RE_LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/gu;
+
 const REVIEWED_NODE = 'v24.18.1';
 const REVIEWED_NPM = '11.16.0';
 
@@ -369,8 +395,33 @@ if (arrUnsupported.length > 0) {
   process.exit(2);
 }
 
-function sha256(strText) {
-  return createHash('sha256').update(strText, 'utf8').digest('hex');
+// Round 52, reported by Codex against the script's self-hash, and swept to the
+// class rather than the site. This hashed a STRING, and every caller that had
+// read a file handed it text decoded as UTF-8 -- which is lossy: any invalid
+// byte sequence decodes to U+FFFD, so a file containing a raw 0x80 and a file
+// containing a genuine U+FFFD produce the same string and therefore the same
+// digest. This file itself carries two literal U+FFFD characters, so the
+// substitution is available in practice, not only in principle. Measured:
+//
+//   original raw sha256 c0ff4a6f...   tampered raw sha256 95226a6a...
+//   what this function returned for BOTH: c0ff4a6f...
+//
+// A byte-different script reporting the reviewed script identity defeats the one
+// control that binds these numbers to the code that produced them.
+//
+// The reported site was the script. The same decode fed `package.json` and
+// `package-lock.json`, whose SHA-256 rows and blob ids are COMPARED fields, and
+// gitBlobId is defined over raw bytes by git in the first place -- so computing
+// one from a decoded string was wrong twice over. Bytes end to end now: the
+// reads return Buffers, the digests are taken over Buffers, and the re-read
+// comparisons use Buffer.equals rather than string identity.
+//
+// A string is still accepted, because the advisory posture legitimately hashes a
+// canonical JSON string this file generated rather than a file it read.
+function sha256(objInput) {
+  return createHash('sha256')
+    .update(Buffer.isBuffer(objInput) ? objInput : Buffer.from(objInput, 'utf8'))
+    .digest('hex');
 }
 
 // Round 41, reported by Codex. Names read off the tree are attacker-chosen, and
@@ -491,8 +542,8 @@ function formatTreeName(strName) {
 const strInvokedPath = fileURLToPath(import.meta.url);
 const strScriptPath = realpathSync(strInvokedPath);
 const boolEntryPointIsLink = strInvokedPath !== strScriptPath;
-const strScriptBefore = readFileSync(strScriptPath, 'utf8');
-const strScriptSha256 = sha256(strScriptBefore);
+const objScriptBefore = readFileSync(strScriptPath);
+const strScriptSha256 = sha256(objScriptBefore);
 // Round 18, reported. Math.round can round the uptime DOWN, which places the
 // computed start LATER than the real one -- and anything changed inside that
 // sliver carries a ctime below the ceiling and escapes the check. Math.ceil can
@@ -573,8 +624,8 @@ function isPlainObject(objValue) {
 // A Git blob identity is SHA-1 over `blob <byteLength>\0<content>`. Implemented
 // rather than shelled out to `git`, so the check works in an exported tree with
 // no repository and cannot be confused by the working directory.
-function gitBlobId(strText) {
-  const objBytes = Buffer.from(strText, 'utf8');
+function gitBlobId(objInput) {
+  const objBytes = Buffer.isBuffer(objInput) ? objInput : Buffer.from(objInput, 'utf8');
   return createHash('sha1')
     .update(`blob ${objBytes.length}\0`, 'utf8')
     .update(objBytes)
@@ -600,7 +651,7 @@ function canonicalize(objValue) {
 // node:fs trace instead. A read that cannot complete IS the input changing.
 function readOrRefuse(strPath) {
   try {
-    return readFileSync(strPath, 'utf8');
+    return readFileSync(strPath);
   } catch (objError) {
     process.stderr.write(
       'supply-freeze: a recorded input could not be re-read; refusing to report.\n' +
@@ -1541,6 +1592,16 @@ function ghsaIdFromUrl(strUrl) {
   } catch {
     return null;
   }
+  // Round 52, reported by Codex. Returning the FIRST matching segment made
+  // `/GHSA-aaaa-bbbb-cccc/GHSA-dddd-eeee-ffff` and
+  // `/GHSA-aaaa-bbbb-cccc/GHSA-gggg-hhhh-jjjj` one identity -- the same
+  // collision this function was written to close, moved from "which characters
+  // end the token" to "which of several tokens is the token". A url naming two
+  // advisories does not name one of them; it is malformed, and the honest answer
+  // is no identity rather than a guess at precedence. Collected and counted, so
+  // exactly one is an identity and anything else falls through to the source-id
+  // test, which finds a real identity or refuses at exit 5.
+  const arrFound = [];
   for (const strSegment of objUrl.pathname.split('/')) {
     let strDecoded;
     try {
@@ -1549,10 +1610,10 @@ function ghsaIdFromUrl(strUrl) {
       return null;
     }
     if (RE_GHSA_EXACT.test(strDecoded)) {
-      return strDecoded;
+      arrFound.push(strDecoded);
     }
   }
-  return null;
+  return arrFound.length === 1 ? arrFound[0] : null;
 }
 
 function normalizeAudit(objAudit) {
@@ -1906,7 +1967,7 @@ const strTreeRoot = join(strWorkflowDirectory, 'node_modules');
 // refusal names its values on stderr.
 function snapshotOrRefuse(strPath) {
   try {
-    return readFileSync(strPath, 'utf8');
+    return readFileSync(strPath);
   } catch (objError) {
     process.stderr.write(
       'supply-freeze: refusing to record digests for an unreviewed manifest.\n' +
@@ -1925,8 +1986,8 @@ function snapshotOrRefuse(strPath) {
 // the first read of anything recorded, the window closes.
 const intRecordingStartedAt = Date.now();
 
-const strPackageBefore = snapshotOrRefuse(strPackagePath);
-const strLockBefore = snapshotOrRefuse(strLockPath);
+const objPackageBefore = snapshotOrRefuse(strPackagePath);
+const objLockBefore = snapshotOrRefuse(strLockPath);
 
 // Round 29, reported -- the baseline half of the quiescence sweep. Read here
 // rather than at the ceiling above so that a missing or unreadable manifest
@@ -2443,11 +2504,8 @@ function redactUrl(strValue) {
 // withheld, because nothing distinguishes that from a url this parser accepts.
 // redactUrl fails closed on it and prints a length rather than the text. A
 // withheld diagnostic is recoverable by rerunning; a published credential is not.
-const RE_PARSER_DELETES = /[\t\n\r]/gu;
-const RE_URL_IN_TEXT = new RegExp(
-  'h[\\t\\n\\r]*t[\\t\\n\\r]*t[\\t\\n\\r]*p[\\t\\n\\r]*(?:s[\\t\\n\\r]*)?'
-  + ':[/\\\\\\t\\n\\r]*[\\s\\S]*', 'iu');
-const RE_LINE_BREAK = /\r\n|[\n\r\u2028\u2029]/gu;
+// The three expressions above are declared at the top of the module; see the
+// note there for why position matters.
 function formatUntrustedText(strText) {
   const strRaw = String(strText);
   const intUrlAt = strRaw.search(RE_URL_IN_TEXT);
@@ -2455,15 +2513,31 @@ function formatUntrustedText(strText) {
     return formatTreeName(strRaw);
   }
   const strTail = strRaw.slice(intUrlAt);
-  // The count was overstated until round 52 swept it: a tail ending in a line
-  // terminator reported one further line withheld when no further line existed.
-  // Counted by segment now, with a trailing empty one dropped, so the number is
-  // the count of lines that actually carried text.
-  const arrLines = strTail.split(RE_LINE_BREAK);
-  if (arrLines[arrLines.length - 1] === '') {
-    arrLines.pop();
+  // Two round-52 corrections, one swept and one reported by Codex.
+  //
+  // The count was overstated: a tail ending in a line terminator reported one
+  // further line withheld when no further line followed it, and npm output
+  // routinely ends in a newline. A terminator at the very end introduces no
+  // line, so it is not counted.
+  //
+  // And it is counted WITHOUT materializing the matches. `split` and `match`
+  // both allocate one array element per line -- for `split`, a substring each.
+  // The audit subprocess is permitted 64 MiB of output, so a schema-invalid
+  // response whose message carries millions of newlines would allocate hundreds
+  // of megabytes to compute a single integer, and die of memory pressure in
+  // place of the documented exit 5. An incremental scan holds one match at a
+  // time regardless of input size.
+  let intWithheld = 0;
+  let intLastEnd = -1;
+  RE_LINE_BREAK.lastIndex = 0;
+  for (let objBreak = RE_LINE_BREAK.exec(strTail); objBreak !== null;
+    objBreak = RE_LINE_BREAK.exec(strTail)) {
+    intWithheld += 1;
+    intLastEnd = objBreak.index + objBreak[0].length;
   }
-  const intWithheld = arrLines.length - 1;
+  if (intLastEnd === strTail.length) {
+    intWithheld -= 1;
+  }
   return formatTreeName(strRaw.slice(0, intUrlAt))
     + formatTreeName(redactUrl(strTail.replace(RE_PARSER_DELETES, '')))
     + (intWithheld > 0
@@ -2539,18 +2613,18 @@ const objRecord = {
     umask: strObservedUmask,
   },
   manifest: {
-    'package.json': sha256(strPackageBefore),
-    'package-lock.json': sha256(strLockBefore),
+    'package.json': sha256(objPackageBefore),
+    'package-lock.json': sha256(objLockBefore),
   },
   manifestBlobs: {
-    'package.json': gitBlobId(strPackageBefore),
-    'package-lock.json': gitBlobId(strLockBefore),
+    'package.json': gitBlobId(objPackageBefore),
+    'package-lock.json': gitBlobId(objLockBefore),
   },
   matchesReviewedManifest:
-    sha256(strPackageBefore) === REVIEWED_PACKAGE_SHA256 &&
-    sha256(strLockBefore) === REVIEWED_LOCK_SHA256 &&
-    gitBlobId(strPackageBefore) === REVIEWED_PACKAGE_BLOB &&
-    gitBlobId(strLockBefore) === REVIEWED_LOCK_BLOB,
+    sha256(objPackageBefore) === REVIEWED_PACKAGE_SHA256 &&
+    sha256(objLockBefore) === REVIEWED_LOCK_SHA256 &&
+    gitBlobId(objPackageBefore) === REVIEWED_PACKAGE_BLOB &&
+    gitBlobId(objLockBefore) === REVIEWED_LOCK_BLOB,
 };
 
 // Reported and confirmed: this used to record `matchesReviewedManifest: false`
@@ -2565,7 +2639,7 @@ if (!boolAnyToolchain && !objRecord.matchesReviewedManifest) {
     `                     reviewed ${REVIEWED_PACKAGE_SHA256}\n` +
     `  package-lock.json  observed ${objRecord.manifest['package-lock.json']}\n` +
     `                     reviewed ${REVIEWED_LOCK_SHA256}\n` +
-    `  package.json       blob     ${gitBlobId(strPackageBefore)}\n` +
+    `  package.json       blob     ${gitBlobId(objPackageBefore)}\n` +
     `                     reviewed ${REVIEWED_PACKAGE_BLOB}\n` +
     '  a changed manifest needs a new reviewed freeze, not a digest against this one.\n');
   process.exit(4);
@@ -2617,7 +2691,7 @@ try {
   if (realpathSync(objLs.path) !== realpathSync(strWorkflowDirectory)) {
     throw new Error(`npm ls examined ${objLs.path}, not ${strWorkflowDirectory}`);
   }
-  const objManifest = JSON.parse(strPackageBefore);
+  const objManifest = JSON.parse(objPackageBefore.toString('utf8'));
   const arrDeclared = [...new Set([
     ...Object.keys(objManifest.dependencies ?? {}),
     ...Object.keys(objManifest.devDependencies ?? {}),
@@ -3168,8 +3242,8 @@ if (boolSkipAudit) {
 
 // Read-only is an assertion, not a claim. `npm ls` and `npm audit` are supposed
 // to leave both files alone; this proves they did rather than trusting them.
-if (readOrRefuse(strPackagePath) !== strPackageBefore
-  || readOrRefuse(strLockPath) !== strLockBefore) {
+if (!readOrRefuse(strPackagePath).equals(objPackageBefore)
+  || !readOrRefuse(strLockPath).equals(objLockBefore)) {
   process.stderr.write('supply-freeze: package metadata changed while reading it; refusing to report\n');
   process.exit(3);
 }
@@ -3368,8 +3442,8 @@ if (objSweepDifference) {
 // there" shape this review has now found several times. The content comparison
 // is repeated here, after every scan and immediately before the record is
 // emitted, so the hashes reported are the bytes last observed.
-if (readOrRefuse(strPackagePath) !== strPackageBefore
-  || readOrRefuse(strLockPath) !== strLockBefore) {
+if (!readOrRefuse(strPackagePath).equals(objPackageBefore)
+  || !readOrRefuse(strLockPath).equals(objLockBefore)) {
   process.stderr.write(
     'supply-freeze: package metadata changed after the tree was recorded; refusing to report\n' +
     '  the manifest hashes above would describe bytes that are no longer on disk.\n');
@@ -3379,7 +3453,7 @@ if (readOrRefuse(strPackagePath) !== strPackageBefore
 // Round 12. The script's own bytes, re-compared after everything else. A
 // replacement during the run would otherwise leave the reported script digest
 // describing a file that is not the one that produced these numbers.
-if (readOrRefuse(strScriptPath) !== strScriptBefore) {
+if (!readOrRefuse(strScriptPath).equals(objScriptBefore)) {
   process.stderr.write(
     'supply-freeze: this script changed while it was running; refusing to report.\n' +
     `  reported digest    ${strScriptSha256}\n` +
