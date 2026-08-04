@@ -531,12 +531,40 @@ const boolSkipAudit = arrArguments.includes('--no-audit');
 // Renders an unrecognized argument without ever emitting its value. Declared as
 // a function so it is hoisted above the refusal below, matching how
 // formatUntrustedText is reached from the same block.
+//
+// Round 64, reported by Codex, and it is the round-63 fix caught one shape
+// short. That round withheld everything after the first `=`, on the stated
+// reasoning that "a flag name cannot carry a credential and a value always
+// can". The reasoning is right; the implementation only recognised ONE spelling
+// of a value. `--token hunter2` is two argv entries, both land in
+// arrUnsupported, and `hunter2` has no `=` -- so it took the flag-name branch
+// and printed verbatim. Measured on the shipped script:
+//
+//   node Get-SupplyFreezeDigest.mjs --token hunter2
+//     unrecognized       --token hunter2          <- the secret, in a kept log
+//
+// The discriminator is not `=`, it is whether the token is a FLAG. A flag
+// begins with `-`; anything else in an unrecognized invocation is an operand,
+// which is where a separated value lands. So operands are withheld whole and
+// flags render only their name.
+//
+// The residual, stated rather than left to be found: a separated value that
+// itself begins with `-` (`--token -sekrit`) is indistinguishable from a flag
+// by this rule and is still rendered. Closing that would mean withholding every
+// argument after the first unrecognized one, which loses the diagnostic that
+// makes this refusal useful -- a caller who typed `--no-audti` needs to see
+// which flag was rejected.
 function formatUnsupportedArgument(strArg) {
   const intEquals = strArg.indexOf('=');
-  if (intEquals < 0) return formatUntrustedText(strArg);
-  const intValueLength = strArg.length - intEquals - 1;
-  return `${formatUntrustedText(strArg.slice(0, intEquals))}`
-    + `=(value withheld, ${intValueLength} characters)`;
+  if (intEquals >= 0) {
+    const intValueLength = strArg.length - intEquals - 1;
+    return `${formatUntrustedText(strArg.slice(0, intEquals))}`
+      + `=(value withheld, ${intValueLength} characters)`;
+  }
+  if (!strArg.startsWith('-')) {
+    return `(value withheld, ${strArg.length} characters)`;
+  }
+  return formatUntrustedText(strArg);
 }
 
 const SUPPORTED_ARGUMENTS = new Set(['--json', '--any-toolchain', '--no-audit']);
@@ -1327,7 +1355,7 @@ function readdirOrRefuseUndecodable(strDirectory, strRelative) {
     if (!Buffer.from(strName, 'utf8').equals(objEntry.name)) {
       process.stderr.write(
         'supply-freeze: refusing to fold a tree with an undecodable entry name.\n' +
-        `  directory          node_modules${strRelative ? `/${formatTreeName(strRelative)}` : ''}\n` +
+        `  directory          node_modules${strRelative ? `/${formatUntrustedText(strRelative)}` : ''}\n` +
         `  entry              ${objEntry.name.toString('hex')} `
           + `(${objEntry.name.length} byte${objEntry.name.length === 1 ? '' : 's'}, hex; `
           + 'not valid UTF-8)\n' +
@@ -1610,7 +1638,7 @@ function foldInstalledTree(strRoot) {
         } catch (objError) {
           // errno codes are a closed OS-defined set, so naming the code is safe
           // in a way that naming the target is not.
-          arrUnresolvedLinks.push({ path: formatTreeName(strChild), code: objError?.code ?? 'unknown' });
+          arrUnresolvedLinks.push({ path: formatUntrustedText(strChild), code: objError?.code ?? 'unknown' });
           continue;
         }
         if (boolLeavesTree) {
@@ -1628,7 +1656,7 @@ function foldInstalledTree(strRoot) {
           //
           // Round 41 applies the same reasoning to the name's own BYTES, which
           // this round showed were attacker-chosen too.
-          arrEscapingLinks.push({ path: formatTreeName(strChild) });
+          arrEscapingLinks.push({ path: formatUntrustedText(strChild) });
         }
         continue;
       }
@@ -1719,7 +1747,28 @@ function foldInstalledTree(strRoot) {
         // refuse. What is true is the narrow thing this argument actually needs
         // -- the exit-11 refusal is waived and the fold still runs.
         intSpecials += 1;
-        arrSpecialPaths.push(formatTreeName(strChild));
+        // Round 64, reported by Codex, and the round-63 sweep for this exact
+        // class returned the wrong answer. That round routed formatErrorLocation
+        // through the funnel and reported the remaining formatTreeName callers
+        // as "two tree-name renderers that print entry names already covered by
+        // the exit-12 UTF-8 refusal". Both halves were false. There were FOUR
+        // such callers, not two; and exit 12 refuses a name that is not valid
+        // UTF-8, which says nothing about a name that is perfectly valid UTF-8
+        // AND shaped like a credentialed url. Reproduced end to end on the
+        // reviewed toolchain, with a FIFO planted inside a package so npm ls
+        // still passes and exit 11 is actually reached:
+        //
+        //   supply-freeze: refusing to record digests for a tree containing
+        //   special files.
+        //     special entries    1 (expected 0)
+        //       node_modules/glob/https:_user:SECRET@host?token=X
+        //
+        // Every one of the four sites now takes formatUntrustedText, which falls
+        // back to formatTreeName when it finds no url -- so an ordinary package
+        // path renders exactly as before and only a credential-shaped name is
+        // withheld. The operator keeps the diagnostic in every case that is not
+        // an attack.
+        arrSpecialPaths.push(formatUntrustedText(strChild));
         const objSpecial = lstatSync(strPath);
         const strTag = objSpecial.isFIFO() ? 'P'
           : objSpecial.isSocket() ? 'S'
@@ -3425,9 +3474,45 @@ function configDrift(objReviewed, objEffective) {
         // arrived under. An argument about which keys can hold a URL is the same
         // shape as the scheme allowlist rounds 47-59 spent seven rounds
         // retiring: a list of safe cases that npm, not this script, decides.
-        : formatUntrustedText(JSON.stringify(objObserved));
+        // Round 64, reported by Codex, and the round-61 fix above caught being
+        // a URL redactor where a value withholder was needed. That round routed
+        // these through formatUntrustedText on the reasoning that "a value this
+        // process did not compute goes through the funnel" -- which is correct
+        // and insufficient, because the funnel only withholds from a URL SCHEME
+        // onward. Measured by Codex on npm 11.16.0: `NPM_CONFIG_OMIT=hunter2`
+        // comes back as `omit: ["hunter2"]`, is not URL-shaped, and was printed
+        // verbatim into the retained exit-6 log.
+        //
+        // So the value is described rather than rendered -- but only the parts
+        // that can carry a secret. A boolean or a number cannot, and they are
+        // the diagnostic a caller actually needs: someone who set
+        // bin-links=false must see `false` to understand the refusal. Strings
+        // are the only shape that can hold a credential, so strings become a
+        // length and everything else prints.
+        : formatObservedConfig(objObserved);
       return `  ${strKey.padEnd(18)} observed ${strObserved}, reviewed ${JSON.stringify(objExpected)}`;
     });
+}
+
+// Describes an observed configuration value without emitting any string it
+// contains. Booleans and numbers are rendered because they cannot carry a
+// secret and are what makes this refusal actionable; strings are reduced to a
+// length; arrays are described element-wise so `omit: []` -- the reviewed value
+// and by far the most common observation -- still reads as an empty array
+// rather than as an opaque placeholder.
+function formatObservedConfig(objObserved) {
+  const describe = (objValue) => {
+    if (objValue === null) return 'null';
+    if (typeof objValue === 'boolean' || typeof objValue === 'number') {
+      return JSON.stringify(objValue);
+    }
+    if (typeof objValue === 'string') {
+      return `(string withheld, ${objValue.length} characters)`;
+    }
+    if (Array.isArray(objValue)) return `[${objValue.map(describe).join(', ')}]`;
+    return '(value withheld)';
+  };
+  return describe(objObserved);
 }
 
 if (!boolAnyToolchain) {
@@ -4385,7 +4470,7 @@ if (objSweepDifference) {
   process.stderr.write(
     'supply-freeze: the recorded inputs changed while recording; refusing to report.\n' +
     '  detected by        per-entry inode change time, not by the fold comparison\n' +
-    `  entry              ${formatTreeName(objSweepDifference.label)}\n` +
+    `  entry              ${formatUntrustedText(objSweepDifference.label)}\n` +
     `  what changed       ${objSweepDifference.kind}\n` +
     (objSweepDifference.was === undefined
       ? ''

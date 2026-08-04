@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `1b4dc378657c6d83bc6fce1ebdec7c4fa1284f9173ed67d9adb008dfdbd9f781` | script `script.sha256` |
+| Freeze script SHA-256 | `808d425b129c88e1c989e7e43ec314736715e18df856ee125458d08d78e2a49e` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -467,8 +467,33 @@ strNode="$strWork/node24/bin/node"   # absolute, and npm is the one beside it
 cd .github/workflows
 umask 0022                   # the recorded tree was installed under this
 env -u NODE_OPTIONS "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund
-env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs --json
+
+# Verify the recorder BEFORE running it. The script reports its own SHA-256, but
+# that is the script telling you about itself -- worthless if the file has been
+# modified. This checks it from outside, and `&&`-chains the run behind it so a
+# mismatch stops the procedure instead of executing unreviewed JavaScript.
+#
+# Paste the "Freeze script SHA-256" value from Compared fields above. It is
+# deliberately NOT repeated here: this document holds every digest exactly once,
+# because a hand-copied digest has nothing deriving it and rots silently -- which
+# has already happened twice in this pull request's own description.
+strReviewedScript='PASTE the Freeze script SHA-256 row here'
+echo "$strReviewedScript  Get-SupplyFreezeDigest.mjs" \
+  | sha256sum -c - \
+  && env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs --json
 ```
+
+**The order of those last two commands is the point.** An earlier revision of this block ran the
+recorder first and left the script's digest to be compared afterwards, from
+[Check the script's own digest first](#what-this-script-cannot-check-about-itself) further down.
+That is backwards: a reader who checks out a revision carrying a modified recorder has already
+executed it by the time they reach the comparison, and a recorder modified to lie about its own
+identity will also lie about that. The check has to happen outside the program and before it runs,
+which is the same reasoning as the archive digest above — and the same defect, one file over, that
+round 62 fixed for `sha256sum` without `-c`.
+
+This is a *precondition of the procedure*, not a control the script provides. Nothing the recorder
+prints can establish it; see [Trust boundary](#trust-boundary).
 
 **`--json` is not optional here.** The default renderer is a human summary and does not print
 every compared field — `toolchain.npmTree`, which authenticates npm's bytes, and the two

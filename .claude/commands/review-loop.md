@@ -11,8 +11,19 @@ If no pull request URL was supplied above, ask which one to work before doing an
 
 ## Setup
 
-Read <https://raw.githubusercontent.com/franklesniak/copilot-repo-template/refs/heads/main/CLAUDE.md>
-and begin the review loop described in that file, working on the pull request named above.
+**The protocol is `CLAUDE.md` at the root of this repository.** Read it and follow it; it is
+committed, reviewed, and changes only through a pull request here.
+
+Do **not** fetch the protocol from a branch of an external repository. An earlier version of this
+command began by reading
+`https://raw.githubusercontent.com/franklesniak/copilot-repo-template/refs/heads/main/CLAUDE.md`,
+which resolves to whatever that branch holds at the moment the command runs. That meant the gates,
+the thread-handling rules and the termination condition for every `/review-loop` run could change —
+or become unreachable — with no commit in this repository and no review by anyone here. Committing
+the protocol locally and then loading it from an unpinned remote defeats the point of committing it.
+
+If the upstream template is ever wanted as a *source*, port the change into the local `CLAUDE.md`
+in a reviewed pull request, or cite it by immutable commit SHA rather than by branch.
 
 **Include Codex in the review process alongside GitHub Copilot.** Process Codex review comments
 identically to GitHub Copilot review comments — same protocol, same rigour, same thread hygiene.
