@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `bcc05d468ee716a215ea13ebef96c2e3c94947f1a0e8bac5ade45640408592ee` | script `script.sha256` |
+| Freeze script SHA-256 | `1b4dc378657c6d83bc6fce1ebdec7c4fa1284f9173ed67d9adb008dfdbd9f781` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -515,8 +515,11 @@ recorded under `022` moved the digest while the census still reported the record
 `2177 of 2177`, so it was blind to one of the umasks the guard itself rejects. The
 histogram distinguishes all three.
 
-The histogram is recorded and **not** folded into the digest. The full mode is machine state;
-pinning it would reintroduce exactly the drift the execute-bit normalization exists to avoid.
+The histogram is recorded and **not** folded into the digest, because the digest measures
+loadability and write bits do not affect it. It *is* a compared field — see
+[Compared fields](#compared-fields) and the ACL evidence in
+[What this script cannot check about itself](#what-this-script-cannot-check-about-itself) for why
+the earlier "full modes are machine state" exemption did not survive being measured.
 
 To sidestep ambient configuration files:
 
@@ -524,11 +527,22 @@ To sidestep ambient configuration files:
 strIsolationDirectory="$(mktemp -d)"
 : > "$strIsolationDirectory/npm-user-empty"
 : > "$strIsolationDirectory/npm-global-empty"
+# Both casings, or the ambient lowercase wins and the isolation does nothing.
+unset npm_config_userconfig npm_config_globalconfig
 export NPM_CONFIG_USERCONFIG="$strIsolationDirectory/npm-user-empty"
 export NPM_CONFIG_GLOBALCONFIG="$strIsolationDirectory/npm-global-empty"
 env -u NODE_OPTIONS "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund
 env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs --json
 ```
+
+**Both casings must be handled, and setting only the upper one is not isolation.** npm's
+configuration documentation states that `npm_config_*` environment variables are case-insensitive
+and that the lower-case spelling is preferred, so a caller who already exports
+`npm_config_userconfig` keeps their own `.npmrc` in force while this block looks as though it had
+replaced it. The failure is quiet in the direction that matters: the install picks up the ambient
+file, and the recorder either builds a different tree or refuses at exit `6` against a tree the
+reader believes was installed in isolation. This is the same case-sensitivity defect the
+`bin-links` scrub carried, fixed there in round 61 and left standing here.
 
 **The isolation must cover the recorder, not just the install.** An earlier draft passed
 `--userconfig` and `--globalconfig` as flags to `npm ci` alone. Those flags apply to that one
@@ -696,6 +710,29 @@ Exit `9` applies only when the audit runs. The registry does not shape the insta
 every package in the lockfile carries an `integrity` hash and `npm ci` verifies each tarball
 against it, so substituted bytes fail the install outright. Only the advisory posture is
 exposed, which is why `--no-audit` records the lockfile-derived fields from any registry.
+
+**Exit `13` refuses a project `.npmrc` that is not a regular file**, and it exists because
+following the link was the wrong answer rather than an incomplete one. npm reads a per-project
+`.npmrc` from the directory the audit child runs in, so that file is a live configuration source
+and the sweep watches it. Round 62 made the sweep follow the link chain; round 63 showed two
+holes that sweeping harder cannot reach.
+
+The first is that a link's **target has its own parent**, and that parent decides which file npm
+opens. With `.npmrc` a link to `<external>/dir/npmrc`, `dir` can be renamed aside, replaced by a
+directory holding a hostile config for the audit, and restored — leaving the link, the original
+target inode and the workflow directory all with unchanged change times. The second is that a
+**dangling** link was indistinguishable from no file at all: the sweep recorded `-1` for both, so
+a link pointing at a path that does not exist yet could have its target created for the audit and
+removed before the final sweep. Measured, both cases: the two sweeps agreed and npm consumed
+`registry=https://evil`.
+
+Sweeping the target's ancestors would close the first and not the second, and would pull
+arbitrary external directories — whose change times move for unrelated reasons — into a check
+that must not refuse correct runs. So the shape is refused instead. This repository ships no
+`.npmrc`, npm's project config is a plain per-directory file, and nothing legitimate needs that
+path to be a link. A regular file has no link chain, no external ancestors and no dangling state,
+which leaves exactly the rewrite-in-place case the sweep already detects. An **absent** `.npmrc`
+is still recorded as `-1` and still runs normally; only a present-but-unsweepable shape refuses.
 
 **The script's identity is bound to the run.** Its bytes are read as the first thing the script
 does, re-compared after every other check, and its inode-change time is tested against process
@@ -1188,6 +1225,7 @@ The fold is verified to move for each of these, and to return exactly to baselin
 | The `node_modules` root's own **read** bits cleared (`0755` → `0711`) | yes — measured `6061b674…` → `01cf16f0…` |
 | A file's read bit cleared for group and other (`0644` → `0600`) | yes |
 | An entry whose name is not valid UTF-8, beside a sibling named U+FFFD | refused with exit `12`; both names decode alike, so one file would be folded twice and the other never read |
+| A project `.npmrc` that is a symlink, dangling symlink, directory, FIFO, socket or device node | refused with exit `13`; only a regular file can be held still across the run — see below |
 | `node_modules` replaced by a symlink to a byte-identical tree | yes, and a reviewed run refuses with exit `7` |
 | The `node_modules` root's own execute bits changed | yes |
 | `node_modules` is a symlink and the **target directory's** execute bits change (`0755` → `0700`) | yes — measured `59799ca3…` → `48dac79b…` under `--any-toolchain` |

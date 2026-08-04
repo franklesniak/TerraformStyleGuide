@@ -528,6 +528,17 @@ const boolSkipAudit = arrArguments.includes('--no-audit');
 // Refused rather than warned: a warning on stderr is invisible to `--json`
 // consumers, which are the callers most likely to be scripted.
 
+// Renders an unrecognized argument without ever emitting its value. Declared as
+// a function so it is hoisted above the refusal below, matching how
+// formatUntrustedText is reached from the same block.
+function formatUnsupportedArgument(strArg) {
+  const intEquals = strArg.indexOf('=');
+  if (intEquals < 0) return formatUntrustedText(strArg);
+  const intValueLength = strArg.length - intEquals - 1;
+  return `${formatUntrustedText(strArg.slice(0, intEquals))}`
+    + `=(value withheld, ${intValueLength} characters)`;
+}
+
 const SUPPORTED_ARGUMENTS = new Set(['--json', '--any-toolchain', '--no-audit']);
 const arrUnsupported = arrArguments.filter((strArg) => !SUPPORTED_ARGUMENTS.has(strArg));
 if (arrUnsupported.length > 0) {
@@ -538,10 +549,28 @@ if (arrUnsupported.length > 0) {
     // quiescent, 0 problems'`: the forged sentence landed at column 0, inside a
     // refusal, claiming the opposite of what the run had just decided.
     //
-    // formatUntrustedText rather than bare escaping, because an unrecognized
-    // argument is exactly where a mistyped `--registry=https://host/TOKEN` shows
-    // up, and this line would otherwise print the token it refused to accept.
-    `  unrecognized       ${arrUnsupported.map((strArg) => formatUntrustedText(strArg)).join(' ')}\n` +
+    // Round 63, reported by Codex, and the round-45 fix above was answering the
+    // wrong question. It sent the whole argument through formatUntrustedText,
+    // which redacts from a URL SCHEME onward -- so `--registry=https://h/TOKEN`
+    // was withheld and `--registry=//host/path?token=SECRET` was not, because a
+    // schemeless network-path reference has no scheme colon for RE_URL_IN_TEXT
+    // to find. npm accepts that spelling; the refusal printed the token.
+    //
+    // Widening the pattern is the move rounds 47 through 52 already made five
+    // times, each widening introducing the next gap, and the rule those rounds
+    // settled on is to derive the boundary from the parser rather than guess it.
+    // The parser is no help here: `new URL('//host/p')` THROWS without a base,
+    // so a network-path reference is not a URL by the standard's own definition.
+    // There is no pattern to derive, which is why every attempt to widen one has
+    // found another shape.
+    //
+    // So the VALUE is never rendered. A flag name cannot carry a credential and
+    // a value always can, so the name goes through the funnel and everything
+    // after the first `=` is replaced by its length. This is fail-closed by
+    // construction rather than by pattern, and it holds for a secret that is not
+    // URL-shaped at all -- `--token=hunter2` was never covered by any of this.
+    // The diagnostic keeps what a caller needs, which is which flag was rejected.
+    `  unrecognized       ${arrUnsupported.map(formatUnsupportedArgument).join(' ')}\n` +
     `  supported          ${[...SUPPORTED_ARGUMENTS].join(' ')}\n` +
     '  a mistyped option would otherwise be ignored in silence, and the run would\n' +
     '  record something other than what was asked for.\n');
@@ -632,9 +661,18 @@ function sha256(objInput) {
 // String() before escaping because objError.path is not guaranteed to be a
 // string; a Buffer path would otherwise reach String.prototype.replace as an
 // object.
+// Round 63, reported by Codex. This escaped control characters and stopped
+// there, so it was the one untrusted-text path that bypassed the redaction
+// funnel every other diagnostic in this file goes through. The path here is
+// attacker-chosen in exactly the cases this function exists for: a tree entry
+// that vanishes mid-scan is reported through here, and an entry may legally be
+// named `https:/user:SECRET@host/path?token=X`. formatUntrustedText falls back
+// to formatTreeName when it finds no url, so this is a strict widening -- the
+// same escaping as before on ordinary paths, plus redaction on the ones that
+// carry a credential.
 function formatErrorLocation(objError, strFallback) {
   return `  error              ${objError?.code ?? 'unknown'}`
-    + ` at ${formatTreeName(String(objError?.path ?? strFallback))}\n`;
+    + ` at ${formatUntrustedText(String(objError?.path ?? strFallback))}\n`;
 }
 
 // Round 45, reported by Codex, and a defect in the escaper round 44 made
@@ -1884,22 +1922,68 @@ function newestChangeTime(strRoot, arrExtraPaths) {
   // differ. Throwing on a missing optional path would refuse every ordinary run
   // instead, since this repository ships no .npmrc.
   const considerOptional = (strPath, strLabel) => {
+    // Round 62 made this follow the link chain, because npm reads the project
+    // config THROUGH a symlink and sweeping only the link missed a target that
+    // was created, consumed by the audit and restored.
+    //
+    // Round 63, reported by Codex twice over, and following the link turned out
+    // to be the wrong fix rather than an incomplete one. Two holes remained, and
+    // neither is reachable by sweeping harder:
+    //
+    //   The target's PARENT still decides which file npm opens. With .npmrc a
+    //   link to <external>/dir/npmrc, `dir` can be renamed aside, replaced by a
+    //   directory holding a hostile npmrc for the audit, and restored. The link,
+    //   the original target inode and the workflow directory all keep their
+    //   change times. Measured, both sweeps agreed while npm consumed
+    //   "registry=https://evil".
+    //
+    //   A DANGLING link collapsed to the same state as an absent file. Hop 0
+    //   recorded the link, hop 1 threw ENOENT, and this handler then OVERWROTE
+    //   the entry with -1 -- so a link to a path that does not exist yet swept
+    //   identically to no file at all. The target could be created for the audit
+    //   and removed before the final sweep. Measured: absent, before and after
+    //   all three recorded {".npmrc":-1} while npm read the injected config.
+    //
+    // Sweeping the target's ancestors would close the first and not the second,
+    // and would pull arbitrary external directories into the sweep -- the
+    // over-sensitivity the round-36 comment below rejects for good reason.
+    //
+    // So the SHAPE is refused instead. This repository ships no .npmrc, npm's
+    // project config is a plain per-directory file, and nothing legitimate here
+    // needs that path to be a link, a FIFO or a directory. Refusing a
+    // non-regular .npmrc closes both holes outright and takes the whole class
+    // with them, rather than answering the two mechanisms that were reported.
+    // A regular file has no link chain, no external ancestors and no dangling
+    // state, so what remains is exactly the round-57 rewrite-in-place case this
+    // sweep already handles.
+    let objLinkStats;
     try {
-      // Round 62, reported by Codex. This called `consider`, which lstats -- so a
-      // SYMLINKED .npmrc recorded the link's change time and never the target's.
-      // npm reads the project config THROUGH that link, so the target could be
-      // created, consumed by the audit and restored without the link's ctime or
-      // the directory's moving at all.
-      //
-      // The file already had the right helper. considerThroughLinks exists for
-      // exactly this, and its own round-36 comment states the rule it is applied
-      // under: "Every path this script READS THROUGH a link is swept through the
-      // link". npm reading .npmrc is such a path, and I used the other helper.
-      considerThroughLinks(strPath, strLabel);
+      objLinkStats = lstatSync(strPath);
     } catch (objError) {
       if (objError?.code !== 'ENOENT') throw objError;
       objEntryChangeTimes.set(strLabel, -1);
+      return;
     }
+    if (!objLinkStats.isFile()) {
+      const strKind = objLinkStats.isSymbolicLink() ? 'symbolic link'
+        : objLinkStats.isDirectory() ? 'directory'
+          : objLinkStats.isFIFO() ? 'FIFO'
+            : objLinkStats.isSocket() ? 'socket'
+              : objLinkStats.isCharacterDevice() ? 'character device'
+                : objLinkStats.isBlockDevice() ? 'block device'
+                  : 'not a regular file';
+      process.stderr.write(
+        'supply-freeze: refusing a project npm configuration that is not a regular file.\n' +
+        `  path               ${formatUntrustedText(strPath)}\n` +
+        `  observed           ${strKind}\n` +
+        '  npm reads this as a configuration source, and only a regular file can be held\n' +
+        '  still across the run: a link is opened through a target whose own parent can be\n' +
+        '  swapped mid-run, and a link that does not resolve is indistinguishable from no\n' +
+        '  file at all while its target can still be created for the audit and removed.\n' +
+        '  remove the entry, or make it a regular file.\n');
+      process.exit(13);
+    }
+    consider(strPath, strLabel);
   };
   const walk = (strDirectory, strRelative) => {
     for (const objEntryHint of readdirOrRefuseUndecodable(strDirectory, strRelative)) {
@@ -1944,20 +2028,47 @@ function newestChangeTime(strRoot, arrExtraPaths) {
   // runs is not a stricter check, it is a broken one. A symlinked DIRECTORY
   // component is therefore still outside this, and is stated in the record
   // rather than implied closed.
+  // Round 63, reported by Codex. Every hop was resolved as a STRING, and
+  // `readlinkSync` without an encoding decodes the stored bytes as UTF-8. A
+  // target the kernel stored as `d/\x80` therefore came back as `d/�`, and
+  // re-encoding that for the next `lstat` asks for a DIFFERENT file -- one
+  // literally named with the three bytes `EF BF BD`. An actor who plants that
+  // sibling gets the sweep to watch the decoy while npm follows the link to the
+  // real target, which can then be rewritten mid-run and restored invisibly.
+  //
+  // Measured, with the link pointing at `d/<0x80>` and a decoy at `d/<EF BF BD>`:
+  //
+  //   readFileSync through the link : "REAL npmrc: registry=https://evil.example"
+  //   lstat(readlink as string) ino : 2033814   <- what the sweep watched
+  //   lstat(readlink as bytes)  ino : 2033813   <- what npm actually opened
+  //
+  // This is the round-52 defect one layer out: the self-hash read decoded text
+  // where it needed raw bytes, and the fold already stores a symlink's target as
+  // the raw bytes the kernel gave it. The sweep was the remaining place that
+  // round-tripped a path through a lossy decode. So the walk is done in Buffers
+  // end to end -- `lstatSync` and `readlinkSync` both take and return them, and
+  // no decode happens at all. Labels stay strings because they are map keys and
+  // diagnostics, never paths.
+  const dirnameBytes = (bufPath) => {
+    const intSlash = bufPath.lastIndexOf(0x2F);
+    return intSlash <= 0 ? Buffer.from('/') : bufPath.subarray(0, intSlash);
+  };
   const considerThroughLinks = (strPath, strLabel) => {
-    let strCurrent = strPath;
+    let bufCurrent = Buffer.from(strPath);
     for (let intHop = 0; ; intHop += 1) {
       const objStats = consider(
-        strCurrent, intHop === 0 ? strLabel : `${strLabel} (link hop ${intHop})`);
+        bufCurrent, intHop === 0 ? strLabel : `${strLabel} (link hop ${intHop})`);
       if (!objStats.isSymbolicLink()) return;
       // A cycle would otherwise spin here. The throw is the same exit 10 a
       // dangling link produces, and for the same reason: the path stopped
       // resolving to bytes this script can name.
       if (intHop >= 40) {
-        throw new Error(`${strLabel}: symlink chain exceeds 40 hops at ${strCurrent}`);
+        throw new Error(`${strLabel}: symlink chain exceeds 40 hops`);
       }
-      const strTarget = readlinkSync(strCurrent);
-      strCurrent = strTarget.startsWith('/') ? strTarget : join(dirname(strCurrent), strTarget);
+      const bufTarget = readlinkSync(bufCurrent, 'buffer');
+      bufCurrent = bufTarget[0] === 0x2F
+        ? bufTarget
+        : Buffer.concat([dirnameBytes(bufCurrent), Buffer.from('/'), bufTarget]);
     }
   };
   considerThroughLinks(strRoot, 'node_modules');
