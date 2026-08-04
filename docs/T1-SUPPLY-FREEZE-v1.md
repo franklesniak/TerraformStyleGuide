@@ -477,8 +477,6 @@ strNode="$strWork/node24/bin/node"   # absolute, and npm is the one beside it
 
 cd .github/workflows
 umask 0022                   # the recorded tree was installed under this
-env -u NODE_OPTIONS "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund
-
 # Verify the recorder BEFORE running it. The script reports its own SHA-256, but
 # that is the script telling you about itself -- worthless if the file has been
 # modified. This checks it from outside, and `&&`-chains the run behind it so a
@@ -489,8 +487,16 @@ env -u NODE_OPTIONS "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --n
 # because a hand-copied digest has nothing deriving it and rots silently -- which
 # has already happened twice in this pull request's own description.
 strReviewedScript='PASTE the Freeze script SHA-256 row here'
-echo "$strReviewedScript  Get-SupplyFreezeDigest.mjs" \
-  | sha256sum -c - \
+
+# `npm ci` is the FIRST link of the chain, not a separate statement before it.
+# Standing alone it was the one command in this block whose failure did not stop
+# the procedure: an install that fails over an older node_modules leaves that
+# tree on disk, and the recorder then folds it and prints a confident digest --
+# a failed reproduction reporting success over stale bytes. Every step from the
+# install to the record is now one `&&` sequence, so the first failure ends it.
+env -u NODE_OPTIONS "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund \
+  && echo "$strReviewedScript  Get-SupplyFreezeDigest.mjs" \
+    | sha256sum -c - \
   && env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs --json
 ```
 
@@ -675,7 +681,8 @@ The rule therefore holds without exception: **`--any-toolchain` waives compariso
 | `2` | npm installation cannot be located, read or authenticated | **no** | the launcher beside `node` is missing; npm resolves outside this Node installation or outside `lib/node_modules/npm`; the installation cannot be read; the command line is no longer the file that was authenticated; or npm cannot be spawned at all. These establish *which program answered*, which `--any-toolchain` does not waive — it relaxes **which** toolchain is acceptable, never whether the one present can be identified. Measured: a `node` copied away from its distribution exits `2` under `--any-toolchain --no-audit` exactly as it does without the flag, while the genuine reviewed toolchain under the same flag exits `0` |
 | `2` | Unrecognized invocation | **no** | an argument the script does not support; `--any-toolchain --bogus` still exits `2` |
 | `3` | Recorded input changed mid-run | **no** | `package.json`, `package-lock.json` or the script itself edited while the run was in progress |
-| `4` | Unreviewed manifest | yes | `package.json` or `package-lock.json` has moved |
+| `4` | Manifest missing or unreadable | **no** | `package.json` or `package-lock.json` absent, unreadable, or not a regular file. `snapshotOrRefuse()` takes the snapshot before the gated comparison against the reviewed digests, so there is nothing to compare and nothing to disown. Measured: a copy of the recorder with no manifests exits `4` under `--any-toolchain --no-audit`, reporting `package.json could not be read` |
+| `4` | Unreviewed manifest | yes | `package.json` or `package-lock.json` is present and readable but does not match the reviewed digest — it has moved. This is the only half of exit `4` the flag waives |
 | `5` | Audit response is not a report | **no** | registry unreachable, an endpoint error returned as JSON, or a document that is not shaped like an audit report — including a report version that is not a positive safe integer, or a severity count that is not a nonnegative safe integer, since past 2^53-1 two different reported numbers stop being distinguishable. Advisory fields are refused the same way when their type or range cannot be compared — a `cvss.score` must be a finite number in the CVSS range 0–10, because a non-finite score serializes as `null` and would record as an absent one |
 | `5` | Advisory posture contradicts itself | **no** | a severity outside npm's five recognized levels, or counts whose buckets do not sum to `total` — a posture whose own arithmetic disagrees cannot be compared exactly |
 | `5` | Normalization did not cover every reported package | **no** | the normalized package map holds fewer entries than the report had vulnerability records, so the digest would be taken over a shorter set than the counts describe |
@@ -683,7 +690,7 @@ The rule therefore holds without exception: **`--any-toolchain` waives compariso
 | `6` | Install- or trust-shaping npm configuration | yes | `bin-links`, `omit`, `package-lock-only`, `umask`, `omit-lockfile-registry-resolved`, and the transport settings `proxy`, `https-proxy`, `noproxy`, `ca`, `cafile`, `strict-ssl` … from an `.npmrc` or the environment. Also raised, self-diagnosing, if the transport scrub itself failed to bind the audit environment |
 | `7` | Root missing or not a directory | **no** | `node_modules` absent, or present as a file or a symlink to one |
 | `7` | Root is a symlink to a directory | yes | `node_modules` replaced by a symlink whose target is a real directory, which redirects where every installed module loads from while the contents behind it stay byte-identical. Refused by `lstat` before the tree is walked, so an arbitrarily large target is not scanned first. Under `--any-toolchain` the target is folded instead, with the **target's** normalized bits recorded as the root mode |
-| `7` | Tree does not satisfy the lockfile | yes | `node_modules` incomplete or never installed; or `npm ls` answered about a tree other than this one. The refusal names which |
+| `7` | Tree does not satisfy the lockfile | yes | `node_modules` is present but incomplete, or `npm ls` answered about a tree other than this one. The refusal names which. A tree that was **never installed** is not this row: `node_modules` is then absent, which the root walkability check refuses first and unconditionally — measured, a checkout without `node_modules` exits `7` reporting `node_modules MISSING` under `--any-toolchain --no-audit --json`, with no record produced |
 | `8` | Unreviewed process umask | yes | recording shell is not at `0022` |
 | `9` | Unreviewed advisory registry | yes | `registry` points at a mirror or proxy |
 | `10` | Recorded inputs changed while recording | **no** | a swept path — `node_modules`, a manifest, the workflow directory or an ancestor — was written, swapped or created during the run |
