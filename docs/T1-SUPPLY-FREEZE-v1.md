@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `1a541edbdc8444176b1a5382fc5642bbd96cdd470ea92bf77197bfc75cfd3b62` | script `script.sha256` |
+| Freeze script SHA-256 | `03451f5db1f714fc815720c5676b22c4c677b7b3f6b291fcde529ef58e6635a9` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -679,7 +679,7 @@ already declares `freezeRecord: false`.
 | `7` | Tree does not satisfy the lockfile | yes | `node_modules` incomplete or never installed; or `npm ls` answered about a tree other than this one. The refusal names which |
 | `8` | Unreviewed process umask | yes | recording shell is not at `0022` |
 | `9` | Unreviewed advisory registry | yes | `registry` points at a mirror or proxy |
-| `10` | Recorded inputs changed while recording | **no** | something wrote to `node_modules` or a manifest during the run |
+| `10` | Recorded inputs changed while recording | **no** | a swept path — `node_modules`, a manifest, the workflow directory or an ancestor — was written, swapped or created during the run |
 | `11` | Tree contains special files | yes | a FIFO, socket or device node under `node_modules` |
 | `11` | Tree contains links that leave it | yes | a symlink under `node_modules` resolving outside it — typically a package directory replaced by a link to an external tree |
 | `11` | Tree contains links it cannot resolve | yes | a symlink under `node_modules` whose resolution fails for any reason, so containment is unproven rather than satisfied |

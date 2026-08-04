@@ -4684,6 +4684,47 @@ const objNewestChange = scanOrRefuse(
 // and it is why a separate "refuse future ctimes" rule was considered and
 // dropped: it would add a false-failure mode on a legitimately skewed network
 // filesystem while detecting nothing this does not already catch.
+// Round 68, found by sweeping my own previous round rather than reported. The
+// compared value carries an inode AND a change time since the same-tick swap fix,
+// and the optional-path sentinel -1 records absence, so ONE 'change time moved'
+// label stood for four different transitions. Detection was correct for all four;
+// the sentence the operator reads was wrong for three. Measured before this was
+// added, driving the shipped functions verbatim:
+//
+//   inode differs, ctime identical -> "change time moved" above two IDENTICAL
+//                                     timestamps
+//   .npmrc appears mid-run         -> "change time moved" above "baseline
+//                                     reading absent"
+//   .npmrc removed mid-run         -> "change time moved" above "final reading
+//                                     absent"
+//   ctime moves, inode same        -> "change time moved"  (the one true case)
+//
+// The second is the worst of them: an appearing .npmrc is the project-config
+// injection the optional sweep exists to catch, and something absent cannot have
+// had its change time move. A refusal that contradicts its own data on its face
+// is one an operator stops trusting, which costs more than the missing word.
+//
+// The round-57 note below is right that -1 makes all four transitions fall out of
+// one equality test. That is a claim about DETECTION, and it was silent about
+// reporting -- the label was then written as though a single transition existed.
+//
+// They are named apart because they are different attack signatures: a swap is
+// not a rewrite and neither is an injection, and that distinction is what an
+// operator triages on. The strings reuse 'appeared during the run' and
+// 'disappeared during the run' verbatim from the presence branches below, so one
+// transition never has two spellings.
+const funcDescribeSweepChange = (objWas, objNow) => {
+  if (objWas === -1) return 'appeared during the run';
+  if (objNow === -1) return 'disappeared during the run';
+  const strWas = String(objWas);
+  const strNow = String(objNow);
+  const strWasInode = strWas.slice(0, strWas.indexOf(':'));
+  const strNowInode = strNow.slice(0, strNow.indexOf(':'));
+  if (strWasInode === strNowInode) return 'change time moved';
+  return strWas.slice(strWasInode.length) === strNow.slice(strNowInode.length)
+    ? 'replaced by a different inode, within one timestamp tick'
+    : 'replaced by a different inode';
+};
 const funcFirstSweepDifference = (objBaseline, objFinal) => {
   for (const [strLabel, intFinal] of objFinal) {
     if (!objBaseline.has(strLabel)) {
@@ -4691,7 +4732,10 @@ const funcFirstSweepDifference = (objBaseline, objFinal) => {
     }
     if (objBaseline.get(strLabel) !== intFinal) {
       return {
-        kind: 'change time moved', label: strLabel, was: objBaseline.get(strLabel), now: intFinal,
+        kind: funcDescribeSweepChange(objBaseline.get(strLabel), intFinal),
+        label: strLabel,
+        was: objBaseline.get(strLabel),
+        now: intFinal,
       };
     }
   }
@@ -4707,7 +4751,8 @@ const objSweepDifference = funcFirstSweepDifference(
 if (objSweepDifference) {
   process.stderr.write(
     'supply-freeze: the recorded inputs changed while recording; refusing to report.\n' +
-    '  detected by        per-entry inode change time, not by the fold comparison\n' +
+    '  detected by        per-entry inode identity and change time, not by the fold\n' +
+    '                     comparison\n' +
     `  entry              ${formatUntrustedText(objSweepDifference.label)}\n` +
     `  what changed       ${objSweepDifference.kind}\n` +
     (objSweepDifference.was === undefined
@@ -4722,7 +4767,8 @@ if (objSweepDifference) {
     '  an entry changed after this run began, so the digest above describes bytes\n' +
     '  that are no longer on disk. record against a quiescent tree.\n' +
     '  every swept entry is compared against its own baseline reading, so a change\n' +
-    '  is caught whichever direction the timestamp moves. comparing one newest\n' +
+    '  is caught whichever direction the timestamp moves, and a swap that moves no\n' +
+    '  timestamp at all is caught by the inode half. comparing one newest\n' +
     '  ctime against another would miss any write that lands below a maximum set\n' +
     '  by an inode stamped ahead of this machine\'s clock.\n');
   process.exit(10);
