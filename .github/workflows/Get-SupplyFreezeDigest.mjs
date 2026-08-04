@@ -774,6 +774,29 @@ function npmInstallationRootOrRefuse() {
       '  and its own --version output is not evidence about itself.\n');
     process.exit(2);
   }
+  // Round 62, reported by Codex. Containment proved the CLI sits inside the
+  // resolved root and said nothing about where that ROOT sits. With
+  // lib/node_modules/npm a symlink to a writable external directory, the root
+  // resolves outside the distribution -- so the ancestors folded below are that
+  // external tree's, not this distribution's, and swapping the external parent
+  // during the npm calls moves nothing the folds watch. Keeping bin/npm-cli.js
+  // as a hardlink to the genuine leaf even satisfies the per-invocation inode
+  // check while npm loads malicious siblings around it.
+  //
+  // The root must therefore be inside the distribution before containment means
+  // anything, because every other check in this chain is relative to it.
+  const strDistribution = dirname(dirname(realpathSync(process.execPath)));
+  if (strRealRoot !== strDistribution && !strRealRoot.startsWith(`${strDistribution}/`)) {
+    process.stderr.write(
+      'supply-freeze: refusing an npm installation that resolves outside this Node distribution.\n' +
+      `  node               ${formatUntrustedText(process.execPath)}\n` +
+      `  distribution       ${formatUntrustedText(strDistribution)}\n` +
+      `  npm resolves to    ${formatUntrustedText(strRealRoot)}\n` +
+      '  the ancestors this script folds are the distribution\'s, so an installation\n' +
+      '  reached through a link out of it is verified against the wrong directories --\n' +
+      '  its real parents could be replaced without moving anything that is watched.\n');
+    process.exit(2);
+  }
   if (strRealNpm !== strRealRoot && !strRealNpm.startsWith(`${strRealRoot}/`)) {
     process.stderr.write(
       'supply-freeze: refusing to run an npm that is not part of this Node installation.\n' +
@@ -1846,7 +1869,17 @@ function newestChangeTime(strRoot, arrExtraPaths) {
   // instead, since this repository ships no .npmrc.
   const considerOptional = (strPath, strLabel) => {
     try {
-      consider(strPath, strLabel);
+      // Round 62, reported by Codex. This called `consider`, which lstats -- so a
+      // SYMLINKED .npmrc recorded the link's change time and never the target's.
+      // npm reads the project config THROUGH that link, so the target could be
+      // created, consumed by the audit and restored without the link's ctime or
+      // the directory's moving at all.
+      //
+      // The file already had the right helper. considerThroughLinks exists for
+      // exactly this, and its own round-36 comment states the rule it is applied
+      // under: "Every path this script READS THROUGH a link is swept through the
+      // link". npm reading .npmrc is such a path, and I used the other helper.
+      considerThroughLinks(strPath, strLabel);
     } catch (objError) {
       if (objError?.code !== 'ENOENT') throw objError;
       objEntryChangeTimes.set(strLabel, -1);

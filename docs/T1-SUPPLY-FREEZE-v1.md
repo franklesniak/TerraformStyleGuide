@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `72ad07bf3b2ebe0dc69d5c23907b15dcf40478d781ddbbe54c7c0bf18b61b1aa` | script `script.sha256` |
+| Freeze script SHA-256 | `250446a0ee580f237e522efb74875cc3616688f3c82ee4adf94e293b1a0abc72` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -436,10 +436,13 @@ git rev-parse HEAD:.github/workflows/package-lock.json     # must equal the reco
 strWork="$(mktemp -d)"
 curl -fsSLo "$strWork/node24.tar.xz" \
   https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz
-sha256sum "$strWork/node24.tar.xz"
-# must print d6c664df3f3f61458e8c277585571328522d705166723a7c7823a9253a4d15a0
-mkdir "$strWork/node24"
-tar -xJf "$strWork/node24.tar.xz" -C "$strWork/node24" --strip-components=1
+# sha256sum without -c only PRINTS; it cannot fail, so an unverified archive
+# would still be extracted by the next line and a tampered Node would then be
+# the runtime every later check runs under -- see Trust boundary.
+echo 'd6c664df3f3f61458e8c277585571328522d705166723a7c7823a9253a4d15a0  '"$strWork/node24.tar.xz" \
+  | sha256sum -c - \
+  && mkdir "$strWork/node24" \
+  && tar -xJf "$strWork/node24.tar.xz" -C "$strWork/node24" --strip-components=1
 strNode="$strWork/node24/bin/node"   # absolute, and npm is the one beside it
 
 cd .github/workflows
@@ -544,8 +547,17 @@ environment were clean.
 that matters:
 
 ```bash
-env -u npm_config_bin_links -u NPM_CONFIG_BIN_LINKS npm ci --ignore-scripts --no-audit --no-fund
+env -u NODE_OPTIONS -u npm_config_bin_links -u NPM_CONFIG_BIN_LINKS \
+  "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund
 ```
+
+**The unsets are added to the reviewed invocation, not substituted for it.** An earlier revision
+of this example wrote a bare `npm` and dropped the `NODE_OPTIONS` unset, so a reader copying it
+built the tree with whatever npm their `PATH` offered, under whatever preload their environment
+carried — and then chased a digest mismatch caused by the example itself. The script cannot check
+which runtime it is executing under once it has started (see
+[Trust boundary](#trust-boundary)), so every install command in this document uses the
+digest-verified `$strNode` and the npm beside it.
 
 The script's configuration guard is what catches both, and it is the reason this is a loud
 failure rather than a silent one.
