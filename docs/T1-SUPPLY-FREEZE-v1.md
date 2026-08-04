@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `250446a0ee580f237e522efb74875cc3616688f3c82ee4adf94e293b1a0abc72` | script `script.sha256` |
+| Freeze script SHA-256 | `bcc05d468ee716a215ea13ebef96c2e3c94947f1a0e8bac5ade45640408592ee` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -89,6 +89,9 @@ per-row rather than asserted in a sentence.
 | Installed tree symlinks | `8` | script `installedTreeSymlinks` |
 | Installed tree directories | `336` | script `installedTreeDirectories` |
 | Installed tree special entries | `0` | script `installedTreeSpecials` |
+| File permissions | `{"644":2157,"755":20}` | script `installedTreeModes` |
+| Directory permissions | `{"755":336}` | script `installedTreeDirectoryModes` |
+| `node_modules` root mode | `755` | script `installedTreeRootMode` |
 | Advisory registry | `https://registry.npmjs.org/` | script `registry` |
 | Advisory posture SHA-256 | `925751f8c4d131a9403a2d9ea6536c1d9c508a62d3a993c76b860375bac732ba` | script `auditSha256` |
 | Advisory counts | `{"info":0,"low":0,"moderate":2,"high":5,"critical":0,"total":7}` | script `auditCounts` |
@@ -224,9 +227,6 @@ is the history of why.
 
 | Field | Value | Derived by | Why it is not compared |
 | --- | --- | --- | --- |
-| File permissions | `{"644":2157,"755":20}` | script `installedTreeModes` | full modes are machine state |
-| Directory permissions | `{"755":336}` | script `installedTreeDirectoryModes` | full modes are machine state |
-| `node_modules` root mode | `755` | script `installedTreeRootMode` | full modes are machine state |
 | Policy decision | `T1-ADVISORY-DISPOSITION-v1` | this document | no artifact exists to compare against; bounded through issue #24 |
 | Audit environment scrubbed | `[]` | script `auditEnvironmentScrubbed` | describes the recording machine, not the supply inputs; a reader's own run reports their own list |
 
@@ -327,12 +327,31 @@ It is reclassified rather than deleted because the context is worth keeping, and
 invented as an artifact because minting a policy record is the repository owner's decision, not
 a side effect of a change about digest reproducibility. The bound itself lives in issue #24.
 
-A harmless `0644` → `0664` leaves the installed-tree digest byte-identical — measured — while
-moving the histogram to `{"644":2156,"664":1,"755":20}`. Comparing it for
-exact equality would therefore reject a tree the digest says is correct, which is precisely the
-machine-state drift the execute-bit normalization exists to avoid. An earlier draft listed it as
-a recorded field while the prose called it "recorded, not enforced"; the table and the prose
-disagreed, and #22's rule resolved that disagreement the wrong way.
+**The three permission rows were here until they were measured, and the measurement reversed the
+argument.** This section used to say that a `0644` → `0664` is harmless, leaves the installed-tree
+digest byte-identical while moving the histogram to `{"644":2156,"664":1,"755":20}`, and that
+comparing the histogram for exact equality would therefore reject a tree the digest says is
+correct.
+
+Every clause of that is true except the first, and the first is the one the conclusion rested on.
+`0644` → `0664` is the **exact signature of a POSIX ACL granting write to an additional
+principal**: the ACL mask replaces the group permission bits, so `setfacl -m u:someone:rw-` on a
+`0644` file reports `0664` from `stat` while the bytes and the compared fold are untouched. Far
+from harmless, it is the one ACL shape that silently makes a *frozen* tree mutable by someone the
+record never accounted for. The evidence is in
+[What this script cannot check about itself](#what-this-script-cannot-check-about-itself).
+
+So the rows moved into [Compared fields](#compared-fields). The "machine state" objection does not
+survive its own document either: the process umask is a compared field with its own refusal
+(exit `8`), so a run under a different umask is rejected before the histogram is ever consulted,
+and under the pinned umask the reviewed tree is uniformly `644`/`755` with no group-write bucket
+at all. There is no drift left for the exemption to protect.
+
+The write bits stay outside the *digest* for the reason the fold's own comment gives — it measures
+loadability, and write permission does not affect whether a module loads. That reasoning is sound
+for a digest and was silently borrowed to excuse not comparing the histogram, where it does not
+apply: a freeze record is about mutability as well as loadability, and the histogram is where
+mutability was visible all along.
 
 ### Not a recorded field: the install command
 
@@ -481,11 +500,13 @@ a predicate over them:
 | `027` | `{"640":2157,"750":20}` | differs |
 | `077` | `{"600":2157,"700":20}` | differs |
 
-The histogram is a **diagnostic hint, not a proof**. Any change to a file's mode moves it —
-measured, a single `chmod g-r` under the reviewed umask turns `{"644":2157,"755":20}` into
-`{"604":1,"644":2156,"755":20}`. A shape that differs from the record is therefore *consistent
-with* a different install umask, and equally consistent with modes altered after the install;
-it narrows the search rather than settling it.
+The histogram is compared for exact equality, but it **does not by itself say why it differs**.
+Any change to a file's mode moves it — measured, a single `chmod g-r` under the reviewed umask
+turns `{"644":2157,"755":20}` into `{"604":1,"644":2156,"755":20}`. A shape that differs from the
+record is therefore *consistent with* a different install umask, and equally consistent with
+modes altered after the install, or with an ACL mask widening the group bits. It fails the
+comparison in every one of those cases; what it narrows rather than settles is the diagnosis.
+Read it together with the umask row, which is separately compared and separately refused.
 
 An earlier draft counted **group-readable files** instead, and that was too weak to be a
 backstop. `umask 027` clears `0o027`, which leaves group read set — `0o644` becomes `0o640` and
@@ -813,19 +834,65 @@ stat'ing every parent directory up to `/`, whose change times move for reasons t
 do with this record — a check that refuses correct runs is not a stricter check, so the boundary is
 drawn at the leaf's own chain and stated here instead.
 
-**The permission fold measures POSIX mode bits, and nothing else.** A tree can be made unloadable
-by mechanisms `stat` does not report: POSIX ACLs — a named-user entry denying read leaves `0644`
-and the bytes untouched — and equally SELinux or AppArmor labels, a `noexec` mount, or
-`chattr +i`. None of these move the installed-tree digest or the permission histograms.
+**The permission fold measures POSIX mode bits, so it sees a POSIX ACL only where the ACL moves
+those bits.** An earlier revision of this section said a tree can be made unloadable by
+mechanisms `stat` does not report and that "none of these move the installed-tree digest or the
+permission histograms". That sentence was **wrong in two of the six cases it covered**, and it
+was wrong in the direction that matters: it understated what the fold catches while leaving the
+case it misses undescribed. Measured, on ext4, by writing `system.posix_acl_access` directly and
+reading back `st_mode`:
 
-This is stated rather than fixed, and the reason is that the available fix is worse than the
-statement. Node exposes no ACL or extended-attribute API, so detection means shelling out to
-`getfacl`, which is not universally installed — measured absent on the container these
-verifications were run in. A guard that silently does nothing wherever the `acl` package is
-missing would let a reader believe extended ACLs were checked when on many hosts nothing looked,
-which converts an honest blind spot into a false assurance. ACLs are also only one member of the
-set above, so the useful boundary is to say what the fold measures rather than to chase one
-mechanism and leave its siblings unmentioned.
+| ACL added to a `0644` file | `st_mode` | Compared fold (`& 0o555`) | Histogram (`& 0o777`) |
+| --- | --- | --- | --- |
+| *(control — no ACL)* | `644` | unchanged | unchanged |
+| `u:1234:---` — deny that user | `644` | unchanged | unchanged |
+| `u:1234:r--` — grant read | `644` | unchanged | unchanged |
+| `u:1234:rw-` — grant write | `664` | unchanged | **moves** |
+| `u:1234:r-x` — grant execute | `654` | **moves** | **moves** |
+| `u:1234:rwx` — grant all | `674` | **moves** | **moves** |
+
+The mechanism is the ACL mask. [`acl(5)`](https://man7.org/linux/man-pages/man5/acl.5.html) states
+that when an ACL carries an `ACL_MASK` entry "the group permissions correspond to the permissions
+of the `ACL_MASK` entry" — so any ACL that grants a permission the owning group lacks widens the
+mask and writes itself into the group bits of `st_mode`. A grant is therefore partly visible; a
+**denial** is not, because denying a named user contributes nothing to the mask.
+
+Enforcement was verified, not assumed. Against a no-ACL control in the same directory, under
+`setuid(1234)`: the control reads, `u:1234:---` gets `EACCES`, and `u:1234:rw-` both reads *and
+writes*. An earlier run of this test showed every case denied, which was an artifact of an
+untraversable parent — the control is what distinguishes the two.
+
+Two consequences follow, and the second is the one this record cares about most:
+
+* **A denying ACL is invisible here, and it is a denial.** It cannot substitute content; it makes
+  a module unloadable for some user, which surfaces as a build failure rather than as a silently
+  wrong tree.
+* **A write-granting ACL is the dangerous shape, because it makes a "frozen" tree mutable by a
+  principal the record never accounted for** — and it lands exactly on `0644` → `0664`, the delta
+  a previous revision of this document dismissed as harmless while declining to compare the
+  histograms. That is why the histograms are now compared fields.
+
+Detection of the two invisible shapes is stated rather than fixed. Node exposes no ACL or
+extended-attribute API — confirmed still absent from core as of Node 24, with xattr access
+available only through third-party native modules such as
+[`fs-xattr`](https://www.npmjs.com/package/fs-xattr) — so detection means shelling out. Both
+candidates are rejected on the same principle rather than on effort: `getfacl` is not universally
+installed (measured absent on the container these verifications were run in), and while `python3`
+*is* present here and exposes `os.listxattr`, adding an unauthenticated external interpreter to a
+script that spent seven review rounds authenticating the one external program it already runs
+would open a wider hole than it closes. A guard that silently no-ops where its helper is missing
+converts an honest blind spot into a false assurance.
+
+The other mechanisms in this family — SELinux or AppArmor labels, a `noexec` mount, `chattr +i` —
+remain outside every field this script derives, and no claim is made about them.
+
+**What the walk already proves, and for whom.** The fold reads every file's bytes and traverses
+every directory, so a completed run is positive evidence that the user who ran the recorder holds
+read on every file and search on every directory. That is not a separate check; it is a
+precondition of producing a digest at all. The residual is therefore narrower than "ACLs are
+invisible": it is an access-control entry affecting *a user other than the one that ran the
+recorder*. In the documented `npm ci && node ./Get-SupplyFreezeDigest.mjs` workflow those are the
+same user.
 
 **Check the script's own digest first.** The script reports its own SHA-256 on every run, and the
 value is recorded in the table above. This matters because the digests below are a property of
@@ -984,11 +1051,16 @@ the [compared fields](#compared-fields).
 **Read permission is folded alongside execute, and for one round it was not.** The fold masked
 `mode & 0o111`, so `0644` → `0600` on an installed module was invisible: the owner running the
 recorder can still read it and `npm ls` still passes, but a group or other user can no longer
-load it. The histogram moves, but it is a *non-compared* diagnostic, so every compared field
-stayed equal and a reviewed run would have emitted `freezeRecord: true` for a tree those users
-cannot use. The mask is now `mode & 0o555` — read and execute together are exactly the "can each
-permission class still load this" property. **Write bits stay out**: they do not affect
-loadability and are the most machine-variable of the three.
+load it. The histogram moved, but it was a *non-compared* diagnostic at the time, so every
+compared field stayed equal and a reviewed run would have emitted `freezeRecord: true` for a tree
+those users cannot use. The mask is now `mode & 0o555` — read and execute together are exactly the
+"can each permission class still load this" property.
+
+**Write bits stay out of the digest**, because they do not affect loadability. They are no longer
+outside the *record*: the histograms became compared fields once a write-granting POSIX ACL was
+measured to land on exactly the `0644` → `0664` delta their exemption had called harmless. The
+digest answers "can this still be loaded"; the histogram answers "can this still be changed", and
+a freeze record needs both.
 
 **A symlinked `node_modules` root is refused.** `npm ci` creates the root as a real directory; a
 symlink redirects where every installed module loads from while the contents behind it can be

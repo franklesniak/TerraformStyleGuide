@@ -1619,9 +1619,13 @@ function foldInstalledTree(strRoot) {
         // For a directory the two bits are different powers: `x` is traverse to a
         // KNOWN name, `r` is permission to LIST. Measured on node_modules/glob,
         // 0755 -> 0711: the digest stayed at 16f42788... and every compared field
-        // with it, while only the directory-mode histogram moved -- and that is
-        // marked non-compared in the record, so a reviewed run still emitted the
-        // freeze. Measured on the consequence, as a non-owner: readdir on that
+        // with it, while only the directory-mode histogram moved -- and that was
+        // marked non-compared in the record AT THE TIME, so a reviewed run still
+        // emitted the freeze. (The histograms became compared fields later, when a
+        // write-granting POSIX ACL was measured landing on exactly the 0644 -> 0664
+        // delta their exemption had called harmless. This mask fix stands on its
+        // own regardless -- a directory's own bits belong in the digest.)
+        // Measured on the consequence, as a non-owner: readdir on that
         // directory is EACCES while reading a known path through it still
         // succeeds. So the tree stays loadable by exact path and stops being
         // ENUMERABLE, which is what every glob-based package discovery does.
@@ -1720,17 +1724,29 @@ function foldInstalledTree(strRoot) {
       // READ permission was invisible: measured, 0644 -> 0600 on an installed
       // .js file left the digest byte-identical. The owner running the recorder
       // can still read it and `npm ls` still passes, but a group or other user
-      // can no longer load that module -- and the histogram that does move is
-      // explicitly a non-compared diagnostic, so every compared field stayed
-      // equal and a reviewed run would emit freezeRecord: true for a tree those
-      // users cannot use.
+      // can no longer load that module -- and the histogram that does move was
+      // an explicitly non-compared diagnostic AT THE TIME, so every compared
+      // field stayed equal and a reviewed run would emit freezeRecord: true for
+      // a tree those users cannot use.
       //
       // `mode & 0o555` is read AND execute, which together are exactly the
       // "can each permission class still load this" property. Write bits stay
-      // out deliberately: they do not affect loadability and are the most
-      // machine-variable of the three. Both halves are umask-dependent, which
-      // is fine for the same reason the execute bits are -- the umask is
-      // pinned and checked.
+      // out of the DIGEST deliberately: they do not affect loadability.
+      //
+      // They are no longer outside the RECORD, and the reason is the POSIX ACL
+      // finding. An ACL granting write to a named user widens the ACL mask, and
+      // per acl(5) the mask IS what st_mode's group bits report -- so
+      // `setfacl -m u:someone:rw-` on a 0644 file reads back 0664 with the bytes
+      // and this fold untouched. Measured, writing system.posix_acl_access
+      // directly: deny and read-grant move nothing, write-grant moves only the
+      // histogram, execute-grant moves this fold too. The histograms are
+      // therefore compared fields now; the old exemption called 0644 -> 0664
+      // "harmless machine state" when it is the signature of a frozen tree
+      // becoming writable by someone the record never accounted for.
+      //
+      // The umask being pinned and checked is what makes all of this stable:
+      // under the reviewed umask the tree is uniformly 644/755 with no
+      // group-write bucket, so comparing the histogram cannot false-refuse.
       intFiles += 1;
       const intMode = lstatSync(strPath).mode;
       const strPermissions = (intMode & 0o777).toString(8).padStart(3, '0');
