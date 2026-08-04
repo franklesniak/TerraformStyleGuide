@@ -92,6 +92,21 @@ per-row rather than asserted in a sentence.
 | Advisory posture SHA-256 | `925751f8c4d131a9403a2d9ea6536c1d9c508a62d3a993c76b860375bac732ba` | script `auditSha256` |
 | Advisory counts | `{"info":0,"low":0,"moderate":2,"high":5,"critical":0,"total":7}` | script `auditCounts` |
 
+> **This row is blocked pending an advisory disposition, and re-taking the digest did not clear
+> it.** The value above is correct and reproducible — it was re-taken on the reviewed toolchain
+> against the public registry. But it folds **`GHSA-rgw5-rvv9-x895`**, published after the original
+> freeze and **not covered by any decision recorded under `T1-ADVISORY-DISPOSITION-v1`**.
+>
+> Comparing against this baseline would therefore *pass* while a vulnerability nobody has ruled on
+> sits inside it — the exact opposite of what the advisory rows exist to do. Per
+> [Compared fields](#compared-fields), issue #22 must treat advisory drift as a blocking check that
+> a policy decision clears; **re-baselining a digest is not a substitute for deciding about what the
+> digest now contains**, and an earlier revision of this record made precisely that mistake by
+> replacing the value and removing the block in one step.
+>
+> A consumer must treat this row as **not yet dischargeable** until a disposition covering
+> `GHSA-rgw5-rvv9-x895` is recorded. The clearing condition is tracked in issue #24.
+
 The three `git` rows are derived from the repository, not from a run of the script, and this is
 how. Note the **`^2`**: an earlier draft wrote `git rev-parse <the recorded head>`, which takes
 the value being checked as its own input and resolves it back to itself — it proved nothing. The
@@ -178,7 +193,7 @@ that table exists at all — the reasoning is in
 
 Recorded so a reader can diagnose a mismatch or understand the context. **Not** subject to
 exact equality. Every row below carries a value. One field the script emits has none for this
-record, and it is described in [A field this record does not carry](#a-field-this-record-does-not-carry)
+record, and it is described in [How `auditEnvironmentScrubbed` came to have a value](#how-auditenvironmentscrubbed-came-to-have-a-value)
 rather than given a row here.
 
 | Field | Value | Derived by | Why it is not compared |
@@ -187,11 +202,20 @@ rather than given a row here.
 | Directory permissions | `{"755":336}` | script `installedTreeDirectoryModes` | full modes are machine state |
 | `node_modules` root mode | `755` | script `installedTreeRootMode` | full modes are machine state |
 | Policy decision | `T1-ADVISORY-DISPOSITION-v1` | this document | no artifact exists to compare against; bounded through issue #24 |
+| Audit environment scrubbed | `[]` | script `auditEnvironmentScrubbed` | describes the recording machine, not the supply inputs; a reader's own run reports their own list |
 
-### A field this record does not carry
+### How `auditEnvironmentScrubbed` came to have a value
 
-`auditEnvironmentScrubbed` is emitted by the current script but has no value in this record, so it
-has no row in the table above.
+**This field now has an observed value, and the row above carries it.** The advisory-posture
+re-take was performed with the current script, which emits `auditEnvironmentScrubbed` on every
+successful audited run — so the same run that produced the recorded `auditSha256` necessarily
+produced a value for this field too. It observed `[]`: the recording environment carried no
+trust-relevant variable that had to be removed before the audit ran.
+
+The history below is kept because the *reasoning* still governs how this row must be read, and
+because an earlier revision of this section survived the re-take while asserting the opposite —
+that no observation existed. That was true of the original freeze and false the moment the posture
+was replaced.
 
 **It had one for four rounds, and that was the defect.** The row sat in a table of recorded values
 holding no value, and reviewers read the contradiction rather than the four paragraphs answering
@@ -213,19 +237,24 @@ conflation the advisory guard refuses when it rejects a missing `via` key that a
 quietly turned into `[]`.
 
 The current script does always emit the key — `[]` under `--no-audit`, a sorted list otherwise —
-and two independent reviewers read that as contradicting this record. It does not, and the reason
-is checkable rather than asserted: the field was added to the script *after* these digests were
-taken. The commit that recorded the advisory posture above (`8905ba3`) is an ancestor of the
-commit that introduced `auditEnvironmentScrubbed` (`bdbfb81`), which `git merge-base --is-ancestor`
-confirms, so the run that minted this record could not have emitted the field and no observed
-value exists. A later reviewer asked for the value observed in the same run that produced the
-recorded `auditSha256` — there is no such observation to record. Writing a plausible-looking `[]` would be a value invented to fill a
-column — the same fabrication the advisory-identity guard was tightened to refuse, committed in
-the record instead of in the code.
+and two independent reviewers once read that as contradicting this record. At the time it did not,
+and the reason was checkable rather than asserted: the field was added to the script *after* the
+original digests were taken. The commit that recorded the *original* advisory posture (`8905ba3`) is an ancestor of the commit
+that introduced `auditEnvironmentScrubbed` (`bdbfb81`), which `git merge-base --is-ancestor`
+confirms, so the run that minted that posture could not have emitted the field. Writing a
+plausible-looking `[]` at that point would have been a value invented to fill a column — the same
+fabrication the advisory-identity guard was tightened to refuse, committed in the record instead
+of in the code. That refusal was correct then and is why the row was absent rather than guessed.
 
-The field is per-run in any case: it describes the environment of whoever executes the script, so
-a reader's own run reports their own list, not this one. On a clean environment that list is `[]`.
-That is what a reader should expect to see; it is not a value this record can claim was observed.
+**What changed is that the posture was re-taken, not that the standard was relaxed.** The value in
+the row above is `[]` because a run of the current script observed `[]`, in the same run that
+produced the recorded `auditSha256` — which is exactly the evidence a reviewer had asked for and
+that did not exist until the re-take supplied it.
+
+The field remains per-run: it describes the environment of whoever executes the script, so a
+reader's own run reports their own list rather than this one. That is why it is recorded and not
+compared — a reader on a machine carrying a proxy variable will see a non-empty list without
+anything being wrong with the supply inputs.
 
 **`auditEnvironmentScrubbed` lists names only, never values.** A `NODE_EXTRA_CA_CERTS` path or a
 proxy URL can carry a hostname, a username, or a token, and this record is published. An empty
