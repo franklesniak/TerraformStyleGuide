@@ -218,12 +218,13 @@ because an earlier revision of this section survived the re-take while asserting
 that no observation existed. That was true of the original freeze and false the moment the posture
 was replaced.
 
-**It had one for four rounds, and that was the defect.** The row sat in a table of recorded values
-holding no value, and reviewers read the contradiction rather than the four paragraphs answering
-it: the cell said the field was not captured, then that it had no value, then that it was not
-recorded in this freeze — three wordings, each reported in turn. Rewording a row that should not
-have been in that table is answering the shape shown, which is the habit this document keeps
-finding in its own script. The row is gone; what it was trying to say is below.
+**A row stood here for four rounds before this one, and the defect was not the row but the
+emptiness in it.** It sat in a table of recorded values holding no value, and reviewers read the
+contradiction rather than the four paragraphs answering it: the cell said the field was not
+captured, then that it had no value, then that it was not recorded in this freeze — three
+wordings, each reported in turn. Rewording a row that had nothing to record is answering the shape
+shown, which is the habit this document keeps finding in its own script. That row was removed, and
+the row above is not its return: the difference between them is that a run produced this one.
 
 An earlier draft filled its Value column with the key name and
 two hypotheticals — the key name, then `[]` or `["NODE_OPTIONS"]` offered as examples — which
