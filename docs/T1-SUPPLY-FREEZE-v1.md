@@ -651,20 +651,27 @@ regardless, because a bypassed run still emits a number, and a number taken over
 changed mid-read is wrong under any flag. The `Bypassed` column below says which is which, per
 row, rather than leaving it to a sentence that has already been wrong once.
 
-**With one exception, which is recorded here rather than smoothed over.** The check that the npm
-installation did not change *while it was being used* sits behind `if (!boolAnyToolchain)`, so a
-bypassed run does not make it. That is an integrity-during-run refusal being waived, which the
-paragraph above says does not happen — and the paragraph was written before this row was read
-closely. The `Bypassed` column is the authority; this sentence exists so the exception is stated
-rather than left for a reader to discover by disagreeing with the prose. Whether that check should
-be waived at all is a question about the script, not about this table: a bypassed run cannot
-compare npm against the reviewed digest, but the before/after comparison needs no reviewed value.
-It is left as-is here because changing a guard is not a documentation fix, and the run it affects
-already declares `freezeRecord: false`.
+**There is no longer an exception, and the history is kept here because it is the point.** This
+section used to record one: the check that the npm installation did not change *while it was being
+used* sat behind `if (!boolAnyToolchain)`, so a bypassed run skipped it. That was an
+integrity-during-run refusal being waived, which the paragraph above says does not happen. The
+note ended by declining to fix it — "changing a guard is not a documentation fix, and the run it
+affects already declares `freezeRecord: false`."
+
+Round 71 closed it, because that reasoning was wrong twice over. The before/after comparison needs
+no reviewed value, so nothing about `--any-toolchain` ever made it inapplicable; and the fold that
+produces the baseline ran unconditionally anyway, so the value was being computed and discarded.
+`npmTree` is emitted for bypassed runs, so the record could pair one installation's hash with
+another installation's version, `ls` and audit answers. `freezeRecord: false` marks a record as
+unblessed, not as permitted to be internally inconsistent.
+
+The rule therefore holds without exception: **`--any-toolchain` waives comparisons against
+`REVIEWED_*` constants, and nothing else. Self-consistency checks run in every mode.**
 
 | Exit | Refusal | Bypassed by `--any-toolchain` | Usual cause |
 | ---: | --- | :---: | --- |
-| `2` | Unreviewed toolchain | yes | different Node, npm, platform or architecture; a symlinked entry point; `NODE_OPTIONS` set; an npm installation whose digest is not the reviewed one; or that installation changing while it is in use — see [What this script cannot check about itself](#what-this-script-cannot-check-about-itself) |
+| `2` | Unreviewed toolchain | yes | different Node, npm, platform or architecture; a symlinked entry point; `NODE_OPTIONS` set; or an npm installation whose digest is not the reviewed one — see [What this script cannot check about itself](#what-this-script-cannot-check-about-itself) |
+| `2` | npm installation changed while it was being used | **no** | the npm tree was rewritten, or its inode change times moved, between the fold taken before the first subprocess and the recheck after the last one. Compares the run's own before value against its own after value, so it needs no reviewed digest and `--any-toolchain` does not waive it. Measured: touching a file inside the installation mid-run under `--any-toolchain --no-audit` exits `2`, reporting an identical `sha256` with a differing change-time hash, while the unperturbed bypassed run exits `0`. Bypassed until round 71 — see the note above the table |
 | `2` | npm installation cannot be located, read or authenticated | **no** | the launcher beside `node` is missing; npm resolves outside this Node installation or outside `lib/node_modules/npm`; the installation cannot be read; the command line is no longer the file that was authenticated; or npm cannot be spawned at all. These establish *which program answered*, which `--any-toolchain` does not waive — it relaxes **which** toolchain is acceptable, never whether the one present can be identified. Measured: a `node` copied away from its distribution exits `2` under `--any-toolchain --no-audit` exactly as it does without the flag, while the genuine reviewed toolchain under the same flag exits `0` |
 | `2` | Unrecognized invocation | **no** | an argument the script does not support; `--any-toolchain --bogus` still exits `2` |
 | `3` | Recorded input changed mid-run | **no** | `package.json`, `package-lock.json` or the script itself edited while the run was in progress |
