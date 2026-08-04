@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `808d425b129c88e1c989e7e43ec314736715e18df856ee125458d08d78e2a49e` | script `script.sha256` |
+| Freeze script SHA-256 | `f28f27a7ace1d0d50531bc0849b02a74bf63ba3ec8f17d3bed4e5f9870fe211c` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -674,6 +674,7 @@ already declares `freezeRecord: false`.
 | `11` | Tree contains links it cannot resolve | yes | a symlink under `node_modules` whose resolution fails for any reason, so containment is unproven rather than satisfied |
 | `12` | Tree contains an undecodable entry name | **no** | an entry under `node_modules` whose name is not valid UTF-8. Such a name decodes to U+FFFD, so a sibling named U+FFFD shares the decoded name and both resolve to one file — the other is never read and never reaches the digest. Refused rather than folded, because the alternative is a digest over a tree the script did not measure. The check is a byte round trip, so a file legitimately named U+FFFD still folds |
 | `13` | Project npm configuration is not a regular file | **no** | `.github/workflows/.npmrc` present as a symlink, directory, FIFO, socket or device node. npm reads it as a configuration source, and only a regular file can be held still across the run — a link is opened through a target whose own parent can be swapped mid-run, and a link that does not resolve is indistinguishable from no file at all while its target can still be created for the audit and removed. Measured: `--any-toolchain --no-audit` exits `13` exactly as a plain run does |
+| `14` | Tree entry the recorder does not solely control | **no** | an entry under `node_modules` carrying setuid, setgid or sticky bits; a regular file with more than one hard link, so a second path can rewrite the bytes; or an entry owned by a different uid than the recording process, whose owner can chmod and rewrite it after the final sweep. None of the three move the digest — it folds `mode & 0o555` and bytes, and the histograms mask to `0o777` — so they are refused rather than folded. `uid` and `gid` are deliberately **not** hashed: they are properties of the machine, and folding them would make two hosts that installed identical packages produce different digests. Measured: setuid and hard-link cases each exit `14`, and removing them returns the identical tree digest |
 
 A bypassed run marks its own output as explicitly not a freeze record — `freezeRecord: false`
 with the reasons listed — in both output formats.

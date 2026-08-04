@@ -1311,6 +1311,55 @@ function hashField(objHash, objField) {
   objHash.update(objBytes);
 }
 
+// Round 66, reported by Codex. The fold hashes `mode & 0o555` and the histogram
+// records `mode & 0o777`, so three inode properties were invisible to every
+// compared field: the OWNER, the hard-link count, and the setuid/setgid/sticky
+// bits. A `4755` binary recorded as `755`; a package directory owned by another
+// uid folded exactly like one owned by the recorder, and that owner can chmod
+// and rewrite it after the final sweep whatever the mode bits say.
+//
+// Codex offered "include or refuse". These REFUSE rather than fold, and the
+// reason is reproducibility: uid and gid are properties of the machine, not of
+// the published bytes, so hashing them would make the tree digest differ between
+// two hosts that installed identical packages -- destroying the cross-machine
+// reproduction the whole record exists to provide. Refusing closes the same hole
+// and moves no digest, so the frozen values stay valid.
+//
+// gid is deliberately NOT refused on. A differing gid is only exploitable when
+// the group can also write, and group-write already shows up as 664/775 in the
+// mode histograms, which have been COMPARED fields since the POSIX ACL finding.
+// Refusing on gid as well would false-refuse every tree installed under a setgid
+// directory, which inherits the parent's gid by design, and would buy nothing
+// the histogram does not already catch.
+//
+// This is the containment rule the tree already applies to symlinks that leave
+// it, one property over: an entry the recorder does not own, or that a second
+// path can write through, is not contained by this tree.
+function refuseUnreviewedInodeMetadata(strPath, strChild, objStats, strKind) {
+  const intSpecialBits = objStats.mode & 0o7000;
+  const intOwnUid = typeof process.getuid === 'function' ? process.getuid() : null;
+  const strProblem = intSpecialBits !== 0
+    ? `setuid/setgid/sticky bits set (${intSpecialBits.toString(8).padStart(4, '0')})`
+    : (strKind === 'file' && objStats.nlink > 1)
+      ? `hard-linked ${objStats.nlink} times, so a second path can rewrite these bytes`
+      : (intOwnUid !== null && objStats.uid !== intOwnUid)
+        ? `owned by uid ${objStats.uid}, but this recorder runs as uid ${intOwnUid}`
+        : null;
+  if (strProblem === null) return;
+  process.stderr.write(
+    'supply-freeze: refusing to record a tree entry the recorder does not solely control.\n' +
+    `  entry              ${formatUntrustedText(strChild)}\n` +
+    `  kind               ${strKind}\n` +
+    `  observed           ${strProblem}\n` +
+    '  the digest folds permission bits and bytes, so none of these move it: an\n' +
+    '  entry owned by another uid can be rewritten by that owner after the final\n' +
+    '  sweep, a second hard link can be written through while this path looks\n' +
+    '  untouched, and a setuid bit does not appear in a 0o777 histogram at all.\n' +
+    '  reinstall the tree as the recording user with the documented command:\n' +
+    '    npm ci --ignore-scripts --no-audit --no-fund\n');
+  process.exit(14);
+}
+
 // Round 48, reported by Codex, and it is a hiding place rather than a collision
 // in the recorded value. POSIX filenames are bytes; `readdirSync` decodes them as
 // UTF-8, and every byte sequence that is not valid UTF-8 decodes to U+FFFD. Two
@@ -1703,7 +1752,9 @@ function foldInstalledTree(strRoot) {
         // record's tree row was re-taken in the same commit and the reasoning is
         // recorded there.
         intDirectories += 1;
-        const intDirectoryMode = lstatSync(strPath).mode;
+        const objDirectoryStats = lstatSync(strPath);
+        refuseUnreviewedInodeMetadata(strPath, strChild, objDirectoryStats, 'directory');
+        const intDirectoryMode = objDirectoryStats.mode;
         objDirectoryModeHistogram.set(
           (intDirectoryMode & 0o777).toString(8).padStart(3, '0'),
           (objDirectoryModeHistogram.get((intDirectoryMode & 0o777).toString(8).padStart(3, '0')) ?? 0) + 1);
@@ -1835,7 +1886,9 @@ function foldInstalledTree(strRoot) {
       // under the reviewed umask the tree is uniformly 644/755 with no
       // group-write bucket, so comparing the histogram cannot false-refuse.
       intFiles += 1;
-      const intMode = lstatSync(strPath).mode;
+      const objFileStats = lstatSync(strPath);
+      refuseUnreviewedInodeMetadata(strPath, strChild, objFileStats, 'file');
+      const intMode = objFileStats.mode;
       const strPermissions = (intMode & 0o777).toString(8).padStart(3, '0');
       objModeHistogram.set(strPermissions, (objModeHistogram.get(strPermissions) ?? 0) + 1);
       objHash.update('F', 'utf8');
@@ -3660,6 +3713,21 @@ try {
       '--include=dev', '--include=optional', '--include=peer',
       '--global=false', '--link=false']);
   } catch (objLsError) {
+    // Round 66, reported. This refusal used to be unconditional, which
+    // contradicted the comment forty lines below -- "the bypass still applies to
+    // a tree that is PRESENT but does not satisfy the lockfile" -- and the
+    // exit-7 bypass row in the record. Measured before the fix: an empty
+    // node_modules under `--any-toolchain --no-audit --json` exited 7, while the
+    // same flags on an intact tree exited 0 with freezeRecord false. npm ls
+    // exits non-zero for exactly the incomplete tree the bypass is meant to let
+    // a reader measure, so the failure is now RECORDED under the bypass and
+    // refused only on a reviewed run. Rethrowing reaches the outer catch, which
+    // sets treeSatisfiesLockfile false and builds the detail from this status --
+    // the same path the wrong-tree and filtered-dependency checks below already
+    // take, so all three tree failures now behave alike under the flag.
+    if (boolAnyToolchain) {
+      throw objLsError;
+    }
     const arrProblems = (() => {
       try {
         const objBody = JSON.parse(typeof objLsError?.stdout === 'string' ? objLsError.stdout : '');
