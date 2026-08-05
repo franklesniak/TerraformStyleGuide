@@ -1554,6 +1554,43 @@ function readdirOrRefuseUndecodable(strDirectory, strRelative) {
   });
 }
 
+// Round 79/C, reported by Codex and reproduced. Extracted from foldInstalledTree
+// so the SAME refusal can run before the baseline quiescence scan. It used to run
+// only inside the fold, which happens AFTER that scan, so the baseline followed an
+// external node_modules symlink and walked the target first:
+//
+//   node_modules -> quiet external dir -> exit 7  (boundary refusal won the race)
+//   node_modules -> /proc              -> exit 10, EACCES at node_modules/1/fdinfo
+//
+// Which refusal fired depended on whether the external tree happened to walk
+// cleanly, so the documented exit 7 was not guaranteed and an arbitrarily large or
+// volatile external tree was traversed on the way to rejecting it. One function,
+// called at both sites, keeps the two from drifting the way the boundary tests did.
+function refuseEscapingTreeRoot(strRoot) {
+  const strResolvedRoot = realpathSync(strRoot);
+  if (strResolvedRoot !== strWorkflowDirectory
+    && !strResolvedRoot.startsWith(`${strWorkflowDirectory}/`)) {
+    process.stderr.write(
+      'supply-freeze: refusing a node_modules symlink that leaves the watched boundary.\n' +
+      `  node_modules       ${formatUntrustedText(strRoot)}\n` +
+      // The resolved target is attacker-supplyable, so it is formatted rather
+      // than interpolated raw -- the same rule the escaping-link refusal was
+      // given in round 39.
+      `  resolves outside   ${formatUntrustedText(strWorkflowDirectory)}\n` +
+      '  the sweep follows this link and watches its target, but nothing watches\n' +
+      '  the directories ABOVE that target. One of them can be renamed aside, a\n' +
+      '  different tree put in its place for npm ls and npm audit, and the original\n' +
+      '  restored before the final sweep -- the link and the target inode still\n' +
+      '  compare equal, while the recorded answers came from bytes never folded.\n' +
+      '  --any-toolchain does not waive this: it is a self-consistency check, not a\n' +
+      '  comparison against a reviewed constant.\n' +
+      '  point node_modules at a directory inside the workflow directory, or make\n' +
+      '  it a real directory.\n');
+    process.exit(7);
+  }
+  return strResolvedRoot;
+}
+
 function foldInstalledTree(strRoot) {
   const objHash = createHash('sha256');
   let intFiles = 0;
@@ -2084,27 +2121,7 @@ function foldInstalledTree(strRoot) {
     // set this script can actually prove". A target inside the workflow directory
     // has a chain that terminates in the swept set and IS provable; one outside
     // does not. So the boundary decides, rather than the symlink.
-    const strResolvedRoot = realpathSync(strRoot);
-    if (strResolvedRoot !== strWorkflowDirectory
-      && !strResolvedRoot.startsWith(`${strWorkflowDirectory}/`)) {
-      process.stderr.write(
-        'supply-freeze: refusing a node_modules symlink that leaves the watched boundary.\n' +
-        `  node_modules       ${formatUntrustedText(strRoot)}\n` +
-        // The resolved target is attacker-supplyable, so it is formatted rather
-        // than interpolated raw -- the same rule the escaping-link refusal was
-        // given in round 39.
-        `  resolves outside   ${formatUntrustedText(strWorkflowDirectory)}\n` +
-        '  the sweep follows this link and watches its target, but nothing watches\n' +
-        '  the directories ABOVE that target. One of them can be renamed aside, a\n' +
-        '  different tree put in its place for npm ls and npm audit, and the original\n' +
-        '  restored before the final sweep -- the link and the target inode still\n' +
-        '  compare equal, while the recorded answers came from bytes never folded.\n' +
-        '  --any-toolchain does not waive this: it is a self-consistency check, not a\n' +
-        '  comparison against a reviewed constant.\n' +
-        '  point node_modules at a directory inside the workflow directory, or make\n' +
-        '  it a real directory.\n');
-      process.exit(7);
-    }
+    const strResolvedRoot = refuseEscapingTreeRoot(strRoot);
     refuseUnreviewedInodeMetadata(
       strResolvedRoot, 'node_modules (symlink target)', statSync(strRoot), 'directory');
   }
@@ -2408,9 +2425,12 @@ function newestChangeTime(strRoot, arrExtraPaths) {
   //
   // So the documented exit 7 is not guaranteed; which refusal fires depends on
   // whether the external tree happens to walk cleanly. The unbounded external walk
-  // the old comment denied is real, and the claim was load-bearing -- it was the
-  // stated reason this is a sweep rather than a refusal. See OPEN-C in the PR
-  // thread: the fix is to hoist the escape refusal ahead of this scan.
+  // the old comment denied was real, and the claim was load-bearing -- it was the
+  // stated reason this is a sweep rather than a refusal. FIXED in round 80:
+  // refuseEscapingTreeRoot() now runs before the baseline scan, and node_modules
+  // -> /proc refuses at exit 7 instead of walking into it and reporting exit 10.
+  // With that guard ahead of the walk, the bounded-by-construction claim above is
+  // true as written rather than true only after the fold.
   //
   // Labels carry the full path, not the basename: round 67 fixed exactly that
   // collision, where two swept paths sharing a basename collapsed to one map key.
@@ -3271,6 +3291,13 @@ const objBaselineChange = (() => {
       path: '(no walkable installed tree when recording began)',
       entries: new Map(),
     };
+  }
+  // Round 79/C. The escape refusal runs HERE, before the baseline walk, so an
+  // external node_modules target is rejected rather than traversed on the way to
+  // being rejected. lstat, not stat: a root that is not a symlink has nothing to
+  // resolve, and asking stat would follow the very link this is guarding.
+  if (existsSync(strTreeRoot) && lstatSync(strTreeRoot).isSymbolicLink()) {
+    refuseEscapingTreeRoot(strTreeRoot);
   }
   return scanOrRefuse(
     () => newestChangeTime(strTreeRoot, [
