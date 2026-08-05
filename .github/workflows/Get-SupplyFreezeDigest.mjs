@@ -1208,10 +1208,19 @@ function foldNpmInstallation(strRoot, strLauncherPath) {
   // /tmp, /opt, / and so on, whose change times move for reasons that have
   // nothing to do with this record -- the same over-sensitivity the quiescence
   // sweep's round-36 note refused to take on, and an over-sensitive check that
-  // refuses real runs is not a stricter check. A caller who can rewrite the
-  // directory CONTAINING the Node distribution can also replace node itself,
-  // which is the trust boundary the record documents and not something a fold
-  // can close.
+  // refuses real runs is not a stricter check.
+  //
+  // Stopping here is a PRECONDITION, not a closed check, and an earlier revision
+  // justified it wrongly (reported by Codex): it argued a caller able to rewrite
+  // the directory CONTAINING the distribution could replace node itself, but
+  // replacing node ON DISK does not replace the running process -- the
+  // interpreter stays the authenticated one while an npm subprocess is
+  // redirected, so that argument did not cover the interval it claimed to. What
+  // actually holds is narrower: the distribution must live where it cannot be
+  // renamed during the run (in CI a job-private extraction directory), and the
+  // pre-invocation recheck of the npm command line's inode narrows the window to
+  // the gap before exec without eliminating it. See docs/T1-SUPPLY-FREEZE-v1.md,
+  // "What this script cannot check about itself".
   const strDistributionRoot = dirname(dirname(realpathSync(process.execPath)));
   const arrSeen = [];
   const foldAncestors = (strLeaf) => {
@@ -1956,7 +1965,15 @@ function refuseEscapingTreeRoot(strRoot) {
         process.stderr.write(
           'supply-freeze: refusing to record digests for a node_modules link whose '
           + 'path cannot be resolved.\n'
-          + formatErrorLocation(objError, strHop)
+          // Reported by Codex, the same target-withhold class as the undecodable
+          // refusal above. objError.path and strHop are built from a target the
+          // tree author chose -- on every hop the failing component comes from that
+          // target -- and formatErrorLocation would print them through
+          // formatUntrustedText, which withholds only URL-shaped credentials, so a
+          // plain `/.../SECRET_token/link` would reach the retained log. Only the
+          // hop number and the errno, neither attacker-derived, are reported.
+          + `  hop                ${intHop + 1}\n`
+          + `  error              ${formatUntrustedText(String(objError?.code ?? 'unknown'))}\n`
           + '  every component of a root link must resolve, or containment cannot be\n'
           + '  decided.\n');
         process.exit(7);
@@ -3818,9 +3835,10 @@ const strNodeVersion = process.version;
 //
 // REVIEWED_NPM_TREE_SHA256 was NOT taken from the container this was developed
 // on. It is derived from node-v24.18.1-linux-x64.tar.xz downloaded from
-// nodejs.org, whose SHA-256 was checked against the digest markdownlint.yml and
-// build.yml already pin before the archive was opened -- so the constant comes
-// from the same bytes CI extracts, not from a local directory of unknown
+// nodejs.org, whose SHA-256 was checked against the digest markdownlint.yml
+// already pins before the archive was opened (build.yml does not fetch Node) --
+// so the constant comes from the same bytes CI's markdownlint job extracts, not
+// from a local directory of unknown
 // provenance. Both fold to f5855634..., 1916 files and no symlinks.
 //
 // The byte comparison is gated on --any-toolchain and the containment check is

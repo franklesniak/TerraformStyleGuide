@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `fd12171d4ed8182bab9ffde61b6f93e24dd6a3e832bb84e27f82bbdc10c85fb3` | script `script.sha256` |
+| Freeze script SHA-256 | `164e5d2b6ab1d1321a99491205a79c516edaca8237732b4ea5eb5f3a94f6b916` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -404,10 +404,13 @@ Note what this is *not*. It is not the round-56 finding, where the reviewed Node
 it is refused now because npm is authenticated by its bytes. This is the strictly harder attack of
 modifying Node itself, and it is outside what a script can close about its own interpreter.
 
-**The anchor is therefore external, and it already exists.** Both workflows fetch
-`node-v24.18.1-linux-x64.tar.xz` from `nodejs.org`, compare its SHA-256 against a reviewed
-constant *before* extracting it, and then invoke the extracted binary by absolute path. The trust
-in a CI-produced record rests on that step, not on anything the script says about itself.
+**The anchor is therefore external, and it already exists.** The `markdownlint.yml` workflow
+fetches `node-v24.18.1-linux-x64.tar.xz` from `nodejs.org`, compares its SHA-256 against a reviewed
+constant *before* extracting it, and invokes the extracted binary by absolute path; the
+[How to reproduce](#how-to-reproduce) recipe below does the same before producing this record.
+(`build.yml` does not fetch Node, and no workflow runs the freeze script — the record is produced
+by the manual recipe.) The trust in the record rests on that verify-before-extract step, not on
+anything the script says about itself.
 
 **One further precondition, corrected here because an earlier revision justified it wrongly.** The
 recorder folds every directory from the Node distribution root down to the npm installation and
