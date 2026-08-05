@@ -20,7 +20,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync,
   readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs';
-import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Round 52, reported by Codex. These three lived beside formatUntrustedText,
@@ -1709,8 +1709,33 @@ function refuseEscapingTreeRoot(strRoot) {
       // inside. Measured on the fixture: exit 0 accepted, where the same chain
       // without `..` refuses at exit 7. The guard I added to catch chains that
       // leave and return was itself bypassable by three characters.
-      const strNext = resolve(isAbsolute(strTarget)
-        ? strTarget : join(dirname(strHop), strTarget));
+      // COMPONENT WALK, not lexical resolve. Codex's original wording offered
+      // "normalize OR component-walk each hop"; I took the weaker option, and the
+      // class stayed open. resolve() collapses `..` textually but knows nothing
+      // about symlinked COMPONENTS, so `node_modules -> in/mid` with
+      // `<workflow>/in` itself a symlink to /tmp/ext still tested as inside:
+      //
+      //   lexical    <workflow>/in/mid   -> looks INSIDE, check passes
+      //   realpath   /tmp/ext/mid        -> actually OUTSIDE
+      //
+      // Reproduced at exit 0 where the documented invariant is an unconditional
+      // exit 7. The parent directory is resolved through realpathSync so symlinked
+      // components are followed; the FINAL component is deliberately left
+      // unresolved, because the loop's next iteration is what follows it.
+      const strRaw = isAbsolute(strTarget)
+        ? strTarget : join(dirname(strHop), strTarget);
+      let strNext;
+      try {
+        strNext = join(realpathSync(dirname(strRaw)), basename(strRaw));
+      } catch (objError) {
+        process.stderr.write(
+          'supply-freeze: refusing to record digests for a node_modules link whose '
+          + 'path cannot be resolved.\n'
+          + formatErrorLocation(objError, dirname(strRaw))
+          + '  every component of a root link must resolve, or containment cannot be\n'
+          + '  decided.\n');
+        process.exit(7);
+      }
       if (!isInsideOrEqual(strNext, strWorkflowDirectory)) {
         process.stderr.write(
           'supply-freeze: refusing a node_modules symlink chain that leaves the '
