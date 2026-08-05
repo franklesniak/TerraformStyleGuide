@@ -1567,6 +1567,50 @@ function readdirOrRefuseUndecodable(strDirectory, strRelative) {
 // volatile external tree was traversed on the way to rejecting it. One function,
 // called at both sites, keeps the two from drifting the way the boundary tests did.
 function refuseEscapingTreeRoot(strRoot) {
+  // Round 80, reported by Codex as a P2 and reproduced. The endpoint-only
+  // realpathSync check below accepts a chain that LEAVES the boundary and comes
+  // back -- node_modules -> /tmp/ext/mid -> <workflow>/real-tree -- because the
+  // final target is inside. Measured on the fixture: direct in-boundary link
+  // exit 0, direct external link exit 7, leave-and-return chain exit 0.
+  //
+  // The external hop is recorded, but its PARENT is not, and that parent can be
+  // renamed aside while npm ls and npm audit run, then restored before the second
+  // fold. Both folds then describe the original in-boundary tree while npm
+  // answered from a different one.
+  //
+  // Every hop is therefore tested, not just the endpoint -- the same rule the
+  // round-42 component walk already applies to package symlinks. A chain is only
+  // as trustworthy as the weakest parent along it.
+  {
+    let strHop = strRoot;
+    for (let intHop = 0; ; intHop += 1) {
+      if (intHop >= 40) {
+        throw new Error('node_modules root: symlink chain exceeds 40 hops');
+      }
+      let objHopStats;
+      try { objHopStats = lstatSync(strHop); } catch { break; }
+      if (!objHopStats.isSymbolicLink()) break;
+      const strTarget = readlinkSync(strHop);
+      const strNext = isAbsolute(strTarget)
+        ? strTarget : join(dirname(strHop), strTarget);
+      if (!isInsideOrEqual(strNext, strWorkflowDirectory)) {
+        process.stderr.write(
+          'supply-freeze: refusing a node_modules symlink chain that leaves the '
+          + 'watched boundary.\n'
+          + `  node_modules       ${formatUntrustedText(strRoot)}\n`
+          + `  hop ${intHop + 1} resolves outside ${formatUntrustedText(strWorkflowDirectory)}\n`
+          + '  the chain may return inside the boundary, but a hop outside it has a\n'
+          + '  parent nothing watches: that parent can be renamed aside, a different\n'
+          + '  tree put in its place for npm ls and npm audit, and the original\n'
+          + '  restored before the final sweep. Both folds would then describe a tree\n'
+          + '  npm never read.\n'
+          + '  point every hop of node_modules inside the workflow directory, or make\n'
+          + '  it a real directory.\n');
+        process.exit(7);
+      }
+      strHop = strNext;
+    }
+  }
   const strResolvedRoot = realpathSync(strRoot);
   if (strResolvedRoot !== strWorkflowDirectory
     && !strResolvedRoot.startsWith(`${strWorkflowDirectory}/`)) {
