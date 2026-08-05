@@ -1711,7 +1711,32 @@ function refuseEscapingTreeRoot(strRoot) {
       let objHopStats;
       try { objHopStats = lstatSync(strHop); } catch { break; }
       if (!objHopStats.isSymbolicLink()) break;
-      const strTarget = readlinkSync(strHop);
+      // Raw bytes, then a round-trip check. Codex P2 on a756ebe: readlinkSync's
+      // default decoding turns any target that is not valid UTF-8 into U+FFFD, so
+      // a chain like `node_modules -> bad_<0x80> -> /tmp/ext/mid -> <workflow>/tree`
+      // with a decoy `bad_<U+FFFD>` INSIDE the workflow made this loop inspect the
+      // decoy and never see the external hop -- reproduced at exit 0 where the
+      // invariant is an unconditional exit 7.
+      //
+      // The component walk added in 198eb02 does not help: the decoy is inside the
+      // boundary, so containment passes on the wrong link entirely.
+      //
+      // Refusing is chosen over carrying Buffer paths through the loop. An
+      // undecodable target in the node_modules root chain is pathological, and a
+      // containment claim that cannot be stated in the same bytes the kernel uses
+      // is a claim this recorder should not make.
+      const bufTarget = readlinkSync(strHop, { encoding: 'buffer' });
+      if (!Buffer.from(bufTarget.toString('utf8'), 'utf8').equals(bufTarget)) {
+        process.stderr.write(
+          'supply-freeze: refusing to record digests for a node_modules link whose '
+          + 'target is not valid UTF-8.\n'
+          + `  hop                ${formatUntrustedText(strHop)}\n`
+          + `  target (hex)       ${bufTarget.toString('hex')}\n`
+          + '  the target cannot be distinguished from a sibling named U+FFFD, so\n'
+          + '  containment cannot be decided on the bytes the kernel would use.\n');
+        process.exit(7);
+      }
+      const strTarget = bufTarget.toString('utf8');
       // resolve(), not a bare isAbsolute() branch. Reported by Codex as a P2
       // against the per-hop rule added one commit earlier, and reproduced: the
       // relative branch went through join(), which normalizes `..`, while the
@@ -2017,7 +2042,18 @@ function foldInstalledTree(strRoot) {
               if (intHops > 40) {
                 throw Object.assign(new Error('too many levels of symbolic links'), { code: 'ELOOP' });
               }
-              const strTarget = readlinkSync(strCandidate);
+              // Same class as the root-hop fix above, swept rather than left as the
+              // sibling of a reported defect: this walk decoded its target too, so
+              // an undecodable target collapsed to U+FFFD and could match a decoy.
+              // Routed to the existing unresolved-link refusal, which already
+              // treats an undecidable containment claim as a refusal rather than a
+              // silent accept.
+              const bufLink = readlinkSync(strCandidate, { encoding: 'buffer' });
+              if (!Buffer.from(bufLink.toString('utf8'), 'utf8').equals(bufLink)) {
+                throw Object.assign(new Error('link target is not valid UTF-8'),
+                  { code: 'EILSEQ' });
+              }
+              const strTarget = bufLink.toString('utf8');
               if (isAbsolute(strTarget)) { strAt = '/'; }
               arrPending = strTarget.split('/').filter((strPart2) => strPart2.length > 0)
                 .concat(arrPending);
