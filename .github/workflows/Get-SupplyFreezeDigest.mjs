@@ -1056,7 +1056,24 @@ function npmInstallationRootOrRefuse() {
       formatErrorLocation(objError, strRoot) +
       '  a Node distribution keeps npm at lib/node_modules/npm and links bin/npm into\n' +
       '  it. Without that layout there is nothing to verify the executable against,\n' +
-      '  and its own --version output is not evidence about itself.\n');
+      '  and its own --version output is not evidence about itself.\n' +
+      // Reported by Codex. This check runs before the version/platform gate that
+      // --any-toolchain waives, so on Windows -- where npm sits beside node.exe,
+      // not under lib/node_modules/npm -- a reader following the documented
+      // --any-toolchain path met a bare "cannot locate npm" rather than the real
+      // reason. The reason is scope, not a missing file: this recorder computes
+      // only on the reviewed Unix distribution layout. A Windows install writes
+      // .cmd/.ps1 shims where this POSIX fold records symlinks and folds modes
+      // Windows does not carry, so its tree is not comparable to the reviewed one
+      // whatever the flag. --any-toolchain relaxes which VERSIONS are acceptable,
+      // never this layout, so the honest answer to a non-Unix platform is to say
+      // so here rather than to half-discover npm and fold a tree that means nothing.
+      (process.platform === 'win32'
+        ? '  this is a non-Unix (Windows) layout: npm sits beside node.exe and bin\n' +
+          '  entries are .cmd/.ps1 shims, not the symlinks this POSIX fold records, so\n' +
+          '  the tree is not comparable to the reviewed one. --any-toolchain relaxes\n' +
+          '  which versions are acceptable, never this Unix-layout requirement.\n'
+        : ''));
     process.exit(2);
   }
   // Round 62, reported by Codex. Containment proved the CLI sits inside the
