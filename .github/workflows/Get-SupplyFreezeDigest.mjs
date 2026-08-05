@@ -915,8 +915,29 @@ function canonicalize(objValue) {
 function readViaVerifiedDescriptor(strPath, intMissingExit, fnOnMissing) {
   let intFd;
   try {
-    intFd = openSync(strPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+    intFd = openSync(strPath,
+      fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW);
   } catch (objError) {
+    // O_NOFOLLOW, reported by Codex as a P1 against the descriptor fix one commit
+    // earlier -- which closed the FIFO shape of this TOCTOU and left the symlink
+    // shape wide open. Measured on the shipped code: opening a symlink without
+    // this flag reported isFile()=true, isSymbolicLink()=false, and returned the
+    // TARGET's bytes. The descriptor was bound, but bound to the wrong object, so
+    // fstat approved a link as a regular file -- the exact case exit 15 exists to
+    // refuse, defeated by the fix written to enforce it.
+    //
+    // The kernel refuses at open, so unlike an lstat-then-open check there is no
+    // window to race. ELOOP is how it says "that was a symlink"; it is translated
+    // here because the raw errno reads like a loop, not a refusal.
+    if (objError?.code === 'ELOOP') {
+      process.stderr.write(
+        'supply-freeze: refusing to record digests for a manifest that is not a regular file.\n'
+        + `  ${strPath.split('/').pop().padEnd(18)} is a symlink\n`
+        + '  refused by the kernel at open (O_NOFOLLOW), so no window exists between\n'
+        + '  checking the type and reading the bytes. Only a regular file returns the\n'
+        + '  same bytes to this process and to npm.\n');
+      process.exit(15);
+    }
     fnOnMissing(objError);
     process.exit(intMissingExit);
   }
