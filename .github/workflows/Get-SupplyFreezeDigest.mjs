@@ -2381,9 +2381,26 @@ function newestChangeTime(strRoot, arrExtraPaths) {
     }
     if (strResolvedRoot === strRoot) return;
     let strAncestor = dirname(strResolvedRoot);
-    for (let intDepth = 0; intDepth < 40; intDepth += 1) {
+    for (let intDepth = 0; ; intDepth += 1) {
       if (strAncestor === strWorkflowDirectory
         || !strAncestor.startsWith(`${strWorkflowDirectory}/`)) break;
+      // Swept rather than reported, and it is this round's own code caught being
+      // a check that narrows itself. The depth guard used to `break`, which is
+      // the wrong direction twice over: this walk runs from the target UPWARD, so
+      // the entries a cap drops are the OUTERMOST ones -- the ancestors nearest
+      // the workflow directory, which are exactly the ones a rename-aside would
+      // move. A silent break there reads as "swept the chain" while having
+      // dropped the part that matters.
+      //
+      // It also differed from its sibling for no reason a reader could infer:
+      // considerThroughLinks, thirty lines up, caps at 40 hops and THROWS, on the
+      // stated grounds that a path which stopped resolving is an exit 10 rather
+      // than something to continue past. Same cap, same situation, opposite
+      // behaviour. This now throws too, and the throw is the same exit 10.
+      if (intDepth >= 40) {
+        throw new Error(
+          'node_modules symlink target: ancestor chain exceeds 40 levels');
+      }
       consider(strAncestor, `node_modules target ancestor ${strAncestor}`);
       strAncestor = dirname(strAncestor);
     }
