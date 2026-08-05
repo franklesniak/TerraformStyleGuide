@@ -912,7 +912,17 @@ function canonicalize(objValue) {
 // reading BLOCKS until a writer appears, so checking the type after a plain
 // open() would hang the run on exactly the input this guard exists to refuse --
 // a fix that deadlocks CI gets reverted, which is no fix.
-function readViaVerifiedDescriptor(strPath, intMissingExit, fnOnMissing) {
+// objRefusal carries the CALLER's answer for a file that is not a regular file.
+// Codex P3 on a756ebe: the branches below were written for manifests, and this
+// helper also serves the script self-check, so a raced script replacement refused
+// with exit 15 and "a manifest is not a regular file" -- pointing the reader at
+// the wrong input. The table classifies script replacement as exit 3.
+//
+// Codex named the ELOOP branch; the fstat branch below it had the identical defect
+// and is fixed here too. Fixing only the reported instance would have left the
+// same wrong answer one branch away.
+function readViaVerifiedDescriptor(strPath, intMissingExit, fnOnMissing,
+    objRefusal = { exit: 15, what: 'manifest' }) {
   let intFd;
   try {
     intFd = openSync(strPath,
@@ -931,12 +941,13 @@ function readViaVerifiedDescriptor(strPath, intMissingExit, fnOnMissing) {
     // here because the raw errno reads like a loop, not a refusal.
     if (objError?.code === 'ELOOP') {
       process.stderr.write(
-        'supply-freeze: refusing to record digests for a manifest that is not a regular file.\n'
+        `supply-freeze: refusing to record digests for a ${objRefusal.what} that is `
+        + 'not a regular file.\n'
         + `  ${strPath.split('/').pop().padEnd(18)} is a symlink\n`
         + '  refused by the kernel at open (O_NOFOLLOW), so no window exists between\n'
         + '  checking the type and reading the bytes. Only a regular file returns the\n'
         + '  same bytes to this process and to npm.\n');
-      process.exit(15);
+      process.exit(objRefusal.exit);
     }
     fnOnMissing(objError);
     process.exit(intMissingExit);
@@ -951,12 +962,13 @@ function readViaVerifiedDescriptor(strPath, intMissingExit, fnOnMissing) {
               : objStats.isCharacterDevice() || objStats.isBlockDevice() ? 'a device node'
                 : 'not a regular file';
       process.stderr.write(
-        'supply-freeze: refusing to record digests for a manifest that is not a regular file.\n'
+        `supply-freeze: refusing to record digests for a ${objRefusal.what} that is `
+        + 'not a regular file.\n'
         + `  ${strPath.split('/').pop().padEnd(18)} is ${strKind}\n`
         + '  checked on the open descriptor, not by name: a name can be swapped between\n'
         + '  the check and the read, and only a regular file returns the same bytes to\n'
         + '  this process and to npm.\n');
-      process.exit(15);
+      process.exit(objRefusal.exit);
     }
     return readFileSync(intFd);
   } finally {
@@ -964,13 +976,13 @@ function readViaVerifiedDescriptor(strPath, intMissingExit, fnOnMissing) {
   }
 }
 
-function readOrRefuse(strPath) {
+function readOrRefuse(strPath, objRefusal = { exit: 15, what: 'manifest' }) {
   return readViaVerifiedDescriptor(strPath, 3, (objError) => {
     process.stderr.write(
       'supply-freeze: a recorded input could not be re-read; refusing to report.\n' +
       formatErrorLocation(objError, strPath) +
       '  it was readable when this run began, so it changed underneath the record.\n');
-  });
+  }, objRefusal);
 }
 
 // Round 56, reported by Codex. Locates the npm INSTALLATION that backs the
@@ -5306,7 +5318,9 @@ if (!readOrRefuse(strPackagePath).equals(objPackageBefore)
 // Round 12. The script's own bytes, re-compared after everything else. A
 // replacement during the run would otherwise leave the reported script digest
 // describing a file that is not the one that produced these numbers.
-if (!readOrRefuse(strScriptPath).equals(objScriptBefore)) {
+// The script self-check owns its own answer: a raced replacement of THIS SCRIPT is
+// exit 3 per the refusal table, not the manifest's exit 15.
+if (!readOrRefuse(strScriptPath, { exit: 3, what: 'script' }).equals(objScriptBefore)) {
   process.stderr.write(
     'supply-freeze: this script changed while it was running; refusing to report.\n' +
     `  reported digest    ${strScriptSha256}\n` +
