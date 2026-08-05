@@ -2006,12 +2006,72 @@ function foldInstalledTree(strRoot) {
   // within it after the final sweep -- the exact capability the child checks
   // exist to refuse, left open on the one directory that contains all of them.
   //
-  // Applied only when lstat says this is a real directory. A symlinked root is a
+  // Round 75, reported by Codex, and the paragraph above is the defect. It read:
+  // "Applied only when lstat says this is a real directory. A symlinked root is a
   // different case with its own refusal and its own bypass behaviour above, and
   // folding an ownership check into that path would change which of the two
-  // refusals a reader sees for an unchanged condition.
+  // refusals a reader sees for an unchanged condition." That reasoning protected
+  // the tidiness of the diagnostics and left the check off the directory the fold
+  // actually traverses.
+  //
+  // Measured, and the pair of controls is what makes it readable. With only the
+  // TOP directory chowned to uid 65534 (chowning the children instead proves
+  // nothing -- the per-entry checks catch those and the refusal is theirs):
+  //
+  //   real node_modules, root-only foreign uid       -> exit 14, "owned by uid 65534"
+  //   symlink to that SAME directory, same ownership -> exit 0, record emitted
+  //   symlink, target and children all uid 0         -> exit 0   (control)
+  //
+  // Same inode, same owner, different answer purely because lstat saw a link. The
+  // capability left open is the one this refusal exists to deny: whoever owns the
+  // traversed directory can replace top-level package entries after the final
+  // sweep, and no compared field records that uid.
   if (objRootStats.isDirectory()) {
     refuseUnreviewedInodeMetadata(strRoot, 'node_modules', objRootStats, 'directory');
+  } else if (objRootStats.isSymbolicLink()) {
+    // The stat -- not the lstat -- is the directory `walk` traverses, and it is
+    // already consulted a few lines below for the root mode, for exactly this
+    // reason (round 24). The metadata check was the one thing still reading the
+    // link instead of the target.
+    //
+    // The escape refusal is the second half, and it is the sibling finding: the
+    // quiescence sweep follows the link and watches the TARGET, but not the
+    // target's parent. Measured -- perturbing the target's parent mid-run exits
+    // 0 while perturbing the project directory (control) and the target itself
+    // both exit 10 -- so that parent can be renamed aside, repointed for npm ls
+    // and npm audit, and restored before the final sweep, with the link and the
+    // original target still comparing equal.
+    //
+    // Sweeping an arbitrary external ancestor chain is NOT the fix, and this file
+    // already says why one guard over, where the manifest rule chose to refuse:
+    // it "would mean walking an unbounded chain outside the checkout, where
+    // ctimes move for unrelated reasons", so refusing "keeps the input boundary a
+    // set this script can actually prove". A target inside the workflow directory
+    // has a chain that terminates in the swept set and IS provable; one outside
+    // does not. So the boundary decides, rather than the symlink.
+    const strResolvedRoot = realpathSync(strRoot);
+    if (strResolvedRoot !== strWorkflowDirectory
+      && !strResolvedRoot.startsWith(`${strWorkflowDirectory}/`)) {
+      process.stderr.write(
+        'supply-freeze: refusing a node_modules symlink that leaves the watched boundary.\n' +
+        `  node_modules       ${formatUntrustedText(strRoot)}\n` +
+        // The resolved target is attacker-supplyable, so it is formatted rather
+        // than interpolated raw -- the same rule the escaping-link refusal was
+        // given in round 39.
+        `  resolves outside   ${formatUntrustedText(strWorkflowDirectory)}\n` +
+        '  the sweep follows this link and watches its target, but nothing watches\n' +
+        '  the directories ABOVE that target. One of them can be renamed aside, a\n' +
+        '  different tree put in its place for npm ls and npm audit, and the original\n' +
+        '  restored before the final sweep -- the link and the target inode still\n' +
+        '  compare equal, while the recorded answers came from bytes never folded.\n' +
+        '  --any-toolchain does not waive this: it is a self-consistency check, not a\n' +
+        '  comparison against a reviewed constant.\n' +
+        '  point node_modules at a directory inside the workflow directory, or make\n' +
+        '  it a real directory.\n');
+      process.exit(7);
+    }
+    refuseUnreviewedInodeMetadata(
+      strResolvedRoot, 'node_modules (symlink target)', statSync(strRoot), 'directory');
   }
   // Round 24, reported and measured. The mode folded here came from lstat, which
   // for a symlinked root describes the LINK -- 0777 on Linux, always -- and never
@@ -2294,6 +2354,40 @@ function newestChangeTime(strRoot, arrExtraPaths) {
     }
   };
   considerThroughLinks(strRoot, 'node_modules');
+  // Round 75, the other half of the symlinked-root finding. considerThroughLinks
+  // watches the link and every hop's target; it does not watch the directories
+  // ABOVE the final target, and a rename of one of those is what swaps the tree
+  // without moving anything already swept. Measured before this was added:
+  // perturbing the target's parent mid-run exited 0, while the project directory
+  // (control) and the target itself both exited 10.
+  //
+  // Bounded by construction, which is the whole reason this is a sweep here and a
+  // refusal there. The escape check in foldInstalledTree refuses any target that
+  // resolves outside the workflow directory, so this chain always terminates at
+  // strWorkflowDirectory -- which, with its own ancestors, is already in the
+  // swept set. There is no unbounded external walk, and no ctime from outside the
+  // checkout can produce a false refusal.
+  //
+  // Labels carry the full path, not the basename: round 67 fixed exactly that
+  // collision, where two swept paths sharing a basename collapsed to one map key.
+  (() => {
+    let strResolvedRoot;
+    try {
+      strResolvedRoot = realpathSync(strRoot);
+    } catch {
+      // A root that does not resolve is refused elsewhere, at exit 7 and 10. This
+      // sweep adds nothing to that diagnosis, so it declines to compete with it.
+      return;
+    }
+    if (strResolvedRoot === strRoot) return;
+    let strAncestor = dirname(strResolvedRoot);
+    for (let intDepth = 0; intDepth < 40; intDepth += 1) {
+      if (strAncestor === strWorkflowDirectory
+        || !strAncestor.startsWith(`${strWorkflowDirectory}/`)) break;
+      consider(strAncestor, `node_modules target ancestor ${strAncestor}`);
+      strAncestor = dirname(strAncestor);
+    }
+  })();
   walk(strRoot, '');
   // Round 67, reported by Codex, and a defect in the round-66 ancestor sweep
   // added one commit earlier. The label was the path's BASENAME, so two swept
