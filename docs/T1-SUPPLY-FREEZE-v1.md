@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `2633494c260516e632f31f5ecf51692248b77090c67780a18e857a413cfd10b8` | script `script.sha256` |
+| Freeze script SHA-256 | `6a82492ca193497cd5ff404083a128a1c6f2b48797322f6e71ceaef212f16443` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -1248,10 +1248,24 @@ bytes and still folds; only names that lose information are refused. See the exi
 [Why a run was refused](#why-a-run-was-refused) and the corresponding mutation-table row, which
 describe the same refusal.
 
-A symlink target remains different in kind, being an arbitrary byte string npm writes rather than a
-validated name, which is why that one is folded byte-exact instead of being refused. The fold's
-injectivity claim can therefore be read without a decoding caveat attached: a tree whose names
-cannot be decoded unambiguously is not folded at all.
+A symlink target is different in kind from a name, being an arbitrary byte string npm writes rather
+than a validated one, and inside the *installed tree* it is still folded byte-exact rather than
+refused. Two rules therefore apply to targets, and reimplementers need both:
+
+* **Folding** a target under `node_modules` reads it as raw bytes and hashes those bytes. An
+  undecodable target does not stop the fold.
+* **Resolving** a target — the `node_modules` root symlink chain, and the package-link resolver
+  that decides containment — refuses an undecodable target with exit `7` (root chain) or records
+  it as an unresolved link, which a non-bypassed run reports as exit `11`.
+
+The asymmetry is deliberate. A fold only needs to distinguish two trees, which raw bytes do
+perfectly. A containment decision has to be stated in the same bytes the kernel resolves, and a
+target that decodes to U+FFFD cannot be distinguished from a sibling literally named U+FFFD --
+so the boundary claim would rest on a path the kernel never walks. This recorder refuses to make
+a claim it cannot state exactly.
+
+The fold's injectivity claim can therefore be read without a decoding caveat attached: a tree
+whose names cannot be decoded unambiguously is not folded at all.
 
 **Special files were a second unstated exception, and are no longer one.** Entries that are
 neither file, directory nor symlink used to fold to a bare tag and a path, so every such entry

@@ -1731,7 +1731,8 @@ function refuseEscapingTreeRoot(strRoot) {
           'supply-freeze: refusing to record digests for a node_modules link whose '
           + 'target is not valid UTF-8.\n'
           + `  hop                ${formatUntrustedText(strHop)}\n`
-          + `  target (hex)       ${bufTarget.toString('hex')}\n`
+          + `  target             ${bufTarget.length} bytes, sha256 `
+          + `${createHash('sha256').update(bufTarget).digest('hex').slice(0, 16)}\n`
           + '  the target cannot be distinguished from a sibling named U+FFFD, so\n'
           + '  containment cannot be decided on the bytes the kernel would use.\n');
         process.exit(7);
@@ -1746,29 +1747,40 @@ function refuseEscapingTreeRoot(strRoot) {
       // inside. Measured on the fixture: exit 0 accepted, where the same chain
       // without `..` refuses at exit 7. The guard I added to catch chains that
       // leave and return was itself bypassable by three characters.
-      // COMPONENT WALK, not lexical resolve. Codex's original wording offered
-      // "normalize OR component-walk each hop"; I took the weaker option, and the
-      // class stayed open. resolve() collapses `..` textually but knows nothing
-      // about symlinked COMPONENTS, so `node_modules -> in/mid` with
-      // `<workflow>/in` itself a symlink to /tmp/ext still tested as inside:
+      // AN ACTUAL COMPONENT WALK. Codex asked for this three times; I reached for a
+      // shortcut three times, and each shortcut was reproduced as a bypass:
       //
-      //   lexical    <workflow>/in/mid   -> looks INSIDE, check passes
-      //   realpath   /tmp/ext/mid        -> actually OUTSIDE
+      //   resolve()                   -> symlinked components invisible   (198eb02)
+      //   realpathSync(dirname(raw))  -> join() collapsed `..` LEXICALLY  (1a75c44)
       //
-      // Reproduced at exit 0 where the documented invariant is an unconditional
-      // exit 7. The parent directory is resolved through realpathSync so symlinked
-      // components are followed; the FINAL component is deliberately left
-      // unresolved, because the loop's next iteration is what follows it.
-      const strRaw = isAbsolute(strTarget)
-        ? strTarget : join(dirname(strHop), strTarget);
+      // The second is subtle and worth stating precisely, because Codex attributed it
+      // to realpathSync: path.join('<workflow>', 'in/../xcase') returns
+      // '<workflow>/xcase' BEFORE realpathSync is called, so realpath is handed a
+      // decoy path and never encounters `in` at all. Measured at exit 0 with an
+      // in-workflow decoy `xcase` and `in` pointing outside.
+      //
+      // strAt is ALWAYS a resolved real path, so `..` applies to the real position --
+      // which is exactly what the kernel does. The FINAL component is left
+      // unresolved; the loop's next iteration is what follows it.
+      const arrParts = strTarget.split('/').filter((strPart) => strPart.length > 0);
       let strNext;
       try {
-        strNext = join(realpathSync(dirname(strRaw)), basename(strRaw));
+        let strAt = isAbsolute(strTarget) ? '/' : realpathSync(dirname(strHop));
+        if (arrParts.length === 0) { strNext = strAt; }
+        for (let intPart = 0; intPart < arrParts.length; intPart += 1) {
+          const strPart = arrParts[intPart];
+          if (strPart === '.') { continue; }
+          if (strPart === '..') { strAt = dirname(strAt); continue; }
+          const strCand = join(strAt, strPart);
+          if (intPart === arrParts.length - 1) { strNext = strCand; break; }
+          strAt = realpathSync(strCand);
+        }
+        if (strNext === undefined) { strNext = strAt; }
       } catch (objError) {
         process.stderr.write(
           'supply-freeze: refusing to record digests for a node_modules link whose '
           + 'path cannot be resolved.\n'
-          + formatErrorLocation(objError, dirname(strRaw))
+          + formatErrorLocation(objError, strHop)
           + '  every component of a root link must resolve, or containment cannot be\n'
           + '  decided.\n');
         process.exit(7);
