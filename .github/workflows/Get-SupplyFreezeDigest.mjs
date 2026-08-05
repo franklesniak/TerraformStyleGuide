@@ -922,7 +922,7 @@ function canonicalize(objValue) {
 // and is fixed here too. Fixing only the reported instance would have left the
 // same wrong answer one branch away.
 function readViaVerifiedDescriptor(strPath, intMissingExit, fnOnMissing,
-    objRefusal = { exit: 15, what: 'manifest' }) {
+    objRefusal = { exit: 15, what: 'manifest', holdable: true }) {
   let intFd;
   try {
     intFd = openSync(strPath,
@@ -970,13 +970,40 @@ function readViaVerifiedDescriptor(strPath, intMissingExit, fnOnMissing,
         + '  this process and to npm.\n');
       process.exit(objRefusal.exit);
     }
+    if (objRefusal.holdable) {
+      // Codex P2 on 57ec78c, bound to the descriptor this time. nlink and uid are
+      // read from the OPEN fd whose bytes are about to be returned, not from a
+      // by-name lstat a swap can outrun. A second hard link, or another owner, is a
+      // write path the quiescence sweep cannot see -- it compares this inode, and a
+      // rewrite through the other path lands on this inode -- so npm could be fed
+      // different bytes between the snapshot and the final re-read while the two
+      // byte-equality reads still compare equal. intUid is computed here, not
+      // borrowed from a scope it does not belong to -- the borrowed reference in
+      // the first cut of this class died with ReferenceError on every run.
+      const intUid = typeof process.getuid === 'function' ? process.getuid() : null;
+      const strWhy = (objStats.nlink > 1)
+        ? `is hard-linked ${objStats.nlink} times, so a second path can rewrite these bytes`
+        : (intUid !== null && objStats.uid !== intUid)
+          ? `is owned by uid ${objStats.uid}, but this recorder runs as uid ${intUid}`
+          : null;
+      if (strWhy !== null) {
+        process.stderr.write(
+          `supply-freeze: refusing to record digests for a ${objRefusal.what} that `
+          + 'another path can rewrite.\n'
+          + `  ${strPath.split('/').pop().padEnd(18)} ${strWhy}\n`
+          + '  checked on the open descriptor whose bytes are returned. The compared\n'
+          + '  hashes must come from bytes only this run can reach; an alternate write\n'
+          + '  path lets npm read other bytes between the snapshot and the final read.\n');
+        process.exit(objRefusal.exit);
+      }
+    }
     return readFileSync(intFd);
   } finally {
     closeSync(intFd);
   }
 }
 
-function readOrRefuse(strPath, objRefusal = { exit: 15, what: 'manifest' }) {
+function readOrRefuse(strPath, objRefusal = { exit: 15, what: 'manifest', holdable: true }) {
   return readViaVerifiedDescriptor(strPath, 3, (objError) => {
     process.stderr.write(
       'supply-freeze: a recorded input could not be re-read; refusing to report.\n' +
@@ -1359,7 +1386,19 @@ function runNpm(arrNpmArguments, objEnv) {
     process.exit(2);
   }
   try {
-    return execFileSync(process.execPath, [strNpmCli, ...arrNpmArguments], {
+    // Codex P3 on 57ec78c. Every npm the script runs is pinned out of workspace
+    // mode. In this non-workspace checkout `npm config list`, `config get`, `ls`
+    // and `audit` all REFUSE with ENOWORKSPACES when the ambient environment or a
+    // user/global .npmrc sets workspaces=true, so a correct checkout could not
+    // produce a record. A command-line flag outranks every ambient source (env and
+    // project/user/global .npmrc), and `workspaces` is not a reviewed config key --
+    // it cannot shape a non-workspace install -- so forcing it false un-breaks the
+    // CLI without hiding drift. Measured: config list/get went from exit 1
+    // (ENOWORKSPACES) to 0 under ambient workspaces=true; --version, ls and audit
+    // accept the flag. configDrift compares only reviewed keys, so the false it now
+    // reports for `workspaces` in `config list --json` is never examined.
+    return execFileSync(process.execPath,
+      [strNpmCli, ...arrNpmArguments, '--workspaces=false'], {
       cwd: strWorkflowDirectory,
       env: npmChildEnv(objEnv),
       encoding: 'utf8',
@@ -3437,39 +3476,18 @@ for (const [strPath, strLabel] of [[strPackagePath, 'package.json'], [strLockPat
   // audit` open the same path and consume whatever is written next. Nothing in
   // the quiescence sweep can see it -- the sweep compares the FIFO's inode and
   // change time, which a writer feeding different bytes never touches.
-  // Codex P2 on 4c4529b. A regular manifest used to `continue` straight past every
-  // containment property, while node_modules entries are refused for exactly these
-  // two -- "hard-linked N times, so a second path can rewrite these bytes" and a uid
-  // that is not this recorder's. The manifests are the MORE load-bearing inputs:
-  // they are the compared hashes. They were held to the weaker rule, which is the
-  // same shape of gap the round-66 and round-74 fixes closed one property at a time.
-  //
-  // MEASURED, before and after, on this build: an extra hard link to package.json
-  // (nlink 1 -> 2) was accepted at exit 0, and writing through that second path
-  // changed the bytes the recorder compares. The final sweep cannot see it: it
-  // compares this inode's ctime, and a rewrite through the other name lands on the
-  // same inode with a ctime the sweep then reads as its own.
-  if (objLinkStats.isFile()) {
-    // Computed here, not borrowed: the node_modules fold's intOwnUid is scoped to
-    // that function. node --check passed on the borrowed reference and every run
-    // then died with ReferenceError on the COMMON path -- the uid ternary is
-    // evaluated whenever nlink is 1, which is every healthy manifest.
-    const intUid = typeof process.getuid === 'function' ? process.getuid() : null;
-    const strWhy = (objLinkStats.nlink > 1)
-      ? `hard-linked ${objLinkStats.nlink} times, so a second path can rewrite these bytes`
-      : (intUid !== null && objLinkStats.uid !== intUid)
-        ? `owned by uid ${objLinkStats.uid}, but this recorder runs as uid ${intUid}`
-        : null;
-    if (strWhy === null) continue;
-    process.stderr.write(
-      'supply-freeze: refusing a recorded manifest that another path can rewrite.\n'
-      + `  manifest           ${formatUntrustedText(strLabel)}\n`
-      + `  ${strWhy}\n`
-      + '  the compared hashes must come from bytes only this run can reach. A second\n'
-      + '  name for the same inode is a write path the quiescence sweep cannot see:\n'
-      + '  it compares this inode, and the rewrite lands on this inode.\n');
-    process.exit(15);
-  }
+  // Codex P2 on 57ec78c. The nlink/uid rewrite check that used to live HERE, on
+  // the preflight `lstat()` by name, is moved onto the OPEN descriptor in
+  // readViaVerifiedDescriptor. The reads that supply the compared bytes --
+  // snapshotOrRefuse() and the final readOrRefuse() -- open the manifest by name
+  // and only re-checked isFile() on the descriptor, so a manifest that was a plain
+  // nlink-1 file at this preflight could be swapped for reviewed bytes carrying a
+  // second hard link before the snapshot: write malicious bytes for `npm ls`/`npm
+  // audit`, restore the reviewed bytes before the final read, and the byte-equality
+  // re-read compares equal while npm answered from other bytes. A check on the
+  // descriptor whose bytes are returned has no such gap. This preflight now only
+  // classifies a manifest that is not a regular file at all.
+  if (objLinkStats.isFile()) continue;
   const strKind = objLinkStats.isSymbolicLink() ? 'a symlink'
     : objLinkStats.isDirectory() ? 'a directory'
       : objLinkStats.isFIFO() ? 'a FIFO'

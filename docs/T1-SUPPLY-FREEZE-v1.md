@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `7bc2c087edf4e8e1c0504cda30064ba8eac7d263c16e7d508c926845960092c3` | script `script.sha256` |
+| Freeze script SHA-256 | `e79bf0d57bb0cc8055f3e8a3e8ced2442feefd6847bdaa8088e13d5e366cbe3d` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -467,20 +467,25 @@ strReviewedLockBlob='PASTE the `package-lock.json` blob row here'
 # pre-create /tmp/node24.tar.xz as a symlink and `curl -o` will follow it and
 # truncate the target, or pre-create /tmp/node24 as a directory symlink and
 # `tar -C` will extract through it -- both before any digest is checked.
+# strNode is cleared FIRST, and everything from the blob preflight through setting
+# it is ONE && chain. A failed blob check or download therefore stops before the
+# archive is extracted and leaves strNode unset -- so the install-and-record block
+# below, which begins env ... "$strNode" ... npm ci, breaks loudly on an empty
+# command rather than running the wrong Node against a stale tree. Unchained, as an
+# earlier revision had it, a rejected preflight fell through into the extract, and
+# an interactive retry still carrying a valid strWork went on to install and record
+# a tree this checkout was never proven to match.
+#
+# sha256sum without -c only PRINTS; it cannot fail, so the archive is verified with
+# -c INSIDE the chain, before it is extracted -- see Trust boundary.
+unset strNode
 test "$(git rev-parse HEAD:.github/workflows/package.json)" = "$strReviewedPackageBlob" \
   && test "$(git rev-parse HEAD:.github/workflows/package-lock.json)" = "$strReviewedLockBlob" \
   && strWork="$(mktemp -d)" \
   && curl -fsSLo "$strWork/node24.tar.xz" \
-    https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz
-# sha256sum without -c only PRINTS; it cannot fail, so an unverified archive
-# would still be extracted by the next line and a tampered Node would then be
-# the runtime every later check runs under -- see Trust boundary.
-# strNode is cleared FIRST so a failure below cannot leave it pointing at a
-# node24/ directory some earlier run extracted -- an unset variable breaks the
-# next command loudly, a stale one runs the wrong Node silently.
-unset strNode
-echo 'd6c664df3f3f61458e8c277585571328522d705166723a7c7823a9253a4d15a0  '"$strWork/node24.tar.xz" \
-  | sha256sum -c - \
+    https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz \
+  && echo 'd6c664df3f3f61458e8c277585571328522d705166723a7c7823a9253a4d15a0  '"$strWork/node24.tar.xz" \
+    | sha256sum -c - \
   && mkdir "$strWork/node24" \
   && tar -xJf "$strWork/node24.tar.xz" -C "$strWork/node24" --strip-components=1 \
   && strNode="$strWork/node24/bin/node"   # absolute, and npm is the one beside it
