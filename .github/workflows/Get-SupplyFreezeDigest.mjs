@@ -3296,9 +3296,21 @@ const objBaselineChange = (() => {
   // external node_modules target is rejected rather than traversed on the way to
   // being rejected. lstat, not stat: a root that is not a symlink has nothing to
   // resolve, and asking stat would follow the very link this is guarding.
-  if (existsSync(strTreeRoot) && lstatSync(strTreeRoot).isSymbolicLink()) {
-    refuseEscapingTreeRoot(strTreeRoot);
-  }
+  // Round 80, reported by Codex against the guard added one commit earlier -- and
+  // it is round 79's finding A recreated by the fix for finding C. A raced
+  // node_modules (removed or swapped between the existsSync probe and this
+  // lstat) threw OUTSIDE scanOrRefuse, so the ordinary concurrent-mutation case
+  // became an exit-1 stack trace instead of the documented exit 10 or exit 7.
+  //
+  // Fixing an uncaught-throw instance and then writing a new uncaught throw two
+  // commits later is the class going unswept: round 77 swept for guards that
+  // silently narrow, never for throws outside the refusal wrapper. Both the
+  // existence probe and the type read now sit inside it.
+  scanOrRefuse(() => {
+    if (existsSync(strTreeRoot) && lstatSync(strTreeRoot).isSymbolicLink()) {
+      refuseEscapingTreeRoot(strTreeRoot);
+    }
+  }, 'the root type check before the baseline scan');
   return scanOrRefuse(
     () => newestChangeTime(strTreeRoot, [
     [strPackagePath, 'package.json'],
