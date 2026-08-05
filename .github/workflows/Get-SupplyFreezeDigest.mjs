@@ -2396,12 +2396,21 @@ function newestChangeTime(strRoot, arrExtraPaths) {
   // perturbing the target's parent mid-run exited 0, while the project directory
   // (control) and the target itself both exited 10.
   //
-  // Bounded by construction, which is the whole reason this is a sweep here and a
-  // refusal there. The escape check in foldInstalledTree refuses any target that
-  // resolves outside the workflow directory, so this chain always terminates at
-  // strWorkflowDirectory -- which, with its own ancestors, is already in the
-  // swept set. There is no unbounded external walk, and no ctime from outside the
-  // checkout can produce a false refusal.
+  // Bounded by construction ONCE foldInstalledTree runs -- but round 79 showed
+  // that is not the same as bounded here, and the paragraph this replaces claimed
+  // otherwise. It said "there is no unbounded external walk", reasoning from the
+  // escape check in foldInstalledTree. That check runs LATER than this baseline
+  // scan, so the baseline follows an external root and walks it first. Codex
+  // reported it and it reproduces:
+  //
+  //   node_modules -> quiet external dir -> exit 7  (boundary refusal wins)
+  //   node_modules -> /proc              -> exit 10, EACCES at node_modules/1/fdinfo
+  //
+  // So the documented exit 7 is not guaranteed; which refusal fires depends on
+  // whether the external tree happens to walk cleanly. The unbounded external walk
+  // the old comment denied is real, and the claim was load-bearing -- it was the
+  // stated reason this is a sweep rather than a refusal. See OPEN-C in the PR
+  // thread: the fix is to hoist the escape refusal ahead of this scan.
   //
   // Labels carry the full path, not the basename: round 67 fixed exactly that
   // collision, where two swept paths sharing a basename collapsed to one map key.
