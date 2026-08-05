@@ -1636,6 +1636,27 @@ function hashField(objHash, objField) {
 // This is the containment rule the tree already applies to symlinks that leave
 // it, one property over: an entry the recorder does not own, or that a second
 // path can write through, is not contained by this tree.
+
+// Round 74, reported by Codex against 4628 and its sibling reinstall snippets.
+// Appended to every "reinstall with npm ci" refusal below. The bare command
+// those print is correct in a clean environment but refuses under an ambient npm
+// workspace setting -- NPM_CONFIG_WORKSPACES, or a `workspace`/`workspaces` line
+// in a user/global .npmrc. Measured on npm 10.9.7 and reported on 11.16.0:
+// `NPM_CONFIG_WORKSPACES=true npm ci` exits 1 "No workspaces found", and no
+// single npm ci invocation is robust to every source -- `--workspaces=false`
+// then collides with any singular `workspace` selector ("Can not use
+// --no-workspaces and --workspace at the same time"), and dropping it re-exposes
+// the plural case. So the hint keeps the terse command for the clean-environment
+// common case and points at the recipe that clears the ambient settings, rather
+// than reprinting a longer command that still fails one case. One constant, so
+// the six sites cannot drift -- which is how they diverged from the doc's
+// reproduction block, itself carrying `env -u ... --workspaces=false`, to begin
+// with.
+const strWorkspaceReinstallNote =
+  '  (if npm refuses here with a workspace error, an ambient npm workspace\n' +
+  '  setting is in play; the reproduction steps in docs/T1-SUPPLY-FREEZE-v1.md\n' +
+  '  clear it.)\n';
+
 function refuseUnreviewedInodeMetadata(strPath, strChild, objStats, strKind) {
   const intSpecialBits = objStats.mode & 0o7000;
   const intOwnUid = typeof process.getuid === 'function' ? process.getuid() : null;
@@ -1657,7 +1678,8 @@ function refuseUnreviewedInodeMetadata(strPath, strChild, objStats, strKind) {
     '  sweep, a second hard link can be written through while this path looks\n' +
     '  untouched, and a setuid bit does not appear in a 0o777 histogram at all.\n' +
     '  reinstall the tree as the recording user with the documented command:\n' +
-    '    npm ci --ignore-scripts --no-audit --no-fund\n');
+    '    npm ci --ignore-scripts --no-audit --no-fund\n' +
+    strWorkspaceReinstallNote);
   process.exit(14);
 }
 
@@ -1714,7 +1736,8 @@ function readdirOrRefuseUndecodable(strDirectory, strRelative) {
         '  digest, which would report a tree it did not measure.\n' +
         '  npm ci from the reviewed lockfile does not produce such a name; reinstall\n' +
         '  with the documented command:\n' +
-        '    npm ci --ignore-scripts --no-audit --no-fund\n');
+        '    npm ci --ignore-scripts --no-audit --no-fund\n' +
+        strWorkspaceReinstallNote);
       process.exit(12);
     }
     // A faithful stand-in for the Dirent: the walkers use the name and the three
@@ -4403,7 +4426,8 @@ if (!boolAnyToolchain && intObservedUmask !== REVIEWED_UMASK) {
     '  execute bits and therefore the installed-tree digest.\n' +
     '  re-install and re-record under the reviewed umask:\n' +
     `    (umask 0${REVIEWED_UMASK.toString(8).padStart(3, '0')}; `
-      + 'npm ci --ignore-scripts --no-audit --no-fund)\n');
+      + 'npm ci --ignore-scripts --no-audit --no-fund)\n'
+      + strWorkspaceReinstallNote);
   process.exit(8);
 }
 
@@ -4546,7 +4570,8 @@ try {
       '  npm ls exits non-zero for extraneous, missing and invalid packages, and\n' +
       '  still prints a tree, so the report cannot be read as agreement.\n' +
       '  install first with the documented command, then record:\n' +
-      '    npm ci --ignore-scripts --no-audit --no-fund\n');
+      '    npm ci --ignore-scripts --no-audit --no-fund\n' +
+      strWorkspaceReinstallNote);
     process.exit(7);
   }
   // The exit code alone has now been wrong four times, in rounds 19, 20, 22 and
@@ -4625,7 +4650,8 @@ if (!boolRootWalkable) {
     `  node_modules       ${existsSync(strTreeRoot) ? 'present, but not a directory' : 'MISSING'}\n` +
     '  there is nothing to fold, so no digest exists to report -- with or without\n' +
     '  --any-toolchain. install first with the documented command:\n' +
-    '    npm ci --ignore-scripts --no-audit --no-fund\n');
+    '    npm ci --ignore-scripts --no-audit --no-fund\n' +
+    strWorkspaceReinstallNote);
   process.exit(7);
 }
 
@@ -4644,7 +4670,8 @@ if (!boolAnyToolchain && (!existsSync(strTreeRoot) || !objRecord.treeSatisfiesLo
     (strTreeCheckDetail ? `  because            ${formatUntrustedText(strTreeCheckDetail)}\n` : '') +
     '  install first with the documented command, then record:\n' +
     '    npm ci --ignore-scripts --no-audit --no-fund\n' +
-    '  note that package-lock-only=true makes npm ci a no-op that reports success.\n');
+    '  note that package-lock-only=true makes npm ci a no-op that reports success.\n' +
+    strWorkspaceReinstallNote);
   process.exit(7);
 }
 

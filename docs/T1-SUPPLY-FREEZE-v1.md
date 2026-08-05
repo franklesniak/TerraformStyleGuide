@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `eff5888c1852027d5f9366018cf043e9cfaeb2a34d7a372e7531f4f4011dfb9e` | script `script.sha256` |
+| Freeze script SHA-256 | `885a7c7220442878ebd4a90a32715435d4fe10fbe278908e107a56c6911843ff` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -539,10 +539,23 @@ singular `--workspace <name>` selector, read from the environment and from user 
 files. In this non-workspace repository either one makes `npm ci` and every recorder probe refuse:
 `workspaces=true` exits with `ENOWORKSPACES`, and a `workspace=<name>` selection names a workspace
 that does not exist. The commands above therefore pass `--workspaces=false` and clear any singular
-`NPM_CONFIG_WORKSPACE`, exactly as the recorder now does for its own npm calls — a plural setting
-is overridden by the flag, and a singular one is unset so the flag has nothing to collide with,
-because npm refuses `--no-workspaces` and `--workspace` together (`Can not use --no-workspaces and
---workspace at the same time`).
+`NPM_CONFIG_WORKSPACE` **from the environment**, exactly as the recorder now does for its own npm
+calls — a plural setting from any source is overridden by the flag, and a singular one *in the
+environment* is unset so the flag has nothing to collide with, because npm refuses `--no-workspaces`
+and `--workspace` together (`Can not use --no-workspaces and --workspace at the same time`).
+
+The one selector these commands do **not** clear is a singular `workspace=<name>` in a user or
+global `.npmrc`: `env -u` reaches the environment, not a file, so a file-sourced selector survives
+and `--workspaces=false` then collides with it. Measured, with `workspace=foo` in a user `.npmrc`,
+`npm ci --ignore-scripts --no-audit --no-fund --workspaces=false` exits `1` with `Can not use
+--no-workspaces and --workspace at the same time`; dropping the flag does not help either, exiting
+`1` with `No workspaces found: --workspace=foo`. Reproduce from the isolation recipe below instead —
+redirecting the user and global config files to empty ones clears the file-sourced selector
+(measured, the same install then exits `0`). The recorder's own npm calls carry the same
+`--workspaces=false`, so a file-sourced selector makes its configuration probe (`npm config list
+--json`) fail closed — measured, npm exits `1` with the same conflict, which the recorder reports as
+its exit-`6` configuration refusal — rather than recording a wrong tree; a committed
+`workspace=<name>` is exotic, and the recipe that clears it is one section down.
 
 **Ambient npm configuration changes what `npm ci` produces.** A `bin-links=false` or `omit=dev`
 setting in an environment variable or a user/global `.npmrc` yields a different tree from the
