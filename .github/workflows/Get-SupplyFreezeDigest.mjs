@@ -18,7 +18,8 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs';
+import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync,
+  readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs';
 import { delimiter, dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -891,16 +892,64 @@ function canonicalize(objValue) {
 // readFileSync, so a manifest deleted or made unreadable mid-run threw before
 // the comparison it feeds could issue the documented exit 3 -- exit 1 and a raw
 // node:fs trace instead. A read that cannot complete IS the input changing.
-function readOrRefuse(strPath) {
+// Round 80, reported by Codex as a P2 and validated. Reads a manifest through a
+// descriptor whose type was checked ON THAT DESCRIPTOR, never by re-resolving the
+// path.
+//
+// The preflight loop lstat()s the manifest by NAME, and snapshotOrRefuse() and
+// readOrRefuse() then each open() it by NAME again. Three independent
+// resolutions of an attacker-controlled name, so the thing whose type was
+// approved need not be the thing whose bytes are read. Swap a regular file for a
+// FIFO in between and the reviewed bytes are consumed from a stream while npm ls
+// and npm audit consume whatever is written next; the sweep compares the same
+// FIFO inode and ctime at the end and exit 15 never fires.
+//
+// Measured: one FIFO path, one inode, returned REVIEWED-BYTES on the first open
+// and ATTACKER-BYTES on the second. NOT measured: winning the race itself, which
+// is timing-dependent. The mechanism is demonstrated; the exploit is not.
+//
+// O_NONBLOCK is load-bearing rather than defensive tidiness. Opening a FIFO for
+// reading BLOCKS until a writer appears, so checking the type after a plain
+// open() would hang the run on exactly the input this guard exists to refuse --
+// a fix that deadlocks CI gets reverted, which is no fix.
+function readViaVerifiedDescriptor(strPath, intMissingExit, fnOnMissing) {
+  let intFd;
   try {
-    return readFileSync(strPath);
+    intFd = openSync(strPath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
   } catch (objError) {
+    fnOnMissing(objError);
+    process.exit(intMissingExit);
+  }
+  try {
+    const objStats = fstatSync(intFd);
+    if (!objStats.isFile()) {
+      const strKind = objStats.isSymbolicLink() ? 'a symlink'
+        : objStats.isDirectory() ? 'a directory'
+          : objStats.isFIFO() ? 'a FIFO'
+            : objStats.isSocket() ? 'a socket'
+              : objStats.isCharacterDevice() || objStats.isBlockDevice() ? 'a device node'
+                : 'not a regular file';
+      process.stderr.write(
+        'supply-freeze: refusing to record digests for a manifest that is not a regular file.\n'
+        + `  ${strPath.split('/').pop().padEnd(18)} is ${strKind}\n`
+        + '  checked on the open descriptor, not by name: a name can be swapped between\n'
+        + '  the check and the read, and only a regular file returns the same bytes to\n'
+        + '  this process and to npm.\n');
+      process.exit(15);
+    }
+    return readFileSync(intFd);
+  } finally {
+    closeSync(intFd);
+  }
+}
+
+function readOrRefuse(strPath) {
+  return readViaVerifiedDescriptor(strPath, 3, (objError) => {
     process.stderr.write(
       'supply-freeze: a recorded input could not be re-read; refusing to report.\n' +
       formatErrorLocation(objError, strPath) +
       '  it was readable when this run began, so it changed underneath the record.\n');
-    process.exit(3);
-  }
+  });
 }
 
 // Round 56, reported by Codex. Locates the npm INSTALLATION that backs the
@@ -3231,16 +3280,13 @@ const strTreeRoot = join(strWorkflowDirectory, 'node_modules');
 // exists to name exactly this, and contradicting the record's claim that every
 // refusal names its values on stderr.
 function snapshotOrRefuse(strPath) {
-  try {
-    return readFileSync(strPath);
-  } catch (objError) {
+  return readViaVerifiedDescriptor(strPath, 4, (objError) => {
     process.stderr.write(
       'supply-freeze: refusing to record digests for an unreviewed manifest.\n' +
       `  ${strPath.split('/').pop().padEnd(18)} could not be read\n` +
       formatErrorLocation(objError, strPath) +
       '  the reviewed manifest must be present and readable before anything is recorded.\n');
-    process.exit(4);
-  }
+  });
 }
 
 // Round 19, reported. This ceiling used to be captured after the snapshots and
