@@ -20,7 +20,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, openSync,
   readdirSync, readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs';
-import { delimiter, dirname, isAbsolute, join } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Round 52, reported by Codex. These three lived beside formatUntrustedText,
@@ -1676,8 +1676,17 @@ function refuseEscapingTreeRoot(strRoot) {
       try { objHopStats = lstatSync(strHop); } catch { break; }
       if (!objHopStats.isSymbolicLink()) break;
       const strTarget = readlinkSync(strHop);
-      const strNext = isAbsolute(strTarget)
-        ? strTarget : join(dirname(strHop), strTarget);
+      // resolve(), not a bare isAbsolute() branch. Reported by Codex as a P2
+      // against the per-hop rule added one commit earlier, and reproduced: the
+      // relative branch went through join(), which normalizes `..`, while the
+      // absolute branch passed the raw target straight to the containment test.
+      // So `${workflow}/../extmid/mid` tested as INSIDE the workflow directory on
+      // a plain string prefix, then resolved to an external hop that linked back
+      // inside. Measured on the fixture: exit 0 accepted, where the same chain
+      // without `..` refuses at exit 7. The guard I added to catch chains that
+      // leave and return was itself bypassable by three characters.
+      const strNext = resolve(isAbsolute(strTarget)
+        ? strTarget : join(dirname(strHop), strTarget));
       if (!isInsideOrEqual(strNext, strWorkflowDirectory)) {
         process.stderr.write(
           'supply-freeze: refusing a node_modules symlink chain that leaves the '
