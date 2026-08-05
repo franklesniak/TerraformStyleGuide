@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `0c130b54c2ceb067af5137a7f3d74a40c79958f21665e2c0fc31fade96c5f7f7` | script `script.sha256` |
+| Freeze script SHA-256 | `d724728fd0a001ca7e4da7b164a2b11f2cf2a4354b2e76506e9a8cf00a65231b` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -454,18 +454,24 @@ git checkout main            # or any revision containing Get-SupplyFreezeDigest
 # repeated here, for the reason given at the script digest below.
 strReviewedPackageBlob='PASTE the `package.json` blob row here'
 strReviewedLockBlob='PASTE the `package-lock.json` blob row here'
-test "$(git rev-parse HEAD:.github/workflows/package.json)" = "$strReviewedPackageBlob" \
-  && test "$(git rev-parse HEAD:.github/workflows/package-lock.json)" = "$strReviewedLockBlob"
-
+# The preflight is chained into the download and extraction that follow it, not
+# left as a statement beside them. Unchained it satisfied nothing the comment
+# above promises: both `test`s returned non-zero on a bad blob, printed nothing,
+# and the reader carried on to install and record against manifests this check
+# had already rejected. A guard whose failure does not stop what it guards is
+# decoration.
+#
 # Obtain the toolchain by digest rather than by name. `node` on PATH is chosen by
 # the environment, and the script cannot check what it is -- see Trust boundary.
 # mktemp -d, not a fixed /tmp path: on a shared host another user can
 # pre-create /tmp/node24.tar.xz as a symlink and `curl -o` will follow it and
 # truncate the target, or pre-create /tmp/node24 as a directory symlink and
 # `tar -C` will extract through it -- both before any digest is checked.
-strWork="$(mktemp -d)"
-curl -fsSLo "$strWork/node24.tar.xz" \
-  https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz
+test "$(git rev-parse HEAD:.github/workflows/package.json)" = "$strReviewedPackageBlob" \
+  && test "$(git rev-parse HEAD:.github/workflows/package-lock.json)" = "$strReviewedLockBlob" \
+  && strWork="$(mktemp -d)" \
+  && curl -fsSLo "$strWork/node24.tar.xz" \
+    https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz
 # sha256sum without -c only PRINTS; it cannot fail, so an unverified archive
 # would still be extracted by the next line and a tampered Node would then be
 # the runtime every later check runs under -- see Trust boundary.

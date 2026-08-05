@@ -2966,17 +2966,42 @@ for (const [strPath, strLabel] of [[strPackagePath, 'package.json'], [strLockPat
   } catch {
     continue;
   }
-  if (!objLinkStats.isSymbolicLink()) continue;
+  // Round 74, reported by Codex, and this is the round-66 manifest-symlink fix
+  // caught testing for the shape that was reported instead of the property that
+  // matters. It asked `isSymbolicLink()` and let every other non-regular kind
+  // through, while the comment above claimed the .npmrc rule was being applied
+  // here -- and that rule (exit 13) refuses symlink, directory, FIFO, socket AND
+  // device. The narrower test was the weaker of two checks written for one class.
+  //
+  // A FIFO is the case that makes this a correctness bug rather than a tidiness
+  // one, and it defeats a different guard than the symlink does. Its bytes are
+  // not a file at all but a stream, supplied per open by whoever holds the write
+  // end: snapshotOrRefuse() reads the reviewed bytes, then `npm ls` and `npm
+  // audit` open the same path and consume whatever is written next. Nothing in
+  // the quiescence sweep can see it -- the sweep compares the FIFO's inode and
+  // change time, which a writer feeding different bytes never touches.
+  if (objLinkStats.isFile()) continue;
+  const strKind = objLinkStats.isSymbolicLink() ? 'a symlink'
+    : objLinkStats.isDirectory() ? 'a directory'
+      : objLinkStats.isFIFO() ? 'a FIFO'
+        : objLinkStats.isSocket() ? 'a socket'
+          : objLinkStats.isBlockDevice() ? 'a block device'
+            : objLinkStats.isCharacterDevice() ? 'a character device'
+              : 'not a regular file';
   process.stderr.write(
-    'supply-freeze: refusing a recorded manifest that is a symlink.\n' +
+    'supply-freeze: refusing a recorded manifest that is not a regular file.\n' +
     `  manifest           ${formatUntrustedText(strLabel)}\n` +
-    '  this path is opened by name by npm ls and npm audit, and its target sits in\n' +
-    '  a directory this script does not watch. That directory can be renamed aside\n' +
-    '  and replaced while the run is in progress and restored before the final\n' +
-    '  sweep, so the link and its original target still compare equal while npm\n' +
-    '  answered from different bytes than the ones hashed here.\n' +
-    '  the same rule already applies to a project .npmrc; replace the link with a\n' +
-    '  regular file inside the workflow directory.\n');
+    `  what it is         ${strKind}\n` +
+    '  this path is opened by name by npm ls and npm audit, and only a regular file\n' +
+    '  can be held still across the run. A symlink is opened through a target whose\n' +
+    '  own parent can be renamed aside mid-run and restored before the final sweep,\n' +
+    '  so the link and its original target still compare equal while npm answered\n' +
+    '  from different bytes. A FIFO or socket is worse: it yields whatever its\n' +
+    '  writer supplies at each open, so the bytes hashed here and the bytes npm\n' +
+    '  read need never have been the same, and no inode or change-time comparison\n' +
+    '  can detect the difference.\n' +
+    '  the same rule already applies to a project .npmrc at exit 13; replace it with\n' +
+    '  a regular file inside the workflow directory.\n');
   process.exit(15);
 }
 const strTreeRoot = join(strWorkflowDirectory, 'node_modules');
