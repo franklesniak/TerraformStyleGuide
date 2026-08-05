@@ -1358,11 +1358,27 @@ function foldNpmInstallation(strRoot, strLauncherPath) {
 function npmChildEnv(objEnv) {
   const objBase = objEnv ?? process.env;
   const strNodeDirectory = dirname(process.execPath);
-  if (strNodeDirectory.includes(delimiter)) return { ...objBase };
-  return {
-    ...objBase,
-    PATH: `${strNodeDirectory}${delimiter}${objBase.PATH ?? ''}`,
-  };
+  // Round 73, reported by Codex against the round-72 --workspaces=false fix. npm
+  // also honours the SINGULAR `-w/--workspace <name>` selector, and --no-workspaces
+  // (which is what --workspaces=false is) beside any `workspace` setting is a hard
+  // npm error, "Can not use --no-workspaces and --workspace at the same time" -- so
+  // an environment carrying NPM_CONFIG_WORKSPACE=foo refused before configDrift
+  // could classify anything. Measured: the singular var alone already exits 1
+  // (ENOWORKSPACES) in this non-workspace repo, with the forced flag it exits 1 on
+  // the conflict, and env-setting workspaces=false collides the same way -- there
+  // is no value that both silences the plural and tolerates the singular. Both
+  // settings, both casings, are scrubbed from the child so the CLI --workspaces=false
+  // has nothing to collide with. A plural setting sourced from a user/global .npmrc
+  // is not in the environment and is still overridden by that flag; a singular one
+  // from a file is exotic and surfaces npm's own conflict rather than a silent tree.
+  const objScrubbed = {};
+  for (const [strKey, strValue] of Object.entries(objBase)) {
+    if (/^npm_config_workspaces?$/i.test(strKey)) continue;
+    objScrubbed[strKey] = strValue;
+  }
+  if (strNodeDirectory.includes(delimiter)) return objScrubbed;
+  objScrubbed.PATH = `${strNodeDirectory}${delimiter}${objBase.PATH ?? ''}`;
+  return objScrubbed;
 }
 
 function runNpm(arrNpmArguments, objEnv) {

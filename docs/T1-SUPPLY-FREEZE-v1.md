@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `e79bf0d57bb0cc8055f3e8a3e8ced2442feefd6847bdaa8088e13d5e366cbe3d` | script `script.sha256` |
+| Freeze script SHA-256 | `eff5888c1852027d5f9366018cf043e9cfaeb2a34d7a372e7531f4f4011dfb9e` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -509,7 +509,8 @@ strReviewedScript='PASTE the Freeze script SHA-256 row here'
 # tree on disk, and the recorder then folds it and prints a confident digest --
 # a failed reproduction reporting success over stale bytes. Every step from the
 # install to the record is now one `&&` sequence, so the first failure ends it.
-env -u NODE_OPTIONS "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund \
+env -u NODE_OPTIONS -u NPM_CONFIG_WORKSPACE -u npm_config_workspace \
+  "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund --workspaces=false \
   && echo "$strReviewedScript  Get-SupplyFreezeDigest.mjs" \
     | sha256sum -c - \
   && env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs --json
@@ -532,6 +533,16 @@ every compared field — `toolchain.npmTree`, which authenticates npm's bytes, a
 `manifestBlobs` object ids are all absent from it. A reader following this procedure without
 `--json` cannot supply the values [Consumers](#consumers) requires comparing, which is the shape
 the procedure exists to produce.
+
+**Ambient workspace mode must be disabled.** npm honours both `--workspaces` (plural) and the
+singular `--workspace <name>` selector, read from the environment and from user or global `.npmrc`
+files. In this non-workspace repository either one makes `npm ci` and every recorder probe refuse:
+`workspaces=true` exits with `ENOWORKSPACES`, and a `workspace=<name>` selection names a workspace
+that does not exist. The commands above therefore pass `--workspaces=false` and clear any singular
+`NPM_CONFIG_WORKSPACE`, exactly as the recorder now does for its own npm calls — a plural setting
+is overridden by the flag, and a singular one is unset so the flag has nothing to collide with,
+because npm refuses `--no-workspaces` and `--workspace` together (`Can not use --no-workspaces and
+--workspace at the same time`).
 
 **Ambient npm configuration changes what `npm ci` produces.** A `bin-links=false` or `omit=dev`
 setting in an environment variable or a user/global `.npmrc` yields a different tree from the
@@ -593,7 +604,8 @@ export NPM_CONFIG_GLOBALCONFIG="$strIsolationDirectory/npm-global-empty"
 # fails before replacing an old node_modules leaves the recorder to run anyway and
 # record the stale tree from a prior run -- the isolation workaround then appears to
 # succeed while describing a tree this recipe never installed.
-env -u NODE_OPTIONS "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund \
+env -u NODE_OPTIONS -u NPM_CONFIG_WORKSPACE -u npm_config_workspace \
+  "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund --workspaces=false \
   && env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs --json
 ```
 
@@ -645,8 +657,10 @@ that matters:
 
 ```bash
 env -u NODE_OPTIONS -u npm_config_bin_links -u NPM_CONFIG_BIN_LINKS \
-  "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund \
+  -u NPM_CONFIG_WORKSPACE -u npm_config_workspace \
+  "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund --workspaces=false \
   && env -u NODE_OPTIONS -u npm_config_bin_links -u NPM_CONFIG_BIN_LINKS \
+  -u NPM_CONFIG_WORKSPACE -u npm_config_workspace \
     "$strNode" Get-SupplyFreezeDigest.mjs --json
 ```
 
