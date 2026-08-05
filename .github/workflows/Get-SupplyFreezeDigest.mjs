@@ -3531,7 +3531,23 @@ if (!existsSync(strNpmBesideNode)) {
 const objNpmInstallation = npmInstallationRootOrRefuse();
 const strNpmTreeRoot = objNpmInstallation.root;
 const strNpmCli = objNpmInstallation.cli;
-const intNpmCliInode = lstatSync(strNpmCli, { bigint: true }).ino;
+// Found by the uncaught-throw class sweep, which round 79's finding A called for
+// and which nothing had actually run until now. Round 77 swept for guards that
+// silently NARROW their coverage; this is the other half -- calls that THROW
+// outside the refusal wrapper.
+//
+// npmInstallationRootOrRefuse() resolved strNpmCli on the line above, and the
+// line below is already a scanOrRefuse. Remove or swap npm-cli.js in that window
+// and this threw ENOENT uncaught: an exit-1 stack trace where the documented
+// answer is a refusal. The omission is glaring only because its neighbour is
+// wrapped, which is exactly why it survived seventy-odd rounds.
+//
+// The full sweep found three module-scope fs calls outside scanOrRefuse. The
+// other two -- realpathSync and readFileSync on the script's own path at startup
+// -- are NOT defects and are deliberately left alone: they run before anything is
+// recorded, so there is no record to protect and no refusal to make.
+const intNpmCliInode = scanOrRefuse(
+  () => lstatSync(strNpmCli, { bigint: true }), 'the npm CLI inode read').ino;
 const objNpmTree = scanOrRefuse(
   () => foldNpmInstallation(strNpmTreeRoot, strNpmBesideNode), 'the npm installation fold');
 // Round 58, reported by Codex: REVIEWED_NPM_TREE_FILES was printed in the
