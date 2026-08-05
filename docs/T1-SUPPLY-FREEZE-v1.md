@@ -631,8 +631,17 @@ that matters:
 
 ```bash
 env -u NODE_OPTIONS -u npm_config_bin_links -u NPM_CONFIG_BIN_LINKS \
-  "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund
+  "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund \
+  && env -u NODE_OPTIONS -u npm_config_bin_links -u NPM_CONFIG_BIN_LINKS \
+    "$strNode" Get-SupplyFreezeDigest.mjs --json
 ```
+
+**Both commands carry the scrub, and an earlier revision showed it on only the first.** The
+recorder reads the same `npm_config_*` environment the installer does — it is the input the exit-6
+configuration guard inspects — so a reader who scrubbed the variable for `npm ci` alone installed
+the correct tree and then watched the recorder refuse it at exit `6`, with the documented
+workaround unable to complete. The setting has to be absent from both processes or from neither;
+scrubbing it for one is the shape of a fix rather than a fix.
 
 **The unsets are added to the reviewed invocation, not substituted for it.** An earlier revision
 of this example wrote a bare `npm` and dropped the `NODE_OPTIONS` unset, so a reader copying it
