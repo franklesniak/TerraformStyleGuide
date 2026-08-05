@@ -283,6 +283,26 @@ const REVIEWED_NPM_CONFIG = Object.freeze({
   'package-lock': true,
   'package-lock-only': false,
   umask: 0,
+  // Reported by Codex. `dry-run` is install-shaping and was absent from this
+  // table, so configDrift -- which iterates only the reviewed keys -- could not
+  // see it. npm documents `--dry-run` for `npm ci` (default false); under it
+  // `npm ci` exits 0 and writes nothing, so the documented reinstall becomes a
+  // no-op and the recorder would fold whatever stale or tampered tree was
+  // already on disk instead of refusing the configuration. `npm ls` checks the
+  // dependency GRAPH, not the bytes, so a graph-valid stale tree still passes
+  // treeSatisfiesLockfile -- the same "an install-shaping setting the guard
+  // could see and didn't" defect as bin-links (r2), package-lock-only (r3) and
+  // umask (r9).
+  //
+  // Measured on npm 10.9.7 from an identical `file:` lockfile under process
+  // umask 0022: a clean `npm ci` installs node_modules/dep; the same command
+  // under NPM_CONFIG_DRY_RUN=true exits 0 and creates nothing, and against a
+  // tree whose dep/package.json was edited to 9.9.9 it exits 0 and leaves the
+  // edit in place where a clean `npm ci` wipes and restores it. `npm config
+  // list --json` reports dry-run true under the env var and false when clean, so
+  // this guard sees it exactly as it sees the three keys above; a clean run does
+  // not drift.
+  'dry-run': false,
   // Round 11, reported and confirmed. npm applies this option when it CREATES
   // lockfiles, and that includes the hidden `node_modules/.package-lock.json`
   // the fold hashes. npm documents it as producing lockfiles without registry
@@ -1131,7 +1151,20 @@ function foldNpmInstallation(strRoot, strLauncherPath) {
       // The launcher's target is part of its identity: repointing a symlink
       // moves its ctime, but recording where it points makes the refusal say so
       // and covers a filesystem that does not.
-      if (objStat.isSymbolicLink()) hashField(objChangeHash, readlinkSync(strPath));
+      //
+      // Reported by Copilot, and by Codex as the same defect one sibling over.
+      // The target is read as RAW BYTES, not decoded text. readlinkSync without
+      // an encoding decodes as UTF-8, and every byte sequence that is not valid
+      // UTF-8 decodes to U+FFFD -- so the walk below was given a buffer in 80/D
+      // for exactly this, and this considerRootOrLauncher read was missed. String
+      // encoding here collapses two distinct launcher/ancestor targets to the same
+      // change-hash input, so on a filesystem whose ctime does not move on a
+      // repoint the swap this field exists to catch would go unrecorded. Measured:
+      // raw targets 0x80 and 0x81 collide decoded (efbfbd == efbfbd) and stay
+      // distinct as buffers (80 != 81).
+      if (objStat.isSymbolicLink()) {
+        hashField(objChangeHash, readlinkSync(strPath, { encoding: 'buffer' }));
+      }
     } catch (objError) {
       process.stderr.write(
         'supply-freeze: refusing to verify an npm installation that cannot be read.\n' +
@@ -1216,7 +1249,14 @@ function foldNpmInstallation(strRoot, strLauncherPath) {
             'supply-freeze: refusing to verify an npm installation with a name that '
             + 'is not valid UTF-8.\n'
             + `  directory          ${formatUntrustedText(strDirectory)}\n`
-            + `  entry (hex)        ${bufName.toString('hex')}\n`
+            // Reported by Codex. The raw name is attacker-controlled and can carry
+            // a username, path or token before the invalid byte; hex is trivially
+            // reversible from a retained CI log, so it is withheld the same way the
+            // root-link target refusal below withholds its target -- a length and a
+            // digest prefix, which still tell two different bad names apart.
+            + `  entry              ${bufName.length} bytes, sha256 `
+            + `${createHash('sha256').update(bufName).digest('hex').slice(0, 16)} `
+            + '(not valid UTF-8)\n'
             + '  the name cannot be folded distinctly from a sibling named U+FFFD, so\n'
             + '  two different installations could record the same npmTree digest.\n');
           process.exit(2);
@@ -1728,9 +1768,15 @@ function readdirOrRefuseUndecodable(strDirectory, strRelative) {
       process.stderr.write(
         'supply-freeze: refusing to fold a tree with an undecodable entry name.\n' +
         `  directory          node_modules${strRelative ? `/${formatUntrustedText(strRelative)}` : ''}\n` +
-        `  entry              ${objEntry.name.toString('hex')} `
-          + `(${objEntry.name.length} byte${objEntry.name.length === 1 ? '' : 's'}, hex; `
-          + 'not valid UTF-8)\n' +
+        // Reported by Codex. The entry name is attacker-controlled and can carry a
+        // secret before the invalid byte (e.g. token_SUPPLYSECRET_<byte>); a full
+        // hex dump is trivially reversible from a retained CI log. Withheld the
+        // same way the root-link target refusal withholds its target -- a length
+        // and a digest prefix, which still distinguish two different bad names.
+        `  entry              ${objEntry.name.length} byte`
+          + `${objEntry.name.length === 1 ? '' : 's'}, sha256 `
+          + `${createHash('sha256').update(objEntry.name).digest('hex').slice(0, 16)} `
+          + '(not valid UTF-8)\n' +
         '  such a name decodes to U+FFFD, so a sibling named U+FFFD shares it and both\n' +
         '  resolve to one file -- the other file is never read and never reaches the\n' +
         '  digest, which would report a tree it did not measure.\n' +
