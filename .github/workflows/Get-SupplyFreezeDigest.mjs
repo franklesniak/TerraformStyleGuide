@@ -1730,7 +1730,10 @@ function refuseEscapingTreeRoot(strRoot) {
         process.stderr.write(
           'supply-freeze: refusing to record digests for a node_modules link whose '
           + 'target is not valid UTF-8.\n'
-          + `  hop                ${formatUntrustedText(strHop)}\n`
+          + `  hop                ${intHop + 1} (path withheld: on hops after the\n`
+          + '                     first it is built from a target the tree author\n'
+          + '                     chose, so printing it leaks the same bytes the\n'
+          + '                     target redaction below withholds)\n'
           + `  target             ${bufTarget.length} bytes, sha256 `
           + `${createHash('sha256').update(bufTarget).digest('hex').slice(0, 16)}\n`
           + '  the target cannot be distinguished from a sibling named U+FFFD, so\n'
@@ -1765,15 +1768,47 @@ function refuseEscapingTreeRoot(strRoot) {
       const arrParts = strTarget.split('/').filter((strPart) => strPart.length > 0);
       let strNext;
       try {
+        // EVERY intermediate position is checked, not just the endpoint. Codex P2 on
+        // 4c4529b -- the fourth defect in this one class, and the third in a fix of
+        // mine. The walk was correct about WHERE the chain ends and blind to where it
+        // GOES: `node_modules -> ../../esc/back/nm`, with the external `esc/back`
+        // symlinked back under the workflow, resolved to an in-boundary endpoint while
+        // traversing an unswept external directory. Measured at exit 0.
+        //
+        // A boundary that is only tested at the destination is not a boundary. `..`
+        // moves and resolved intermediates are each tested as they happen, so a chain
+        // that leaves is refused at the step that leaves it.
         let strAt = isAbsolute(strTarget) ? '/' : realpathSync(dirname(strHop));
+        // Inside the boundary OR an ancestor of it. "Always inside" is WRONG and was
+        // measured wrong: an absolute target starts the walk at `/`, so every ancestor
+        // (`/`, `/tmp`, ...) tripped the check and four in-boundary controls that must
+        // return 0 returned 7. Any absolute path must traverse its own ancestors; what
+        // must never happen is stepping SIDEWAYS out of the tree -- to a directory that
+        // is neither the workflow, nor within it, nor on the path to it. Ancestors are
+        // already swept by the ancestor sweep; `esc` in the repro is not.
+        const funcAncestor = (strWhere) => strWorkflowDirectory === strWhere
+          || strWorkflowDirectory.startsWith(`${strWhere === '/' ? '' : strWhere}/`);
+        const funcStep = (strWhere) => {
+          if (!isInsideOrEqual(strWhere, strWorkflowDirectory) && !funcAncestor(strWhere)) {
+            process.stderr.write(
+              'supply-freeze: refusing to record digests for a node_modules link that '
+              + 'leaves the watched boundary.\n'
+              + `  hop                ${intHop + 1}\n`
+              + '  an intermediate component of the chain resolves outside the workflow\n'
+              + '  directory. The endpoint may return inside, but the directories the\n'
+              + '  chain passes through are not swept and can be swapped while npm runs.\n');
+            process.exit(7);
+          }
+        };
         if (arrParts.length === 0) { strNext = strAt; }
         for (let intPart = 0; intPart < arrParts.length; intPart += 1) {
           const strPart = arrParts[intPart];
           if (strPart === '.') { continue; }
-          if (strPart === '..') { strAt = dirname(strAt); continue; }
+          if (strPart === '..') { strAt = dirname(strAt); funcStep(strAt); continue; }
           const strCand = join(strAt, strPart);
           if (intPart === arrParts.length - 1) { strNext = strCand; break; }
           strAt = realpathSync(strCand);
+          funcStep(strAt);
         }
         if (strNext === undefined) { strNext = strAt; }
       } catch (objError) {
