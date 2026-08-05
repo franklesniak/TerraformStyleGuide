@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `2358b7fd4de1159c498865d75d4241a80411cf56839c0085aa957614b85b2ed3` | script `script.sha256` |
+| Freeze script SHA-256 | `79945453cb362647379f82177ced23e4a17a3f59e66ce0ddc5897d586a699cfd` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -475,11 +475,15 @@ test "$(git rev-parse HEAD:.github/workflows/package.json)" = "$strReviewedPacka
 # sha256sum without -c only PRINTS; it cannot fail, so an unverified archive
 # would still be extracted by the next line and a tampered Node would then be
 # the runtime every later check runs under -- see Trust boundary.
+# strNode is cleared FIRST so a failure below cannot leave it pointing at a
+# node24/ directory some earlier run extracted -- an unset variable breaks the
+# next command loudly, a stale one runs the wrong Node silently.
+unset strNode
 echo 'd6c664df3f3f61458e8c277585571328522d705166723a7c7823a9253a4d15a0  '"$strWork/node24.tar.xz" \
   | sha256sum -c - \
   && mkdir "$strWork/node24" \
-  && tar -xJf "$strWork/node24.tar.xz" -C "$strWork/node24" --strip-components=1
-strNode="$strWork/node24/bin/node"   # absolute, and npm is the one beside it
+  && tar -xJf "$strWork/node24.tar.xz" -C "$strWork/node24" --strip-components=1 \
+  && strNode="$strWork/node24/bin/node"   # absolute, and npm is the one beside it
 
 cd .github/workflows
 umask 0022                   # the recorded tree was installed under this

@@ -5,7 +5,7 @@ argument-hint: <pull-request-url>
 
 # PR review loop
 
-Target pull request: **$1**
+Target pull request: **$ARGUMENTS**
 
 If no pull request URL was supplied above, ask which one to work before doing anything else.
 

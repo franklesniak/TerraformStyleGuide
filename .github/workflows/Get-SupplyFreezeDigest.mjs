@@ -1170,8 +1170,23 @@ function foldNpmInstallation(strRoot, strLauncherPath) {
           hashField(objHash, strKey);
           hashField(objHash, sha256(readFileSync(strPath)));
         } else {
-          hashField(objHash, '?');
+          // Round 80, reported by Codex as a P3. This branch folded a bare '?'
+          // and the path, so a FIFO and a character device at the same path
+          // produced the SAME toolchain.npmTree value while the record claims to
+          // describe the npm installation that answered.
+          //
+          // This is round 9's finding C3 -- "special-file types collide in the ?
+          // branch" -- fixed in the installed-tree fold and never applied here.
+          // The corrected version sat thirty lines away for seventy rounds. Same
+          // tags, same rdev, so the two folds now agree.
+          const strSpecialTag = objStat.isFIFO() ? 'P'
+            : objStat.isSocket() ? 'S'
+              : objStat.isCharacterDevice() ? 'C'
+                : objStat.isBlockDevice() ? 'B'
+                  : '?';
+          objHash.update(strSpecialTag, 'utf8');
           hashField(objHash, strKey);
+          hashField(objHash, String(objStat.rdev));
         }
         // Round 57, and this half exists because the reply that shipped the
         // content fold argued its way out of it and was wrong.
