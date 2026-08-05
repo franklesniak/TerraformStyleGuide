@@ -112,6 +112,26 @@ measurement contradicts.
 Never write an identifier — a commit SHA, comment ID, issue number, digest, or URL — that you
 have not verified. If you need one and do not have it, look it up.
 
+## Code-reviewer comments
+
+A code-reviewer comment — from Codex, Copilot, or a human — is a *finding*: run the six-step
+protocol above on it. Two steps are specific to a review comment and are **not optional**,
+whichever entry point you arrived through (`/review-loop`, a goal, or an ad-hoc request):
+
+* **Reply on the comment's own thread** with the full analysis — the validation and its control,
+  the options, the rubric, the scoring table, the selected option, and the measured evidence. An
+  oversized tool result can report an error for a reply that in fact posted; check before
+  re-posting rather than posting twice.
+* **Resolve (close) the thread** once the reply is posted and any fix is pushed. A comment you
+  have addressed but left unresolved reads as open work. If you leave one open deliberately, say
+  precisely why and name who was asked to decide — an unfinished analysis is not "awaiting a
+  decision".
+
+Do this even when the comment's line is marked **outdated**: verify the issue against the current
+code before concluding it is resolved. An outdated anchor is a moved line, not a fixed defect — a
+later commit may have shifted the surrounding code without addressing the finding.
+
 ## PR review loops
 
-See `.claude/commands/review-loop.md`, or invoke it as `/review-loop <pull-request-url>`.
+`/review-loop <pull-request-url>` wraps the above in a full per-round loop — gates, commit, CI, a
+round summary, and re-requesting both reviewers. See `.claude/commands/review-loop.md`.
