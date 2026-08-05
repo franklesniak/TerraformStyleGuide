@@ -1042,8 +1042,29 @@ function foldNpmInstallation(strRoot, strLauncherPath) {
   const arrSeen = [];
   const foldAncestors = (strLeaf) => {
     let strCurrent = dirname(strLeaf);
-    for (let intHop = 0; intHop < 64; intHop += 1) {
-      if (!strCurrent.startsWith(strDistributionRoot)) return;
+    // Round 77, found by sweeping the CLASS of round 76's defect rather than
+    // stopping at the instance. Two siblings of it lived here.
+    //
+    // The hop guard used to be `intHop < 64`, which on exhaustion fell out of
+    // the loop and returned normally. Same shape as round 76: the walk runs
+    // UPWARD, so the ancestors an exhausted cap drops are the ones NEAREST the
+    // distribution root -- the outermost, most security-relevant end -- and it
+    // dropped them without a word. It now throws, like considerThroughLinks and
+    // like the node_modules ancestor walk.
+    //
+    // The boundary test used to be startsWith(strDistributionRoot) with no
+    // separator, so `/usr/localX` tested as inside `/usr/local`. That is
+    // over-inclusive rather than a hole -- it folds an unrelated sibling
+    // directory into the toolchain digest and shows up as unexplained digest
+    // churn -- but the file already had this right one function away, where the
+    // node_modules boundary check spells it `!== root && !startsWith(root + '/')`.
+    // Two boundary tests, same file, one correct. That divergence IS the defect.
+    for (let intHop = 0; ; intHop += 1) {
+      if (strCurrent !== strDistributionRoot
+        && !strCurrent.startsWith(`${strDistributionRoot}/`)) return;
+      if (intHop >= 64) {
+        throw new Error('toolchain fold: ancestor chain exceeds 64 levels');
+      }
       if (!arrSeen.includes(strCurrent)) {
         arrSeen.push(strCurrent);
         considerRootOrLauncher(strCurrent, `(ancestor) ${strCurrent.slice(strDistributionRoot.length) || '/'}`);
