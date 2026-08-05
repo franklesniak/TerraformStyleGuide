@@ -3437,7 +3437,39 @@ for (const [strPath, strLabel] of [[strPackagePath, 'package.json'], [strLockPat
   // audit` open the same path and consume whatever is written next. Nothing in
   // the quiescence sweep can see it -- the sweep compares the FIFO's inode and
   // change time, which a writer feeding different bytes never touches.
-  if (objLinkStats.isFile()) continue;
+  // Codex P2 on 4c4529b. A regular manifest used to `continue` straight past every
+  // containment property, while node_modules entries are refused for exactly these
+  // two -- "hard-linked N times, so a second path can rewrite these bytes" and a uid
+  // that is not this recorder's. The manifests are the MORE load-bearing inputs:
+  // they are the compared hashes. They were held to the weaker rule, which is the
+  // same shape of gap the round-66 and round-74 fixes closed one property at a time.
+  //
+  // MEASURED, before and after, on this build: an extra hard link to package.json
+  // (nlink 1 -> 2) was accepted at exit 0, and writing through that second path
+  // changed the bytes the recorder compares. The final sweep cannot see it: it
+  // compares this inode's ctime, and a rewrite through the other name lands on the
+  // same inode with a ctime the sweep then reads as its own.
+  if (objLinkStats.isFile()) {
+    // Computed here, not borrowed: the node_modules fold's intOwnUid is scoped to
+    // that function. node --check passed on the borrowed reference and every run
+    // then died with ReferenceError on the COMMON path -- the uid ternary is
+    // evaluated whenever nlink is 1, which is every healthy manifest.
+    const intUid = typeof process.getuid === 'function' ? process.getuid() : null;
+    const strWhy = (objLinkStats.nlink > 1)
+      ? `hard-linked ${objLinkStats.nlink} times, so a second path can rewrite these bytes`
+      : (intUid !== null && objLinkStats.uid !== intUid)
+        ? `owned by uid ${objLinkStats.uid}, but this recorder runs as uid ${intUid}`
+        : null;
+    if (strWhy === null) continue;
+    process.stderr.write(
+      'supply-freeze: refusing a recorded manifest that another path can rewrite.\n'
+      + `  manifest           ${formatUntrustedText(strLabel)}\n`
+      + `  ${strWhy}\n`
+      + '  the compared hashes must come from bytes only this run can reach. A second\n'
+      + '  name for the same inode is a write path the quiescence sweep cannot see:\n'
+      + '  it compares this inode, and the rewrite lands on this inode.\n');
+    process.exit(15);
+  }
   const strKind = objLinkStats.isSymbolicLink() ? 'a symlink'
     : objLinkStats.isDirectory() ? 'a directory'
       : objLinkStats.isFIFO() ? 'a FIFO'

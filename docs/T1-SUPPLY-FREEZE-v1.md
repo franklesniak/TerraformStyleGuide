@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `8ae6aa24f04a9dc02fc9fb8cfa0827ecbcb5b870fb02816ef93a3d03f0dcec90` | script `script.sha256` |
+| Freeze script SHA-256 | `7bc2c087edf4e8e1c0504cda30064ba8eac7d263c16e7d508c926845960092c3` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -963,18 +963,24 @@ The size check is the half that generalizes. It refuses when the normalized map 
 than the report had records, whatever the cause, so a future edit that drops a package fails closed
 instead of silently shortening the set the digest is taken over.
 
-**The quiescence sweep follows a manifest's whole symlink chain, but not symlinked directory
-components.** Where a manifest resolves through several links — `package.json` → `mid` → `real` —
-every hop is stat'd individually, because collapsing the chain with `realpathSync` left the middle
-of it unwatched: measured, repointing `mid` alone changed the bytes read through `package.json`
-while the outer link's `lstat` ctime and the original target's `stat` ctime both stayed put, so the
-swap moved no value the sweep collected. Each hop now appears in a refusal by name, as
-`package.json (link hop 1)`.
+**A symlinked manifest is refused outright, so no chain is swept.** This section previously
+described the sweep following a manifest's whole symlink chain, hop by hop, and named the refusal
+entry `package.json (link hop 1)`. That was accurate when written and is no longer reachable: the
+manifest preflight now refuses a `package.json` or `package-lock.json` that is a symlink — or a
+directory, FIFO, socket, or device — with exit `15`, before any snapshot is taken. A chain cannot
+be swept because a chain is never accepted, and no `(link hop 1)` entry can appear in a refusal.
 
-What is still outside it is a symlinked *directory* component of the path. Closing that would mean
-stat'ing every parent directory up to `/`, whose change times move for reasons that have nothing to
-do with this record — a check that refuses correct runs is not a stricter check, so the boundary is
-drawn at the leaf's own chain and stated here instead.
+The reasoning behind the refusal is the one that made the sweep insufficient. A link is opened
+through a target whose own parent can be swapped mid-run, and sweeping the target's ancestors would
+mean walking an unbounded chain outside the checkout, where change times move for reasons unrelated
+to this record. Refusing keeps the input boundary a set this script can prove.
+
+**A regular manifest that another path can rewrite is refused too.** Being a regular file is not
+sufficient: a manifest hard-linked more than once, or owned by a uid other than the one running the
+recorder, is refused with exit `15`. A second name for the same inode is a write path the sweep
+cannot see — the sweep compares this inode's change time, and a rewrite through the other name
+lands on this inode. `node_modules` entries were already held to both properties; the manifests are
+the compared hashes and are now held to them as well.
 
 **The permission fold measures POSIX mode bits, so it sees a POSIX ACL only where the ACL moves
 those bits.** An earlier revision of this section said a tree can be made unloadable by
