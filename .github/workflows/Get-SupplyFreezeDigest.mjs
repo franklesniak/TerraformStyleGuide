@@ -1164,7 +1164,26 @@ function foldNpmInstallation(strRoot, strLauncherPath) {
   const walk = (strDirectory, strRelative) => {
     let arrNames;
     try {
-      arrNames = readdirSync(strDirectory).sort();
+      // Round 80/E, Codex. readdirSync's default decoding turns any name that is
+      // not valid UTF-8 into U+FFFD, so with a sibling literally named U+FFFD two
+      // distinct raw-byte entries both fold by reading the same decoy path twice.
+      // Names are read as buffers and required to round-trip; anything that does
+      // not is refused rather than folded, which is what the installed-tree fold
+      // already does.
+      const arrRaw = readdirSync(strDirectory, { encoding: 'buffer' });
+      for (const bufName of arrRaw) {
+        if (!Buffer.from(bufName.toString('utf8'), 'utf8').equals(bufName)) {
+          process.stderr.write(
+            'supply-freeze: refusing to verify an npm installation with a name that '
+            + 'is not valid UTF-8.\n'
+            + `  directory          ${formatUntrustedText(strDirectory)}\n`
+            + `  entry (hex)        ${bufName.toString('hex')}\n`
+            + '  the name cannot be folded distinctly from a sibling named U+FFFD, so\n'
+            + '  two different installations could record the same npmTree digest.\n');
+          process.exit(2);
+        }
+      }
+      arrNames = arrRaw.map((bufName) => bufName.toString('utf8')).sort();
     } catch (objError) {
       process.stderr.write(
         'supply-freeze: refusing to verify an npm installation that cannot be read.\n' +
@@ -1184,7 +1203,12 @@ function foldNpmInstallation(strRoot, strLauncherPath) {
           intSymlinks += 1;
           hashField(objHash, 'l');
           hashField(objHash, strKey);
-          hashField(objHash, readlinkSync(strPath));
+          // Round 80/D, Codex. The installed-tree fold reads link targets as
+          // buffers; this sibling decoded them. Measured: targets 0x80 and 0x81
+          // both decode to U+FFFD, so two npm installations produced the same
+          // toolchain.npmTree while the record claims to identify the one that
+          // answered.
+          hashField(objHash, readlinkSync(strPath, { encoding: 'buffer' }));
         } else if (objStat.isFile()) {
           intFiles += 1;
           hashField(objHash, 'f');
@@ -3576,8 +3600,25 @@ const strNpmCli = objNpmInstallation.cli;
 // other two -- realpathSync and readFileSync on the script's own path at startup
 // -- are NOT defects and are deliberately left alone: they run before anything is
 // recorded, so there is no record to protect and no refusal to make.
-const intNpmCliInode = scanOrRefuse(
-  () => lstatSync(strNpmCli, { bigint: true }), 'the npm CLI inode read').ino;
+// Round 80/C, Codex, against the wrap added one commit earlier. Routing this
+// through scanOrRefuse fixed the uncaught throw but reported exit 10 -- "the
+// recorded inputs changed" -- for what is actually the npm command line failing
+// to stay readable before its authenticated inode baseline exists. The table
+// classifies an unreadable or unauthenticated npm installation as exit 2, so the
+// generic tree-quiescence diagnostic sent operators hunting a repository mutation
+// instead of a toolchain swap. Right guard, wrong answer.
+let intNpmCliInode;
+try {
+  intNpmCliInode = lstatSync(strNpmCli, { bigint: true }).ino;
+} catch (objError) {
+  process.stderr.write(
+    'supply-freeze: refusing to verify an npm installation that cannot be read.\n'
+    + `  npm command line   ${formatUntrustedText(strNpmCli)}\n`
+    + formatErrorLocation(objError, strNpmCli)
+    + '  it was located and authenticated moments ago, so the toolchain changed\n'
+    + '  underneath this run.\n');
+  process.exit(2);
+}
 const objNpmTree = scanOrRefuse(
   () => foldNpmInstallation(strNpmTreeRoot, strNpmBesideNode), 'the npm installation fold');
 // Round 58, reported by Codex: REVIEWED_NPM_TREE_FILES was printed in the

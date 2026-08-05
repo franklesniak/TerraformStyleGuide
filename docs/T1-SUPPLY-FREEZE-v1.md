@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `1260b1acd7efec4ac71f39e7fea45d74fd641e372ba93a47cb7fdf8c4f983e58` | script `script.sha256` |
+| Freeze script SHA-256 | `488fdeec42bd76d5de5c7c8bced0a19a81bec99818f651f5c94deec1f1629088` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -583,8 +583,13 @@ strIsolationDirectory="$(mktemp -d)"
 unset npm_config_userconfig npm_config_globalconfig
 export NPM_CONFIG_USERCONFIG="$strIsolationDirectory/npm-user-empty"
 export NPM_CONFIG_GLOBALCONFIG="$strIsolationDirectory/npm-global-empty"
-env -u NODE_OPTIONS "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund
-env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs --json
+# `&&`, for the same reason the main reproduction block gives: npm ci is the FIRST
+# LINK of the chain, not a separate statement before it. Unchained, an install that
+# fails before replacing an old node_modules leaves the recorder to run anyway and
+# record the stale tree from a prior run -- the isolation workaround then appears to
+# succeed while describing a tree this recipe never installed.
+env -u NODE_OPTIONS "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund \
+  && env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs --json
 ```
 
 **Both casings must be handled, and setting only the upper one is not isolation.** npm's
