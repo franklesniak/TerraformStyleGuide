@@ -942,7 +942,7 @@ function npmInstallationRootOrRefuse() {
   // The root must therefore be inside the distribution before containment means
   // anything, because every other check in this chain is relative to it.
   const strDistribution = dirname(dirname(realpathSync(process.execPath)));
-  if (strRealRoot !== strDistribution && !strRealRoot.startsWith(`${strDistribution}/`)) {
+  if (!isInsideOrEqual(strRealRoot, strDistribution)) {
     process.stderr.write(
       'supply-freeze: refusing an npm installation that resolves outside this Node distribution.\n' +
       `  node               ${formatUntrustedText(process.execPath)}\n` +
@@ -994,6 +994,21 @@ function npmInstallationRootOrRefuse() {
 // Inode numbers accompany every change record for the same reason: ctime catches
 // a write, ino catches a swap, and a rename-in/rename-out can move one without
 // the other on some filesystems.
+// Round 79, reported by Codex as a P3 against the check below, and the same
+// defect at the ancestor walk one function down -- so it is fixed once, here,
+// and used at both.
+//
+// Round 77 replaced a separator-less startsWith with `root + '/'`, which is
+// correct for every root EXCEPT the filesystem root: for `/` it builds the
+// prefix `//`, no absolute path starts with that, and a Node distribution laid
+// out at the root (`/bin/node` with npm under `/lib/node_modules/npm`) refuses
+// every descendant as outside itself. That check runs before the reviewed-version
+// comparison and `--any-toolchain` does not reach it, so the false refusal is
+// unconditional. Fixing a boundary bug by introducing a different boundary bug is
+// exactly the churn this helper stops -- there is now ONE containment predicate.
+const isInsideOrEqual = (strChild, strParent) => strChild === strParent
+  || strChild.startsWith(strParent === '/' ? '/' : `${strParent}/`);
+
 function foldNpmInstallation(strRoot, strLauncherPath) {
   const objHash = createHash('sha256');
   const objChangeHash = createHash('sha256');
@@ -1060,8 +1075,7 @@ function foldNpmInstallation(strRoot, strLauncherPath) {
     // node_modules boundary check spells it `!== root && !startsWith(root + '/')`.
     // Two boundary tests, same file, one correct. That divergence IS the defect.
     for (let intHop = 0; ; intHop += 1) {
-      if (strCurrent !== strDistributionRoot
-        && !strCurrent.startsWith(`${strDistributionRoot}/`)) return;
+      if (!isInsideOrEqual(strCurrent, strDistributionRoot)) return;
       if (intHop >= 64) {
         throw new Error('toolchain fold: ancestor chain exceeds 64 levels');
       }
@@ -3365,7 +3379,8 @@ const objNpmInstallation = npmInstallationRootOrRefuse();
 const strNpmTreeRoot = objNpmInstallation.root;
 const strNpmCli = objNpmInstallation.cli;
 const intNpmCliInode = lstatSync(strNpmCli, { bigint: true }).ino;
-const objNpmTree = foldNpmInstallation(strNpmTreeRoot, strNpmBesideNode);
+const objNpmTree = scanOrRefuse(
+  () => foldNpmInstallation(strNpmTreeRoot, strNpmBesideNode), 'the npm installation fold');
 // Round 58, reported by Codex: REVIEWED_NPM_TREE_FILES was printed in the
 // refusal and never compared, so it documented a number rather than asserting
 // one. It is an independent backstop now -- the digest is the primary check and
@@ -4804,7 +4819,8 @@ if (arrFoldDrift.length > 0) {
 // --any-toolchain waives comparisons against REVIEWED_* constants, and nothing
 // else. Self-consistency checks run in every mode.
 {
-  const objNpmTreeAfter = foldNpmInstallation(strNpmTreeRoot, strNpmBesideNode);
+  const objNpmTreeAfter = scanOrRefuse(
+    () => foldNpmInstallation(strNpmTreeRoot, strNpmBesideNode), 'the second npm installation fold');
   if (objNpmTreeAfter.sha256 !== objNpmTree.sha256
     || objNpmTreeAfter.changeSha256 !== objNpmTree.changeSha256) {
     process.stderr.write(
