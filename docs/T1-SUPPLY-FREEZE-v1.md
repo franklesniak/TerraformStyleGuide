@@ -622,8 +622,20 @@ export NPM_CONFIG_GLOBALCONFIG="$strIsolationDirectory/npm-global-empty"
 # succeed while describing a tree this recipe never installed.
 env -u NODE_OPTIONS -u NPM_CONFIG_WORKSPACE -u npm_config_workspace \
   "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund --workspaces=false \
+  && echo "$strReviewedScript  Get-SupplyFreezeDigest.mjs" \
+    | sha256sum -c - \
   && env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs --json
 ```
+
+**Both isolation recipes verify the recorder before running it.** Each carries the same
+`echo "$strReviewedScript  Get-SupplyFreezeDigest.mjs" | sha256sum -c -` link the main reproduction
+block uses, `&&`-chained ahead of the run. The reason is identical: the recorder reports its own
+SHA-256, which is worthless if the file was modified, so the digest has to be checked from outside
+and before the program executes. A reader is routed to an isolation recipe precisely because the
+primary `npm ci` failed — often before that check could run — so omitting it here would execute an
+unreviewed recorder on exactly the path a failing primary run sends people down. `$strReviewedScript`
+is the value pasted once in the main block above; these recipes already depend on `$strNode` and
+`$strWork` from that same block.
 
 **Both casings must be handled, and setting only the upper one is not isolation.** npm's
 configuration documentation states that `npm_config_*` environment variables are case-insensitive
@@ -675,6 +687,8 @@ that matters:
 env -u NODE_OPTIONS -u npm_config_bin_links -u NPM_CONFIG_BIN_LINKS \
   -u NPM_CONFIG_WORKSPACE -u npm_config_workspace \
   "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund --workspaces=false \
+  && echo "$strReviewedScript  Get-SupplyFreezeDigest.mjs" \
+    | sha256sum -c - \
   && env -u NODE_OPTIONS -u npm_config_bin_links -u NPM_CONFIG_BIN_LINKS \
   -u NPM_CONFIG_WORKSPACE -u npm_config_workspace \
     "$strNode" Get-SupplyFreezeDigest.mjs --json
