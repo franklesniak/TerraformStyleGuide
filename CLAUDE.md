@@ -108,6 +108,15 @@ Implement the solution the analysis supports. Not a smaller one that was easier,
 different one that occurred to you while writing the code — if the analysis no longer fits, redo
 the analysis.
 
+**Escalation is an outcome of this protocol, not an exemption from it.** If steps 2–4 do not
+yield a winner — a genuine tie, decisive information you cannot obtain, or a criterion that is
+really the owner's to weigh — you escalate instead of selecting at step 5. But the options, the
+rubric, and the scoring table must already exist and be shown to whoever decides, together with
+the exact reason the analysis could not select and the name of who must. A recommendation offered
+without those artifacts has skipped the protocol, however reasonable it sounds, and it biases the
+decider toward an unexamined answer. This governs design decisions and owner-preference calls
+exactly as it governs code findings.
+
 ## Anti-patterns this protocol exists to prevent
 
 These are drawn from real failures in this repository, and each one passed casual inspection at
@@ -136,6 +145,11 @@ the time.
   or round summary promises for "later" that no GitHub Issue tracks. The thread resolves, the
   round scrolls away, and the only record is prose no one is watching. Ask of every deferral:
   *what tracked artifact carries this once the thread is closed?*
+* **A recommendation in place of an analysis.** Escalating a decision — or handing the owner
+  "my recommendation is…" — without the options, rubric, and scoring table behind it. It is the
+  fluent-argument anti-pattern wearing the costume of deference: it looks like respect for the
+  owner's authority while skipping the work that authority depends on. Escalation is where the
+  protocol *ends*, not where it is *skipped* — show the table, then escalate.
 
 ## Correcting your own earlier work
 
@@ -220,8 +234,11 @@ here.
   `STYLE_GUIDE_RATIONALE.md`) instead of editing a generated artifact.
 * **Escalate rather than decide unilaterally** when options tie, decisive information is missing, a
   criterion is really an owner preference, or a fix would cross an explicit PR-scope boundary — and
-  name who has to decide. A thread left "open by design" or "awaiting a decision" is only accurate
-  if someone was actually asked; otherwise it is unfinished, and should be finished.
+  name who has to decide. Show the gate artifacts (options, rubric, scoring table) that establish
+  the tie or the owner preference *before* escalating; an escalation without them has skipped the
+  protocol (see **Escalation is an outcome of this protocol, not an exemption from it**). A thread
+  left "open by design" or "awaiting a decision" is only accurate if someone was actually asked;
+  otherwise it is unfinished, and should be finished.
 * **Termination.** Continue until **either** both reviewers return a clean review in the same
   round, **or** 80 rounds have been completed. Report which condition ended the loop.
 
