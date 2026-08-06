@@ -531,7 +531,16 @@ Each materialized profile declares all fixed fields and only the literal variati
 
 Each row mutates one parameter, path, separator, platform, leaf, or outcome only. The physical tables contain no `or` fixture and no ordinal `*.case-NN` semantic key. P1A must split grouped evidence before it can satisfy multiple Terraform keys.
 
-Startup expands profiles/rows, validates schema/unique sets, and computes exact applicable `(ID,runtime)` pairs. Completion requires one complete record for every pair and none outside it. Mutation tests independently prove missing, duplicate, unexpected, and multiply emitted results fail. Retain profile/catalog versions, canonical expanded SHA-256, profile/applicability/expected result counts, and per-runtime pass/fail/skip totals.
+Startup expands profiles/rows, validates schema/unique sets, and computes exact applicable `(ID,runtime)` pairs. Completion requires one complete record for every pair and none outside it.
+
+Not every property is expressible as a catalog row. Two classes are asserted at the harness level, outside the T1A-CASES-v1 catalog, under a versioned, count-checked manifest so they cannot be silently deleted:
+
+- Resource-only properties (e.g. bounding a hostile directory read before any ceiling applies): they change no observable output, so no oracle row can assert them; the harness proves them via the production command tree (AST), a poisoned copy that must fail, and a traced copy that records the guard ran.
+- Race-window properties needing fault injection (e.g. a validator-created directory another process populates before ownership is recorded): asserted with a positive control (the un-raced path must succeed), because a race has no single deterministic per-case×runtime result.
+
+These are counted and version-pinned exactly as the 141-row catalog is; "none outside it" governs the catalog, not these.
+
+Mutation tests independently prove missing, duplicate, unexpected, and multiply emitted results fail. Retain profile/catalog versions, canonical expanded SHA-256, profile/applicability/expected result counts, and per-runtime pass/fail/skip totals.
 
 ### 14. Use repository-local IDs and shared semantic identities
 
