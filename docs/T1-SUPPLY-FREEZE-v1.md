@@ -73,7 +73,7 @@ per-row rather than asserted in a sentence.
 | Reviewed head that merged | `a308c860e078b661de0dd663be35f018fc60fdcc` | `git` — see below |
 | Merge commit | `143f54e52075a1ae1e999a6e242073e3d8d4a46b` | `git` — see below |
 | Merged tree | `8c6e0573e2c87b37ce8a6833e6cc74edfaa370a2` | `git` — see below |
-| Freeze script SHA-256 | `164e5d2b6ab1d1321a99491205a79c516edaca8237732b4ea5eb5f3a94f6b916` | script `script.sha256` |
+| Freeze script SHA-256 | `cecf8275476dc66b17da158260b7be69389ebfca3bc7d6a8f983762fb16fc194` | script `script.sha256` |
 | Node | `v24.18.1` | script `toolchain.node` |
 | npm | `11.16.0` | script `toolchain.npm` |
 | npm installation SHA-256 | `f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231` | script `toolchain.npmTree` |
@@ -727,7 +727,10 @@ reducing the tree to a single file, and a record must not be minted over that.
 
 ### Why a run was refused
 
-Every refusal names the observed and reviewed values on stderr.
+Every refusal reports the evidence appropriate to it on stderr: a comparison-based refusal names
+the observed and reviewed values; a refusal with no reviewed counterpart — an absent
+`node_modules`, an unreadable manifest, a malformed audit — names the observed condition; and an
+unsupported-argument refusal deliberately withholds the value it will not vouch for.
 
 **`--any-toolchain` does not bypass all of them, and this section said it did.** It waives the
 *reviewed-environment and reviewed-input* guards — the ones asserting that this machine and these

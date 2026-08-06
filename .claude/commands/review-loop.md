@@ -42,18 +42,18 @@ matter how sound the argument is.
 ## Per-round mechanics
 
 1. **Process each finding** through the decision protocol, and implement the selected option.
-2. **Reply on the thread** with the full analysis — validation, options, rubric, scoring table,
-   selected option, and the measured evidence. Confirm the reply posted; oversized tool results
-   can report an error for a reply that in fact succeeded, so check before re-posting rather than
-   posting twice.
-3. **Resolve the thread** once the reply is posted and the fix is pushed.
-4. **Run the deferral sweep** — check every review thread, round summary, the pull request
+2. **Run the deferral sweep** — check every review thread, round summary, the pull request
    description, and added code comment for deferred work that no issue tracks (see **Deferring
-   work** in `CLAUDE.md`). Complete anything that belongs in this pull request, or file a tracking
-   issue, *before* the gates and summary below.
-5. **Run the repository's gates** before pushing, and quote their real output.
-6. **Commit and push** to the working branch.
-7. **Verify CI** on the new head.
+   work** in `CLAUDE.md`), including anything you are about to defer in a reply. Complete anything
+   that belongs in this pull request, or file a tracking issue, before the gates below.
+3. **Run the repository's gates** before pushing, and quote their real output.
+4. **Commit and push** to the working branch.
+5. **Verify CI** on the new head.
+6. **Reply on each thread** with the full analysis — validation, options, rubric, scoring table,
+   selected option, and the measured evidence, citing the pushed commit. Confirm the reply posted;
+   oversized tool results can report an error for a reply that in fact succeeded, so check before
+   re-posting rather than posting twice.
+7. **Resolve each thread** once its reply is posted and the fix is pushed.
 8. **Post a round summary** on the pull request: what was found, what changed, what the gates
    said, what the sweep found, and what remains open with the reason.
 9. **Request the next round** from both reviewers.

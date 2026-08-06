@@ -209,11 +209,12 @@ here.
   scoring table, and the stated selection — must appear before you continue, either in the working
   transcript or in the reply you post on the comment's thread (a `References` section carries any
   primary-source research). Then implement the selected option, reply on the thread, and resolve it.
-* **Per round.** Process each finding and implement it; reply on and resolve each thread; run the
-  deferral sweep (see **Deferring work**) and complete or file whatever it finds; run the
-  repository's gates and quote their real output; commit and push to the working branch; verify CI
-  on the new head; post a round summary (what was found, what changed, what the gates said, what the
-  sweep found, and what remains open with the reason); and re-request both reviewers.
+* **Per round.** Process each finding and implement it; run the deferral sweep (see **Deferring
+  work**) and complete or file whatever it finds; run the repository's gates and quote their real
+  output; commit and push to the working branch; verify CI on the new head; reply on and resolve
+  each thread (a resolve needs the fix pushed, so it comes after the push); post a round summary
+  (what was found, what changed, what the gates said, what the sweep found, and what remains open
+  with the reason); and re-request both reviewers.
 * **Recommend a style-guide change** when a finding reveals a gap in the guide itself, rather than
   only in the code under review — propose the `STYLE_GUIDE.md` edit (with rationale in
   `STYLE_GUIDE_RATIONALE.md`) instead of editing a generated artifact.
