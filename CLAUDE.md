@@ -193,8 +193,8 @@ one durable home:
 The test is one sentence: **if the only place a piece of future work is written down is a
 comment, it is not tracked.** Before resolving a thread whose reply defers something, name
 the issue that now carries it. Before finishing a pull request, sweep every review thread,
-round summary, and added code comment for deferrals with no issue behind them, and either
-do them now or file them.
+round summary, the pull request description, and added code comment for deferrals with no
+issue behind them, and either do them now or file them.
 
 ## The review loop
 
@@ -210,10 +210,10 @@ here.
   transcript or in the reply you post on the comment's thread (a `References` section carries any
   primary-source research). Then implement the selected option, reply on the thread, and resolve it.
 * **Per round.** Process each finding and implement it; reply on and resolve each thread; run the
+  deferral sweep (see **Deferring work**) and complete or file whatever it finds; run the
   repository's gates and quote their real output; commit and push to the working branch; verify CI
-  on the new head; post a round summary (what was found, what changed, what the gates said, and what
-  remains open with the reason); sweep for deferred work that lives only in a comment and either
-  complete it or file a tracking issue (see **Deferring work**); and re-request both reviewers.
+  on the new head; post a round summary (what was found, what changed, what the gates said, what the
+  sweep found, and what remains open with the reason); and re-request both reviewers.
 * **Recommend a style-guide change** when a finding reveals a gap in the guide itself, rather than
   only in the code under review — propose the `STYLE_GUIDE.md` edit (with rationale in
   `STYLE_GUIDE_RATIONALE.md`) instead of editing a generated artifact.

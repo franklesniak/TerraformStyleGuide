@@ -47,12 +47,16 @@ matter how sound the argument is.
    can report an error for a reply that in fact succeeded, so check before re-posting rather than
    posting twice.
 3. **Resolve the thread** once the reply is posted and the fix is pushed.
-4. **Run the repository's gates** before pushing, and quote their real output.
-5. **Commit and push** to the working branch.
-6. **Verify CI** on the new head.
-7. **Post a round summary** on the pull request: what was found, what changed, what the gates
-   said, and what remains open with the reason.
-8. **Request the next round** from both reviewers.
+4. **Run the deferral sweep** — check every review thread, round summary, the pull request
+   description, and added code comment for deferred work that no issue tracks (see **Deferring
+   work** in `CLAUDE.md`). Complete anything that belongs in this pull request, or file a tracking
+   issue, *before* the gates and summary below.
+5. **Run the repository's gates** before pushing, and quote their real output.
+6. **Commit and push** to the working branch.
+7. **Verify CI** on the new head.
+8. **Post a round summary** on the pull request: what was found, what changed, what the gates
+   said, what the sweep found, and what remains open with the reason.
+9. **Request the next round** from both reviewers.
 
 ## Threads you did not resolve
 

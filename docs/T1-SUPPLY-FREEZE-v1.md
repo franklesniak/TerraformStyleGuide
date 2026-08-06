@@ -609,22 +609,29 @@ To sidestep ambient configuration files:
 
 ```bash
 strIsolationDirectory="$(mktemp -d)"
-: > "$strIsolationDirectory/npm-user-empty"
-: > "$strIsolationDirectory/npm-global-empty"
-# Both casings, or the ambient lowercase wins and the isolation does nothing.
-unset npm_config_userconfig npm_config_globalconfig
-export NPM_CONFIG_USERCONFIG="$strIsolationDirectory/npm-user-empty"
-export NPM_CONFIG_GLOBALCONFIG="$strIsolationDirectory/npm-global-empty"
-# `&&`, for the same reason the main reproduction block gives: npm ci is the FIRST
-# LINK of the chain, not a separate statement before it. Unchained, an install that
-# fails before replacing an old node_modules leaves the recorder to run anyway and
-# record the stale tree from a prior run -- the isolation workaround then appears to
-# succeed while describing a tree this recipe never installed.
-env -u NODE_OPTIONS -u NPM_CONFIG_WORKSPACE -u npm_config_workspace \
-  "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund --workspaces=false \
-  && echo "$strReviewedScript  Get-SupplyFreezeDigest.mjs" \
-    | sha256sum -c - \
-  && env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs --json
+# mktemp failing would leave $strIsolationDirectory empty and send the redirections
+# below to /npm-user-empty and /npm-global-empty -- root-level files a privileged
+# reader would create or truncate. Require a real directory before writing anything.
+if [ -z "$strIsolationDirectory" ] || [ ! -d "$strIsolationDirectory" ]; then
+  echo 'mktemp -d did not create a directory; aborting the isolation recipe' >&2
+else
+  : > "$strIsolationDirectory/npm-user-empty"
+  : > "$strIsolationDirectory/npm-global-empty"
+  # Both casings, or the ambient lowercase wins and the isolation does nothing.
+  unset npm_config_userconfig npm_config_globalconfig
+  export NPM_CONFIG_USERCONFIG="$strIsolationDirectory/npm-user-empty"
+  export NPM_CONFIG_GLOBALCONFIG="$strIsolationDirectory/npm-global-empty"
+  # `&&`, for the same reason the main reproduction block gives: npm ci is the FIRST
+  # LINK of the chain, not a separate statement before it. Unchained, an install that
+  # fails before replacing an old node_modules leaves the recorder to run anyway and
+  # record the stale tree from a prior run -- the isolation workaround then appears to
+  # succeed while describing a tree this recipe never installed.
+  env -u NODE_OPTIONS -u NPM_CONFIG_WORKSPACE -u npm_config_workspace \
+    "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund --workspaces=false \
+    && echo "$strReviewedScript  Get-SupplyFreezeDigest.mjs" \
+      | sha256sum -c - \
+    && env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs --json
+fi
 ```
 
 **Both isolation recipes verify the recorder before running it.** Each carries the same

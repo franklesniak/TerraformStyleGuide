@@ -13,8 +13,11 @@
 // this file produces. The two superseded values are NOT reproduced by this
 // script and cannot be: their recipe is unknown. See docs/T1-SUPPLY-FREEZE-v1.md.
 //
-// This script is read-only. It runs no install, writes no file, and asserts the
-// manifest and lockfile are byte-identical after it finishes.
+// This script is read-only: it runs no install and writes nothing into the repository
+// or the installed tree it measures, and it asserts the manifest and lockfile are
+// byte-identical after it finishes. (The `npm ls`/`npm audit` children it runs may write
+// to npm's own cache -- an update-notifier timestamp, or a debug log on failure -- which
+// is outside that measured surface.)
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
