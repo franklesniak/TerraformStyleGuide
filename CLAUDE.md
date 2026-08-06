@@ -132,6 +132,10 @@ the time.
 * **Inconsistent examples.** An example can be locally correct and still wrong, by differing from
   its siblings in a way a reader must guess is load-bearing. Compare each example against the
   others of the same operation.
+* **Deferred work parked in a comment.** A follow-up, hardening, or decision a review reply
+  or round summary promises for "later" that no GitHub Issue tracks. The thread resolves, the
+  round scrolls away, and the only record is prose no one is watching. Ask of every deferral:
+  *what tracked artifact carries this once the thread is closed?*
 
 ## Correcting your own earlier work
 
@@ -162,6 +166,36 @@ Do this even when the comment's line is marked **outdated**: verify the issue ag
 code before concluding it is resolved. An outdated anchor is a moved line, not a fixed defect — a
 later commit may have shifted the surrounding code without addressing the finding.
 
+## Deferring work
+
+Deferred work that lives only in a comment is not tracked — it is lost. A review reply, a
+code comment, a PR description, or a round summary that promises a fix, a hardening, or a
+decision "later", "separately", or "in a follow-up" leaves nothing a person can find once
+the thread is resolved and the round scrolls away. Prose rots, a resolved thread hides its
+own text, and a PR description gets rewritten — none of them is a tracker.
+
+Every time you defer, re-evaluate the deferral before recording it, and route it to exactly
+one durable home:
+
+* **Deferred for your own convenience — it was easier, or the context window was running
+  out?** Then it is not a real deferral: complete it in the current pull request. This is
+  step 6 ("not a smaller one that was easier") applied to your own follow-ups.
+* **Genuinely needs separate handling** — depends on a policy decision, is a rework larger
+  than the finding supports, or crosses an explicit PR-scope boundary? **Record it as a
+  GitHub Issue** with an explicit clearing condition, and cite that issue number from the
+  comment or committed record that defers to it. Put it in the issue's *body* (or a dedicated
+  issue); a note buried in a comment on the issue is not itself reliably tracked.
+* **Decided against altogether** — a declination, a deliberate boundary? Then it is not
+  deferred work and needs no issue, but the residual it leaves must be written into a
+  *committed artifact* (the code, its documentation, or the record it concerns), never into
+  a review reply that vanishes when the thread resolves.
+
+The test is one sentence: **if the only place a piece of future work is written down is a
+comment, it is not tracked.** Before resolving a thread whose reply defers something, name
+the issue that now carries it. Before finishing a pull request, sweep every review thread,
+round summary, and added code comment for deferrals with no issue behind them, and either
+do them now or file them.
+
 ## The review loop
 
 `/review-loop <pull-request-url>` runs a full, multi-round loop over a pull request's reviews; the
@@ -178,7 +212,8 @@ here.
 * **Per round.** Process each finding and implement it; reply on and resolve each thread; run the
   repository's gates and quote their real output; commit and push to the working branch; verify CI
   on the new head; post a round summary (what was found, what changed, what the gates said, and what
-  remains open with the reason); and re-request both reviewers.
+  remains open with the reason); sweep for deferred work that lives only in a comment and either
+  complete it or file a tracking issue (see **Deferring work**); and re-request both reviewers.
 * **Recommend a style-guide change** when a finding reveals a gap in the guide itself, rather than
   only in the code under review — propose the `STYLE_GUIDE.md` edit (with rationale in
   `STYLE_GUIDE_RATIONALE.md`) instead of editing a generated artifact.
