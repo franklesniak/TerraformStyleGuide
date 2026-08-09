@@ -94,7 +94,8 @@ weights, options as columns, and a weighted total per option.
 ### 5. Select and specify
 
 Use the table to select the best option. State the selection in detail, so that someone coming in
-cold understands exactly what needs to be done and why. Include:
+cold understands exactly what needs to be done and why. Ensure that when you state the selection
+in detail, your response follows `ASD-STE100`. Include:
 
 * relevant primary-source references;
 * local testing information where applicable — environment details, the exact commands run, and
