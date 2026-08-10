@@ -1163,9 +1163,50 @@ function foldNpmInstallation(strRoot, strLauncherPath) {
   const objChangeHash = createHash('sha256');
   let intFiles = 0;
   let intSymlinks = 0;
-  const considerRootOrLauncher = (strPath, strLabel) => {
+  // Codex P2 on e6a517b. The installed-tree walker (refuseUnreviewedInodeMetadata)
+  // and the descriptor-bound manifest read both refuse an entry a second path can
+  // rewrite -- a regular file hard-linked elsewhere, or one owned by another uid --
+  // because the quiescence sweep compares this inode and a write through the other
+  // path lands on it between the snapshot and the final re-read. This npm-installation
+  // fold read npm's own bytes with neither guard. The nlink guard is regular-file
+  // only, matching the installed-tree walker: a directory's link count counts its
+  // subdirectories and a symlink is not a byte source, so only a regular file's extra
+  // link is a rewrite path. objStat comes from lstatSync(..., { bigint: true }), so
+  // nlink and uid are BigInt and are compared as BigInt.
+  const refuseExternallyMutableNpmEntry = (strPath, strLabel, objStat, boolRegularFile) => {
+    const bigOwnUid = typeof process.getuid === 'function' ? BigInt(process.getuid()) : null;
+    const strWhy = (boolRegularFile && objStat.nlink > 1n)
+      ? `is hard-linked ${objStat.nlink} times, so a second path can rewrite these bytes`
+      : (bigOwnUid !== null && objStat.uid !== bigOwnUid)
+        ? `is owned by uid ${objStat.uid}, but this recorder runs as uid ${bigOwnUid}`
+        : null;
+    if (strWhy === null) return;
+    process.stderr.write(
+      'supply-freeze: refusing to verify an npm installation entry that another path can '
+      + 'rewrite.\n'
+      + `  entry              ${formatUntrustedText(strLabel)}\n`
+      + `  observed           ${strWhy}\n`
+      + `  link count / uid   nlink ${objStat.nlink}, uid ${objStat.uid}, recorder uid `
+      + `${bigOwnUid === null ? '(unknown)' : bigOwnUid}\n`
+      + '  the npmTree fold reads these bytes and the quiescence sweep compares this\n'
+      + '  inode; a second hard link, or another owner, is a write path that sweep\n'
+      + '  cannot see, so npm could be fed other bytes while the digest compares equal.\n');
+    process.exit(2);
+  };
+  const considerRootOrLauncher = (strPath, strLabel, boolEnforceSoleControl = false) => {
     try {
       const objStat = lstatSync(strPath, { bigint: true });
+      // Codex P2 on e6a517b: the installation root and the npm launcher are read by
+      // this recorder as well, so refuse one a second path can rewrite before folding,
+      // exactly as the walk refuses regular files below. Only the root and launcher
+      // enforce this; the ancestor sweep reuses this helper for change detection and
+      // passes boolEnforceSoleControl false, matching the foldAncestors note that a
+      // distribution ancestor is a precondition, not bytes this fold reads. The root
+      // is a directory and the launcher a symlink, so the regular-file nlink guard
+      // does not apply to them; the uid guard does.
+      if (boolEnforceSoleControl) {
+        refuseExternallyMutableNpmEntry(strPath, strLabel, objStat, objStat.isFile());
+      }
       hashField(objChangeHash, strLabel);
       hashField(objChangeHash, `${statIdentity(objStat)}:${objStat.mode}`);
       // The launcher's target is part of its identity: repointing a symlink
@@ -1192,8 +1233,8 @@ function foldNpmInstallation(strRoot, strLauncherPath) {
       process.exit(2);
     }
   };
-  considerRootOrLauncher(strRoot, '(installation root)');
-  if (strLauncherPath !== undefined) considerRootOrLauncher(strLauncherPath, '(npm launcher)');
+  considerRootOrLauncher(strRoot, '(installation root)', true);
+  if (strLauncherPath !== undefined) considerRootOrLauncher(strLauncherPath, '(npm launcher)', true);
   // Round 59, reported by Codex, and the round-58 fix caught one level up.
   //
   // Folding an inode says "this directory was not replaced". It says nothing
@@ -1318,6 +1359,10 @@ function foldNpmInstallation(strRoot, strLauncherPath) {
           // answered.
           hashField(objHash, readlinkSync(strPath, { encoding: 'buffer' }));
         } else if (objStat.isFile()) {
+          // Codex P2 on e6a517b: refuse an externally mutable regular file before
+          // folding its bytes, the same guard the installed-tree walker and the
+          // descriptor-bound manifest read apply. objStat is a bigint lstat.
+          refuseExternallyMutableNpmEntry(strPath, strKey, objStat, true);
           intFiles += 1;
           hashField(objHash, 'f');
           hashField(objHash, strKey);
@@ -2759,6 +2804,54 @@ function newestChangeTime(strRoot, arrExtraPaths) {
         '  file at all while its target can still be created for the audit and removed.\n' +
         '  remove the entry, or make it a regular file.\n');
       process.exit(13);
+    }
+    // Codex P2 on e6a517b. The non-regular refusal above closes the link/FIFO/
+    // directory shapes; a REGULAR-file .npmrc still recorded only inode and ctime
+    // through `consider`, so a second hard link or a foreign owner -- a write path
+    // the change sweep cannot see, because it compares this inode and a rewrite
+    // through the other path lands on it -- went unrefused. Apply the descriptor-
+    // bound guard the manifests use (readViaVerifiedDescriptor): open once with
+    // O_NOFOLLOW, fstat the descriptor, and refuse a file another path can rewrite,
+    // bound to that descriptor so a name swap between the lstat above and this check
+    // cannot outrun it. npm reads this as a configuration source, so the bytes must
+    // be ones only this run can vouch for -- the same property the manifest read
+    // requires. The existing non-regular refusal is unchanged.
+    let intFd;
+    try {
+      intFd = openSync(strPath,
+        fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW);
+    } catch (objError) {
+      // A symlink (ELOOP), FIFO or vanished target appearing between the lstat above
+      // and this open is the swap the descriptor bind exists to refuse: it is no
+      // longer the regular file just classified. Refuse it as a non-regular .npmrc.
+      process.stderr.write(
+        'supply-freeze: refusing a project npm configuration that changed while being read.\n' +
+        formatErrorLocation(objError, strPath) +
+        '  it was a regular file a moment ago, so a second path swapped it mid-run.\n');
+      process.exit(13);
+    }
+    try {
+      const objFdStats = fstatSync(intFd, { bigint: true });
+      const bigOwnUid = typeof process.getuid === 'function' ? BigInt(process.getuid()) : null;
+      const strWhy = (objFdStats.nlink > 1n)
+        ? `is hard-linked ${objFdStats.nlink} times, so a second path can rewrite these bytes`
+        : (bigOwnUid !== null && objFdStats.uid !== bigOwnUid)
+          ? `is owned by uid ${objFdStats.uid}, but this recorder runs as uid ${bigOwnUid}`
+          : null;
+      if (strWhy !== null) {
+        process.stderr.write(
+          'supply-freeze: refusing a project npm configuration that another path can rewrite.\n' +
+          `  path               ${formatUntrustedText(strPath)}\n` +
+          `  observed           ${strWhy}\n` +
+          `  link count / uid   nlink ${objFdStats.nlink}, uid ${objFdStats.uid}, recorder uid ` +
+          `${bigOwnUid === null ? '(unknown)' : bigOwnUid}\n` +
+          '  checked on the open descriptor whose inode npm reads; a second hard link,\n' +
+          '  or another owner, is a write path this sweep cannot see, so npm could be\n' +
+          '  fed other bytes while the recorded change time still compares equal.\n');
+        process.exit(15);
+      }
+    } finally {
+      closeSync(intFd);
     }
     consider(strPath, strLabel);
   };

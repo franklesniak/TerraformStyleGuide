@@ -94,8 +94,13 @@ weights, options as columns, and a weighted total per option.
 ### 5. Select and specify
 
 Use the table to select the best option. State the selection in detail, so that someone coming in
-cold understands exactly what needs to be done and why. Ensure that when you state the selection
-in detail, your response follows `ASD-STE100`. Include:
+cold understands exactly what needs to be done and why. Write that statement to the local subset
+of `ASD-STE100` (Simplified Technical English) pinned here, so conformance can be judged from
+this file alone: keep sentences short, and give one instruction per sentence; use the active
+voice; use the simple present, past, or future tense, and avoid `-ing` forms where you can; use
+approved, consistent vocabulary, so that one word carries one meaning; and write full words
+rather than omissions. Where this local subset and the external standard differ, this subset
+governs. Include:
 
 * relevant primary-source references;
 * local testing information where applicable — environment details, the exact commands run, and

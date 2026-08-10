@@ -7,7 +7,7 @@ argument-hint: <pull-request-url>
 
 Target pull request: **$ARGUMENTS**
 
-If no pull request URL was supplied above, ask which one to work before doing anything else.
+If no pull request URL was supplied above, ask which one to work on before doing anything else.
 
 ## Setup
 
