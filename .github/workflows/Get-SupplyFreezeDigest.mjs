@@ -1903,12 +1903,24 @@ function refuseEscapingTreeRoot(strRoot) {
   {
     let strHop = strRoot;
     for (let intHop = 0; ; intHop += 1) {
-      if (intHop >= 40) {
-        throw new Error('node_modules root: symlink chain exceeds 40 hops');
-      }
       let objHopStats;
       try { objHopStats = lstatSync(strHop); } catch { break; }
       if (!objHopStats.isSymbolicLink()) break;
+      // Round 81, reported by Codex as a P3 and reproduced. The hop cap is tested
+      // AFTER the target's type, the way considerThroughLinks does it -- not
+      // before. The pre-fix order threw at intHop === 40 on the loop's next turn,
+      // BEFORE lstat inspected the final non-link target, so a chain of exactly 40
+      // hops to an in-boundary directory refused at exit 10 -- one hop short of the
+      // limit the throw message itself names ("exceeds 40 hops" is 41+, not 40).
+      // 40 is Linux MAXSYMLINKS: the kernel resolves 40 links and returns ELOOP on
+      // the 41st, so this now refuses at the same length the kernel does. Measured
+      // on real chains -- pre-fix N=40 threw while N=39 accepted; post-fix N=40
+      // accepts and N=41 throws, matching considerThroughLinks, the component walk
+      // and the ancestor-depth cap, which the same sweep confirmed already accept
+      // 40 and refuse 41.
+      if (intHop >= 40) {
+        throw new Error('node_modules root: symlink chain exceeds 40 hops');
+      }
       // Raw bytes, then a round-trip check. Codex P2 on a756ebe: readlinkSync's
       // default decoding turns any target that is not valid UTF-8 into U+FFFD, so
       // a chain like `node_modules -> bad_<0x80> -> /tmp/ext/mid -> <workflow>/tree`
