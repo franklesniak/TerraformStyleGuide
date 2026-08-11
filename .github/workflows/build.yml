@@ -221,35 +221,35 @@ jobs:
               param([byte[]]$Bytes)
               if ($Bytes.Length -eq 0) { return @() }
               if ($Bytes[$Bytes.Length - 1] -ne 0) { throw 'git-paths: missing final NUL' }
-              $arrRecords = @()
+              $listRecords = [System.Collections.Generic.List[byte[]]]::new()
               $intStart = 0
               for ($intIndex = 0; $intIndex -lt $Bytes.Length; $intIndex++) {
                   if ($Bytes[$intIndex] -eq 0) {
                       if ($intIndex -eq $intStart) { throw 'git-paths: empty or duplicate record' }
                       $arrRecord = [byte[]]::new($intIndex - $intStart)
                       [System.Array]::Copy($Bytes, $intStart, $arrRecord, 0, $arrRecord.Length)
-                      $arrRecords += ,$arrRecord
+                      $listRecords.Add($arrRecord)
                       $intStart = $intIndex + 1
                   }
               }
-              return $arrRecords
+              return $listRecords.ToArray()
           }
 
           function Assert-AllowedPaths {
               param([byte[][]]$Records, [string[]]$Allowed, [string]$Surface)
               $objUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
-              $arrObserved = @()
+              $listObserved = [System.Collections.Generic.List[string]]::new()
               foreach ($arrRecord in $Records) {
                   try { $strPath = $objUtf8.GetString($arrRecord) } catch { throw "git-paths: undecodable $Surface record" }
                   $arrRoundTrip = $objUtf8.GetBytes($strPath)
                   if ([Convert]::ToBase64String($arrRecord) -cne [Convert]::ToBase64String($arrRoundTrip)) {
                       throw "git-paths: ambiguous $Surface record"
                   }
-                  if ($arrObserved -ccontains $strPath) { throw "git-paths: duplicate $Surface record" }
+                  if ($listObserved -ccontains $strPath) { throw "git-paths: duplicate $Surface record" }
                   if ($Allowed -cnotcontains $strPath) { throw "git-paths: unexpected $Surface path" }
-                  $arrObserved += $strPath
+                  $listObserved.Add($strPath)
               }
-              return @($arrObserved | Sort-Object -CaseSensitive)
+              return @($listObserved | Sort-Object -CaseSensitive)
           }
 
           # Everything below this line runs after repository-controlled code, so
@@ -281,27 +281,27 @@ jobs:
               # sample into an active hook with the digest unchanged. Framing
               # each component with its length removes the boundary ambiguity,
               # so the encoding determines the contents uniquely.
-              $arrComponents = [System.Collections.Generic.List[byte[]]]::new()
+              $listComponents = [System.Collections.Generic.List[byte[]]]::new()
               $strConfigPath = [System.IO.Path]::Combine($strGitDirectory, 'config')
               if ([System.IO.File]::Exists($strConfigPath)) {
-                  $arrComponents.Add([System.IO.File]::ReadAllBytes($strConfigPath))
+                  $listComponents.Add([System.IO.File]::ReadAllBytes($strConfigPath))
               } else {
-                  $arrComponents.Add([byte[]]::new(0))
+                  $listComponents.Add([byte[]]::new(0))
               }
               $strHooksDirectory = [System.IO.Path]::Combine($strGitDirectory, 'hooks')
               if ([System.IO.Directory]::Exists($strHooksDirectory)) {
                   foreach ($strHook in ([System.IO.Directory]::GetFiles($strHooksDirectory) | Sort-Object -CaseSensitive)) {
-                      $arrComponents.Add([System.Text.Encoding]::UTF8.GetBytes([System.IO.Path]::GetFileName($strHook)))
-                      $arrComponents.Add([System.IO.File]::ReadAllBytes($strHook))
+                      $listComponents.Add([System.Text.Encoding]::UTF8.GetBytes([System.IO.Path]::GetFileName($strHook)))
+                      $listComponents.Add([System.IO.File]::ReadAllBytes($strHook))
                   }
               }
               $objSha = [System.Security.Cryptography.SHA256]::Create()
               $objBuffer = [System.IO.MemoryStream]::new()
               try {
-                  $arrCount = [System.BitConverter]::GetBytes([long]$arrComponents.Count)
+                  $arrCount = [System.BitConverter]::GetBytes([long]$listComponents.Count)
                   if ([System.BitConverter]::IsLittleEndian) { [System.Array]::Reverse($arrCount) }
                   $objBuffer.Write($arrCount, 0, $arrCount.Length)
-                  foreach ($arrComponent in $arrComponents) {
+                  foreach ($arrComponent in $listComponents) {
                       $arrLength = [System.BitConverter]::GetBytes([long]$arrComponent.Length)
                       if ([System.BitConverter]::IsLittleEndian) { [System.Array]::Reverse($arrLength) }
                       $objBuffer.Write($arrLength, 0, $arrLength.Length)
@@ -434,17 +434,17 @@ jobs:
           # follow are retained for their path-level diagnostics, but this is the
           # check that decides, because it reads bytes rather than asking Git.
           $objWorktreeAfter = Get-WorktreeFileDigests
-          $arrChanged = [System.Collections.Generic.List[string]]::new()
+          $listChanged = [System.Collections.Generic.List[string]]::new()
           foreach ($strPath in $objWorktreeBefore.Keys) {
               if ((-not $objWorktreeAfter.ContainsKey($strPath)) -or ($objWorktreeAfter[$strPath] -cne $objWorktreeBefore[$strPath])) {
-                  $arrChanged.Add($strPath)
+                  $listChanged.Add($strPath)
               }
           }
           foreach ($strPath in $objWorktreeAfter.Keys) {
-              if (-not $objWorktreeBefore.ContainsKey($strPath)) { $arrChanged.Add($strPath) }
+              if (-not $objWorktreeBefore.ContainsKey($strPath)) { $listChanged.Add($strPath) }
           }
-          if ($arrChanged.Count -ne 0) {
-              $arrOutside = @($arrChanged | Where-Object { $arrArtifacts -cnotcontains $_ } | Sort-Object -CaseSensitive)
+          if ($listChanged.Count -ne 0) {
+              $arrOutside = @($listChanged | Where-Object { $arrArtifacts -cnotcontains $_ } | Sort-Object -CaseSensitive)
               if ($arrOutside.Count -ne 0) {
                   throw "git-state: the generator changed $($arrOutside.Count) path(s) outside the four generated artifacts"
               }

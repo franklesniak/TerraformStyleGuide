@@ -16,11 +16,25 @@ This script reads STYLE_GUIDE.md and creates four derived files:
 
 .NOTES
 This script generates Terraform style guide artifacts for this repository.
-Version: 1.0.20260802.3
+Version: 1.0.20260811.0
 #>
 
 $script:strRepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path -Path $PSScriptRoot -ChildPath '../..'))
 function Get-StyleGuideFileSha256 {
+    <#
+    .SYNOPSIS
+    Computes the SHA-256 digest of a file as a lowercase hexadecimal string.
+
+    .DESCRIPTION
+    Opens the file for shared reading and returns the SHA-256 hash of its bytes.
+    The digest is returned as a lowercase hexadecimal string with no separators.
+
+    .PARAMETER LiteralPath
+    Literal path to the file to hash. Wildcards are not expanded.
+
+    .OUTPUTS
+    System.String. The lowercase hexadecimal SHA-256 digest of the file.
+    #>
     param (
         [Parameter(Mandatory = $true)]
         [string]$LiteralPath
@@ -48,6 +62,24 @@ function Get-StyleGuideFileSha256 {
 }
 
 function Assert-StyleGuideOrdinaryPath {
+    <#
+    .SYNOPSIS
+    Asserts that a path is an ordinary file or directory, not a link.
+
+    .DESCRIPTION
+    Reads the filesystem attributes of the path. The function throws when the
+    path is a reparse point or link, and when its type does not match the
+    expected type.
+
+    .PARAMETER LiteralPath
+    Literal path to inspect. Wildcards are not expanded.
+
+    .PARAMETER ExpectedType
+    The required filesystem type. The value is 'Directory' or 'File'.
+
+    .OUTPUTS
+    None. The function throws System.IO.IOException when the assertion fails.
+    #>
     param (
         [Parameter(Mandatory = $true)]
         [string]$LiteralPath,
@@ -70,6 +102,21 @@ function Assert-StyleGuideOrdinaryPath {
 }
 
 function Assert-StyleGuideTrackedDestination {
+    <#
+    .SYNOPSIS
+    Asserts that a destination leaf is the one exact Git-tracked path.
+
+    .DESCRIPTION
+    Resolves the Git application and queries the index for the destination leaf.
+    The function throws unless the leaf is tracked as exactly one path that
+    matches the requested leaf under a case-sensitive comparison.
+
+    .PARAMETER DestinationLeaf
+    The repository-root-relative leaf name of the destination artifact.
+
+    .OUTPUTS
+    None. The function throws System.IO.IOException when the assertion fails.
+    #>
     param (
         [Parameter(Mandatory = $true)]
         [string]$DestinationLeaf
@@ -97,6 +144,29 @@ function Assert-StyleGuideTrackedDestination {
 }
 
 function Write-StyleGuideArtifact {
+    <#
+    .SYNOPSIS
+    Writes a generated style-guide artifact to its fixed destination atomically.
+
+    .DESCRIPTION
+    Validates the destination against the artifact identifier, writes the content
+    to a temporary sibling, verifies the bytes and digest, and publishes the file
+    by an atomic rename. The function throws a categorized error when any phase
+    fails, and it does not leave a partially written destination.
+
+    .PARAMETER ArtifactId
+    The artifact identifier. The value is 'copilot', 'terraform-instructions',
+    'chat', or 'full'.
+
+    .PARAMETER DestinationPath
+    The fully qualified destination path for the artifact.
+
+    .PARAMETER Content
+    The exact text content to write to the artifact.
+
+    .OUTPUTS
+    None. The function throws System.InvalidOperationException when writing fails.
+    #>
     param (
         [Parameter(Mandatory = $true)]
         [ValidateSet('copilot', 'terraform-instructions', 'chat', 'full')]
@@ -214,7 +284,7 @@ function Write-StyleGuideArtifact {
         # refused there, and only genuine absence is treated as absence.
         $boolDestinationExists = $true
         try {
-            $null = [System.IO.File]::GetAttributes($strExpectedPath)
+            [void][System.IO.File]::GetAttributes($strExpectedPath)
         } catch [System.IO.FileNotFoundException] {
             $boolDestinationExists = $false
         } catch [System.IO.DirectoryNotFoundException] {
@@ -614,7 +684,7 @@ function New-StyleGuideFullVersion {
         $hashtableSections = @{}
         $strCurrentAnchor = $null
         $intCurrentLevel = 0
-        $arrCurrentBody = [System.Collections.Generic.List[string]]::new()
+        $listCurrentBody = [System.Collections.Generic.List[string]]::new()
 
         foreach ($strLine in $arrRationaleLines) {
             if ($strLine -match '^(#{2,4}) (.+)$') {
@@ -623,7 +693,7 @@ function New-StyleGuideFullVersion {
 
                 # Save previous section if it was a ### heading
                 if ($null -ne $strCurrentAnchor -and $intCurrentLevel -eq 3) {
-                    $hashtableSections[$strCurrentAnchor] = $arrCurrentBody.ToArray()
+                    $hashtableSections[$strCurrentAnchor] = $listCurrentBody.ToArray()
                 }
 
                 # Compute anchor for this heading
@@ -634,7 +704,7 @@ function New-StyleGuideFullVersion {
                     # This is a leaf section -- collect its body
                     $strCurrentAnchor = $strAnchor
                     $intCurrentLevel = 3
-                    $arrCurrentBody = [System.Collections.Generic.List[string]]::new()
+                    $listCurrentBody = [System.Collections.Generic.List[string]]::new()
                 } elseif ($intLevel -eq 2) {
                     # Grouping header -- reset tracking but do not collect
                     $strCurrentAnchor = $null
@@ -642,39 +712,39 @@ function New-StyleGuideFullVersion {
                 } else {
                     # #### sub-heading inside a ### section -- include as body content
                     if ($null -ne $strCurrentAnchor -and $intCurrentLevel -eq 3) {
-                        $arrCurrentBody.Add($strLine)
+                        $listCurrentBody.Add($strLine)
                     }
                 }
             } elseif ($null -ne $strCurrentAnchor -and $intCurrentLevel -eq 3) {
-                $arrCurrentBody.Add($strLine)
+                $listCurrentBody.Add($strLine)
             }
         }
         # Save final section if it was a ### heading
         if ($null -ne $strCurrentAnchor -and $intCurrentLevel -eq 3) {
-            $hashtableSections[$strCurrentAnchor] = $arrCurrentBody.ToArray()
+            $hashtableSections[$strCurrentAnchor] = $listCurrentBody.ToArray()
         }
 
         # Also handle the ## Executive Summary: Author Profile which is a ## heading
         # but maps to a ## heading in the main guide. Parse it separately.
         $strCurrentAnchor = $null
         $intCurrentLevel = 0
-        $arrCurrentBody = [System.Collections.Generic.List[string]]::new()
+        $listCurrentBody = [System.Collections.Generic.List[string]]::new()
         $boolInExecutiveSummary = $false
 
         foreach ($strLine in $arrRationaleLines) {
             if ($strLine -match '^## Executive Summary: Terraform Philosophy') {
                 $boolInExecutiveSummary = $true
-                $arrCurrentBody = [System.Collections.Generic.List[string]]::new()
+                $listCurrentBody = [System.Collections.Generic.List[string]]::new()
             } elseif ($boolInExecutiveSummary -and $strLine -match '^## ') {
                 # Hit the next ## heading, stop collecting
-                $hashtableSections['executive-summary-terraform-philosophy'] = $arrCurrentBody.ToArray()
+                $hashtableSections['executive-summary-terraform-philosophy'] = $listCurrentBody.ToArray()
                 $boolInExecutiveSummary = $false
             } elseif ($boolInExecutiveSummary) {
-                $arrCurrentBody.Add($strLine)
+                $listCurrentBody.Add($strLine)
             }
         }
         if ($boolInExecutiveSummary) {
-            $hashtableSections['executive-summary-terraform-philosophy'] = $arrCurrentBody.ToArray()
+            $hashtableSections['executive-summary-terraform-philosophy'] = $listCurrentBody.ToArray()
         }
 
         # Clean each section body:
@@ -721,7 +791,7 @@ function New-StyleGuideFullVersion {
         $strPlaceholder = '*This section intentionally left blank.*'
         $strMarkerPattern = '^\s*<!-- RATIONALE: (.+?) -->\s*$'
         $arrGuideLines = $strGuideContent -split '\r?\n'
-        $arrOutputLines = [System.Collections.Generic.List[string]]::new()
+        $listOutputLines = [System.Collections.Generic.List[string]]::new()
 
         for ($intIndex = 0; $intIndex -lt $arrGuideLines.Count; $intIndex++) {
             $strLine = $arrGuideLines[$intIndex]
@@ -737,7 +807,7 @@ function New-StyleGuideFullVersion {
                 if ($hashtableCleanSections.ContainsKey($strMarkerKey)) {
                     $arrRationaleBody = $hashtableCleanSections[$strMarkerKey]
                     foreach ($strRatLine in $arrRationaleBody) {
-                        $arrOutputLines.Add($strRatLine)
+                        $listOutputLines.Add($strRatLine)
                     }
                 } else {
                     Write-Warning "No rationale section found for marker: $strMarkerKey"
@@ -750,14 +820,14 @@ function New-StyleGuideFullVersion {
             if ($strLine -match '^\- \[Terraform Version Requirements\]' -and
                     $hashtableCleanSections.ContainsKey('executive-summary-terraform-philosophy')) {
                 $boolTocAlreadyPresent = $false
-                foreach ($strPrevLine in $arrOutputLines) {
+                foreach ($strPrevLine in $listOutputLines) {
                     if ($strPrevLine -match 'Executive Summary: Terraform Philosophy') {
                         $boolTocAlreadyPresent = $true
                         break
                     }
                 }
                 if (-not $boolTocAlreadyPresent) {
-                    $arrOutputLines.Add('- [Executive Summary: Terraform Philosophy](#executive-summary-terraform-philosophy)')
+                    $listOutputLines.Add('- [Executive Summary: Terraform Philosophy](#executive-summary-terraform-philosophy)')
                 }
             }
 
@@ -770,7 +840,7 @@ function New-StyleGuideFullVersion {
                 # Only insert if the executive summary was not already emitted via a
                 # RATIONALE marker (i.e., the slim guide no longer has the placeholder).
                 $boolAlreadyEmitted = $false
-                foreach ($strPrevLine in $arrOutputLines) {
+                foreach ($strPrevLine in $listOutputLines) {
                     if ($strPrevLine -match '^## Executive Summary: Terraform Philosophy') {
                         $boolAlreadyEmitted = $true
                         break
@@ -781,25 +851,25 @@ function New-StyleGuideFullVersion {
                     # lines that the slim guide placed before this heading. The
                     # executive summary will supply its own trailing rule, so
                     # keeping the pre-existing one would create a duplicate.
-                    while ($arrOutputLines.Count -gt 0 -and
-                            ($arrOutputLines[$arrOutputLines.Count - 1].Trim() -eq '' -or
-                             $arrOutputLines[$arrOutputLines.Count - 1].Trim() -eq '---')) {
-                        $arrOutputLines.RemoveAt($arrOutputLines.Count - 1)
+                    while ($listOutputLines.Count -gt 0 -and
+                            ($listOutputLines[$listOutputLines.Count - 1].Trim() -eq '' -or
+                             $listOutputLines[$listOutputLines.Count - 1].Trim() -eq '---')) {
+                        $listOutputLines.RemoveAt($listOutputLines.Count - 1)
                     }
-                    $arrOutputLines.Add('')
-                    $arrOutputLines.Add('## Executive Summary: Terraform Philosophy')
-                    $arrOutputLines.Add('')
+                    $listOutputLines.Add('')
+                    $listOutputLines.Add('## Executive Summary: Terraform Philosophy')
+                    $listOutputLines.Add('')
                     $arrRationaleBody = $hashtableCleanSections['executive-summary-terraform-philosophy']
                     foreach ($strRatLine in $arrRationaleBody) {
-                        $arrOutputLines.Add($strRatLine)
+                        $listOutputLines.Add($strRatLine)
                     }
-                    $arrOutputLines.Add('')
-                    $arrOutputLines.Add('---')
-                    $arrOutputLines.Add('')
+                    $listOutputLines.Add('')
+                    $listOutputLines.Add('---')
+                    $listOutputLines.Add('')
                 }
             }
 
-            $arrOutputLines.Add($strLine)
+            $listOutputLines.Add($strLine)
         }
 
         # Append standalone ## sections from STYLE_GUIDE_RATIONALE.md that were
@@ -809,40 +879,40 @@ function New-StyleGuideFullVersion {
         # Skip: Table of Contents, Executive Summary (already injected above),
         # and "...Rationale" grouping headers (whose ### children are injected
         # via markers).
-        $arrStandaloneSections = [System.Collections.Generic.List[object]]::new()
+        $listStandaloneSections = [System.Collections.Generic.List[object]]::new()
         $strCurrentHeading = $null
-        $arrSectionLines = [System.Collections.Generic.List[string]]::new()
+        $listSectionLines = [System.Collections.Generic.List[string]]::new()
 
         foreach ($strLine in $arrRationaleLines) {
             if ($strLine -match '^## (.+)$') {
                 # Save previous section if it was standalone
                 if ($null -ne $strCurrentHeading) {
-                    $arrStandaloneSections.Add(@{
+                    $listStandaloneSections.Add(@{
                         Heading = $strCurrentHeading
-                        Lines   = $arrSectionLines.ToArray()
+                        Lines   = $listSectionLines.ToArray()
                     })
                 }
                 $strCurrentHeading = $Matches[1]
-                $arrSectionLines = [System.Collections.Generic.List[string]]::new()
+                $listSectionLines = [System.Collections.Generic.List[string]]::new()
             } elseif ($null -ne $strCurrentHeading) {
-                $arrSectionLines.Add($strLine)
+                $listSectionLines.Add($strLine)
             }
         }
         if ($null -ne $strCurrentHeading) {
-            $arrStandaloneSections.Add(@{
+            $listStandaloneSections.Add(@{
                 Heading = $strCurrentHeading
-                Lines   = $arrSectionLines.ToArray()
+                Lines   = $listSectionLines.ToArray()
             })
         }
 
         # Determine which ## headings already exist in the output
-        $arrExistingHeadings = @($arrOutputLines | Where-Object {
+        $arrExistingHeadings = @($listOutputLines | Where-Object {
             $_ -match '^## '
         } | ForEach-Object {
             ($_ -replace '^## ', '').Trim()
         })
 
-        foreach ($objSection in $arrStandaloneSections) {
+        foreach ($objSection in $listStandaloneSections) {
             $strHeading = $objSection.Heading
 
             # Skip Table of Contents (rationale-specific navigation)
@@ -859,8 +929,8 @@ function New-StyleGuideFullVersion {
             if ($arrExistingHeadings -contains $strHeading) { continue }
 
             # Append this standalone section
-            $arrOutputLines.Add('')
-            $arrOutputLines.Add("## $strHeading")
+            $listOutputLines.Add('')
+            $listOutputLines.Add("## $strHeading")
 
             # Apply the same filter/convert logic used for injected ### sections
             # so that STYLE_GUIDE_FULL.md remains self-contained with no cross-file links.
@@ -887,14 +957,14 @@ function New-StyleGuideFullVersion {
                 $intBodyEnd--
             }
             if ($intBodyStart -le $intBodyEnd) {
-                $arrOutputLines.Add('')
-                for ($intJ = $intBodyStart; $intJ -le $intBodyEnd; $intJ++) {
-                    $arrOutputLines.Add($arrBody[$intJ])
+                $listOutputLines.Add('')
+                for ($intBodyLineIndex = $intBodyStart; $intBodyLineIndex -le $intBodyEnd; $intBodyLineIndex++) {
+                    $listOutputLines.Add($arrBody[$intBodyLineIndex])
                 }
             }
         }
 
-        $strOutput = ($arrOutputLines -join "`n")
+        $strOutput = ($listOutputLines -join "`n")
 
         # Collapse runs of two or more consecutive blank lines to exactly one blank line.
         # In the joined string, one blank line = \n\n (end of previous line + empty line + 
