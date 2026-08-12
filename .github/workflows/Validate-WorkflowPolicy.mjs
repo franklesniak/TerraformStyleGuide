@@ -263,7 +263,7 @@ const REVIEWED_CREDENTIAL_STEP_DIGEST = 'e94b265f97f20d46df3bafcee77f546463f650c
 // individually below, but an inserted early exit satisfies every one of them
 // while skipping the probes entirely. The same backstop the Markdown step and
 // the former push step carry applies here for the same reason.
-const REVIEWED_VERIFY_STEP_DIGEST = '238b85b3f36cc5bc4a4b8a023342617be23c60cdc36060f083541c7b02f6a360';
+const REVIEWED_VERIFY_STEP_DIGEST = '43b274168cb9f3f9620703614b30bffb30ad3dc15164bea3c13eb9319e01f345';
 
 // Both jobs that run repository-controlled code now acquire their own revision
 // instead of using an action to do it, so neither contains a process holding
@@ -410,7 +410,7 @@ const REVIEWED_VERIFY_GUARDS = Object.freeze([
   // because they are cheap to pin, not because an exploit was shown.
   // Stops before the throw message: the projection blanks string content, so a
   // fragment carrying one can never match it.
-  ['if ($arrObserved -ccontains $strPath) { throw ', [2]],
+  ['if ($listObserved -ccontains $strPath) { throw ', [2]],
   ['if ($Allowed -cnotcontains $strPath) { throw ', [2]],
   ['if ([Convert]::ToBase64String($arrRecord) -cne [Convert]::ToBase64String($arrRoundTrip)) {', [2]],
   ['if ((Get-GitControlSurfaceDigest) -cne $strControlSurfaceBefore) {', [0]],
@@ -432,13 +432,13 @@ const REVIEWED_VERIFY_GUARDS = Object.freeze([
 // measured, so closing only `$local:` and `${...}` here would have been a rule
 // that changes no outcome. Each of these is assigned exactly once in the
 // reviewed step, counted in every spelling PowerShell accepts.
-// Round 54 added arrChanged. It is the accumulator the byte-level gate reads --
-// `if ($arrChanged.Count -ne 0)` -- and omitting it meant `$arrChanged = @()`
+// Round 54 added listChanged. It is the accumulator the byte-level gate reads --
+// `if ($listChanged.Count -ne 0)` -- and omitting it meant `$listChanged = @()`
 // inserted immediately before that gate disabled the authoritative drift check
 // while every other single-assignment assertion still passed. Measured
 // accepted. The list is the set of names the guards read; it was one short.
 const REVIEWED_VERIFY_SINGLE_ASSIGNMENT = Object.freeze([
-  'arrArtifacts', 'arrChanged', 'arrOutside', 'arrRecord', 'arrRoundTrip',
+  'arrArtifacts', 'arrOutside', 'arrRecord', 'arrRoundTrip', 'listChanged',
   'objDiff', 'objWorktreeAfter', 'objWorktreeBefore', 'strControlSurfaceBefore',
 ]);
 
@@ -511,15 +511,15 @@ function variableWritePattern(strName) {
 //
 // So the member surface of each measured collection is closed the way the
 // generator's call operator is: enumerated from the reviewed step, by exact
-// count. These are all reads except arrChanged's two Add calls, which are how
+// count. These are all reads except listChanged's two Add calls, which are how
 // the accumulator is built. Clear, Remove, and an indexer write on either
 // worktree map are absent from the reviewed step and therefore refused.
 const REVIEWED_VERIFY_MEMBER_ACCESS = Object.freeze({
   arrArtifacts: Object.freeze({}),
-  arrChanged: Object.freeze({ '.Add': 2, '.Count': 1 }),
   arrOutside: Object.freeze({ '.Count': 2 }),
   arrRecord: Object.freeze({ '.Length': 1 }),
   arrRoundTrip: Object.freeze({}),
+  listChanged: Object.freeze({ '.Add': 2, '.Count': 1 }),
   objDiff: Object.freeze({ '.ExitCode': 4 }),
   objWorktreeAfter: Object.freeze({ '.ContainsKey': 1, '.Keys': 1, '[': 1 }),
   objWorktreeBefore: Object.freeze({ '.ContainsKey': 1, '.Keys': 1, '[': 1 }),
@@ -529,7 +529,7 @@ const REVIEWED_VERIFY_MEMBER_ACCESS = Object.freeze({
 // Round 55, and the member closure above is why it exists. That closure names
 // the *variable* and inspects what follows it, so two things walked past it:
 //
-//   ${arrChanged}.Clear()          reported -- the braced reference is the same
+//   ${listChanged}.Clear()          reported -- the braced reference is the same
 //                                  object and the scan only knew `$name.`
 //   $x = $objWorktreeBefore        found by attacking my own rule; PowerShell
 //   $x.Clear()                     copies the reference, so mutating the alias
@@ -546,10 +546,10 @@ const REVIEWED_VERIFY_MEMBER_ACCESS = Object.freeze({
 // because it says which *use* is reviewed where this says only how many.
 const REVIEWED_VERIFY_OCCURRENCES = Object.freeze({
   arrArtifacts: 4,
-  arrChanged: 5,
   arrOutside: 3,
   arrRecord: 7,
   arrRoundTrip: 2,
+  listChanged: 5,
   objDiff: 5,
   objWorktreeAfter: 4,
   objWorktreeBefore: 4,
@@ -952,7 +952,7 @@ const REVIEWED_GENERATOR_GUARDS = Object.freeze([
   ['if ($null -eq $objProvider -or $objProvider.Name -cne ', [2]],
   ['if ($objCurrentInfo.Length -ne $intOriginalLength -or $strCurrentSha256 -cne $strOriginalSha256) {', [4]],
 ]);
-const REVIEWED_GENERATOR_DIGEST ='dd62e11eb4e2bb9a7a764febc074901c86811d25bb6fa5b50fa18f54b3bbc342';
+const REVIEWED_GENERATOR_DIGEST ='8a7f71b38171ff07003d913d2e55c9945c79fe10c15f651ecb47c28c170ed746';
 
 // The lint phases execute these two files out of the checkout. The rule
 // configuration decides which rules run at all, and the nested-fence helper is
@@ -1152,7 +1152,7 @@ const MARKDOWN_JOBS = Object.freeze({
   }),
 });
 
-const EXPECTED_VERSION = '1.0.20260802.3';
+const EXPECTED_VERSION = '1.0.20260811.0';
 const MAXIMUM_YAML_BYTES = 1024 * 1024;
 const MAXIMUM_NODE_COUNT = 10000;
 const MAXIMUM_DEPTH = 64;
@@ -1921,9 +1921,9 @@ export function validateBuildPolicy(workflow, source) {
   // prepending '.sample' to its content yields the identical byte stream while
   // converting an inert sample into an active hook. Each component is therefore
   // length-prefixed, and the component count is written first.
-  if (!generateStep.run.includes('$arrComponents = [System.Collections.Generic.List[byte[]]]::new()') ||
+  if (!generateStep.run.includes('$listComponents = [System.Collections.Generic.List[byte[]]]::new()') ||
       !generateStep.run.includes('$arrLength = [System.BitConverter]::GetBytes([long]$arrComponent.Length)') ||
-      !generateStep.run.includes('$arrCount = [System.BitConverter]::GetBytes([long]$arrComponents.Count)')) {
+      !generateStep.run.includes('$arrCount = [System.BitConverter]::GetBytes([long]$listComponents.Count)')) {
     reject('git-policy', 'the Git control-surface digest does not frame its components unambiguously');
   }
   // GitHub applies these files to every subsequent step in the job. There is
@@ -3596,7 +3596,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   // Round 54, reported. The authoritative accumulator was missing from the
   // single-assignment list, so emptying it immediately before its own gate
   // disabled the byte-level drift check with every other assertion satisfied.
-  ['T1-BUILD-147', 'changed-path accumulator emptied before its gate', 'build', (source) => replaceOnce(source, '          if ($arrChanged.Count -ne 0) {', '          $arrChanged = @()\n          if ($arrChanged.Count -ne 0) {')],
+  ['T1-BUILD-147', 'changed-path accumulator emptied before its gate', 'build', (source) => replaceOnce(source, '          if ($listChanged.Count -ne 0) {', '          $listChanged = @()\n          if ($listChanged.Count -ne 0) {')],
   // Case-variant of the same class, on a different protected name.
   ['T1-BUILD-148', 'control-surface digest re-recorded through a case variant', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n          $STRCONTROLSURFACEBEFORE = Get-GitControlSurfaceDigest\n')],
   // A mutation, not an assignment: every name stays bound exactly once while
@@ -3611,7 +3611,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   // Round 55. The member closure named the variable and read what followed it,
   // so a braced reference and an alias both walked past it -- the second found
   // by attacking that rule rather than by report.
-  ['T1-BUILD-154', 'drift accumulator emptied through a braced reference', 'build', (source) => replaceOnce(source, '          if ($arrChanged.Count -ne 0) {', '          ${arrChanged}.Clear()\n          if ($arrChanged.Count -ne 0) {')],
+  ['T1-BUILD-154', 'drift accumulator emptied through a braced reference', 'build', (source) => replaceOnce(source, '          if ($listChanged.Count -ne 0) {', '          ${listChanged}.Clear()\n          if ($listChanged.Count -ne 0) {')],
   ['T1-BUILD-155', 'measured map mutated through an alias', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigests\n', '          $objWorktreeAfter = Get-WorktreeFileDigests\n          $objAlias = $objWorktreeBefore\n')],
   // Neither a call operator nor a bare command token, so no rule here saw it.
   ['T1-BUILD-156', 'process launched through a static call', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', "          [System.Diagnostics.Process]::Start('pwsh', '-NoProfile -File ./payload.ps1')\n          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n")],
@@ -3858,7 +3858,7 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-093": "markdown-policy: markdown.markdownlint.lint writes an unreviewed qualified variable: private:intOuterExit",
   "T1-BUILD-145": "side-effect-policy: build.verify does not assign $strControlSurfaceBefore exactly once",
   "T1-BUILD-146": "side-effect-policy: build.verify does not assign $objWorktreeBefore exactly once",
-  "T1-BUILD-147": "side-effect-policy: build.verify does not assign $arrChanged exactly once",
+  "T1-BUILD-147": "side-effect-policy: build.verify does not assign $listChanged exactly once",
   "T1-BUILD-148": "side-effect-policy: build.verify does not assign $strControlSurfaceBefore exactly once",
   "T1-BUILD-149": "side-effect-policy: build.verify makes an unreviewed use of $objWorktreeBefore: .Clear",
   "T1-BUILD-150": "side-effect-policy: build.verify does not invoke exactly where it was reviewed to",
@@ -3869,7 +3869,7 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   // reached without a command name, which the allowlist cannot see.
   "T1-BUILD-152": "side-effect-policy: build.verify runs an unreviewed command: Set-Item",
   "T1-BUILD-153": "side-effect-policy: build.verify uses New-Variable outside its reviewed constant bindings",
-  "T1-BUILD-154": "side-effect-policy: build.verify makes an unreviewed use of $arrChanged: .Clear",
+  "T1-BUILD-154": "side-effect-policy: build.verify makes an unreviewed use of $listChanged: .Clear",
   "T1-BUILD-155": "side-effect-policy: build.verify refers to $objWorktreeBefore 5 times rather than the reviewed 4",
   "T1-BUILD-156": "side-effect-policy: build.verify makes an unreviewed static call: System.Diagnostics.Process::Start",
   "T1-GENERATOR-034": "supply-policy: the generator does not assign its Git path exactly once",

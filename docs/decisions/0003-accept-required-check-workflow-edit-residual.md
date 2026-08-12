@@ -98,6 +98,11 @@ current workflow graph.
 
 Accept the workflow-edit residual and keep the interim bypass list empty.
 
+The active, effective interim ruleset completes issue #28 and clears that issue as the
+prerequisite that blocks issue #22. Merging this decision record is the final repository
+record step for #28; the issue must not remain open waiting for a check that only #22 can
+create.
+
 Issue #22 must not introduce or activate its planned write-enabled direct-push job until a
 separate decision selects and drills one of these shapes:
 
@@ -112,8 +117,9 @@ to preserve the old writer design.
 
 After issue #22 creates and successfully reports
 `Build Style Guide Artifacts / approve`, that exact context must be added to the required
-list following #22's temporary-ref drill. The live effective rules and retained digest
-must then be updated.
+list following #22's temporary-ref drill and before #22 merges or activates its production
+writer. That extension is a #22 implementation responsibility, not a #28 closure
+criterion. The live effective rules and retained digest must then be updated.
 
 ## 6. Retained effective-rule evidence
 
