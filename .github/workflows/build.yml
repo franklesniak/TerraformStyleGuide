@@ -174,7 +174,49 @@ jobs:
           )
 
           function Invoke-GitRaw {
-              param([string[]]$Arguments)
+              # .SYNOPSIS
+              # Invokes the fixed Git executable and captures raw output bytes.
+              #
+              # .DESCRIPTION
+              # Starts the already resolved Git executable without a shell, isolates
+              # system and global Git configuration, and drains standard output and
+              # standard error concurrently. It returns the exact native exit code,
+              # raw standard-output bytes, and standard-error text. It throws
+              # native-tool when Process.Start returns false. Process, task, stream,
+              # allocation, and parameter-binding failures propagate.
+              #
+              # .PARAMETER GitArguments
+              # Complete Git argument array. Each element is added without shell
+              # interpretation.
+              #
+              # .EXAMPLE
+              # $objWorking = Invoke-GitRaw @('diff', '--name-only', '-z', '--')
+              # # Captures working-tree path records and the exact Git exit code.
+              #
+              # .EXAMPLE
+              # $objUntracked = Invoke-GitRaw @('ls-files', '--others', '--exclude-standard', '-z', '--')
+              # # Captures raw NUL-delimited untracked-path records.
+              #
+              # .INPUTS
+              # None. This function does not accept pipeline input.
+              #
+              # .OUTPUTS
+              # System.Management.Automation.PSCustomObject. One object with
+              # System.Int32 ExitCode, System.Byte[] Bytes, and System.String Error.
+              # A nonzero native exit remains data and is not converted to success.
+              #
+              # .NOTES
+              # PRIVATE/INTERNAL HELPER - This function is not part of the public API
+              # surface. Parameters, return shape, and positional contract may change
+              # without notice.
+              #
+              # Version: 1.0.20260814.0
+              #
+              # This function supports positional parameters
+              # (internal-caller contract only; subject to change):
+              #
+              #   Position 0: GitArguments
+              param([string[]]$GitArguments)
               $objStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
               # Resolved once before the generator ran, and held in a constant.
               # Resolving here instead would consult PATH and the command table
@@ -195,7 +237,7 @@ jobs:
               # all three documented configuration sources are accounted for.
               $objStartInfo.Environment['GIT_CONFIG_GLOBAL'] = '/dev/null'
               $objStartInfo.Environment['GIT_CONFIG_NOSYSTEM'] = '1'
-              foreach ($strArgument in $Arguments) {
+              foreach ($strArgument in $GitArguments) {
                   [void]$objStartInfo.ArgumentList.Add($strArgument)
               }
               $objProcess = [System.Diagnostics.Process]::new()
@@ -207,7 +249,7 @@ jobs:
                   # completion first deadlocks when the child fills the other.
                   $objCopyTask = $objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)
                   $objErrorTask = $objProcess.StandardError.ReadToEndAsync()
-                  $objCopyTask.GetAwaiter().GetResult()
+                  [void]$objCopyTask.GetAwaiter().GetResult()
                   $strError = $objErrorTask.GetAwaiter().GetResult()
                   $objProcess.WaitForExit()
                   return [pscustomobject]@{ ExitCode = $objProcess.ExitCode; Bytes = $objOutput.ToArray(); Error = $strError }
@@ -217,39 +259,129 @@ jobs:
               }
           }
 
-          function ConvertFrom-NulRecords {
-              param([byte[]]$Bytes)
-              if ($Bytes.Length -eq 0) { return @() }
-              if ($Bytes[$Bytes.Length - 1] -ne 0) { throw 'git-paths: missing final NUL' }
-              $listRecords = [System.Collections.Generic.List[byte[]]]::new()
+          function ConvertFrom-NulPathRecordStream {
+              # .SYNOPSIS
+              # Converts one raw NUL-delimited path-record stream.
+              #
+              # .DESCRIPTION
+              # Splits the supplied bytes only at NUL delimiters and copies each
+              # nonempty record without text decoding. Empty input produces no
+              # records. The function throws git-paths: missing final NUL for an
+              # unterminated stream and git-paths: empty or duplicate record for an
+              # empty record. Allocation, copy, and parameter-binding failures
+              # propagate. Duplicate byte records remain visible for the path-set
+              # validator to reject after strict decoding.
+              #
+              # .PARAMETER PathRecordBytes
+              # Complete raw byte stream returned by one NUL-delimited Git query.
+              #
+              # .EXAMPLE
+              # $arrPathRecords = @(ConvertFrom-NulPathRecordStream ([byte[]]@(0x61, 0x00)))
+              # # Returns one System.Byte[] record containing 0x61.
+              #
+              # .EXAMPLE
+              # $arrPathRecords = @(ConvertFrom-NulPathRecordStream ([byte[]]::new(0)))
+              # # Returns an empty array for an empty Git result.
+              #
+              # .INPUTS
+              # None. This function does not accept pipeline input.
+              #
+              # .OUTPUTS
+              # System.Byte[]. Writes one success-stream byte array for each raw path
+              # record. Empty input writes no success-stream object.
+              #
+              # .NOTES
+              # PRIVATE/INTERNAL HELPER - This function is not part of the public API
+              # surface. Parameters, return shape, and positional contract may change
+              # without notice.
+              #
+              # Version: 1.0.20260814.0
+              #
+              # This function supports positional parameters
+              # (internal-caller contract only; subject to change):
+              #
+              #   Position 0: PathRecordBytes
+              param([byte[]]$PathRecordBytes)
+              if ($PathRecordBytes.Length -eq 0) { return @() }
+              if ($PathRecordBytes[$PathRecordBytes.Length - 1] -ne 0) { throw 'git-paths: missing final NUL' }
+              $listPathRecords = [System.Collections.Generic.List[byte[]]]::new()
               $intStart = 0
-              for ($intIndex = 0; $intIndex -lt $Bytes.Length; $intIndex++) {
-                  if ($Bytes[$intIndex] -eq 0) {
+              for ($intIndex = 0; $intIndex -lt $PathRecordBytes.Length; $intIndex++) {
+                  if ($PathRecordBytes[$intIndex] -eq 0) {
                       if ($intIndex -eq $intStart) { throw 'git-paths: empty or duplicate record' }
                       $arrRecord = [byte[]]::new($intIndex - $intStart)
-                      [System.Array]::Copy($Bytes, $intStart, $arrRecord, 0, $arrRecord.Length)
-                      $listRecords.Add($arrRecord)
+                      [System.Array]::Copy($PathRecordBytes, $intStart, $arrRecord, 0, $arrRecord.Length)
+                      $listPathRecords.Add($arrRecord)
                       $intStart = $intIndex + 1
                   }
               }
-              return $listRecords.ToArray()
+              return $listPathRecords.ToArray()
           }
 
-          function Assert-AllowedPaths {
-              param([byte[][]]$Records, [string[]]$Allowed, [string]$Surface)
+          function Assert-AllowedPathSet {
+              # .SYNOPSIS
+              # Asserts one decoded Git path set against an exact allowlist.
+              #
+              # .DESCRIPTION
+              # Strictly decodes each raw record as UTF-8, requires byte-for-byte
+              # round-trip equality, rejects duplicate decoded paths, and requires
+              # case-sensitive membership in the supplied allowlist. It returns the
+              # observed paths in case-sensitive sort order. It throws a git-paths
+              # category for undecodable, ambiguous, duplicate, or unexpected
+              # records. Encoding, collection, sorting, and binding failures
+              # propagate.
+              #
+              # .PARAMETER PathRecords
+              # Raw System.Byte[] path records from ConvertFrom-NulPathRecordStream.
+              #
+              # .PARAMETER AllowedPaths
+              # Exact case-sensitive path allowlist for the selected surface.
+              #
+              # .PARAMETER SurfaceName
+              # Diagnostic surface name, such as working, staged, or untracked.
+              #
+              # .EXAMPLE
+              # $arrObservedPaths = @(Assert-AllowedPathSet $arrPathRecords $arrArtifacts 'working')
+              # # Returns the allowed decoded paths in case-sensitive sort order.
+              #
+              # .EXAMPLE
+              # $arrStagedPaths = @(Assert-AllowedPathSet @() @() 'staged')
+              # # Returns an empty array for an empty clean surface.
+              #
+              # .INPUTS
+              # None. This function does not accept pipeline input.
+              #
+              # .OUTPUTS
+              # System.String. Writes each validated path in case-sensitive sort
+              # order. An empty record set writes no success-stream object.
+              #
+              # .NOTES
+              # PRIVATE/INTERNAL HELPER - This function is not part of the public API
+              # surface. Parameters, return shape, and positional contract may change
+              # without notice.
+              #
+              # Version: 1.0.20260814.0
+              #
+              # This function supports positional parameters
+              # (internal-caller contract only; subject to change):
+              #
+              #   Position 0: PathRecords
+              #   Position 1: AllowedPaths
+              #   Position 2: SurfaceName
+              param([byte[][]]$PathRecords, [string[]]$AllowedPaths, [string]$SurfaceName)
               $objUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
-              $listObserved = [System.Collections.Generic.List[string]]::new()
-              foreach ($arrRecord in $Records) {
-                  try { $strPath = $objUtf8.GetString($arrRecord) } catch { throw "git-paths: undecodable $Surface record" }
+              $listObservedPaths = [System.Collections.Generic.List[string]]::new()
+              foreach ($arrRecord in $PathRecords) {
+                  try { $strPath = $objUtf8.GetString($arrRecord) } catch { throw "git-paths: undecodable $SurfaceName record" }
                   $arrRoundTrip = $objUtf8.GetBytes($strPath)
                   if ([Convert]::ToBase64String($arrRecord) -cne [Convert]::ToBase64String($arrRoundTrip)) {
-                      throw "git-paths: ambiguous $Surface record"
+                      throw "git-paths: ambiguous $SurfaceName record"
                   }
-                  if ($listObserved -ccontains $strPath) { throw "git-paths: duplicate $Surface record" }
-                  if ($Allowed -cnotcontains $strPath) { throw "git-paths: unexpected $Surface path" }
-                  $listObserved.Add($strPath)
+                  if ($listObservedPaths -ccontains $strPath) { throw "git-paths: duplicate $SurfaceName record" }
+                  if ($AllowedPaths -cnotcontains $strPath) { throw "git-paths: unexpected $SurfaceName path" }
+                  $listObservedPaths.Add($strPath)
               }
-              return @($listObserved | Sort-Object -CaseSensitive)
+              return @($listObservedPaths | Sort-Object -CaseSensitive)
           }
 
           # Everything below this line runs after repository-controlled code, so
@@ -272,6 +404,40 @@ jobs:
           # repository's own control surface is digested and required to be
           # unchanged: the generator has no legitimate reason to touch .git.
           function Get-GitControlSurfaceDigest {
+              # .SYNOPSIS
+              # Measures the repository-local Git control surface.
+              #
+              # .DESCRIPTION
+              # Reads the local Git configuration and every hook file, frames the
+              # component count and each component length in big-endian form, and
+              # returns a Base64-encoded SHA-256 digest. It throws git-state when
+              # the Git metadata path is not a directory. Directory, file, hashing, stream, and
+              # allocation failures propagate.
+              #
+              # .EXAMPLE
+              # $strControlSurfaceBefore = Get-GitControlSurfaceDigest
+              # # Records the repository-local configuration and hook state.
+              #
+              # .EXAMPLE
+              # if ((Get-GitControlSurfaceDigest) -cne $strControlSurfaceBefore) { throw 'git-state changed' }
+              # # Compares a later measurement with the recorded digest.
+              #
+              # .INPUTS
+              # None. This function does not accept pipeline input.
+              #
+              # .OUTPUTS
+              # System.String. One Base64-encoded SHA-256 digest of the injectively
+              # framed repository-local Git control surface.
+              #
+              # .NOTES
+              # PRIVATE/INTERNAL HELPER - This function is not part of the public API
+              # surface. Parameters, return shape, and positional contract may change
+              # without notice.
+              #
+              # Version: 1.0.20260814.0
+              #
+              # This function declares no parameters.
+              param ()
               $strGitDirectory = [System.IO.Path]::Combine($PWD.Path, '.git')
               if (-not [System.IO.Directory]::Exists($strGitDirectory)) { throw 'git-state: .git is not a directory' }
               # Components are collected first, then written length-prefixed.
@@ -367,10 +533,47 @@ jobs:
           # maps, so a generator that creates one leaves the comparison looking
           # exactly like a generator that did nothing; refusing keeps the signal.
           # The repository tracks no links, so this cannot fire on honest input.
-          function Get-WorktreeFileDigests {
+          function Get-WorktreeFileDigestMap {
+              # .SYNOPSIS
+              # Measures the ordinary files in the current working tree.
+              #
+              # .DESCRIPTION
+              # Walks the working tree without recursive filesystem APIs, refuses
+              # every reparse point, excludes only the exact .git directory, and
+              # hashes each file through a bounded stream. It uses file length to
+              # avoid opening an empty FIFO and returns an ordinally sorted mapping
+              # from relative path to Base64 SHA-256 digest. It throws worktree when
+              # a link is present. Enumeration, metadata, file, hashing, stream,
+              # collection, and allocation failures propagate.
+              #
+              # .EXAMPLE
+              # $objInitialDigestMap = Get-WorktreeFileDigestMap
+              # # Records every ordinary working-tree file before generation.
+              #
+              # .EXAMPLE
+              # $objFinalDigestMap = Get-WorktreeFileDigestMap
+              # # Records the same map shape after generation for exact comparison.
+              #
+              # .INPUTS
+              # None. This function does not accept pipeline input.
+              #
+              # .OUTPUTS
+              # System.Collections.Generic.SortedDictionary[System.String,System.String].
+              # One non-enumerated ordinal map from repository-relative path to a
+              # Base64-encoded SHA-256 digest.
+              #
+              # .NOTES
+              # PRIVATE/INTERNAL HELPER - This function is not part of the public API
+              # surface. Parameters, return shape, and positional contract may change
+              # without notice.
+              #
+              # Version: 1.0.20260814.0
+              #
+              # This function declares no parameters.
+              param ()
               $strRoot = $PWD.Path
               $strGitDirectory = [System.IO.Path]::Combine($strRoot, '.git')
-              $objMap = [System.Collections.Generic.SortedDictionary[string, string]]::new([System.StringComparer]::Ordinal)
+              $objDigestMap = [System.Collections.Generic.SortedDictionary[string, string]]::new([System.StringComparer]::Ordinal)
               $objSha = [System.Security.Cryptography.SHA256]::Create()
               $objPending = [System.Collections.Generic.Stack[string]]::new()
               $objPending.Push($strRoot)
@@ -395,20 +598,20 @@ jobs:
                               # a large file costs a buffer instead of its size.
                               $objFile = [System.IO.FileInfo]::new($strEntry)
                               if ($objFile.Length -eq 0) {
-                                  $objMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash([byte[]]::new(0)))
+                                  $objDigestMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash([byte[]]::new(0)))
                               } else {
                                   $objStream = [System.IO.File]::OpenRead($strEntry)
                                   try {
-                                      $objMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash($objStream))
+                                      $objDigestMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash($objStream))
                                   } finally { $objStream.Dispose() }
                               }
                           }
                       }
                   }
               } finally { $objSha.Dispose() }
-              return $objMap
+              return $objDigestMap
           }
-          $objWorktreeBefore = Get-WorktreeFileDigests
+          $objWorktreeBefore = Get-WorktreeFileDigestMap
 
           # The generator runs in its own process, not in this session. In-session
           # it could shadow a cmdlet with a function, reassign a variable in this
@@ -433,7 +636,7 @@ jobs:
           # The authoritative drift and blast-radius gate. The Git probes that
           # follow are retained for their path-level diagnostics, but this is the
           # check that decides, because it reads bytes rather than asking Git.
-          $objWorktreeAfter = Get-WorktreeFileDigests
+          $objWorktreeAfter = Get-WorktreeFileDigestMap
           $listChanged = [System.Collections.Generic.List[string]]::new()
           foreach ($strPath in $objWorktreeBefore.Keys) {
               if ((-not $objWorktreeAfter.ContainsKey($strPath)) -or ($objWorktreeAfter[$strPath] -cne $objWorktreeBefore[$strPath])) {
@@ -457,10 +660,10 @@ jobs:
           foreach ($objResult in @($objWorking, $objStaged, $objUntracked)) {
               if ($objResult.ExitCode -ne 0) { throw "native-tool: Git path query failed with exit $($objResult.ExitCode)" }
           }
-          $arrWorking = Assert-AllowedPaths (ConvertFrom-NulRecords $objWorking.Bytes) $arrArtifacts 'working'
-          $arrStaged = Assert-AllowedPaths (ConvertFrom-NulRecords $objStaged.Bytes) @() 'staged'
-          $arrUntracked = Assert-AllowedPaths (ConvertFrom-NulRecords $objUntracked.Bytes) @() 'untracked'
-          if ($arrStaged.Count -ne 0 -or $arrUntracked.Count -ne 0) { throw 'git-paths: checkout is not clean' }
+          $null = Assert-AllowedPathSet (ConvertFrom-NulPathRecordStream $objWorking.Bytes) $arrArtifacts 'working'
+          $arrStagedPaths = @(Assert-AllowedPathSet (ConvertFrom-NulPathRecordStream $objStaged.Bytes) @() 'staged')
+          $arrUntrackedPaths = @(Assert-AllowedPathSet (ConvertFrom-NulPathRecordStream $objUntracked.Bytes) @() 'untracked')
+          if ($arrStagedPaths.Count -ne 0 -or $arrUntrackedPaths.Count -ne 0) { throw 'git-paths: checkout is not clean' }
 
           $objDiff = Invoke-GitRaw (@('diff', '--no-ext-diff', '--no-textconv', '--quiet', '--') + $arrArtifacts)
           if ($objDiff.ExitCode -ne 0 -and $objDiff.ExitCode -ne 1) {
@@ -477,7 +680,7 @@ jobs:
           if ($objDiff.ExitCode -eq 1) {
               throw 'generated-artifacts: committed artifacts do not match generator output. Run ./.github/workflows/Generate-StyleGuideArtifacts.ps1 and commit the four regenerated files.'
           }
-          Write-Host 'generated-artifacts: committed bytes match generator output'
+          Write-Information 'generated-artifacts: committed bytes match generator output' -InformationAction Continue
 
   # Publishing lives in its own job because the generator's descendants outlive
   # the generator. The process boundary makes the call synchronous, not the work:

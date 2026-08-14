@@ -16,25 +16,47 @@ This script reads STYLE_GUIDE.md and creates four derived files:
 
 .NOTES
 This script generates Terraform style guide artifacts for this repository.
-Version: 1.0.20260811.0
+Version: 1.0.20260814.0
 #>
 
 $script:strRepositoryRoot = [System.IO.Path]::GetFullPath((Join-Path -Path $PSScriptRoot -ChildPath '../..'))
 function Get-StyleGuideFileSha256 {
-    <#
-    .SYNOPSIS
-    Computes the SHA-256 digest of a file as a lowercase hexadecimal string.
-
-    .DESCRIPTION
-    Opens the file for shared reading and returns the SHA-256 hash of its bytes.
-    The digest is returned as a lowercase hexadecimal string with no separators.
-
-    .PARAMETER LiteralPath
-    Literal path to the file to hash. Wildcards are not expanded.
-
-    .OUTPUTS
-    System.String. The lowercase hexadecimal SHA-256 digest of the file.
-    #>
+    # .SYNOPSIS
+    # Computes the SHA-256 digest of one file.
+    #
+    # .DESCRIPTION
+    # Opens the literal file path for shared reading, hashes its complete byte
+    # sequence, and returns lowercase hexadecimal text with no separators. File,
+    # hashing, formatting, disposal, and parameter-binding failures propagate.
+    #
+    # .PARAMETER LiteralPath
+    # Literal path to the file to hash. The function does not expand wildcards.
+    #
+    # .EXAMPLE
+    # Get-StyleGuideFileSha256 -LiteralPath '.\STYLE_GUIDE.md'
+    # # Returns the lowercase SHA-256 digest of STYLE_GUIDE.md.
+    #
+    # .EXAMPLE
+    # $strDigest = Get-StyleGuideFileSha256 '.\copilot-instructions.md'
+    # # Uses the internal positional contract and assigns one System.String.
+    #
+    # .INPUTS
+    # None. This function does not accept pipeline input.
+    #
+    # .OUTPUTS
+    # System.String. A lowercase 64-character SHA-256 digest.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API
+    # surface. Parameters, return shape, and positional contract may change
+    # without notice.
+    #
+    # Version: 1.0.20260814.0
+    #
+    # This function supports positional parameters
+    # (internal-caller contract only; subject to change):
+    #
+    #   Position 0: LiteralPath
     param (
         [Parameter(Mandatory = $true)]
         [string]$LiteralPath
@@ -62,24 +84,47 @@ function Get-StyleGuideFileSha256 {
 }
 
 function Assert-StyleGuideOrdinaryPath {
-    <#
-    .SYNOPSIS
-    Asserts that a path is an ordinary file or directory, not a link.
-
-    .DESCRIPTION
-    Reads the filesystem attributes of the path. The function throws when the
-    path is a reparse point or link, and when its type does not match the
-    expected type.
-
-    .PARAMETER LiteralPath
-    Literal path to inspect. Wildcards are not expanded.
-
-    .PARAMETER ExpectedType
-    The required filesystem type. The value is 'Directory' or 'File'.
-
-    .OUTPUTS
-    None. The function throws System.IO.IOException when the assertion fails.
-    #>
+    # .SYNOPSIS
+    # Asserts that one path names an ordinary file or directory.
+    #
+    # .DESCRIPTION
+    # Reads the path attributes and rejects a reparse point or link. The function
+    # also requires the path type to equal the caller's File or Directory value.
+    # It throws System.IO.IOException for an assertion failure. Attribute-read and
+    # parameter-binding failures propagate.
+    #
+    # .PARAMETER LiteralPath
+    # Literal path to inspect. The function does not expand wildcards.
+    #
+    # .PARAMETER ExpectedType
+    # Required filesystem type. The accepted values are Directory and File.
+    #
+    # .EXAMPLE
+    # Assert-StyleGuideOrdinaryPath -LiteralPath $script:strRepositoryRoot -ExpectedType 'Directory'
+    # # Returns no success-stream object when the root is an ordinary directory.
+    #
+    # .EXAMPLE
+    # Assert-StyleGuideOrdinaryPath '.\STYLE_GUIDE.md' 'File'
+    # # Uses the internal positional contract and rejects a link or directory.
+    #
+    # .INPUTS
+    # None. This function does not accept pipeline input.
+    #
+    # .OUTPUTS
+    # None. A successful assertion writes no success-stream object.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API
+    # surface. Parameters, return shape, and positional contract may change
+    # without notice.
+    #
+    # Version: 1.0.20260814.0
+    #
+    # This function supports positional parameters
+    # (internal-caller contract only; subject to change):
+    #
+    #   Position 0: LiteralPath
+    #   Position 1: ExpectedType
     param (
         [Parameter(Mandatory = $true)]
         [string]$LiteralPath,
@@ -102,21 +147,44 @@ function Assert-StyleGuideOrdinaryPath {
 }
 
 function Assert-StyleGuideTrackedDestination {
-    <#
-    .SYNOPSIS
-    Asserts that a destination leaf is the one exact Git-tracked path.
-
-    .DESCRIPTION
-    Resolves the Git application and queries the index for the destination leaf.
-    The function throws unless the leaf is tracked as exactly one path that
-    matches the requested leaf under a case-sensitive comparison.
-
-    .PARAMETER DestinationLeaf
-    The repository-root-relative leaf name of the destination artifact.
-
-    .OUTPUTS
-    None. The function throws System.IO.IOException when the assertion fails.
-    #>
+    # .SYNOPSIS
+    # Asserts that one destination leaf is the exact Git-tracked path.
+    #
+    # .DESCRIPTION
+    # Resolves Git as an application and queries the repository index for the
+    # destination leaf. The function requires native exit zero, one returned
+    # record, and a case-sensitive path match. It throws System.IO.IOException
+    # when the assertion fails. Resolution, invocation, and binding failures
+    # propagate.
+    #
+    # .PARAMETER DestinationLeaf
+    # Repository-root-relative leaf name of the destination artifact.
+    #
+    # .EXAMPLE
+    # Assert-StyleGuideTrackedDestination -DestinationLeaf 'copilot-instructions.md'
+    # # Returns no success-stream object when the exact path is index-tracked.
+    #
+    # .EXAMPLE
+    # Assert-StyleGuideTrackedDestination 'STYLE_GUIDE_FULL.md'
+    # # Uses the internal positional contract and rejects absence or case drift.
+    #
+    # .INPUTS
+    # None. This function does not accept pipeline input.
+    #
+    # .OUTPUTS
+    # None. A successful assertion writes no success-stream object.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API
+    # surface. Parameters, return shape, and positional contract may change
+    # without notice.
+    #
+    # Version: 1.0.20260814.0
+    #
+    # This function supports positional parameters
+    # (internal-caller contract only; subject to change):
+    #
+    #   Position 0: DestinationLeaf
     param (
         [Parameter(Mandatory = $true)]
         [string]$DestinationLeaf
@@ -144,29 +212,60 @@ function Assert-StyleGuideTrackedDestination {
 }
 
 function Write-StyleGuideArtifact {
-    <#
-    .SYNOPSIS
-    Writes a generated style-guide artifact to its fixed destination atomically.
-
-    .DESCRIPTION
-    Validates the destination against the artifact identifier, writes the content
-    to a temporary sibling, verifies the bytes and digest, and publishes the file
-    by an atomic rename. The function throws a categorized error when any phase
-    fails, and it does not leave a partially written destination.
-
-    .PARAMETER ArtifactId
-    The artifact identifier. The value is 'copilot', 'terraform-instructions',
-    'chat', or 'full'.
-
-    .PARAMETER DestinationPath
-    The fully qualified destination path for the artifact.
-
-    .PARAMETER Content
-    The exact text content to write to the artifact.
-
-    .OUTPUTS
-    None. The function throws System.InvalidOperationException when writing fails.
-    #>
+    # .SYNOPSIS
+    # Publishes one complete style-guide artifact atomically.
+    #
+    # .DESCRIPTION
+    # Binds the artifact identifier to one fixed destination, validates ordinary
+    # paths and index tracking, creates a fresh sibling file, durably flushes the
+    # complete BOM-less UTF-8 payload, and verifies its bytes and digest. It uses
+    # File.Replace for an existing destination or non-overwriting File.Move for
+    # an absent tracked destination. A pre-publication failure removes the sibling
+    # when possible. The categorized exception reports cleanup failure or
+    # replacement-state uncertainty when the closed result cannot be proved.
+    #
+    # .PARAMETER ArtifactId
+    # Artifact identifier. Accepted values are copilot, terraform-instructions,
+    # chat, and full.
+    #
+    # .PARAMETER DestinationPath
+    # Fully qualified fixed destination path for the selected artifact.
+    #
+    # .PARAMETER Content
+    # Complete text payload to encode and publish. Null is rejected; empty text is
+    # accepted.
+    #
+    # .EXAMPLE
+    # Write-StyleGuideArtifact -ArtifactId 'copilot' -DestinationPath $strCopilotFile -Content $strContent
+    # # Publishes the complete Copilot payload and returns no success-stream object.
+    #
+    # .EXAMPLE
+    # Write-StyleGuideArtifact 'chat' $strChatFile $strWrappedContent
+    # # Uses the internal positional contract for the fixed chat destination.
+    #
+    # .INPUTS
+    # None. This function does not accept pipeline input.
+    #
+    # .OUTPUTS
+    # None. Success writes no success-stream object. Failure throws one
+    # System.InvalidOperationException whose message identifies the artifact,
+    # destination, phase, and one of access-denied, unsupported, invalid-input,
+    # io-failure, cleanup-failure, replacement-state-uncertain, or
+    # unexpected-failure.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API
+    # surface. Parameters, return shape, and positional contract may change
+    # without notice.
+    #
+    # Version: 1.0.20260814.0
+    #
+    # This function supports positional parameters
+    # (internal-caller contract only; subject to change):
+    #
+    #   Position 0: ArtifactId
+    #   Position 1: DestinationPath
+    #   Position 2: Content
     param (
         [Parameter(Mandatory = $true)]
         [ValidateSet('copilot', 'terraform-instructions', 'chat', 'full')]
@@ -466,19 +565,50 @@ function Write-StyleGuideArtifact {
 }
 
 function New-StyleGuideCopilotVersion {
-    <#
-    .SYNOPSIS
-    Creates copilot-instructions.md as a direct copy of STYLE_GUIDE.md.
-
-    .PARAMETER SourcePath
-    Path to the source STYLE_GUIDE.md file.
-
-    .PARAMETER DestinationPath
-    Path to the destination copilot-instructions.md file.
-
-    .OUTPUTS
-    Returns 0 on success, 1 on failure.
-    #>
+    # .SYNOPSIS
+    # Creates the Copilot style-guide artifact.
+    #
+    # .DESCRIPTION
+    # Reads the complete Terraform style guide, normalizes carriage-return line
+    # endings to LF, and atomically publishes the fixed Copilot artifact. The
+    # function writes a visible information record after publication. It writes a
+    # categorized error and returns one when transformation or publication fails.
+    #
+    # .PARAMETER SourcePath
+    # Path to the source STYLE_GUIDE.md file.
+    #
+    # .PARAMETER DestinationPath
+    # Path to the destination copilot-instructions.md file.
+    #
+    # .EXAMPLE
+    # $intResult = New-StyleGuideCopilotVersion -SourcePath $strSourceFile -DestinationPath $strCopilotFile
+    # # Publishes the artifact and returns 0, or writes an error and returns 1.
+    #
+    # .EXAMPLE
+    # New-StyleGuideCopilotVersion $strSourceFile $strCopilotFile -WhatIf
+    # # Uses the internal positional contract and returns 0 without publication.
+    #
+    # .INPUTS
+    # None. This function does not accept pipeline input.
+    #
+    # .OUTPUTS
+    # System.Int32. Returns 0 after publication or a caller-declined ShouldProcess
+    # operation. Returns 1 after a transformation or publication failure and
+    # writes the closed artifact category to the error stream.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API
+    # surface. Parameters, return shape, and positional contract may change
+    # without notice.
+    #
+    # Version: 1.0.20260814.0
+    #
+    # This function supports positional parameters
+    # (internal-caller contract only; subject to change):
+    #
+    #   Position 0: SourcePath
+    #   Position 1: DestinationPath
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Low')]
     param (
         [Parameter(Mandatory = $true)]
         [string]$SourcePath,
@@ -490,8 +620,11 @@ function New-StyleGuideCopilotVersion {
     try {
         $strContent = Get-Content -LiteralPath $SourcePath -Raw -Encoding UTF8
         $strNormalizedContent = $strContent -replace "`r`n?", "`n"
+        if (-not $PSCmdlet.ShouldProcess($DestinationPath, 'Publish generated style-guide artifact')) {
+            return 0
+        }
         Write-StyleGuideArtifact -ArtifactId 'copilot' -DestinationPath $DestinationPath -Content $strNormalizedContent
-        Write-Host "Successfully created $DestinationPath"
+        Write-Information "Successfully created $DestinationPath" -InformationAction Continue
         return 0
     } catch {
         $strFailure = if ($_.Exception.Message -match '^artifact=') {
@@ -506,23 +639,51 @@ function New-StyleGuideCopilotVersion {
 
 
 function New-StyleGuideTerraformInstructionsVersion {
-    <#
-    .SYNOPSIS
-    Creates terraform.instructions.md with YAML frontmatter prepended to STYLE_GUIDE.md content.
-
-    .PARAMETER SourcePath
-    Path to the source STYLE_GUIDE.md file.
-
-    .PARAMETER DestinationPath
-    Path to the destination terraform.instructions.md file.
-
-    .DESCRIPTION
-    This function reads STYLE_GUIDE.md and prepends YAML frontmatter for GitHub Copilot
-    file-specific instructions. The frontmatter includes applyTo pattern and description.
-
-    .OUTPUTS
-    Returns 0 on success, 1 on failure.
-    #>
+    # .SYNOPSIS
+    # Creates the scoped Terraform-instructions artifact.
+    #
+    # .DESCRIPTION
+    # Reads the complete Terraform style guide, prepends the fixed GitHub Copilot
+    # YAML frontmatter, normalizes carriage-return line endings to LF, and
+    # atomically publishes the fixed instructions artifact. The function writes a
+    # visible information record after publication. It writes a categorized error
+    # and returns one when transformation or publication fails.
+    #
+    # .PARAMETER SourcePath
+    # Path to the source STYLE_GUIDE.md file.
+    #
+    # .PARAMETER DestinationPath
+    # Path to the destination terraform.instructions.md file.
+    #
+    # .EXAMPLE
+    # $intResult = New-StyleGuideTerraformInstructionsVersion -SourcePath $strSourceFile -DestinationPath $strTerraformInstructionsFile
+    # # Publishes the frontmatter and guide payload, then returns 0.
+    #
+    # .EXAMPLE
+    # New-StyleGuideTerraformInstructionsVersion $strSourceFile $strTerraformInstructionsFile -WhatIf
+    # # Uses the internal positional contract and returns 0 without publication.
+    #
+    # .INPUTS
+    # None. This function does not accept pipeline input.
+    #
+    # .OUTPUTS
+    # System.Int32. Returns 0 after publication or a caller-declined ShouldProcess
+    # operation. Returns 1 after a transformation or publication failure and
+    # writes the closed artifact category to the error stream.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API
+    # surface. Parameters, return shape, and positional contract may change
+    # without notice.
+    #
+    # Version: 1.0.20260814.0
+    #
+    # This function supports positional parameters
+    # (internal-caller contract only; subject to change):
+    #
+    #   Position 0: SourcePath
+    #   Position 1: DestinationPath
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Low')]
     param (
         [Parameter(Mandatory = $true)]
         [string]$SourcePath,
@@ -549,8 +710,11 @@ function New-StyleGuideTerraformInstructionsVersion {
         $strFullContent = $strFrontmatter + $strContent
         
         $strNormalizedContent = $strFullContent -replace "`r`n?", "`n"
+        if (-not $PSCmdlet.ShouldProcess($DestinationPath, 'Publish generated style-guide artifact')) {
+            return 0
+        }
         Write-StyleGuideArtifact -ArtifactId 'terraform-instructions' -DestinationPath $DestinationPath -Content $strNormalizedContent
-        Write-Host "Successfully created $DestinationPath"
+        Write-Information "Successfully created $DestinationPath" -InformationAction Continue
         return 0
     } catch {
         $strFailure = if ($_.Exception.Message -match '^artifact=') {
@@ -565,25 +729,52 @@ function New-StyleGuideTerraformInstructionsVersion {
 
 
 function New-StyleGuideChatVersion {
-    <#
-    .SYNOPSIS
-    Creates STYLE_GUIDE_CHAT.md wrapped in a markdown code fence using proper fence nesting.
-
-    .PARAMETER SourcePath
-    Path to the source STYLE_GUIDE.md file.
-
-    .PARAMETER DestinationPath
-    Path to the destination STYLE_GUIDE_CHAT.md file.
-
-    .DESCRIPTION
-    This function reads STYLE_GUIDE.md, finds the maximum number of consecutive backticks
-    in the content, and wraps the entire content in a markdown code fence using one more
-    backtick than the maximum found. This follows the CommonMark rule that a fence closes
-    only when it encounters the same character with at least as many characters as the opener.
-
-    .OUTPUTS
-    Returns 0 on success, 1 on failure.
-    #>
+    # .SYNOPSIS
+    # Creates the chat-ready Terraform style-guide artifact.
+    #
+    # .DESCRIPTION
+    # Reads the complete Terraform style guide, finds its longest backtick run,
+    # and wraps the guide in a longer CommonMark fence with a minimum length of
+    # four. It normalizes carriage-return line endings to LF and atomically
+    # publishes the fixed chat artifact. The function writes a visible information
+    # record after publication. It writes a categorized error and returns one when
+    # transformation or publication fails.
+    #
+    # .PARAMETER SourcePath
+    # Path to the source STYLE_GUIDE.md file.
+    #
+    # .PARAMETER DestinationPath
+    # Path to the destination STYLE_GUIDE_CHAT.md file.
+    #
+    # .EXAMPLE
+    # $intResult = New-StyleGuideChatVersion -SourcePath $strSourceFile -DestinationPath $strChatFile
+    # # Publishes the fenced payload and returns 0, or returns 1 after failure.
+    #
+    # .EXAMPLE
+    # New-StyleGuideChatVersion $strSourceFile $strChatFile -WhatIf
+    # # Uses the internal positional contract and returns 0 without publication.
+    #
+    # .INPUTS
+    # None. This function does not accept pipeline input.
+    #
+    # .OUTPUTS
+    # System.Int32. Returns 0 after publication or a caller-declined ShouldProcess
+    # operation. Returns 1 after a transformation or publication failure and
+    # writes the closed artifact category to the error stream.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API
+    # surface. Parameters, return shape, and positional contract may change
+    # without notice.
+    #
+    # Version: 1.0.20260814.0
+    #
+    # This function supports positional parameters
+    # (internal-caller contract only; subject to change):
+    #
+    #   Position 0: SourcePath
+    #   Position 1: DestinationPath
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Low')]
     param (
         [Parameter(Mandatory = $true)]
         [string]$SourcePath,
@@ -621,8 +812,11 @@ function New-StyleGuideChatVersion {
         $strWrappedContent = "# Terraform Writing Style Guide - Formatted for Copy-Paste Into LLM Chat`n`n$strOuterFence" + "markdown`n$strContent`n$strOuterFence`n"
         
         $strNormalizedContent = $strWrappedContent -replace "`r`n?", "`n"
+        if (-not $PSCmdlet.ShouldProcess($DestinationPath, 'Publish generated style-guide artifact')) {
+            return 0
+        }
         Write-StyleGuideArtifact -ArtifactId 'chat' -DestinationPath $DestinationPath -Content $strNormalizedContent
-        Write-Host "Successfully created $DestinationPath (using $intOuterFenceLength backticks for outer fence)"
+        Write-Information "Successfully created $DestinationPath (using $intOuterFenceLength backticks for outer fence)" -InformationAction Continue
         return 0
     } catch {
         $strFailure = if ($_.Exception.Message -match '^artifact=') {
@@ -637,30 +831,57 @@ function New-StyleGuideChatVersion {
 
 
 function New-StyleGuideFullVersion {
-    <#
-    .SYNOPSIS
-    Creates STYLE_GUIDE_FULL.md by merging STYLE_GUIDE.md with rationale content from STYLE_GUIDE_RATIONALE.md.
-
-    .PARAMETER SourcePath
-    Path to the source STYLE_GUIDE.md file.
-
-    .PARAMETER RationalePath
-    Path to the STYLE_GUIDE_RATIONALE.md file.
-
-    .PARAMETER DestinationPath
-    Path to the destination STYLE_GUIDE_FULL.md file.
-
-    .DESCRIPTION
-    This function reads both STYLE_GUIDE.md and STYLE_GUIDE_RATIONALE.md, then produces
-    a combined document. For each heading in the main guide that has a corresponding
-    section in the rationale document (matched by markdown anchor), the rationale content
-    is re-inserted beneath that heading. Cross-reference blockquotes pointing back to
-    the main guide are removed from the inserted content since the combined document is
-    self-contained. Links to STYLE_GUIDE.md sections are converted to internal anchors.
-
-    .OUTPUTS
-    Returns 0 on success, 1 on failure.
-    #>
+    # .SYNOPSIS
+    # Creates the combined Terraform style-guide artifact.
+    #
+    # .DESCRIPTION
+    # Reads the normative guide and rationale, indexes rationale sections by
+    # Markdown anchor, and inserts matching rationale below each guide heading.
+    # It removes cross-reference blockquotes, converts guide links to internal
+    # anchors, normalizes the final payload to LF with one final newline, and
+    # atomically publishes the fixed full artifact. The function writes a visible
+    # information record after publication. It writes a categorized error and
+    # returns one when transformation or publication fails.
+    #
+    # .PARAMETER SourcePath
+    # Path to the source STYLE_GUIDE.md file.
+    #
+    # .PARAMETER RationalePath
+    # Path to the source STYLE_GUIDE_RATIONALE.md file.
+    #
+    # .PARAMETER DestinationPath
+    # Path to the destination STYLE_GUIDE_FULL.md file.
+    #
+    # .EXAMPLE
+    # $intResult = New-StyleGuideFullVersion -SourcePath $strSourceFile -RationalePath $strRationaleFile -DestinationPath $strFullFile
+    # # Publishes the combined guide and returns 0, or returns 1 after failure.
+    #
+    # .EXAMPLE
+    # New-StyleGuideFullVersion $strSourceFile $strRationaleFile $strFullFile -WhatIf
+    # # Uses the internal positional contract and returns 0 without publication.
+    #
+    # .INPUTS
+    # None. This function does not accept pipeline input.
+    #
+    # .OUTPUTS
+    # System.Int32. Returns 0 after publication or a caller-declined ShouldProcess
+    # operation. Returns 1 after a transformation or publication failure and
+    # writes the closed artifact category to the error stream.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API
+    # surface. Parameters, return shape, and positional contract may change
+    # without notice.
+    #
+    # Version: 1.0.20260814.0
+    #
+    # This function supports positional parameters
+    # (internal-caller contract only; subject to change):
+    #
+    #   Position 0: SourcePath
+    #   Position 1: RationalePath
+    #   Position 2: DestinationPath
+    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Low')]
     param (
         [Parameter(Mandatory = $true)]
         [string]$SourcePath,
@@ -978,8 +1199,11 @@ function New-StyleGuideFullVersion {
         $strOutput = $strOutput.TrimEnd("`n") + "`n"
 
         $strNormalizedContent = $strOutput -replace "`r`n?", "`n"
+        if (-not $PSCmdlet.ShouldProcess($DestinationPath, 'Publish generated style-guide artifact')) {
+            return 0
+        }
         Write-StyleGuideArtifact -ArtifactId 'full' -DestinationPath $DestinationPath -Content $strNormalizedContent
-        Write-Host "Successfully created $DestinationPath"
+        Write-Information "Successfully created $DestinationPath" -InformationAction Continue
         return 0
     } catch {
         $strFailure = if ($_.Exception.Message -match '^artifact=') {
@@ -1038,5 +1262,5 @@ if ($intFullResult -ne 0) {
     exit 1
 }
 
-Write-Host "All style guide artifacts generated successfully"
+Write-Information "All style guide artifacts generated successfully" -InformationAction Continue
 exit 0

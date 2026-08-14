@@ -263,7 +263,7 @@ const REVIEWED_CREDENTIAL_STEP_DIGEST = 'e94b265f97f20d46df3bafcee77f546463f650c
 // individually below, but an inserted early exit satisfies every one of them
 // while skipping the probes entirely. The same backstop the Markdown step and
 // the former push step carry applies here for the same reason.
-const REVIEWED_VERIFY_STEP_DIGEST = '43b274168cb9f3f9620703614b30bffb30ad3dc15164bea3c13eb9319e01f345';
+const REVIEWED_VERIFY_STEP_DIGEST = '5b9b3253c88b6f38a91d69b5177202efedb693733915504de65b63be229898bf';
 
 // Both jobs that run repository-controlled code now acquire their own revision
 // instead of using an action to do it, so neither contains a process holding
@@ -410,8 +410,8 @@ const REVIEWED_VERIFY_GUARDS = Object.freeze([
   // because they are cheap to pin, not because an exploit was shown.
   // Stops before the throw message: the projection blanks string content, so a
   // fragment carrying one can never match it.
-  ['if ($listObserved -ccontains $strPath) { throw ', [2]],
-  ['if ($Allowed -cnotcontains $strPath) { throw ', [2]],
+  ['if ($listObservedPaths -ccontains $strPath) { throw ', [2]],
+  ['if ($AllowedPaths -cnotcontains $strPath) { throw ', [2]],
   ['if ([Convert]::ToBase64String($arrRecord) -cne [Convert]::ToBase64String($arrRoundTrip)) {', [2]],
   ['if ((Get-GitControlSurfaceDigest) -cne $strControlSurfaceBefore) {', [0]],
   ['if ((-not $objWorktreeAfter.ContainsKey($strPath)) -or ($objWorktreeAfter[$strPath] -cne $objWorktreeBefore[$strPath])) {', [1]],
@@ -631,9 +631,10 @@ const REVIEWED_VERIFY_INVOCATIONS = Object.freeze([
 // than the anchor narrowed, for the reason the generator's list records:
 // narrowing it would stop it seeing a command inside a subexpression.
 const REVIEWED_VERIFY_COMMANDS = Object.freeze([
-  'Assert-AllowedPaths', 'ConvertFrom-NulRecords', 'Get-GitControlSurfaceDigest',
-  'Get-WorktreeFileDigests', 'Invoke-GitRaw', 'New-Variable', 'Select-Object',
-  'Sort-Object', 'Where-Object', 'Write-Host',
+  'Assert-AllowedPathSet', 'ConvertFrom-NulPathRecordStream',
+  'Get-GitControlSurfaceDigest', 'Get-WorktreeFileDigestMap', 'Invoke-GitRaw',
+  'New-Variable', 'Select-Object', 'Sort-Object', 'Where-Object',
+  'Write-Information',
   'catch', 'else', 'finally', 'for', 'foreach', 'function', 'if', 'param',
   'return', 'throw', 'try', 'while',
   'Bytes', 'Error', 'ExitCode', 'string]]::new',
@@ -823,13 +824,13 @@ const REVIEWED_GENERATOR_COMMANDS = Object.freeze([
   'Measure-Object', 'Microsoft.PowerShell.Core\\Get-Command', 'New-Object',
   'New-StyleGuideChatVersion', 'New-StyleGuideCopilotVersion',
   'New-StyleGuideFullVersion', 'New-StyleGuideTerraformInstructionsVersion',
-  'Test-Path', 'Where-Object', 'Write-Error', 'Write-Host', 'Write-Warning',
+  'Test-Path', 'Where-Object', 'Write-Error', 'Write-Information', 'Write-Warning',
   'Write-StyleGuideArtifact',
   // Control flow and declarations.
   'break', 'catch', 'continue', 'else', 'elseif', 'exit', 'finally', 'for',
   'foreach', 'function', 'if', 'param', 'return', 'throw', 'try', 'while',
   // Parameter names, as above.
-  'Heading', 'Lines', 'Mandatory',
+  'ConfirmImpact', 'Heading', 'Lines', 'Mandatory', 'SupportsShouldProcess',
 ]);
 
 // Round 53, reported. The command-position allowlist above closed bare command
@@ -916,11 +917,11 @@ const REVIEWED_GENERATOR_DISPATCH = Object.freeze([
 ]);
 
 // Everything the generator is reviewed to do after that last statement, with
-// whitespace collapsed. The Write-Host message is a pair of quotes because the
+// whitespace collapsed. The Write-Information message is a pair of quotes because the
 // projection blanks string content -- which is correct here: what the script
 // prints on success is not a policy input, and pinning it would make an
 // innocuous wording change a policy failure.
-const REVIEWED_GENERATOR_TAIL = 'exit 1 } Write-Host " " exit 0';
+const REVIEWED_GENERATOR_TAIL = 'exit 1 } Write-Information " " -InformationAction Continue exit 0';
 
 // Round 51. The generator's safety assertions, with the number of times each
 // must appear. Every one of these was deleted or neutered in a measured battery
@@ -952,7 +953,7 @@ const REVIEWED_GENERATOR_GUARDS = Object.freeze([
   ['if ($null -eq $objProvider -or $objProvider.Name -cne ', [2]],
   ['if ($objCurrentInfo.Length -ne $intOriginalLength -or $strCurrentSha256 -cne $strOriginalSha256) {', [4]],
 ]);
-const REVIEWED_GENERATOR_DIGEST ='8a7f71b38171ff07003d913d2e55c9945c79fe10c15f651ecb47c28c170ed746';
+const REVIEWED_GENERATOR_DIGEST = '5a239bbec911d8dca9c38880b3ef47b8af3cbe8f5771cf7b607fa2bda6e00acc';
 
 // The lint phases execute these two files out of the checkout. The rule
 // configuration decides which rules run at all, and the nested-fence helper is
@@ -1152,7 +1153,31 @@ const MARKDOWN_JOBS = Object.freeze({
   }),
 });
 
-const EXPECTED_VERSION = '1.0.20260811.0';
+const EXPECTED_VERSION = '1.0.20260814.0';
+const PREFLIGHT_ARGUMENT = '--preflight';
+const REVIEWED_GENERATOR_HELP = Object.freeze({
+  'Get-StyleGuideFileSha256': Object.freeze(['LiteralPath']),
+  'Assert-StyleGuideOrdinaryPath': Object.freeze(['LiteralPath', 'ExpectedType']),
+  'Assert-StyleGuideTrackedDestination': Object.freeze(['DestinationLeaf']),
+  'Write-StyleGuideArtifact': Object.freeze(['ArtifactId', 'DestinationPath', 'Content']),
+  'New-StyleGuideCopilotVersion': Object.freeze(['SourcePath', 'DestinationPath']),
+  'New-StyleGuideTerraformInstructionsVersion': Object.freeze(['SourcePath', 'DestinationPath']),
+  'New-StyleGuideChatVersion': Object.freeze(['SourcePath', 'DestinationPath']),
+  'New-StyleGuideFullVersion': Object.freeze(['SourcePath', 'RationalePath', 'DestinationPath']),
+});
+const REVIEWED_VERIFY_HELP = Object.freeze({
+  'Invoke-GitRaw': Object.freeze(['GitArguments']),
+  'ConvertFrom-NulPathRecordStream': Object.freeze(['PathRecordBytes']),
+  'Assert-AllowedPathSet': Object.freeze(['PathRecords', 'AllowedPaths', 'SurfaceName']),
+  'Get-GitControlSurfaceDigest': Object.freeze([]),
+  'Get-WorktreeFileDigestMap': Object.freeze([]),
+});
+const REVIEWED_GENERATOR_SHOULD_PROCESS = Object.freeze([
+  'New-StyleGuideCopilotVersion',
+  'New-StyleGuideTerraformInstructionsVersion',
+  'New-StyleGuideChatVersion',
+  'New-StyleGuideFullVersion',
+]);
 const MAXIMUM_YAML_BYTES = 1024 * 1024;
 const MAXIMUM_NODE_COUNT = 10000;
 const MAXIMUM_DEPTH = 64;
@@ -1167,6 +1192,121 @@ class PolicyError extends Error {
 
 function reject(category, message) {
   throw new PolicyError(category, message);
+}
+
+function selectCliMode(argv) {
+  if (argv.length === 1 && argv[0] === PREFLIGHT_ARGUMENT) return 'preflight';
+  if (argv.includes(PREFLIGHT_ARGUMENT)) {
+    reject('cli', '--preflight must be the only argument');
+  }
+  if (argv.length !== 2) reject('cli', 'expected --preflight or exactly two workflow arguments');
+  return 'repository';
+}
+
+// The full source digest closes exact reviewed bytes. This smaller authoring
+// contract keeps an intentional digest re-baseline from silently dropping the
+// cycle-1 repair: the helper set, single-line help shape, parameter coverage,
+// examples, private banner, version, and positional truth remain independently
+// named. PowerShell AST validation still runs in the implementation checks; this
+// lexical guard keeps the offline Node policy self-contained.
+function powerShellTopLevelFunctions(source) {
+  const matches = [...source.matchAll(/^[ \t]*function[ \t]+([A-Za-z][A-Za-z0-9-]*)[ \t]*\{/gmu)];
+  return matches.map((match, index) => Object.freeze({
+    name: match[1],
+    body: source.slice(match.index + match[0].length, matches[index + 1]?.index ?? source.length),
+  }));
+}
+
+function assertPowerShellPrivateHelperHelp(source, reviewed, version, category, label) {
+  const functions = powerShellTopLevelFunctions(source);
+  const observedNames = functions.map((entry) => entry.name);
+  const reviewedNames = Object.keys(reviewed);
+  if (JSON.stringify(observedNames) !== JSON.stringify(reviewedNames)) {
+    reject(category, `${label} helper names differ from the reviewed authoring contract`);
+  }
+
+  for (const entry of functions) {
+    const helpMatch = entry.body.match(/^\n((?:(?:[ \t]*#[^\n]*|[ \t]*)\n)+)/u);
+    if (helpMatch === null) {
+      reject(category, `${label} helper ${entry.name} does not contain complete single-line comment-based help`);
+    }
+    const sections = [];
+    let current = null;
+    for (const line of helpMatch[1].split('\n')) {
+      const keyword = line.match(/^[ \t]*# \.([A-Z]+)(?:[ \t]+([A-Za-z][A-Za-z0-9]*))?[ \t]*$/u);
+      if (keyword !== null) {
+        current = { keyword: keyword[1], name: keyword[2] ?? null, content: [] };
+        sections.push(current);
+        continue;
+      }
+      if (current !== null) {
+        const content = line.match(/^[ \t]*#(?:[ \t](.*))?$/u);
+        if (content !== null && (content[1] ?? '').trim() !== '') {
+          current.content.push(content[1].trim());
+        }
+      }
+    }
+
+    const parameters = reviewed[entry.name];
+    const reviewedKeywords = [
+      'SYNOPSIS', 'DESCRIPTION',
+      ...parameters.map(() => 'PARAMETER'),
+      'EXAMPLE', 'EXAMPLE', 'INPUTS', 'OUTPUTS', 'NOTES',
+    ];
+    if (JSON.stringify(sections.map((section) => section.keyword)) !== JSON.stringify(reviewedKeywords) ||
+        sections.some((section) => section.content.length === 0)) {
+      reject(category, `${label} helper ${entry.name} does not contain complete single-line comment-based help`);
+    }
+    const observedParameters = sections
+      .filter((section) => section.keyword === 'PARAMETER')
+      .map((section) => section.name);
+    if (JSON.stringify(observedParameters) !== JSON.stringify(parameters)) {
+      reject(category, `${label} helper ${entry.name} parameter help differs from the reviewed contract`);
+    }
+
+    const notes = sections.find((section) => section.keyword === 'NOTES').content;
+    const notesText = notes.join(' ');
+    if (notes[0] !== 'PRIVATE/INTERNAL HELPER - This function is not part of the public API' ||
+        !notesText.includes('Parameters, return shape, and positional contract may change without notice.') ||
+        !notesText.includes(`Version: ${version}`)) {
+      reject(category, `${label} helper ${entry.name} private notes differ from the reviewed contract`);
+    }
+    if (parameters.length === 0) {
+      if (!notesText.includes('This function declares no parameters.')) {
+        reject(category, `${label} helper ${entry.name} positional notes differ from the reviewed contract`);
+      }
+    } else {
+      for (let index = 0; index < parameters.length; index += 1) {
+        if (!notesText.includes(`Position ${index}: ${parameters[index]}`)) {
+          reject(category, `${label} helper ${entry.name} positional notes differ from the reviewed contract`);
+        }
+      }
+    }
+
+    const afterHelp = entry.body.slice(helpMatch[0].length);
+    if (!/^(?:[ \t]*\[[^\n]+\]\n)*[ \t]*param[ \t]*\(/u.test(afterHelp)) {
+      reject(category, `${label} helper ${entry.name} help is not immediately above its parameter block`);
+    }
+  }
+}
+
+function assertGeneratorShouldProcess(source) {
+  const functions = new Map(powerShellTopLevelFunctions(source).map((entry) => [entry.name, entry.body]));
+  const attribute = "[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Low')]";
+  const decision = "if (-not $PSCmdlet.ShouldProcess($DestinationPath, 'Publish generated style-guide artifact')) {";
+  for (const name of REVIEWED_GENERATOR_SHOULD_PROCESS) {
+    const body = functions.get(name) ?? '';
+    const attributeIndex = body.indexOf(attribute);
+    const decisionIndex = body.indexOf(decision);
+    const writeIndex = body.indexOf('Write-StyleGuideArtifact');
+    if (attributeIndex < 0 || decisionIndex < 0 || writeIndex < 0 || decisionIndex > writeIndex ||
+        body.split(decision).length - 1 !== 1) {
+      reject('supply-policy', `the generator helper ${name} does not support ShouldProcess at its write boundary`);
+    }
+  }
+  if (/SuppressMessageAttribute[^\n]*PSUseShouldProcessForStateChangingFunctions/iu.test(source)) {
+    reject('supply-policy', 'the generator suppresses an applicable ShouldProcess rule');
+  }
 }
 
 // Folded the same way policyDigest folds its inputs, and for the same reason:
@@ -1876,13 +2016,13 @@ export function validateBuildPolicy(workflow, source) {
   // stale artifact look clean. The deciding gate is therefore a byte-level
   // before/after comparison of the working tree, which asks Git nothing and
   // covers both drift and blast radius in one assertion.
-  if (!generateStep.run.includes('function Get-WorktreeFileDigests') ||
-      !generateStep.run.includes('$objWorktreeBefore = Get-WorktreeFileDigests') ||
-      !generateStep.run.includes('$objWorktreeAfter = Get-WorktreeFileDigests') ||
+  if (!generateStep.run.includes('function Get-WorktreeFileDigestMap') ||
+      !generateStep.run.includes('$objWorktreeBefore = Get-WorktreeFileDigestMap') ||
+      !generateStep.run.includes('$objWorktreeAfter = Get-WorktreeFileDigestMap') ||
       !generateStep.run.includes('generated-artifacts: committed artifacts do not match generator output') ||
       !generateStep.run.includes('outside the four generated artifacts') ||
-      generateStep.run.indexOf('$objWorktreeBefore = Get-WorktreeFileDigests') > generatorIndex ||
-      generateStep.run.indexOf('$objWorktreeAfter = Get-WorktreeFileDigests') < generatorIndex) {
+      generateStep.run.indexOf('$objWorktreeBefore = Get-WorktreeFileDigestMap') > generatorIndex ||
+      generateStep.run.indexOf('$objWorktreeAfter = Get-WorktreeFileDigestMap') < generatorIndex) {
     reject('side-effect-policy', 'build.verify does not bracket the generator with a worktree byte comparison');
   }
   // How the walk reaches the files decides what it can be made to read.
@@ -2112,9 +2252,17 @@ export function validateBuildPolicy(workflow, source) {
   // Every named assertion must be reachable ahead of the backstop that would
   // otherwise answer for it.
   if (!generateStep.run.includes('$objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)') ||
-      !generateStep.run.includes('$objProcess.StandardError.ReadToEndAsync()')) {
+      !generateStep.run.includes('$objProcess.StandardError.ReadToEndAsync()') ||
+      !generateStep.run.includes('[void]$objCopyTask.GetAwaiter().GetResult()')) {
     reject('git-policy', 'build.verify no longer drains both Git streams concurrently');
   }
+  assertPowerShellPrivateHelperHelp(
+    generateStep.run,
+    REVIEWED_VERIFY_HELP,
+    EXPECTED_VERSION,
+    'side-effect-policy',
+    'build.verify',
+  );
   // Closing backstop, mirroring the Markdown validation step, and last for the
   // reason above. The assertions before it name what changed; this pins
   // everything they do not model.
@@ -3078,7 +3226,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   // resolution block sits between this guard and the first git invocation, so
   // neither a bare anchor nor one spanning to $arrRemoteUrls matches here.
   ['T1-BUILD-041', 'native-command error mapping guard removed', 'build', (source) => replaceOnce(source, '          # markdownlint.yml disables it.\n          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {\n              $PSNativeCommandUseErrorActionPreference = $false\n          }\n', '          # markdownlint.yml disables it.\n')],
-  ['T1-BUILD-050', 'sequential Git stream reads restored', 'build', (source) => replaceOnce(source, '                  $objCopyTask = $objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)\n                  $objErrorTask = $objProcess.StandardError.ReadToEndAsync()\n                  $objCopyTask.GetAwaiter().GetResult()\n                  $strError = $objErrorTask.GetAwaiter().GetResult()\n', '                  $objProcess.StandardOutput.BaseStream.CopyTo($objOutput)\n                  $strError = $objProcess.StandardError.ReadToEnd()\n')],
+  ['T1-BUILD-050', 'sequential Git stream reads restored', 'build', (source) => replaceOnce(source, '                  $objCopyTask = $objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)\n                  $objErrorTask = $objProcess.StandardError.ReadToEndAsync()\n                  [void]$objCopyTask.GetAwaiter().GetResult()\n                  $strError = $objErrorTask.GetAwaiter().GetResult()\n', '                  $objProcess.StandardOutput.BaseStream.CopyTo($objOutput)\n                  $strError = $objProcess.StandardError.ReadToEnd()\n')],
   ['T1-BUILD-053', 'credentialed executable resolved through PATH', 'build', (source) => replaceOnce(source, '              $objStartInfo.FileName = $strGitPath\n', '              $arrGitCommands = @(Get-Command git -CommandType Application -ErrorAction Stop)\n              $objStartInfo.FileName = $arrGitCommands[0].Source\n')],
   ['T1-BUILD-054', 'trusted Git path list widened', 'build', (source) => replaceOnce(source, "@('/usr/bin/git', '/bin/git') | Where-Object { [System.IO.File]::Exists($_) } | Select-Object -First 1\n          if ([string]::IsNullOrEmpty($strResolvedGit)) { throw 'native-tool:", "@($env:RUNNER_TEMP + '/git', '/usr/bin/git') | Where-Object { [System.IO.File]::Exists($_) } | Select-Object -First 1\n          if ([string]::IsNullOrEmpty($strResolvedGit)) { throw 'native-tool:")],
   ['T1-BUILD-061', 'PATH lookup reintroduced beside the pinned path', 'build', (source) => replaceOnce(source, '              $objStartInfo.FileName = $strGitPath\n', '              $arrFallback = @(Get-Command git -CommandType Application -ErrorAction SilentlyContinue)\n              $objStartInfo.FileName = $strGitPath\n')],
@@ -3135,10 +3283,10 @@ const FIXTURE_INVENTORY = Object.freeze([
   // job that runs the generator and the job that publishes bytes is load-bearing
   // rather than stylistic. Each of these is a way to put repository code back in
   // the same job as the upload, which is the arrangement the split prevents.
-  ['T1-BUILD-086', 'upload returned to the job that runs the generator', 'build', (source) => replaceOnce(source, "          Write-Host 'generated-artifacts: committed bytes match generator output'\n", "          Write-Host 'generated-artifacts: committed bytes match generator output'\n\n      - name: Upload verified generated artifacts\n        id: upload-generated\n        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          name: style-guide-artifacts\n          path: |\n            copilot-instructions.md\n          if-no-files-found: error\n          retention-days: 7\n          compression-level: 6\n          overwrite: false\n          include-hidden-files: false\n")],
+  ['T1-BUILD-086', 'upload returned to the job that runs the generator', 'build', (source) => replaceOnce(source, "          Write-Information 'generated-artifacts: committed bytes match generator output' -InformationAction Continue\n", "          Write-Information 'generated-artifacts: committed bytes match generator output' -InformationAction Continue\n\n      - name: Upload verified generated artifacts\n        id: upload-generated\n        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          name: style-guide-artifacts\n          path: |\n            copilot-instructions.md\n          if-no-files-found: error\n          retention-days: 7\n          compression-level: 6\n          overwrite: false\n          include-hidden-files: false\n")],
   ['T1-BUILD-087', 'script step added to the publishing job', 'build', (source) => replaceOnce(source, '      - name: Upload verified generated artifacts\n        id: upload-generated\n', '      - name: Stage\n        id: stage\n        shell: pwsh\n        run: |\n          Write-Host staged\n\n      - name: Upload verified generated artifacts\n        id: upload-generated\n')],
   ['T1-BUILD-088', 'publishing job no longer waits for verification', 'build', (source) => replaceOnce(source, '  publish:\n    needs: verify\n', '  publish:\n')],
-  ['T1-BUILD-089', 'step appended after the verification step', 'build', (source) => replaceOnce(source, "          Write-Host 'generated-artifacts: committed bytes match generator output'\n", "          Write-Host 'generated-artifacts: committed bytes match generator output'\n\n      - name: Summarize\n        id: summarize\n        shell: pwsh\n        run: |\n          Write-Host done\n")],
+  ['T1-BUILD-089', 'step appended after the verification step', 'build', (source) => replaceOnce(source, "          Write-Information 'generated-artifacts: committed bytes match generator output' -InformationAction Continue\n", "          Write-Information 'generated-artifacts: committed bytes match generator output' -InformationAction Continue\n\n      - name: Summarize\n        id: summarize\n        shell: pwsh\n        run: |\n          Write-Host done\n")],
   // The walk decides what the verification can be made to read, so each way of
   // loosening it is a fixture rather than a comment.
   // Every branch of the walk gets a fixture. The closing digest would catch all
@@ -3169,11 +3317,11 @@ const FIXTURE_INVENTORY = Object.freeze([
   // PowerShell: this form prints a brace and then returns from the script,
   // while a scanner that counted the escaped braces read the return as
   // depth one and let it through.
-  ['T1-BUILD-123', 'top-level return hidden behind escaped braces', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          Write-Host `{\n          return\n          Write-Host `}\n          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n')],
+  ['T1-BUILD-123', 'top-level return hidden behind escaped braces', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          Write-Information `{ -InformationAction Continue\n          return\n          Write-Information `} -InformationAction Continue\n          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n')],
   // PowerShell reads smart quotes as string delimiters, so the braces here are
   // inside a string it opens and the scanner does not. Refused as non-ASCII
   // rather than by teaching the scanner four more codepoints.
-  ['T1-BUILD-124', 'smart quotes introduced into a governed script step', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          Write-Host \u201c{\u201d\n          return\n          Write-Host \u201c}\u201d\n          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n')],
+  ['T1-BUILD-124', 'smart quotes introduced into a governed script step', 'build', (source) => replaceOnce(source, '          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n', '          Write-Information \u201c{\u201d -InformationAction Continue\n          return\n          Write-Information \u201c}\u201d -InformationAction Continue\n          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1\n')],
   // Neither acquire step defines a function, so return has no legitimate use
   // in one; a top-level return exits zero having skipped the whole tail.
   ['T1-BUILD-125', 'top-level return in the acquire step', 'build', (source) => replaceOnce(source, "          $strServerUrl = $env:GITHUB_SERVER_URL\n", "          return\n          $strServerUrl = $env:GITHUB_SERVER_URL\n")],
@@ -3206,7 +3354,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   // The step order was previously covered only as a side effect of the fixture
   // that reintroduced the upload into verify; that fixture now trips the
   // no-actions rule instead, so the ordering gets a fixture of its own.
-  ['T1-BUILD-107', 'authored step appended after the generator step', 'build', (source) => replaceOnce(source, "          Write-Host 'generated-artifacts: committed bytes match generator output'\n", "          Write-Host 'generated-artifacts: committed bytes match generator output'\n\n      - name: Summarize\n        id: summarize\n        shell: pwsh\n        run: |\n          Write-Host 'done'\n")],
+  ['T1-BUILD-107', 'authored step appended after the generator step', 'build', (source) => replaceOnce(source, "          Write-Information 'generated-artifacts: committed bytes match generator output' -InformationAction Continue\n", "          Write-Information 'generated-artifacts: committed bytes match generator output' -InformationAction Continue\n\n      - name: Summarize\n        id: summarize\n        shell: pwsh\n        run: |\n          Write-Host 'done'\n")],
   // Inert-by-construction, not inert by spelling: the statement is textually
   // identical to the approved one and sits on its own line at column zero, so
   // the anchored match and every substring check are satisfied while the
@@ -3243,9 +3391,9 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-096', 'generator job regains a token scope', 'build', (source) => replaceOnce(source, '  verify:\n    runs-on: ubuntu-latest\n    permissions: {}\n', '  verify:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n')],
   ['T1-BUILD-091', 'worktree walk follows links again', 'build', (source) => replaceOnce(source, "                          if (($objAttributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {\n                              throw 'worktree: the working tree contains a link'\n                          }\n", '')],
   ['T1-BUILD-092', 'worktree walk recurses with AllDirectories', 'build', (source) => replaceOnce(source, '[System.IO.Directory]::EnumerateFileSystemEntries($objPending.Pop())', '[System.IO.Directory]::EnumerateFiles($objPending.Pop(), \'*\', [System.IO.SearchOption]::AllDirectories)')],
-  ['T1-BUILD-093', 'worktree walk loads each file whole', 'build', (source) => replaceOnce(source, '                                  $objMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash($objStream))\n', '                                  $objMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash([System.IO.File]::ReadAllBytes($strEntry)))\n')],
-  ['T1-BUILD-084', 'worktree byte comparison removed', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigests\n', '')],
-  ['T1-BUILD-085', 'worktree snapshot taken after the generator', 'build', (source) => replaceOnce(source, '          $objWorktreeBefore = Get-WorktreeFileDigests\n', '')],
+  ['T1-BUILD-093', 'worktree walk loads each file whole', 'build', (source) => replaceOnce(source, '                                  $objDigestMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash($objStream))\n', '                                  $objDigestMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash([System.IO.File]::ReadAllBytes($strEntry)))\n')],
+  ['T1-BUILD-084', 'worktree byte comparison removed', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigestMap\n', '')],
+  ['T1-BUILD-085', 'worktree snapshot taken after the generator', 'build', (source) => replaceOnce(source, '          $objWorktreeBefore = Get-WorktreeFileDigestMap\n', '')],
   ['T1-BUILD-083', 'control-surface digest framing removed', 'build', (source) => replaceOnce(source, "                      $arrLength = [System.BitConverter]::GetBytes([long]$arrComponent.Length)\n", '')],
   ['T1-BUILD-082', 'runner communication file check absent from verify', 'build', (source) => replaceOnce(source, "          foreach ($strChannel in $arrChannelPaths) {\n              if ([string]::IsNullOrEmpty($strChannel)) { throw 'runner-state: a step communication file path is unset' }\n              if ([System.IO.FileInfo]::new($strChannel).Length -ne 0) {\n                  throw 'runner-state: the generator wrote to a runner step communication file'\n              }\n          }\n", '')],
   ['T1-BUILD-081', 'probes reinherit global Git configuration', 'build', (source) => replaceOnce(source, "              $objStartInfo.Environment['GIT_CONFIG_GLOBAL'] = '/dev/null'\n", '')],
@@ -3542,7 +3690,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-143', 'diff exit-code sanity check short-circuited', 'build', (source) => replaceOnce(source, '          if ($objDiff.ExitCode -ne 0 -and $objDiff.ExitCode -ne 1) {', '          if ($false -and $objDiff.ExitCode -ne 0 -and $objDiff.ExitCode -ne 1) {')],
   // Round 52. Four walks through the round-51 dispatch rule, which matched a
   // wildcard family and counted four rather than pinning the sequence.
-  ['T1-GENERATOR-020', 'dispatches retargeted to a same-family no-op generator', 'generator', (source) => replaceOnce(source, '# Generate copilot-instructions.md\n', 'function New-StyleGuideNoopVersion { param($SourcePath,$DestinationPath,$RationalePath) return 0 }\n\n# Generate copilot-instructions.md\n').replace('New-StyleGuideCopilotVersion -SourcePath', 'New-StyleGuideNoopVersion -SourcePath')],
+  ['T1-GENERATOR-020', 'dispatches retargeted to a same-family no-op generator', 'generator', (source) => replaceOnce(replaceOnce(source, '# Generate copilot-instructions.md\n', 'function New-StyleGuideNoopVersion { param($SourcePath,$DestinationPath,$RationalePath) return 0 }\n\n# Generate copilot-instructions.md\n'), '$intCopilotResult = New-StyleGuideCopilotVersion -SourcePath', '$intCopilotResult = New-StyleGuideNoopVersion -SourcePath')],
   ['T1-GENERATOR-021', 'a dispatch result check short-circuited', 'generator', (source) => replaceOnce(source, 'if ($intFullResult -ne 0) {', 'if ($false -and $intFullResult -ne 0) {')],
   ['T1-GENERATOR-022', 'successful exit inserted before the final dispatch', 'generator', (source) => replaceOnce(source, '# Generate STYLE_GUIDE_FULL.md\n', 'exit 0\n\n# Generate STYLE_GUIDE_FULL.md\n')],
   ['T1-GENERATOR-023', 'dispatch sequence wrapped in a block that never runs', 'generator', (source) => replaceOnce(replaceOnce(source, '# Generate copilot-instructions.md\n$intCopilotResult', '# Generate copilot-instructions.md\nif ($false) {\n$intCopilotResult'), 'if ($intFullResult -ne 0) {\n    exit 1\n}\n', 'if ($intFullResult -ne 0) {\n    exit 1\n}\n}\n')],
@@ -3582,7 +3730,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   // Every reviewed statement present, once, in order, at depth zero -- and the
   // artifacts restored to their committed bytes afterwards through the
   // already-allowlisted writer.
-  ['T1-GENERATOR-035', 'artifacts rewritten after the reviewed dispatch', 'generator', (source) => replaceOnce(source, 'Write-Host "All style guide artifacts generated successfully"', "Write-StyleGuideArtifact -DestinationLeaf 'STYLE_GUIDE_FULL.md' -Content $strCached\nWrite-Host \"All style guide artifacts generated successfully\"")],
+  ['T1-GENERATOR-035', 'artifacts rewritten after the reviewed dispatch', 'generator', (source) => replaceOnce(source, 'Write-Information "All style guide artifacts generated successfully" -InformationAction Continue', "Write-StyleGuideArtifact -DestinationLeaf 'STYLE_GUIDE_FULL.md' -Content $strCached\nWrite-Information \"All style guide artifacts generated successfully\" -InformationAction Continue")],
   ['T1-GENERATOR-032', 'reviewed invocation kept but made unreachable', 'generator', (source) => replaceOnce(source, '    $arrTrackedPath = @(& $strGitPath --no-optional-locks -C $script:strRepositoryRoot ls-files --error-unmatch -- $DestinationLeaf 2>$null)\n    $intGitExit = $LASTEXITCODE\n', '    if ($false) {\n    $arrTrackedPath = @(& $strGitPath --no-optional-locks -C $script:strRepositoryRoot ls-files --error-unmatch -- $DestinationLeaf 2>$null)\n    }\n    $intGitExit = $LASTEXITCODE\n')],
   ['T1-BUILD-144', 'outside-paths drift guard kept but made unreachable', 'build', (source) => replaceOnce(replaceOnce(source, '              if ($arrOutside.Count -ne 0) {', '              if ($false) { if ($arrOutside.Count -ne 0) {'), '                  throw "git-state: the generator changed $($arrOutside.Count) path(s) outside the four generated artifacts"\n              }\n', '                  throw "git-state: the generator changed $($arrOutside.Count) path(s) outside the four generated artifacts"\n              } }\n')],
   // Round 53, found by extending the reported finding rather than reported. The
@@ -3601,7 +3749,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-BUILD-148', 'control-surface digest re-recorded through a case variant', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n          $STRCONTROLSURFACEBEFORE = Get-GitControlSurfaceDigest\n')],
   // A mutation, not an assignment: every name stays bound exactly once while
   // both sides of the byte comparison come to describe the post-generator tree.
-  ['T1-BUILD-149', 'measured worktree map mutated in place', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigests\n', '          $objWorktreeAfter = Get-WorktreeFileDigests\n          $objWorktreeBefore.Clear()\n')],
+  ['T1-BUILD-149', 'measured worktree map mutated in place', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigestMap\n', '          $objWorktreeAfter = Get-WorktreeFileDigestMap\n          $objWorktreeBefore.Clear()\n')],
   // Round 54, found by re-running the round-53 batteries against the round-54
   // fix. Each writes a measured value without assigning it, so no count moves.
   ['T1-BUILD-150', 'measured value rebound through a call-operator alias', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', "          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n          & sv strControlSurfaceBefore 'x'\n")],
@@ -3612,7 +3760,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   // so a braced reference and an alias both walked past it -- the second found
   // by attacking that rule rather than by report.
   ['T1-BUILD-154', 'drift accumulator emptied through a braced reference', 'build', (source) => replaceOnce(source, '          if ($listChanged.Count -ne 0) {', '          ${listChanged}.Clear()\n          if ($listChanged.Count -ne 0) {')],
-  ['T1-BUILD-155', 'measured map mutated through an alias', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigests\n', '          $objWorktreeAfter = Get-WorktreeFileDigests\n          $objAlias = $objWorktreeBefore\n')],
+  ['T1-BUILD-155', 'measured map mutated through an alias', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigestMap\n', '          $objWorktreeAfter = Get-WorktreeFileDigestMap\n          $objAlias = $objWorktreeBefore\n')],
   // Neither a call operator nor a bare command token, so no rule here saw it.
   ['T1-BUILD-156', 'process launched through a static call', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', "          [System.Diagnostics.Process]::Start('pwsh', '-NoProfile -File ./payload.ps1')\n          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n")],
   // Round 56. A backtick is a line continuation only when it is the FINAL
@@ -3621,8 +3769,8 @@ const FIXTURE_INVENTORY = Object.freeze([
   // every rule anchored at the start of a line. Both measured accepted before.
   // The payload sits AFTER the generator on purpose: before it, the fold moves
   // the reviewed invocation's line and the suite reports that instead.
-  ['T1-BUILD-157', 'bare command hidden behind a backtick with a trailing space', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigests', '          $null = 0` \n          pwsh -NoProfile -File ./payload.ps1\n          $objWorktreeAfter = Get-WorktreeFileDigests')],
-  ['T1-BUILD-158', 'bare command hidden behind an escaped backtick pair', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigests', '          $null = 0``\n          pwsh -NoProfile -File ./payload.ps1\n          $objWorktreeAfter = Get-WorktreeFileDigests')],
+  ['T1-BUILD-157', 'bare command hidden behind a backtick with a trailing space', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigestMap', '          $null = 0` \n          pwsh -NoProfile -File ./payload.ps1\n          $objWorktreeAfter = Get-WorktreeFileDigestMap')],
+  ['T1-BUILD-158', 'bare command hidden behind an escaped backtick pair', 'build', (source) => replaceOnce(source, '          $objWorktreeAfter = Get-WorktreeFileDigestMap', '          $null = 0``\n          pwsh -NoProfile -File ./payload.ps1\n          $objWorktreeAfter = Get-WorktreeFileDigestMap')],
   // Round 56, reported: no literal member for the pattern to read.
   ['T1-BUILD-159', 'process launched through a computed static member', 'build', (source) => replaceOnce(source, '          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n', "          $strMethod = 'Start'\n          [System.Diagnostics.Process]::$strMethod('pwsh', '-NoProfile -File ./payload.ps1')\n          $strControlSurfaceBefore = Get-GitControlSurfaceDigest\n")],
   // Round 56, found attacking the fix for the one above: a type held in a
@@ -3732,6 +3880,20 @@ const FIXTURE_INVENTORY = Object.freeze([
     parsed.packages[''].devDependencies.yaml = '^2.9.0';
     return [pkg, JSON.stringify(parsed, null, 2)];
   }],
+  // Cycle 1 GF-HOSTS/GF-GIT repair. These cases are append-only after the 286
+  // pre-repair fixtures and bind the authoring contract independently of a
+  // reviewed digest re-baseline.
+  ['T1-GENERATOR-038', 'generator helper inputs help removed', 'generator', (source) => replaceOnce(source, "    # $strDigest = Get-StyleGuideFileSha256 '.\\copilot-instructions.md'\n    # # Uses the internal positional contract and assigns one System.String.\n    #\n    # .INPUTS\n", "    # $strDigest = Get-StyleGuideFileSha256 '.\\copilot-instructions.md'\n    # # Uses the internal positional contract and assigns one System.String.\n    #\n    # .INPUT\n")],
+  ['T1-GENERATOR-039', 'state-changing generator helper drops ShouldProcess support', 'generator', (source) => replaceOnce(source, "    #   Position 2: DestinationPath\n    [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Low')]\n", "    #   Position 2: DestinationPath\n    [CmdletBinding()]\n")],
+  ['T1-BUILD-163', 'embedded Git helper synopsis removed', 'build', (source) => replaceOnce(source, '              # .SYNOPSIS\n              # Invokes the fixed Git executable and captures raw output bytes.\n', '              # .SUMMARY\n              # Invokes the fixed Git executable and captures raw output bytes.\n')],
+  ['T1-BUILD-164', 'plural NUL-record helper identity restored', 'build', (source) => source.split('ConvertFrom-NulPathRecordStream').join('ConvertFrom-NulRecords')],
+  ['T1-BUILD-165', 'plural allowed-path helper identity restored', 'build', (source) => source.split('Assert-AllowedPathSet').join('Assert-AllowedPaths')],
+  ['T1-BUILD-166', 'plural worktree-digest helper identity restored', 'build', (source) => source.split('Get-WorktreeFileDigestMap').join('Get-WorktreeFileDigests')],
+  ['T1-BUILD-167', 'async Git copy task result leaks to the success stream', 'build', (source) => replaceOnce(source, '                  [void]$objCopyTask.GetAwaiter().GetResult()\n', '                  $objCopyTask.GetAwaiter().GetResult()\n')],
+  ['T1-CLI-001', 'policy CLI receives no arguments', 'cli', []],
+  ['T1-CLI-002', 'policy preflight argument is misspelled', 'cli', ['preflight']],
+  ['T1-CLI-003', 'policy preflight receives an extra argument', 'cli', ['--preflight', 'build.yml']],
+  ['T1-CLI-004', 'policy repository validation receives an extra argument', 'cli', ['build.yml', 'markdownlint.yml', 'extra.yml']],
 ]);
 
 // What each fixture must be rejected BY, not merely that it was rejected. A
@@ -4050,6 +4212,17 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-075": "markdown-policy: markdown.policy.validate repeats a reviewed invocation: & $strNpmPath ci --ignore-scripts --no-audit --no-fund",
   "T1-PARSER-001": "supply-policy: the installed YAML parser does not match its reviewed bytes",
   "T1-PARSER-002": "supply-policy: the YAML parser tree contains a non-ordinary entry: dist",
+  "T1-GENERATOR-038": "supply-policy: the generator helper Get-StyleGuideFileSha256 does not contain complete single-line comment-based help",
+  "T1-GENERATOR-039": "supply-policy: the generator helper New-StyleGuideFullVersion does not support ShouldProcess at its write boundary",
+  "T1-BUILD-163": "side-effect-policy: build.verify helper Invoke-GitRaw does not contain complete single-line comment-based help",
+  "T1-BUILD-164": "side-effect-policy: build.verify runs an unreviewed command: ConvertFrom-NulRecords",
+  "T1-BUILD-165": "side-effect-policy: build.verify runs an unreviewed command: Assert-AllowedPaths",
+  "T1-BUILD-166": "side-effect-policy: build.verify does not bracket the generator with a worktree byte comparison",
+  "T1-BUILD-167": "git-policy: build.verify no longer drains both Git streams concurrently",
+  "T1-CLI-001": "cli: expected --preflight or exactly two workflow arguments",
+  "T1-CLI-002": "cli: expected --preflight or exactly two workflow arguments",
+  "T1-CLI-003": "cli: --preflight must be the only argument",
+  "T1-CLI-004": "cli: expected --preflight or exactly two workflow arguments",
 });
 
 function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource, generatorSource) {
@@ -4091,6 +4264,8 @@ function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSou
           (directory) => fixture.directories[directory] ?? [],
           (path) => Buffer.from(fixture.files[path] ?? '', 'utf8'),
         );
+      } else if (kind === 'cli') {
+        selectCliMode(fixture);
       } else {
         reject('fixture-harness', `unknown fixture kind for ${id}`);
       }
@@ -4466,7 +4641,7 @@ export function validateGeneratorPolicy(source) {
   // order, at depth zero. Measured accepted.
   //
   // The remedy asked for was contiguity, and the reviewed tail is contiguous:
-  // the last dispatch, its result check, one Write-Host, and exit 0, with
+  // the last dispatch, its result check, one Write-Information, and exit 0, with
   // nothing else between them. Requiring exactly that leaves no position for a
   // restoring write -- before the dispatch it would be overwritten, after it
   // there is nowhere to stand.
@@ -4488,6 +4663,14 @@ export function validateGeneratorPolicy(source) {
   if (!/\)\s*\$arrGitCommands = @\(Microsoft\.PowerShell\.Core\\Get-Command/u.test(generatorCode)) {
     reject('supply-policy', 'the generator can reach its Git lookup only after unreviewed statements');
   }
+  assertPowerShellPrivateHelperHelp(
+    source,
+    REVIEWED_GENERATOR_HELP,
+    EXPECTED_VERSION,
+    'supply-policy',
+    'the generator',
+  );
+  assertGeneratorShouldProcess(source);
   if (createHash('sha256').update(source, 'utf8').digest('hex') !== REVIEWED_GENERATOR_DIGEST) {
     reject('supply-policy', 'generator does not match its reviewed digest');
   }
@@ -4596,8 +4779,49 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
   });
 }
 
+// This gate runs before npm ci and therefore uses only Node built-ins. The
+// Terraform policy authority is embedded in this validator rather than stored
+// in the PS repository's external contract files, so preflight applies the
+// existing embedded supply identities without adding a second authority.
+export function validatePreflightPolicy() {
+  const validatorPath = fileURLToPath(import.meta.url);
+  const workflowDirectory = dirname(validatorPath);
+  const githubDirectory = dirname(workflowDirectory);
+  const repositoryRoot = dirname(githubDirectory);
+
+  const packageSource = readOrdinaryText(join(workflowDirectory, 'package.json'), 'package.json');
+  const lockSource = readOrdinaryText(join(workflowDirectory, 'package-lock.json'), 'package-lock.json');
+  validatePackagePolicy(packageSource, lockSource);
+
+  const generatorSource = readOrdinaryText(join(workflowDirectory, 'Generate-StyleGuideArtifacts.ps1'), 'generator');
+  validateGeneratorPolicy(generatorSource);
+
+  const attributes = readOrdinaryText(join(repositoryRoot, '.gitattributes'), '.gitattributes');
+  if (attributes !== '* text=auto eol=lf\n') reject('text-policy', '.gitattributes does not have exact content');
+
+  const lintAssets = Object.fromEntries(Object.keys(REVIEWED_LINT_DIGESTS).map(
+    (name) => [name, readOrdinaryText(join(workflowDirectory, name), name)],
+  ));
+  validateLintAssetPolicy(lintAssets);
+  assertNoNpmConfiguration(repositoryRoot, repositoryRoot);
+
+  const validatorSource = readOrdinaryText(validatorPath, 'validator');
+  return Object.freeze({
+    generatorVersion: EXPECTED_VERSION,
+    packageDigest: createHash('sha256').update(packageSource, 'utf8').digest('hex'),
+    lockDigest: createHash('sha256').update(lockSource, 'utf8').digest('hex'),
+    generatorDigest: createHash('sha256').update(generatorSource, 'utf8').digest('hex'),
+    validatorDigest: createHash('sha256').update(validatorSource, 'utf8').digest('hex'),
+  });
+}
+
 function main(argv) {
-  if (argv.length !== 2) reject('cli', 'expected exactly two workflow arguments');
+  const mode = selectCliMode(argv);
+  if (mode === 'preflight') {
+    const result = validatePreflightPolicy();
+    process.stdout.write(`workflow-policy-preflight: pass; version=${result.generatorVersion}; package=${result.packageDigest}; lock=${result.lockDigest}; generator=${result.generatorDigest}; validator=${result.validatorDigest}\n`);
+    return;
+  }
   const result = validateRepositoryPolicy(argv[0], argv[1]);
   process.stdout.write(`workflow-policy: pass; fixtures=${result.fixtureCount}; version=${result.generatorVersion}; digest=${result.policyDigest}\n`);
 }
