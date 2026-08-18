@@ -210,7 +210,7 @@ jobs:
               # surface. Parameters, return shape, and positional contract may change
               # without notice.
               #
-              # Version: 1.0.20260814.0
+              # Version: 1.0.20260818.0
               #
               # This function supports positional parameters
               # (internal-caller contract only; subject to change):
@@ -295,7 +295,7 @@ jobs:
               # surface. Parameters, return shape, and positional contract may change
               # without notice.
               #
-              # Version: 1.0.20260814.0
+              # Version: 1.0.20260818.0
               #
               # This function supports positional parameters
               # (internal-caller contract only; subject to change):
@@ -360,7 +360,7 @@ jobs:
               # surface. Parameters, return shape, and positional contract may change
               # without notice.
               #
-              # Version: 1.0.20260814.0
+              # Version: 1.0.20260818.0
               #
               # This function supports positional parameters
               # (internal-caller contract only; subject to change):
@@ -434,7 +434,7 @@ jobs:
               # surface. Parameters, return shape, and positional contract may change
               # without notice.
               #
-              # Version: 1.0.20260814.0
+              # Version: 1.0.20260818.0
               #
               # This function declares no parameters.
               param ()
@@ -567,7 +567,7 @@ jobs:
               # surface. Parameters, return shape, and positional contract may change
               # without notice.
               #
-              # Version: 1.0.20260814.0
+              # Version: 1.0.20260818.0
               #
               # This function declares no parameters.
               param ()
@@ -619,8 +619,37 @@ jobs:
           # then be reading what it chose. A process boundary removes the class
           # rather than naming its members: a child process cannot reach this
           # session's functions, variables, or environment.
-          & pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1
-          if ($LASTEXITCODE -ne 0) { throw "generator: native exit $LASTEXITCODE" }
+          $arrGeneratorResult = @(& pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1)
+          $intGeneratorExit = $LASTEXITCODE
+          if ($arrGeneratorResult.Count -ne 1) { throw 'generator: unexpected output shape' }
+          $objGeneratorResult = $arrGeneratorResult[0] | ConvertFrom-Json
+          if ($intGeneratorExit -ne 0 -or
+              $objGeneratorResult.Schema -cne 'TerraformStyleGuide.GeneratorResult.v2' -or
+              $objGeneratorResult.GeneratorVersion -cne '1.0.20260818.0' -or
+              $objGeneratorResult.Overall -notin @('Success', 'NoChange') -or
+              $objGeneratorResult.Phase -cne 'complete' -or
+              $objGeneratorResult.Category -cne 'none' -or
+              $objGeneratorResult.NativeOutcome -cne 'Success' -or
+              $objGeneratorResult.ExitCode -ne 0) {
+              throw "generator: native exit $intGeneratorExit"
+          }
+          $arrExpectedArtifactRecords = @(
+              @('copilot', 'copilot-instructions.md'),
+              @('terraform-instructions', 'terraform.instructions.md'),
+              @('chat', 'STYLE_GUIDE_CHAT.md'),
+              @('full', 'STYLE_GUIDE_FULL.md')
+          )
+          if ($objGeneratorResult.Artifacts.Count -ne $arrExpectedArtifactRecords.Count) {
+              throw 'generator: unexpected artifact record count'
+          }
+          for ($intArtifactIndex = 0; $intArtifactIndex -lt $arrExpectedArtifactRecords.Count; $intArtifactIndex++) {
+              $objArtifactRecord = $objGeneratorResult.Artifacts[$intArtifactIndex]
+              if ($objArtifactRecord.ArtifactId -cne $arrExpectedArtifactRecords[$intArtifactIndex][0] -or
+                  $objArtifactRecord.Path -cne $arrExpectedArtifactRecords[$intArtifactIndex][1] -or
+                  $objArtifactRecord.Status -notin @('Success', 'NoChange')) {
+                  throw "generator: invalid artifact record at index $intArtifactIndex"
+              }
+          }
 
           if ((Get-GitControlSurfaceDigest) -cne $strControlSurfaceBefore) {
               throw 'git-state: the generator changed repository Git configuration or hooks'
