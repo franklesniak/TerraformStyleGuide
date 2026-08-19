@@ -263,7 +263,7 @@ const REVIEWED_CREDENTIAL_STEP_DIGEST = 'e94b265f97f20d46df3bafcee77f546463f650c
 // individually below, but an inserted early exit satisfies every one of them
 // while skipping the probes entirely. The same backstop the Markdown step and
 // the former push step carry applies here for the same reason.
-const REVIEWED_VERIFY_STEP_DIGEST = 'dda340a542aff3033f51d681929899acfffb30086cd316b8d3eca5dbd8330cd9';
+const REVIEWED_VERIFY_STEP_DIGEST = 'f0db2a83eeb215e80c2ff6737e72dd8cc4aa51f04a9c037524d261eec57ddc10';
 
 // Both jobs that run repository-controlled code now acquire their own revision
 // instead of using an action to do it, so neither contains a process holding
@@ -867,7 +867,8 @@ const REVIEWED_GENERATOR_COMMANDS = Object.freeze([
 // string is not one; the text compared is the raw line, so nothing hides in
 // what the projection blanks.
 const REVIEWED_GENERATOR_INVOCATIONS = Object.freeze([
-  ["$arrStatOutput = @(& stat '-Lc' '%h:%d:%i' '--' $LiteralPath)", 1],
+  ["$arrStatOutput = @(& stat '-f' '%l:%d:%i' $LiteralPath)", 2],
+  ["$arrStatOutput = @(& stat '-Lc' '%h:%d:%i' '--' $LiteralPath)", 2],
   ['$arrOutput = @(& $strGitPath -C $RepositoryRoot ls-files --error-unmatch -- $RepositoryPath 2>$null)', 1],
 ]);
 
@@ -972,7 +973,7 @@ const REVIEWED_GENERATOR_GUARDS = Object.freeze([
   ['if ($null -eq $objProvider -or $objProvider.Name -cne ', [2]],
   ['if ($objCurrentInfo.Length -ne $intOriginalLength -or $strCurrentSha256 -cne $strOriginalSha256) {', [4]],
 ]);
-const REVIEWED_GENERATOR_DIGEST = 'cb85e36cb68ad943fccbcc34ac42801461329f11a672f6f9f5a52dc92caaa2fe';
+const REVIEWED_GENERATOR_DIGEST = '596ad6d6988b91bc3009ca3efbd74216a1768b735e2fdced5a9d9370ac784d82';
 
 // The lint phases execute these two files out of the checkout. The rule
 // configuration decides which rules run at all, and the nested-fence helper is
@@ -1172,7 +1173,7 @@ const MARKDOWN_JOBS = Object.freeze({
   }),
 });
 
-const EXPECTED_VERSION = '1.0.20260818.0';
+const EXPECTED_VERSION = '1.0.20260818.1';
 const PREFLIGHT_ARGUMENT = '--preflight';
 const REVIEWED_GENERATOR_HELP = Object.freeze({
   'Get-ScriptVersionRecord': Object.freeze(['ScriptText', 'ExpectedVersion']),
@@ -3953,6 +3954,8 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T2-GENERATOR-FILE-008', 'post-publication uncertainty path loses verification', 'generator', (source) => replaceOnce(source, "        $strPhase = 'verify-publication'\n", '')],
   ['T2-GENERATOR-FILE-009', 'cleanup failure loses identity binding', 'generator', (source) => replaceOnce(source, 'if ((Get-OrdinaryFileIdentity -LiteralPath $strTemporaryPath) -cne $strCandidateIdentity)', 'if ((Get-OrdinaryFileIdentity -LiteralPath $strTemporaryPath) -ceq $strCandidateIdentity)')],
   ['T2-GENERATOR-FILE-010', 'multi-artifact partial success loses ordered records', 'generator', (source) => replaceOnce(source, '$listArtifactRecords.Add((New-ArtifactRecord', '$null = (New-ArtifactRecord')],
+  ['T2-GENERATOR-FILE-011', 'BSD platform dispatch is disabled', 'generator', (source) => replaceOnce(source, '    if ($boolHostIsMacOS -or $boolHostIsFreeBsd) {', '    if ($boolHostIsLinux) {')],
+  ['T2-GENERATOR-FILE-012', 'published destination loses candidate identity binding', 'generator', (source) => replaceOnce(source, '        if ($hashtableRecord.FinalOrdinaryIdentity -cne $strCandidateIdentity) {', '        if ($false) {')],
 ]);
 
 // What each fixture must be rejected BY, not merely that it was rejected. A
@@ -4292,6 +4295,8 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T2-GENERATOR-FILE-008": "supply-policy: the generator does not preserve the reviewed post-publication verification assertion count",
   "T2-GENERATOR-FILE-009": "supply-policy: the generator does not preserve the reviewed identity-bound cleanup assertion count",
   "T2-GENERATOR-FILE-010": "supply-policy: the generator does not preserve the reviewed ordered artifact records assertion count",
+  "T2-GENERATOR-FILE-011": "supply-policy: the generator does not preserve the reviewed BSD platform dispatch assertion count",
+  "T2-GENERATOR-FILE-012": "supply-policy: the generator does not preserve the reviewed final candidate identity binding assertion count",
 });
 
 function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource, generatorSource) {
@@ -4551,11 +4556,13 @@ export function validateGeneratorPolicy(source) {
     ['absent-destination publication', '[System.IO.File]::Move($strTemporaryPath, $strDestinationPath)', 1],
     ['unexpected-destination refusal', "throw 'unexpected-destination'", 3],
     ['candidate identity capture', '$strCandidateIdentity = Get-OrdinaryFileIdentity -LiteralPath $strCandidateFullPath', 1],
+    ['BSD platform dispatch', 'if ($boolHostIsMacOS -or $boolHostIsFreeBsd) {', 1],
     ['bounded collision handling', "throw 'candidate-collision-limit'", 1],
     ['durable candidate flush', '$objCandidateStream.Flush($true)', 1],
     ['candidate byte verification', "throw 'candidate-byte-mismatch'", 1],
     ['pre-publication destination revalidation', "$strPhase = 'revalidate-publication'", 1],
     ['post-publication verification', "$strPhase = 'verify-publication'", 1],
+    ['final candidate identity binding', 'if ($hashtableRecord.FinalOrdinaryIdentity -cne $strCandidateIdentity) {', 1],
     ['post-publication uncertainty', "$hashtableRecord.Status = 'ReplacementStateUncertain'", 3],
     ['identity-bound cleanup', 'if ((Get-OrdinaryFileIdentity -LiteralPath $strTemporaryPath) -cne $strCandidateIdentity) {', 1],
     ['candidate cleanup deletion', '[System.IO.File]::Delete($strTemporaryPath)', 1],

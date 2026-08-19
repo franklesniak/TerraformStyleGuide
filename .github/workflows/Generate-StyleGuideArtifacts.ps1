@@ -10,13 +10,13 @@ fixed destination. Serialization is UTF-8 without a BOM and normalizes CRLF
 and lone CR to LF at the final payload boundary.
 
 .NOTES
-Version: 1.0.20260818.0
+Version: 1.0.20260818.1
 #>
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:strGeneratorVersion = '1.0.20260818.0'
+$script:strGeneratorVersion = '1.0.20260818.1'
 $script:strGeneratorResultSchema = 'TerraformStyleGuide.GeneratorResult.v2'
 $script:objUtf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
 $script:objUtf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -72,7 +72,7 @@ function Get-ScriptVersionRecord {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -192,7 +192,7 @@ function Test-ScriptVersionParser {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function declares no parameters.
     param ()
@@ -262,7 +262,7 @@ function ConvertTo-LowerHex {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -311,7 +311,7 @@ function Get-Sha256Hex {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -366,7 +366,7 @@ function Get-FileSha256Hex {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -427,7 +427,7 @@ function Test-PathTextIsSafe {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -499,7 +499,7 @@ function Assert-OrdinaryPathComponent {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -593,7 +593,7 @@ function Get-OrdinaryDestinationState {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -678,7 +678,7 @@ function Test-FileSystemEntry {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -737,7 +737,7 @@ function Assert-OrdinaryAbsolutePath {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -817,7 +817,7 @@ function Test-PathContainedByRoot {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -872,7 +872,7 @@ function Initialize-WindowsFileIdentityType {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function declares no parameters.
     param ()
@@ -932,8 +932,9 @@ function Get-OrdinaryFileIdentity {
     #
     # .DESCRIPTION
     # Reads the Windows volume serial and file index or the Unix device and inode
-    # from the supplied file. Both implementations require exactly one hard link
-    # so aliases cannot pass as distinct ordinary files.
+    # from the supplied file. Linux uses GNU stat syntax. macOS and FreeBSD use
+    # BSD stat syntax. Every implementation requires exactly one hard link so
+    # aliases cannot pass as distinct ordinary files.
     #
     # .PARAMETER LiteralPath
     # Literal path of the ordinary file whose identity is required.
@@ -953,17 +954,18 @@ function Get-OrdinaryFileIdentity {
     #
     # .OUTPUTS
     # System.String. Windows returns volume:file-index text; Unix returns
-    # device:inode text. Throws 'identity-failure' for a nonzero Unix stat exit,
-    # unexpected output cardinality, or malformed output, and 'hardlink-alias'
-    # for a non-unique link count. Parameter-binding, native invocation, and
-    # identity-read failures that prevent those Unix checks from running propagate.
+    # device:inode text. Throws 'unsupported-platform' for an unknown non-Windows
+    # host, 'identity-failure' for a nonzero Unix stat exit, unexpected output
+    # cardinality, or malformed output, and 'hardlink-alias' for a non-unique
+    # link count. Parameter-binding, native invocation, and identity-read failures
+    # that prevent those Unix checks from running propagate.
     #
     # .NOTES
     # PRIVATE/INTERNAL HELPER - This function is not part of the public API
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -979,7 +981,22 @@ function Get-OrdinaryFileIdentity {
         return [TerraformStyleGuide.NativeFileIdentity]::Read($LiteralPath)
     }
 
-    $arrStatOutput = @(& stat '-Lc' '%h:%d:%i' '--' $LiteralPath)
+    $boolHostIsLinux = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+        [System.Runtime.InteropServices.OSPlatform]::Linux
+    )
+    $boolHostIsMacOS = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+        [System.Runtime.InteropServices.OSPlatform]::OSX
+    )
+    $boolHostIsFreeBsd = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+        [System.Runtime.InteropServices.OSPlatform]::Create('FREEBSD')
+    )
+    if ($boolHostIsMacOS -or $boolHostIsFreeBsd) {
+        $arrStatOutput = @(& stat '-f' '%l:%d:%i' $LiteralPath)
+    } elseif ($boolHostIsLinux) {
+        $arrStatOutput = @(& stat '-Lc' '%h:%d:%i' '--' $LiteralPath)
+    } else {
+        throw 'unsupported-platform'
+    }
     $intStatExit = $LASTEXITCODE
     if ($intStatExit -ne 0 -or $arrStatOutput.Count -ne 1 -or
         $arrStatOutput[0] -notmatch '^([1-9][0-9]*):([0-9]+):([0-9]+)$') {
@@ -1029,7 +1046,7 @@ function Assert-TrackedFile {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1087,7 +1104,7 @@ function ConvertFrom-StrictUtf8 {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1138,7 +1155,7 @@ function ConvertTo-NormalizedUtf8 {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1187,7 +1204,7 @@ function New-CopilotPayload {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1239,7 +1256,7 @@ function New-TerraformInstructionsPayload {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1301,7 +1318,7 @@ function New-ChatPayload {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1370,7 +1387,7 @@ function New-FullPayload {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1738,7 +1755,7 @@ function New-StyleGuidePayloadMap {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1821,7 +1838,7 @@ function New-ArtifactRecord {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1895,7 +1912,7 @@ function Initialize-AtomicFileReplacementType {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function declares no parameters.
     param ()
@@ -1970,7 +1987,7 @@ function Write-StyleGuideArtifact {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -2170,16 +2187,17 @@ function Write-StyleGuideArtifact {
         # above re-proves the candidate identity and bytes, but File.Replace and
         # File.Move resolve the source by PATH. Between that final proof and the
         # rename below, a second writer with write access to the parent directory
-        # could rename the verified candidate away and place different bytes at the
+        # could rename the verified candidate away and place a different file at the
         # same temporary path; the path-based rename would then publish the
-        # substituted bytes. No portable mechanism closes this: .NET exposes no
+        # substituted file. No portable mechanism closes this: .NET exposes no
         # handle-bound rename, POSIX rename is not fd-bound and does not honor a
         # share mode, and a delete-denying handle held across the call would instead
         # block the very rename this code must perform. The residual is bounded and
-        # never yields a false success -- the verify-publication phase below reads
-        # the published bytes and reports final-byte-drift / ReplacementStateUncertain
-        # on any mismatch, so a substitution fails closed with truthful evidence. The
-        # window requires a concurrent second writer racing a sub-second interval,
+        # never yields a false success -- the verify-publication phase below binds
+        # the final object to the candidate identity and bytes. It reports
+        # ReplacementStateUncertain on any mismatch, so a substitution fails closed
+        # with truthful evidence. This window requires a concurrent second writer
+        # racing a sub-second interval,
         # which the single-actor CI trust root (docs/decisions/0001) does not have,
         # and such a writer already has directory write access and so gains nothing
         # beyond a truthfully reported failure it could cause by writing directly.
@@ -2223,6 +2241,9 @@ function Write-StyleGuideArtifact {
         $hashtableRecord.FinalOrdinaryIdentity = Get-OrdinaryFileIdentity -LiteralPath $strDestinationPath
         if ($strFinalIdentityBeforeRead -cne $hashtableRecord.FinalOrdinaryIdentity) {
             throw 'final-identity-drift'
+        }
+        if ($hashtableRecord.FinalOrdinaryIdentity -cne $strCandidateIdentity) {
+            throw 'final-candidate-identity-mismatch'
         }
         if ($hashtableRecord.FinalLength -ne $CompletePayloadBytes.Length -or
             $hashtableRecord.FinalSha256 -cne $hashtableRecord.CandidateSha256 -or
@@ -2361,7 +2382,7 @@ function Write-GeneratorResult {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.0
+    # Version: 1.0.20260818.1
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
