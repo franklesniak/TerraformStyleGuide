@@ -10,13 +10,13 @@ fixed destination. Serialization is UTF-8 without a BOM and normalizes CRLF
 and lone CR to LF at the final payload boundary.
 
 .NOTES
-Version: 1.0.20260818.1
+Version: 1.0.20260818.2
 #>
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:strGeneratorVersion = '1.0.20260818.1'
+$script:strGeneratorVersion = '1.0.20260818.2'
 $script:strGeneratorResultSchema = 'TerraformStyleGuide.GeneratorResult.v2'
 $script:objUtf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
 $script:objUtf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -72,7 +72,7 @@ function Get-ScriptVersionRecord {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -192,7 +192,7 @@ function Test-ScriptVersionParser {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function declares no parameters.
     param ()
@@ -262,7 +262,7 @@ function ConvertTo-LowerHex {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -311,7 +311,7 @@ function Get-Sha256Hex {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -366,7 +366,7 @@ function Get-FileSha256Hex {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -427,7 +427,7 @@ function Test-PathTextIsSafe {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -499,7 +499,7 @@ function Assert-OrdinaryPathComponent {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -593,7 +593,7 @@ function Get-OrdinaryDestinationState {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -678,7 +678,7 @@ function Test-FileSystemEntry {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -737,7 +737,7 @@ function Assert-OrdinaryAbsolutePath {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -817,7 +817,7 @@ function Test-PathContainedByRoot {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -872,7 +872,7 @@ function Initialize-WindowsFileIdentityType {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function declares no parameters.
     param ()
@@ -965,7 +965,7 @@ function Get-OrdinaryFileIdentity {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1046,7 +1046,7 @@ function Assert-TrackedFile {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1104,7 +1104,7 @@ function ConvertFrom-StrictUtf8 {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1155,7 +1155,7 @@ function ConvertTo-NormalizedUtf8 {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1204,7 +1204,7 @@ function New-CopilotPayload {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1256,7 +1256,7 @@ function New-TerraformInstructionsPayload {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1318,7 +1318,7 @@ function New-ChatPayload {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1387,7 +1387,7 @@ function New-FullPayload {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1431,7 +1431,7 @@ function New-FullPayload {
             }
 
             # Compute anchor for this heading
-            $strAnchor = $strHeadingText.ToLower() -replace '[^a-z0-9 -]', '' -replace ' ', '-'
+            $strAnchor = $strHeadingText.ToLowerInvariant() -replace '[^a-z0-9 -]', '' -replace ' ', '-'
             $strAnchor = $strAnchor -replace '-+', '-' -replace '^-|-$', ''
 
             if ($intLevel -eq 3) {
@@ -1544,7 +1544,7 @@ function New-FullPayload {
                     $listOutputLines.Add($strRatLine)
                 }
             } else {
-                Write-Warning "No rationale section found for marker: $strMarkerKey"
+                throw 'missing-rationale-anchor'
             }
             continue
         }
@@ -1755,7 +1755,7 @@ function New-StyleGuidePayloadMap {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1838,7 +1838,7 @@ function New-ArtifactRecord {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1912,7 +1912,7 @@ function Initialize-AtomicFileReplacementType {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function declares no parameters.
     param ()
@@ -1987,7 +1987,7 @@ function Write-StyleGuideArtifact {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -2382,7 +2382,7 @@ function Write-GeneratorResult {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.1
+    # Version: 1.0.20260818.2
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):

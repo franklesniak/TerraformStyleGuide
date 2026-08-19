@@ -263,7 +263,7 @@ const REVIEWED_CREDENTIAL_STEP_DIGEST = 'e94b265f97f20d46df3bafcee77f546463f650c
 // individually below, but an inserted early exit satisfies every one of them
 // while skipping the probes entirely. The same backstop the Markdown step and
 // the former push step carry applies here for the same reason.
-const REVIEWED_VERIFY_STEP_DIGEST = 'f0db2a83eeb215e80c2ff6737e72dd8cc4aa51f04a9c037524d261eec57ddc10';
+const REVIEWED_VERIFY_STEP_DIGEST = 'e733062023ef746f828d68e6bd074beca588ab6a6c9b40f83ea00b3bac4d672e';
 
 // Both jobs that run repository-controlled code now acquire their own revision
 // instead of using an action to do it, so neither contains a process holding
@@ -415,6 +415,9 @@ const REVIEWED_VERIFY_GUARDS = Object.freeze([
   ['if ([Convert]::ToBase64String($arrRecord) -cne [Convert]::ToBase64String($arrRoundTrip)) {', [2]],
   ['if ((Get-GitControlSurfaceDigest) -cne $strControlSurfaceBefore) {', [0]],
   ['if ((-not $objWorktreeAfter.ContainsKey($strPath)) -or ($objWorktreeAfter[$strPath] -cne $objWorktreeBefore[$strPath])) {', [1]],
+  ['if (-not $hashtableGeneratorContractCheck.Valid) {', [1]],
+  ['if ($strGeneratorContractActual.Length -gt 64) {', [2]],
+  ['if ($listGeneratorContractViolations.Count -ne 0) {', [0]],
 ]);
 
 // Round 53, found by extending the reported finding to this file rather than by
@@ -438,8 +441,9 @@ const REVIEWED_VERIFY_GUARDS = Object.freeze([
 // while every other single-assignment assertion still passed. Measured
 // accepted. The list is the set of names the guards read; it was one short.
 const REVIEWED_VERIFY_SINGLE_ASSIGNMENT = Object.freeze([
-  'arrArtifacts', 'arrOutside', 'arrRecord', 'arrRoundTrip', 'listChanged',
-  'objDiff', 'objWorktreeAfter', 'objWorktreeBefore', 'strControlSurfaceBefore',
+  'arrArtifacts', 'arrGeneratorContractChecks', 'arrOutside', 'arrRecord',
+  'arrRoundTrip', 'listChanged', 'listGeneratorContractViolations', 'objDiff',
+  'objWorktreeAfter', 'objWorktreeBefore', 'strControlSurfaceBefore',
 ]);
 
 // One variable write, in every spelling that reaches the same variable.
@@ -520,6 +524,7 @@ const REVIEWED_VERIFY_MEMBER_ACCESS = Object.freeze({
   arrRecord: Object.freeze({ '.Length': 1 }),
   arrRoundTrip: Object.freeze({}),
   listChanged: Object.freeze({ '.Add': 2, '.Count': 1 }),
+  listGeneratorContractViolations: Object.freeze({ '.Add': 1, '.Count': 1 }),
   objDiff: Object.freeze({ '.ExitCode': 4 }),
   objWorktreeAfter: Object.freeze({ '.ContainsKey': 1, '.Keys': 1, '[': 1 }),
   objWorktreeBefore: Object.freeze({ '.ContainsKey': 1, '.Keys': 1, '[': 1 }),
@@ -830,7 +835,7 @@ const REVIEWED_GENERATOR_COMMANDS = Object.freeze([
   'New-StyleGuidePayloadMap', 'New-TerraformInstructionsPayload',
   'Set-StrictMode', 'stat', 'Test-FileSystemEntry', 'Test-PathContainedByRoot',
   'Test-PathTextIsSafe', 'Test-ScriptVersionParser', 'Where-Object',
-  'Write-GeneratorResult', 'Write-StyleGuideArtifact', 'Write-Warning',
+  'Write-GeneratorResult', 'Write-StyleGuideArtifact',
   // Control flow and declarations.
   'break', 'catch', 'continue', 'else', 'elseif', 'exit', 'finally', 'for',
   'foreach', 'function', 'if', 'param', 'return', 'throw', 'try', 'while',
@@ -973,7 +978,7 @@ const REVIEWED_GENERATOR_GUARDS = Object.freeze([
   ['if ($null -eq $objProvider -or $objProvider.Name -cne ', [2]],
   ['if ($objCurrentInfo.Length -ne $intOriginalLength -or $strCurrentSha256 -cne $strOriginalSha256) {', [4]],
 ]);
-const REVIEWED_GENERATOR_DIGEST = '596ad6d6988b91bc3009ca3efbd74216a1768b735e2fdced5a9d9370ac784d82';
+const REVIEWED_GENERATOR_DIGEST = '4ab4f6a9759671b545f5bc5df05f982df5f25b46095bd5a4128e8a7a40eac16a';
 
 // The lint phases execute these two files out of the checkout. The rule
 // configuration decides which rules run at all, and the nested-fence helper is
@@ -1173,7 +1178,7 @@ const MARKDOWN_JOBS = Object.freeze({
   }),
 });
 
-const EXPECTED_VERSION = '1.0.20260818.1';
+const EXPECTED_VERSION = '1.0.20260818.2';
 const PREFLIGHT_ARGUMENT = '--preflight';
 const REVIEWED_GENERATOR_HELP = Object.freeze({
   'Get-ScriptVersionRecord': Object.freeze(['ScriptText', 'ExpectedVersion']),
@@ -2158,6 +2163,21 @@ export function validateBuildPolicy(workflow, source) {
   // treats a backtick as an escape and removes it, so a statement broken
   // across lines had already lost the only marker saying it was one.
   const strVerifyCode = powerShellTokenView(normalizeLineContinuations(generateStep.run));
+  const arrGeneratorContractDiagnosticFragments = Object.freeze([
+    "'Name' = 'NativeExit'", "'Name' = 'Schema'", "'Name' = 'GeneratorVersion'",
+    "'Name' = 'Overall'", "'Name' = 'Phase'", "'Name' = 'Category'",
+    "'Name' = 'NativeOutcome'", "'Name' = 'ResultExitCode'",
+    '$strGeneratorContractActual = if ($null -eq $hashtableGeneratorContractCheck.Actual) {',
+    "'<null>'",
+    "$strGeneratorContractActual = $strGeneratorContractActual -replace '[^\\x20-\\x7E]', '?'",
+    "$strGeneratorContractActual = $strGeneratorContractActual.Substring(0, 64) + '...'",
+    "throw \"generator: result contract violation: $($listGeneratorContractViolations -join '; ')\"",
+  ]);
+  for (const strFragment of arrGeneratorContractDiagnosticFragments) {
+    if (generateStep.run.split(strFragment).length - 1 !== 1) {
+      reject('side-effect-policy', `build.verify does not preserve the reviewed generator contract diagnostic: ${strFragment}`);
+    }
+  }
   assertReviewedGuards(strVerifyCode, REVIEWED_VERIFY_GUARDS, 'side-effect-policy', (kind, frag) => kind === 'missing'
     ? `build.verify no longer performs a reviewed drift guard: ${frag}`
     : `a reviewed drift guard is no longer reachable where it was reviewed: ${frag}`);
@@ -3956,6 +3976,10 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T2-GENERATOR-FILE-010', 'multi-artifact partial success loses ordered records', 'generator', (source) => replaceOnce(source, '$listArtifactRecords.Add((New-ArtifactRecord', '$null = (New-ArtifactRecord')],
   ['T2-GENERATOR-FILE-011', 'BSD platform dispatch is disabled', 'generator', (source) => replaceOnce(source, '    if ($boolHostIsMacOS -or $boolHostIsFreeBsd) {', '    if ($boolHostIsLinux) {')],
   ['T2-GENERATOR-FILE-012', 'published destination loses candidate identity binding', 'generator', (source) => replaceOnce(source, '        if ($hashtableRecord.FinalOrdinaryIdentity -cne $strCandidateIdentity) {', '        if ($false) {')],
+  ['T2-GENERATOR-FILE-013', 'rationale anchors return to culture-sensitive casing', 'generator', (source) => replaceOnce(source, '$strHeadingText.ToLowerInvariant()', '$strHeadingText.ToLower()')],
+  ['T2-GENERATOR-FILE-014', 'missing rationale marker no longer fails closed', 'generator', (source) => replaceOnce(source, "                throw 'missing-rationale-anchor'\n", '')],
+  ['T2-GENERATOR-FILE-015', 'missing rationale marker returns to a warning', 'generator', (source) => replaceOnce(source, "                throw 'missing-rationale-anchor'\n", "                Write-Warning \"No rationale section found for marker: $strMarkerKey\"\n")],
+  ['T2-GENERATOR-FILE-016', 'generator result contract diagnostic guard is disabled', 'build', (source) => replaceOnce(source, '          if ($listGeneratorContractViolations.Count -ne 0) {', '          if ($false) {')],
 ]);
 
 // What each fixture must be rejected BY, not merely that it was rejected. A
@@ -4297,6 +4321,10 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T2-GENERATOR-FILE-010": "supply-policy: the generator does not preserve the reviewed ordered artifact records assertion count",
   "T2-GENERATOR-FILE-011": "supply-policy: the generator does not preserve the reviewed BSD platform dispatch assertion count",
   "T2-GENERATOR-FILE-012": "supply-policy: the generator does not preserve the reviewed final candidate identity binding assertion count",
+  "T2-GENERATOR-FILE-013": "supply-policy: the generator does not preserve the reviewed culture-invariant rationale anchor assertion count",
+  "T2-GENERATOR-FILE-014": "supply-policy: the generator does not preserve the reviewed missing-rationale failure assertion count",
+  "T2-GENERATOR-FILE-015": "supply-policy: the generator runs an unreviewed command: Write-Warning",
+  "T2-GENERATOR-FILE-016": "side-effect-policy: build.verify no longer performs a reviewed drift guard: if ($listGeneratorContractViolations.Count -ne 0) {",
 });
 
 function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource, generatorSource) {
@@ -4556,6 +4584,8 @@ export function validateGeneratorPolicy(source) {
     ['absent-destination publication', '[System.IO.File]::Move($strTemporaryPath, $strDestinationPath)', 1],
     ['unexpected-destination refusal', "throw 'unexpected-destination'", 3],
     ['candidate identity capture', '$strCandidateIdentity = Get-OrdinaryFileIdentity -LiteralPath $strCandidateFullPath', 1],
+    ['culture-invariant rationale anchor', "$strAnchor = $strHeadingText.ToLowerInvariant() -replace '[^a-z0-9 -]', '' -replace ' ', '-'", 1],
+    ['missing-rationale failure', "throw 'missing-rationale-anchor'", 1],
     ['BSD platform dispatch', 'if ($boolHostIsMacOS -or $boolHostIsFreeBsd) {', 1],
     ['bounded collision handling', "throw 'candidate-collision-limit'", 1],
     ['durable candidate flush', '$objCandidateStream.Flush($true)', 1],

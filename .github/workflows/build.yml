@@ -210,7 +210,7 @@ jobs:
               # surface. Parameters, return shape, and positional contract may change
               # without notice.
               #
-              # Version: 1.0.20260818.1
+              # Version: 1.0.20260818.2
               #
               # This function supports positional parameters
               # (internal-caller contract only; subject to change):
@@ -295,7 +295,7 @@ jobs:
               # surface. Parameters, return shape, and positional contract may change
               # without notice.
               #
-              # Version: 1.0.20260818.1
+              # Version: 1.0.20260818.2
               #
               # This function supports positional parameters
               # (internal-caller contract only; subject to change):
@@ -360,7 +360,7 @@ jobs:
               # surface. Parameters, return shape, and positional contract may change
               # without notice.
               #
-              # Version: 1.0.20260818.1
+              # Version: 1.0.20260818.2
               #
               # This function supports positional parameters
               # (internal-caller contract only; subject to change):
@@ -434,7 +434,7 @@ jobs:
               # surface. Parameters, return shape, and positional contract may change
               # without notice.
               #
-              # Version: 1.0.20260818.1
+              # Version: 1.0.20260818.2
               #
               # This function declares no parameters.
               param ()
@@ -567,7 +567,7 @@ jobs:
               # surface. Parameters, return shape, and positional contract may change
               # without notice.
               #
-              # Version: 1.0.20260818.1
+              # Version: 1.0.20260818.2
               #
               # This function declares no parameters.
               param ()
@@ -623,15 +623,35 @@ jobs:
           $intGeneratorExit = $LASTEXITCODE
           if ($arrGeneratorResult.Count -ne 1) { throw 'generator: unexpected output shape' }
           $objGeneratorResult = $arrGeneratorResult[0] | ConvertFrom-Json
-          if ($intGeneratorExit -ne 0 -or
-              $objGeneratorResult.Schema -cne 'TerraformStyleGuide.GeneratorResult.v2' -or
-              $objGeneratorResult.GeneratorVersion -cne '1.0.20260818.1' -or
-              $objGeneratorResult.Overall -notin @('Success', 'NoChange') -or
-              $objGeneratorResult.Phase -cne 'complete' -or
-              $objGeneratorResult.Category -cne 'none' -or
-              $objGeneratorResult.NativeOutcome -cne 'Success' -or
-              $objGeneratorResult.ExitCode -ne 0) {
-              throw "generator: native exit $intGeneratorExit"
+          $arrGeneratorContractChecks = @(
+              [ordered]@{ 'Name' = 'NativeExit'; 'Valid' = $intGeneratorExit -eq 0; 'Actual' = $intGeneratorExit }
+              [ordered]@{ 'Name' = 'Schema'; 'Valid' = $objGeneratorResult.Schema -ceq 'TerraformStyleGuide.GeneratorResult.v2'; 'Actual' = $objGeneratorResult.Schema }
+              [ordered]@{ 'Name' = 'GeneratorVersion'; 'Valid' = $objGeneratorResult.GeneratorVersion -ceq '1.0.20260818.2'; 'Actual' = $objGeneratorResult.GeneratorVersion }
+              [ordered]@{ 'Name' = 'Overall'; 'Valid' = $objGeneratorResult.Overall -in @('Success', 'NoChange'); 'Actual' = $objGeneratorResult.Overall }
+              [ordered]@{ 'Name' = 'Phase'; 'Valid' = $objGeneratorResult.Phase -ceq 'complete'; 'Actual' = $objGeneratorResult.Phase }
+              [ordered]@{ 'Name' = 'Category'; 'Valid' = $objGeneratorResult.Category -ceq 'none'; 'Actual' = $objGeneratorResult.Category }
+              [ordered]@{ 'Name' = 'NativeOutcome'; 'Valid' = $objGeneratorResult.NativeOutcome -ceq 'Success'; 'Actual' = $objGeneratorResult.NativeOutcome }
+              [ordered]@{ 'Name' = 'ResultExitCode'; 'Valid' = $objGeneratorResult.ExitCode -eq 0; 'Actual' = $objGeneratorResult.ExitCode }
+          )
+          $listGeneratorContractViolations = [System.Collections.Generic.List[string]]::new()
+          foreach ($hashtableGeneratorContractCheck in $arrGeneratorContractChecks) {
+              if (-not $hashtableGeneratorContractCheck.Valid) {
+                  $strGeneratorContractActual = if ($null -eq $hashtableGeneratorContractCheck.Actual) {
+                      '<null>'
+                  } else {
+                      [string]$hashtableGeneratorContractCheck.Actual
+                  }
+                  $strGeneratorContractActual = $strGeneratorContractActual -replace '[^\x20-\x7E]', '?'
+                  if ($strGeneratorContractActual.Length -gt 64) {
+                      $strGeneratorContractActual = $strGeneratorContractActual.Substring(0, 64) + '...'
+                  }
+                  $listGeneratorContractViolations.Add(
+                      "$($hashtableGeneratorContractCheck.Name)=$strGeneratorContractActual"
+                  )
+              }
+          }
+          if ($listGeneratorContractViolations.Count -ne 0) {
+              throw "generator: result contract violation: $($listGeneratorContractViolations -join '; ')"
           }
           $arrExpectedArtifactRecords = @(
               @('copilot', 'copilot-instructions.md'),
