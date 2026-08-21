@@ -264,7 +264,7 @@ After extraction:
 
 Transitions are closed:
 
-1. `NotCreated`: revalidate the trusted parent and materialize its immediate entries once. Exact candidate-leaf absence moves to `Disposed` with an empty cleanup. Any matching/unclassifiable entry moves to `RetainedUncertain`; delete nothing.
+1. `NotCreated`: revalidate the trusted parent and stream its immediate entries exactly once without materializing or retaining the collection. Stop on the first matching or unclassifiable entry and move to `RetainedUncertain`; delete nothing. If the enumeration completes with no match or uncertainty, exact candidate-leaf absence moves to `Disposed` with an empty cleanup. Enumeration failure also moves to `RetainedUncertain`.
 2. `Active`: perform one complete pre-deletion pass over envelope, exact immediate-child equality, journaled ordinary-file identity, and parent/leaf relationships. Any uncertainty moves to `RetainedUncertain` before deletion. Only a complete pass increments attempt, enters `CleanupInProgress`, removes journaled files nonrecursively in safe order, and removes the proven-empty candidate directory. Complete success sets all journal `Owned=false`, retains acquisition evidence, records absent leaf, and moves to `Disposed`. Inspection/deletion failure stops immediately, records removed/retained entries, and moves to `RetainedUncertain`; no retry.
 3. `Disposed`: validate only the in-memory closed object schema and require all entries `Owned=false`. Return the identical object, attempt, journal, and summary with success and **zero provider, path, filesystem, or native calls**. Do not inspect the released parent or leaf; any new occupant is outside this capability.
 4. Entry in `CleanupInProgress` or `RetainedUncertain` returns stable nonzero `cleanup/candidate-state-retained`, with **zero provider, path, filesystem, native, or deletion calls**.
@@ -408,7 +408,29 @@ Each materialized profile declares all fixed fields and only the literal variati
 
 Each row mutates one parameter, path, separator, platform, leaf, or outcome only. The physical tables contain no `or` fixture and no ordinal `*.case-NN` semantic key. P1A must split grouped evidence before it can satisfy multiple Terraform keys.
 
-Startup expands profiles/rows, validates schema/unique sets, and computes exact applicable `(ID,runtime)` pairs. Completion requires one complete record for every pair and none outside it. Mutation tests independently prove missing, duplicate, unexpected, and multiply emitted results fail. Retain profile/catalog versions, canonical expanded SHA-256, profile/applicability/expected result counts, and per-runtime pass/fail/skip totals.
+Startup expands profiles/rows, validates schema/unique sets, and computes exact applicable `(ID,runtime)` pairs. Completion requires one complete record for every pair and none outside it.
+
+Not every implementation property has a different public result, so the separate normative manifest `T1A-HARNESS-PROOFS-v1` contains exactly these two proof rows. It does not add a functional oracle to the 141-row `T1A-CASES-v1` catalog.
+
+Each proof row has the closed schema:
+
+```text
+Id SemanticCase Applicability ProductionBoundary
+Control Perturbation ExpectedStatus ExpectedPhase ExpectedPostcondition
+```
+
+| ID | `SemanticCase` | Applicability | Exact control and perturbation | Singular proof oracle |
+| --- | --- | --- | --- | --- |
+| `T1A-H-01` | `harness.resource.bounded-cardinality-enumeration` | Windows PowerShell 5.1 on Windows; PowerShell 7 on Windows; PowerShell 7 on Ubuntu | Parse the exact supplied helper and context-manager command trees. Derive one temporary traced copy from the exact source and prove an exact-count check for `N` advances the source at most `N + 1` times. Derive one temporary mutant that eagerly materializes that source; the static proof must reject it before execution. | pass/status 0/`harness-proof` only when the exact-source AST is valid, the traced bound is `N + 1` or less, and the eager mutant is rejected; no candidate/context filesystem state |
+| `T1A-H-02` | `harness.race.pre-journal-population-retained` | Windows PowerShell 5.1 on Windows; PowerShell 7 on Windows; PowerShell 7 on Ubuntu | From the exact supplied source, derive one temporary rendezvous copy that pauses after candidate-directory creation and before ownership is journaled. The positive control releases the pause with no competing entry and must succeed. The perturbation uses a synchronized second process to create one ordinary sentinel before release. | pass/status 0/`harness-proof` only when the control succeeds and the perturbation fails as `destination/pre-journal-populated`, retains candidate and context as uncertain, preserves the competing sentinel, and performs no deletion of it |
+
+The harness records the exact source commit, blob IDs, SHA-256 values, deterministic source-to-copy transformation identity, temporary-copy hashes, parser errors, trace count, process synchronization evidence, and final filesystem state. It removes the temporary proof copies after the results are sealed. A proof copy never becomes a production entry point, and no test switch or environment backdoor is added to a production script.
+
+Exactly six proof results exist: one result for each of the two IDs on each of the three runtime cells. Startup validates the manifest version, closed schema, literal two-ID set, semantic keys, exact applicability, and the six expected `(ID,runtime)` pairs. Completion rejects missing, duplicate, unknown, skipped, orphaned, or multiply emitted proof results. It retains the manifest version, canonical expanded SHA-256, expected/result counts, and per-runtime totals.
+
+The phrase “none outside it” governs the 141-row functional catalog. The six harness-proof results are authorized only by `T1A-HARNESS-PROOFS-v1`.
+
+Mutation tests independently prove missing, duplicate, unexpected, and multiply emitted results fail. Retain profile/catalog versions, canonical expanded SHA-256, profile/applicability/expected result counts, and per-runtime pass/fail/skip totals.
 
 ### 14. Use repository-local IDs and shared semantic identities
 
@@ -518,7 +540,7 @@ Also perform static checks proving:
 - one definition of each exact cleanup function;
 - normal helper and harness call the same candidate cleanup;
 - the harness resolves the supplied helper and context-manager paths once and invokes only those exact tracked versions;
-- every exact enumeration includes hidden/system entries;
+- every exact enumeration includes hidden/system entries, exact-count scans retain at most `N + 1` entries, and absence scans do not accumulate the completed sequence;
 - only the three affected files changed/staged; and
 - generator outputs/workflows remain unchanged.
 
@@ -540,6 +562,7 @@ If hosted cross-platform evidence needs a temporary workflow, use a uniquely nam
 - [ ] Every mandatory stable ID has one explicit oracle and pre-teardown postcondition.
 - [ ] `T1A-CASES-v1` exactly expands `T1A-ORACLES-v1`; every machine-readable atomic row/result has singular expected/actual fields, profile, behavior key, and one applicable-runtime result.
 - [ ] Catalog mutation cases reject missing/duplicate/changed IDs, semantic keys, mappings, profiles, counterpart classifications, and results.
+- [ ] `T1A-HARNESS-PROOFS-v1` contains exactly two rows and six applicable results; its bounded-enumeration and pre-journal race proofs pass with their controls and fail for missing, duplicate, unknown, skipped, orphaned, or multiply emitted results.
 - [ ] Declared and actual resource boundaries pass below/exact cases and reject above/overflow/deceptive cases as specified.
 - [ ] Both cleanup lifecycles pass independent and combined primary-plus-cleanup-failure cases.
 - [ ] Candidate ownership transitions are exactly NotCreated/Active/CleanupInProgress/Disposed/RetainedUncertain; repeated Disposed cleanup proves leaf absence and never deletes a reoccupied leaf.
