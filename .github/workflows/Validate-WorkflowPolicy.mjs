@@ -124,22 +124,22 @@ const EXPECTED_TRIGGER = Object.freeze({
 // that check. These reviewed values are the independent baseline, so the
 // scripts the workflow runs and the graph it installs are fixed at review time.
 const REVIEWED_PACKAGE_DIGESTS = Object.freeze({
-  'package.json': 'e206cdb3562f0397e8eed7fb2c2586269a1f5335cdff2906da8d5e070426321e',
-  'package-lock.json': '277f7168ab3a4f1f7a2565de13191d64b1572e7cb92b67b0972b3242bd4de062',
+  'package.json': 'b1d079c7c16a08b89c074f5a5f9378be156428af2204e96902e2f358d9492e02',
+  'package-lock.json': '876b3018e35745243c74482e4c58d2652a19bd21be51be425de5ee36240d1c70',
 });
 
 const REVIEWED_SCRIPTS = Object.freeze({
-  'lint:md': 'cd ../.. && markdownlint-cli2 "**/*.md" "#node_modules" "#.github/workflows/node_modules" --config .github/workflows/.markdownlint.jsonc',
+  'lint:md': 'cd ../.. && markdownlint-cli2 "**/*.md" "**/*.mdc" "#node_modules" "#.github/workflows/node_modules" --config .github/workflows/.markdownlint.jsonc',
   'lint:md:nested': 'node lint-nested-markdown.js',
-  prepare: 'cd ../.. && husky || true',
+  prepare: 'cd ../.. && husky',
 });
 
 const REVIEWED_DEV_DEPENDENCIES = Object.freeze({
   glob: '^10.3.10',
   husky: '^9.1.7',
-  'markdown-it': '^14.0.0',
-  markdownlint: '^0.40.0',
-  'markdownlint-cli2': '^0.20.0',
+  'markdown-it': '14.3.0',
+  markdownlint: '0.41.1',
+  'markdownlint-cli2': '0.23.2',
   yaml: '2.9.0',
 });
 
@@ -236,8 +236,8 @@ const NETWORK_CLIENT =/\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|ir
 // Both orders were tried here and each one's fix was the other one's defect.
 // Separate jobs are separate runners with separate filesystems, which removes
 // the choice rather than making it.
-const REVIEWED_POLICY_STEP_DIGEST = '0014b712b89fd6ae059238ee0fcdb6a5bd2f528b6659da9bafd36ea07f6119d0';
-const REVIEWED_LINT_STEP_DIGEST = 'acde5c2450673e744a8acc058eeb214d9fcf1de7c9677c4639880a9f76ab9f72';
+const REVIEWED_POLICY_STEP_DIGEST = 'd9a8b23d11e116fb5be4d77c3fbeb93e9d3334093d07ab47ad75f8659c514723';
+const REVIEWED_LINT_STEP_DIGEST = '96fd8e65637c876b9971c16cc2c8dfec97c195b4bfe7983d2f531ffffd09480a';
 
 // Both governed steps have to establish the same supply position before they
 // diverge: the pinned toolchain, the reviewed package metadata, and npm's
@@ -988,7 +988,7 @@ const REVIEWED_GENERATOR_DIGEST = '4ab4f6a9759671b545f5bc5df05f982df5f25b46095bd
 // so what the lint does is pinned alongside what it runs.
 const REVIEWED_LINT_DIGESTS = Object.freeze({
   '.markdownlint.jsonc': '5eb07bf7f30829e0091e82f235a96fdba21be1ef1160ca1e22cdbe8d82da5300',
-  'lint-nested-markdown.js': '4eefec7afba1c79809d916365b2eb3e2ea17aa482593338492a10d6dda5e2031',
+  'lint-nested-markdown.js': 'd8e513044f4e0b65d982e9353f1d2e668fb163dc02857e468fc71f1a21ac76e0',
 });
 
 // Round 45, finding C. The invocation allowlist below records only lines whose
@@ -3304,8 +3304,8 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-MARKDOWN-008', 'nested lint removed', 'markdown', (source) => replaceOnce(source, 'run lint:md:nested', 'run lint:other:nested')],
   ['T1-MARKDOWN-009', 'policy validator removed', 'markdown', (source) => replaceOnce(source, './Validate-WorkflowPolicy.mjs', './other-validator.mjs')],
   ['T1-MARKDOWN-010', 'failure continuation', 'markdown', (source) => replaceOnce(source, '        shell: pwsh\n        working-directory:', '        shell: pwsh\n        continue-on-error: true\n        working-directory:')],
-  ['T1-MARKDOWN-011', 'reviewed package hash removed', 'markdown', (source) => replaceOnce(source, "'E206CDB3562F0397E8EED7FB2C2586269A1F5335CDFF2906DA8D5E070426321E'", "'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'")],
-  ['T1-MARKDOWN-012', 'reviewed lock hash altered', 'markdown', (source) => replaceOnce(source, "'277F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062'", "'377F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062'")],
+  ['T1-MARKDOWN-011', 'reviewed package hash removed', 'markdown', (source) => replaceOnce(source, "'B1D079C7C16A08B89C074F5A5F9378BE156428AF2204E96902E2F358D9492E02'", "'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'")],
+  ['T1-MARKDOWN-012', 'reviewed lock hash altered', 'markdown', (source) => replaceOnce(source, "'876B3018E35745243C74482E4C58D2652A19BD21BE51BE425DE5EE36240D1C70'", "'976B3018E35745243C74482E4C58D2652A19BD21BE51BE425DE5EE36240D1C70'")],
   ['T1-MARKDOWN-013', 'pre-install supply gate neutralized', 'markdown', (source) => replaceOnce(source, 'if ($strPackageBefore -cne $strReviewedPackageHash -or', 'if ($false -and $strPackageBefore -cne $strReviewedPackageHash -or')],
   ['T1-BUILD-042', 'workflow token referenced outside the approved push step', 'build', (source) => replaceOnce(source, "          $ErrorActionPreference = 'Stop'\n          $arrArtifacts", "          $ErrorActionPreference = 'Stop'\n          $strToken = '${{ github.token }}'\n          $arrArtifacts")],
   ['T1-MARKDOWN-015', 'early exit before the remaining required phases', 'markdown', (source) => replaceOnce(source, '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n', '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n          exit 0\n')],
@@ -4043,8 +4043,8 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-008": "markdown-policy: markdown.markdownlint.lint is missing a required phase: run lint:md:nested",
   "T1-MARKDOWN-009": "markdown-policy: markdown.policy.validate is missing a required phase: ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml",
   "T1-MARKDOWN-010": "schema: markdown.policy.validate has missing or extra keys",
-  "T1-MARKDOWN-011": "markdown-policy: markdown.policy.validate is missing a required phase: E206CDB3562F0397E8EED7FB2C2586269A1F5335CDFF2906DA8D5E070426321E",
-  "T1-MARKDOWN-012": "markdown-policy: markdown.policy.validate is missing a required phase: 277F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062",
+  "T1-MARKDOWN-011": "markdown-policy: markdown.policy.validate is missing a required phase: B1D079C7C16A08B89C074F5A5F9378BE156428AF2204E96902E2F358D9492E02",
+  "T1-MARKDOWN-012": "markdown-policy: markdown.policy.validate is missing a required phase: 876B3018E35745243C74482E4C58D2652A19BD21BE51BE425DE5EE36240D1C70",
   "T1-MARKDOWN-013": "markdown-policy: markdown.policy.validate is missing a required phase: if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash)",
   "T1-BUILD-042": "credential-policy: verify.generate-and-verify expands an unapproved credential",
   "T1-MARKDOWN-015": "markdown-policy: markdown.policy.validate adds control flow that can bypass a required phase",
@@ -4359,7 +4359,11 @@ function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSou
       } else if (kind === 'lint-asset') {
         validateLintAssetPolicy(fixture);
       } else if (kind === 'npm-config') {
-        assertNoNpmConfiguration('/repo', '/repo', (directory) => fixture[directory] ?? []);
+        assertNoNpmConfiguration(
+          '/repo',
+          '/repo',
+          (directory) => fixture[directory.split(sep).join('/')] ?? [],
+        );
       } else if (kind === 'parser-tree') {
         assertReviewedParserTree(
           '/yaml',
@@ -4460,7 +4464,8 @@ export function assertNoNpmConfiguration(directory, repositoryRoot, readDirector
     if (entry.isDirectory()) {
       assertNoNpmConfiguration(path, repositoryRoot, readDirectory);
     } else if (entry.name === '.npmrc') {
-      reject('supply-policy', `repository-controlled npm configuration is present: ${path.slice(repositoryRoot.length + 1)}`);
+      const relativePath = path.slice(repositoryRoot.length + 1).split(sep).join('/');
+      reject('supply-policy', `repository-controlled npm configuration is present: ${relativePath}`);
     }
   }
 }
@@ -4671,7 +4676,11 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
   const workflowFiles = readdirSync(workflowDirectory)
     .filter((name) => /\.ya?ml$/u.test(name))
     .sort();
-  assertEqual(workflowFiles, ['build.yml', 'markdownlint.yml'], 'tracked workflow file set');
+  assertEqual(
+    workflowFiles,
+    ['agent-instructions.yml', 'build.yml', 'copilot-setup-steps.yml', 'devcontainer-ci.yml', 'markdownlint.yml'],
+    'tracked workflow file set',
+  );
 
   const buildSource = readOrdinaryText(resolve(buildPath), 'build.yml');
   const markdownSource = readOrdinaryText(resolve(markdownPath), 'markdownlint.yml');

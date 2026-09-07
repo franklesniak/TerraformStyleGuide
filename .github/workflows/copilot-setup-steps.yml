@@ -1,0 +1,197 @@
+name: Copilot setup steps
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "**"
+    paths:
+      - .github/workflows/.npmrc
+      - .github/workflows/copilot-setup-steps.yml
+      - .github/workflows/npm-shrinkwrap.json
+      - .github/workflows/package.json
+      - .github/workflows/package-lock.json
+      - .npmrc
+      - .pre-commit-config.yaml
+      - npm-shrinkwrap.json
+      - package.json
+      - package-lock.json
+  pull_request:
+    paths:
+      - .github/workflows/.npmrc
+      - .github/workflows/copilot-setup-steps.yml
+      - .github/workflows/npm-shrinkwrap.json
+      - .github/workflows/package.json
+      - .github/workflows/package-lock.json
+      - .npmrc
+      - .pre-commit-config.yaml
+      - npm-shrinkwrap.json
+      - package.json
+      - package-lock.json
+
+permissions:
+  contents: read
+
+jobs:
+  copilot-setup-steps:
+    name: Install locked repository validation tools
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          token: ${{ github.token }}
+          persist-credentials: false
+          clean: true
+          fetch-depth: 1
+          fetch-tags: false
+          show-progress: true
+          lfs: false
+          submodules: false
+          set-safe-directory: true
+          allow-unsafe-pr-checkout: false
+
+      - name: Reject alternate npm install inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          declare -ar alternate_inputs=(
+            .npmrc
+            npm-shrinkwrap.json
+            .github/workflows/.npmrc
+            .github/workflows/npm-shrinkwrap.json
+          )
+          for alternate_input in "${alternate_inputs[@]}"; do
+            if [[ -e "${alternate_input}" || -L "${alternate_input}" ]]; then
+              echo "::error file=${alternate_input}::Unsupported npm" \
+                'install input.'
+              exit 1
+            fi
+          done
+
+      - name: Detect locked validation-tool layout
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow_manifest='.github/workflows/package.json'
+          workflow_lock='.github/workflows/package-lock.json'
+
+          for required_file in "${workflow_manifest}" "${workflow_lock}"; do
+            if [[ ! -f "${required_file}" || -L "${required_file}" ]]; then
+              echo "::error file=${required_file}::Required locked npm input" \
+                'is missing or is not a regular file.'
+              exit 1
+            fi
+          done
+
+          classify_npm_input() {
+            if [[ -L "$1" ]]; then
+              printf 'symlink'
+            elif [[ -f "$1" ]]; then
+              printf 'regular-file'
+            elif [[ -e "$1" ]]; then
+              printf 'non-regular'
+            else
+              printf 'absent'
+            fi
+          }
+
+          root_manifest_state="$(classify_npm_input package.json)"
+          root_lock_state="$(classify_npm_input package-lock.json)"
+
+          if [[ "${root_manifest_state}" == regular-file && \
+            "${root_lock_state}" == regular-file ]]; then
+            echo 'layout=modern' >> "${GITHUB_OUTPUT}"
+          elif [[ "${root_manifest_state}" == absent && \
+            "${root_lock_state}" == absent ]]; then
+            echo 'layout=legacy' >> "${GITHUB_OUTPUT}"
+          else
+            echo '::error::The root npm validation tuple requires both inputs as' \
+              'regular files or both inputs absent;' \
+              "package.json=${root_manifest_state};" \
+              "package-lock.json=${root_lock_state}."
+            exit 1
+          fi
+
+      - name: Set up Node.js for the modern layout
+        if: steps.toolchain.outputs.layout == 'modern'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: package.json
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            .github/workflows/package-lock.json
+
+      - name: Set up Node.js for the legacy layout
+        if: steps.toolchain.outputs.layout == 'legacy'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: .github/workflows/package-lock.json
+
+      - name: Verify selected Node.js runtime
+        shell: bash
+        env:
+          TOOLCHAIN_LAYOUT: ${{ steps.toolchain.outputs.layout }}
+        run: |
+          set -euo pipefail
+          if [[ "${TOOLCHAIN_LAYOUT}" == modern ]]; then
+            expected_node="$(node -p \
+              'require("./package.json").engines.node')"
+            expected_npm="$(node -p \
+              'require("./package.json").engines.npm')"
+            test "$(node --version)" = "v${expected_node}"
+            test "$(npm --version)" = "${expected_npm}"
+          elif [[ "${TOOLCHAIN_LAYOUT}" == legacy ]]; then
+            test "$(node -p 'process.versions.node.split(".")[0]')" = '20'
+          else
+            echo '::error::The validation-tool layout is unsupported.'
+            exit 1
+          fi
+
+      - name: Install locked Node.js validation tools
+        shell: bash
+        env:
+          TOOLCHAIN_LAYOUT: ${{ steps.toolchain.outputs.layout }}
+        run: |
+          set -euo pipefail
+          if [[ "${TOOLCHAIN_LAYOUT}" == modern ]]; then
+            npm ci --ignore-scripts --no-audit --fund=false --include=dev
+          elif [[ "${TOOLCHAIN_LAYOUT}" != legacy ]]; then
+            echo '::error::The validation-tool layout is unsupported.'
+            exit 1
+          fi
+          npm ci --ignore-scripts --no-audit --fund=false --include=dev \
+            --prefix .github/workflows
+
+      - name: Verify locked dependency trees and immutable manifests
+        shell: bash
+        env:
+          TOOLCHAIN_LAYOUT: ${{ steps.toolchain.outputs.layout }}
+        run: |
+          set -euo pipefail
+          if [[ "${TOOLCHAIN_LAYOUT}" == modern ]]; then
+            npm ls --all
+            immutable_inputs=(
+              package.json
+              package-lock.json
+              .github/workflows/package.json
+              .github/workflows/package-lock.json
+            )
+          elif [[ "${TOOLCHAIN_LAYOUT}" == legacy ]]; then
+            immutable_inputs=(
+              .github/workflows/package.json
+              .github/workflows/package-lock.json
+            )
+          else
+            echo '::error::The validation-tool layout is unsupported.'
+            exit 1
+          fi
+          npm --prefix .github/workflows ls --all
+          git diff --exit-code -- "${immutable_inputs[@]}"
