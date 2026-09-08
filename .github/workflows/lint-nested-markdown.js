@@ -267,6 +267,65 @@ function lintMarkdownContent(content, config) {
 }
 
 /**
+ * Lint nested Markdown in caller-supplied content without reading its paths.
+ * @param {Array<{filePath: string, content: string}>} markdownInputs - Inputs to lint.
+ * @param {object} config - Markdownlint configuration.
+ * @param {(message: string) => void} logMessage - Progress logger.
+ * @returns {{totalBlocks: number, allResults: Array}} Nested lint results.
+ */
+function lintNestedMarkdownContents(
+    markdownInputs,
+    config = loadMarkdownlintConfig(),
+    logMessage = () => {}
+) {
+    if (!Array.isArray(markdownInputs)) {
+        throw new TypeError('Nested Markdown inputs must be an array.');
+    }
+
+    let totalBlocks = 0;
+    const allResults = [];
+
+    for (const input of markdownInputs) {
+        if (!input || typeof input.filePath !== 'string' ||
+            typeof input.content !== 'string') {
+            throw new TypeError('Each nested Markdown input must contain string filePath and content values.');
+        }
+
+        const blocks = extractMarkdownFencesRecursive(
+            input.content,
+            input.filePath,
+            0,
+            0,
+            ''
+        );
+        if (blocks.length === 0) {
+            continue;
+        }
+
+        logMessage(`${colors.cyan}${input.filePath}${colors.reset}: Found ${blocks.length} nested Markdown block(s)`);
+        totalBlocks += blocks.length;
+        blocks.forEach((block, index) => {
+            const lintResults = lintMarkdownContent(block.content, config);
+            const errors = lintResults.content || [];
+
+            if (errors.length > 0) {
+                allResults.push({
+                    filePath: input.filePath,
+                    line: block.line,
+                    info: block.info,
+                    blockIndex: index + 1,
+                    depth: block.depth,
+                    parentPath: block.parentPath,
+                    errors: errors
+                });
+            }
+        });
+    }
+
+    return { totalBlocks, allResults };
+}
+
+/**
  * Format and display linting results
  * @param {Array} allResults - Array of results with context
  * @returns {boolean} True if any errors were found
@@ -332,37 +391,21 @@ async function main() {
 
         console.log(`Found ${files.length} Markdown file(s) to scan\n`);
 
-        let totalBlocks = 0;
-        const allResults = [];
-
-        // Process each file
+        const markdownInputs = [];
         for (const file of files) {
             const relativePath = path.relative(repoRoot, file);
-            const blocks = extractMarkdownFences(file, repoRoot);
-
-            if (blocks.length > 0) {
-                console.log(`${colors.cyan}${relativePath}${colors.reset}: Found ${blocks.length} nested Markdown block(s)`);
-                totalBlocks += blocks.length;
-
-                // Lint each extracted block
-                blocks.forEach((block, index) => {
-                    const lintResults = lintMarkdownContent(block.content, config);
-                    const errors = lintResults.content || [];
-
-                    if (errors.length > 0) {
-                        allResults.push({
-                            filePath: relativePath,
-                            line: block.line,
-                            info: block.info,
-                            blockIndex: index + 1,
-                            depth: block.depth,
-                            parentPath: block.parentPath,
-                            errors: errors
-                        });
-                    }
-                });
-            }
+            const safeInputPath = validateMarkdownInput(repoRoot, file);
+            markdownInputs.push({
+                filePath: relativePath,
+                content: fs.readFileSync(safeInputPath, 'utf8')
+            });
         }
+
+        const { totalBlocks, allResults } = lintNestedMarkdownContents(
+            markdownInputs,
+            config,
+            console.log
+        );
 
         console.log(`\nTotal nested Markdown blocks found: ${totalBlocks}\n`);
 
@@ -390,7 +433,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+    displayResults,
     findMarkdownFiles,
+    lintNestedMarkdownContents,
     runMarkdownInputSafetySelfTest,
     validateMarkdownInput
 };

@@ -73,7 +73,7 @@ $intClaudeMaximumInputBytes = 131072
 $intCodexConfigMaximumInputBytes = 65536
 $intDocsInstructionsMaximumInputBytes = 131072
 $intInstructionDocumentMaximumInputBytes = 131072
-$intValidatorMaximumInputBytes = 393216
+$intValidatorMaximumInputBytes = 458752
 $intMetadataMaximumParents = 64
 $strMetadataRangePolicyMarker = 'metadata-range-transition-policy-v1'
 $script:objValidationUtcNow = [DateTimeOffset]::UtcNow
@@ -1034,8 +1034,8 @@ function Get-GovernedDocumentParentContext {
     # .DESCRIPTION
     # Selects the worktree comparison source or the first parent of an explicit
     # input revision and derives the applicable UTC metadata date. A local
-    # published baseline supplies committed-range validation separately. Dirty
-    # governed paths use HEAD as their direct worktree parent.
+    # published baseline is the direct parent for both clean and dirty topic
+    # snapshots so that internal commits are not separate metadata transitions.
     #
     # .PARAMETER RepositoryRootPath
     # The absolute repository root path used by Git.
@@ -1157,13 +1157,12 @@ function Get-GovernedDocumentParentContext {
         if ($intDiffExitCode -notin @(0, 1)) {
             throw "Could not compare $RepositoryRelativePath with HEAD."
         }
-        if ($intDiffExitCode -eq 1) {
-            $strParentRevision = 'HEAD'
-            $strExpectedUtcDate = [DateTimeOffset]::UtcNow.ToString('yyyy-MM-dd')
+        $strParentRevision = $PublishedBaselineRevision
+        $strExpectedUtcDate = if ($intDiffExitCode -eq 1) {
+            [DateTimeOffset]::UtcNow.ToString('yyyy-MM-dd')
         }
         else {
-            $strParentRevision = $PublishedBaselineRevision
-            $strExpectedUtcDate = ''
+            ''
         }
         & git -C $RepositoryRootPath cat-file -e `
             "$strParentRevision`:$RepositoryRelativePath" 2>$null
@@ -1286,8 +1285,9 @@ function Get-HuskySetupContractFailure {
     # Finds failures in the locked Husky bootstrap and staged-Markdown contract.
     #
     # .DESCRIPTION
-    # Parses both package manifests and checks the explicit prepare command and
-    # the exact `.md` and `.mdc` staged-file guard in the Husky hook.
+    # Parses both package manifests and checks the explicit prepare command,
+    # exact `.md` and `.mdc` staged-file guard, staged-index lint phase, and
+    # retained full-worktree phases in the Husky hook.
     #
     # .PARAMETER RootPackageContent
     # The root package.json text that defines the documented bootstrap command.
@@ -1316,7 +1316,7 @@ function Get-HuskySetupContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.0.20260907.0
+    # Version: 1.1.20260908.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -1356,6 +1356,38 @@ function Get-HuskySetupContractFailure {
             '(?m)^' + [regex]::Escape($strExpectedGuard) + '$'
         ).Count -ne 1) {
         Write-Output 'Husky guard must cover ACMR .md and .mdc once.'
+    }
+    $arrRequiredLintCommands = @(
+        'if node .github/workflows/lint-staged-markdown.mjs; then',
+        'if npm --prefix .github/workflows run lint:md; then',
+        'if npm --prefix .github/workflows run lint:md:nested; then'
+    )
+    foreach ($strRequiredLintCommand in $arrRequiredLintCommands) {
+        if ([regex]::Matches(
+                $HookContent,
+                '(?m)^' + [regex]::Escape($strRequiredLintCommand) + '$'
+            ).Count -ne 1) {
+            Write-Output "Husky must run this lint command once: $strRequiredLintCommand"
+        }
+    }
+    $intStagedLintIndex = $HookContent.IndexOf(
+        $arrRequiredLintCommands[0],
+        [System.StringComparison]::Ordinal
+    )
+    $intOuterLintIndex = $HookContent.IndexOf(
+        $arrRequiredLintCommands[1],
+        [System.StringComparison]::Ordinal
+    )
+    $intNestedLintIndex = $HookContent.IndexOf(
+        $arrRequiredLintCommands[2],
+        [System.StringComparison]::Ordinal
+    )
+    if ($intStagedLintIndex -lt 0 -or
+        $intOuterLintIndex -lt 0 -or
+        $intNestedLintIndex -lt 0 -or
+        $intStagedLintIndex -gt $intOuterLintIndex -or
+        $intOuterLintIndex -gt $intNestedLintIndex) {
+        Write-Output 'Husky must lint the staged index before both retained worktree phases.'
     }
 }
 
@@ -3862,8 +3894,10 @@ function Get-GovernedDocumentRangeTransitionFailure {
     #
     # .DESCRIPTION
     # Validates event-range identities, locates the policy introduction when
-    # needed, builds every changed document transition, and evaluates the complete
-    # governed range. New-ref ranges accept only Git's all-zero base sentinel.
+    # needed, and evaluates one published-base-to-final-head document transition.
+    # Internal topic commits are inspected as range objects, not as separate
+    # published metadata transitions. New-ref ranges accept only Git's all-zero
+    # base sentinel.
     #
     # .PARAMETER Name
     # The governed document name used in failure records.
@@ -3920,7 +3954,7 @@ function Get-GovernedDocumentRangeTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.2.20260821.1
+    # Version: 1.3.20260908.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -4130,18 +4164,154 @@ function Get-GovernedDocumentRangeTransitionFailure {
         throw 'Could not enumerate the metadata event range.'
     }
 
+    $strHeadTimestamp = ''
+    $intHeadParentCount = 0
+    $boolHeadInheritsParentPath = $false
     foreach ($strRangeCommitValue in $arrRangeCommits) {
         $strRangeCommit = ([string]$strRangeCommitValue).Trim()
-        $arrCommitFailures = @(Get-GovernedDocumentCommitTransitionFailure `
-            -Name $Name `
-            -RepositoryRootPath $RepositoryRootPath `
-            -RepositoryRelativePath $RepositoryRelativePath `
-            -MaximumBytes $MaximumBytes `
-            -CommitRevision $strRangeCommit)
-        foreach ($strCommitFailure in $arrCommitFailures) {
-            Write-Output $strCommitFailure
+        if ($strRangeCommit -notmatch $strObjectIdPattern) {
+            throw "Git returned an invalid metadata range commit: $strRangeCommit"
+        }
+        & git -C $RepositoryRootPath cat-file -e `
+            "$strRangeCommit`^{commit}" 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Git returned an unavailable metadata range commit: $strRangeCommit"
+        }
+
+        $strParentLine = [string] (
+            & git -C $RepositoryRootPath rev-list --parents -n 1 $strRangeCommit
+        )
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not read the parents of metadata range commit $strRangeCommit."
+        }
+        $arrCommitAndParents = @($strParentLine.Trim() -split '\s+')
+        if ($arrCommitAndParents.Count -eq 0 -or
+            $arrCommitAndParents[0] -notmatch $strObjectIdPattern -or
+            -not [string]::Equals(
+                $arrCommitAndParents[0],
+                $strRangeCommit,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )) {
+            throw "Git returned an invalid identity for metadata range commit $strRangeCommit."
+        }
+        $intParentCount = $arrCommitAndParents.Count - 1
+        if ($intParentCount -gt $intMetadataMaximumParents) {
+            throw (
+                "Metadata range commit $strRangeCommit has $intParentCount parents; " +
+                "the maximum is $intMetadataMaximumParents."
+            )
+        }
+        if ($intParentCount -gt 0) {
+            foreach ($strParentRevision in $arrCommitAndParents[1..$intParentCount]) {
+                if ($strParentRevision -notmatch $strObjectIdPattern) {
+                    throw "Git returned an invalid parent for metadata range commit $strRangeCommit."
+                }
+                & git -C $RepositoryRootPath cat-file -e `
+                    "$strParentRevision`^{commit}" 2>$null
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Git returned an unavailable parent for metadata range commit $strRangeCommit."
+                }
+            }
+        }
+
+        $strCommitTimestamp = [string] (
+            & git -C $RepositoryRootPath show -s --format=%cI $strRangeCommit
+        )
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not read the timestamp of metadata range commit $strRangeCommit."
+        }
+        $objCommitTimestamp = [DateTimeOffset]::MinValue
+        if (-not [DateTimeOffset]::TryParse(
+                $strCommitTimestamp.Trim(),
+                [ref] $objCommitTimestamp
+            )) {
+            throw "Metadata range commit $strRangeCommit has an invalid timestamp."
+        }
+        if ($objCommitTimestamp -gt $script:objMaximumCommitUtcTimestamp) {
+            Write-Output (
+                "Metadata range commit $strRangeCommit timestamp " +
+                "$($objCommitTimestamp.ToUniversalTime().ToString('o')) must not be later than " +
+                "trusted UTC $($script:objMaximumCommitUtcTimestamp.ToString('o'))."
+            )
+            return
+        }
+
+        if ([string]::Equals(
+                $strRangeCommit,
+                $HeadRevision,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )) {
+            $strHeadTimestamp = $objCommitTimestamp.UtcDateTime.ToString('yyyy-MM-dd')
+            $intHeadParentCount = $intParentCount
+            if ($intParentCount -gt 1) {
+                foreach ($strParentRevision in $arrCommitAndParents[1..$intParentCount]) {
+                    & git -C $RepositoryRootPath diff --quiet --no-ext-diff --no-textconv `
+                        $strParentRevision $HeadRevision -- $RepositoryRelativePath
+                    $intDiffExitCode = $LASTEXITCODE
+                    if ($intDiffExitCode -eq 0) {
+                        $boolHeadInheritsParentPath = $true
+                    }
+                    elseif ($intDiffExitCode -ne 1) {
+                        throw (
+                            "Could not compare $RepositoryRelativePath for metadata range " +
+                            "commit $HeadRevision."
+                        )
+                    }
+                }
+            }
         }
     }
+    if ([string]::IsNullOrEmpty($strHeadTimestamp)) {
+        throw 'The metadata event range did not contain its head commit.'
+    }
+
+    if (-not [string]::IsNullOrEmpty($strEffectiveBaseRevision)) {
+        & git -C $RepositoryRootPath diff --quiet --no-ext-diff --no-textconv `
+            $strEffectiveBaseRevision $HeadRevision -- $RepositoryRelativePath
+        $intPublishedDiffExitCode = $LASTEXITCODE
+        if ($intPublishedDiffExitCode -eq 0) {
+            return [string[]] @()
+        }
+        if ($intPublishedDiffExitCode -ne 1) {
+            throw "Could not compare the published metadata endpoints for $RepositoryRelativePath."
+        }
+    }
+
+    $strCurrentContent = Read-GitRevisionText `
+        -RepositoryRootPath $RepositoryRootPath `
+        -Revision $HeadRevision `
+        -RepositoryRelativePath $RepositoryRelativePath `
+        -MaximumBytes $MaximumBytes `
+        -RequireRegularFile
+    $strParentContent = $null
+    $strParentRevisionLabel = $BaseRevision
+    if (-not [string]::IsNullOrEmpty($strEffectiveBaseRevision)) {
+        $strParentRevisionLabel = $strEffectiveBaseRevision
+        & git -C $RepositoryRootPath cat-file -e `
+            "$strEffectiveBaseRevision`:$RepositoryRelativePath" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $strParentContent = Read-GitRevisionText `
+                -RepositoryRootPath $RepositoryRootPath `
+                -Revision $strEffectiveBaseRevision `
+                -RepositoryRelativePath $RepositoryRelativePath `
+                -MaximumBytes $MaximumBytes `
+                -RequireRegularFile
+        }
+    }
+
+    $objPublishedTransition = [pscustomobject]@{
+        CurrentContent = $strCurrentContent
+        ParentContent = $strParentContent
+        ExpectedUtcDate = $strHeadTimestamp
+        CurrentRevision = $HeadRevision
+        ParentRevision = $strParentRevisionLabel
+        RequireExpectedUtcDateForRenderedChange = -not (
+            $intHeadParentCount -gt 1 -and $boolHeadInheritsParentPath
+        )
+    }
+    return Get-DocumentMetadataRangeTransitionFailure `
+        -Name $Name `
+        -TransitionContext @($objPublishedTransition)
 }
 
 function Get-TomlSemanticStatementContext {
@@ -5499,18 +5669,22 @@ foreach ($objDocumentContext in $listGovernedDocumentContexts) {
                     -CommitRevision $strNoRangeCommitRevision)
         }
     }
-    $arrRepositoryFailures += @(Get-GovernedDocumentRangeTransitionFailure `
-            -Name $objDocumentContext.Path `
-            -RepositoryRootPath $strRepositoryRootPath `
-            -RepositoryRelativePath $objDocumentContext.Path `
-            -MaximumBytes $objDocumentContext.MaximumBytes `
-            -BaseRevision $strEffectiveRangeBaseRevision `
-            -HeadRevision $strEffectiveRangeHeadRevision `
-            -InputRevision $strValidatedInputRevision `
-            -IsNewRefRange $boolEffectiveRangeIsNewRef `
-            -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
-            -PolicyMaximumBytes $intValidatorMaximumInputBytes `
-            -PolicyMarker $strMetadataRangePolicyMarker)
+    $boolWorktreeReplacesLocalRange =
+        $boolUseLocalPublishedRange -and $objDocumentContext.IsWorktreeTransition
+    if (-not $boolWorktreeReplacesLocalRange) {
+        $arrRepositoryFailures += @(Get-GovernedDocumentRangeTransitionFailure `
+                -Name $objDocumentContext.Path `
+                -RepositoryRootPath $strRepositoryRootPath `
+                -RepositoryRelativePath $objDocumentContext.Path `
+                -MaximumBytes $objDocumentContext.MaximumBytes `
+                -BaseRevision $strEffectiveRangeBaseRevision `
+                -HeadRevision $strEffectiveRangeHeadRevision `
+                -InputRevision $strValidatedInputRevision `
+                -IsNewRefRange $boolEffectiveRangeIsNewRef `
+                -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
+                -PolicyMaximumBytes $intValidatorMaximumInputBytes `
+                -PolicyMarker $strMetadataRangePolicyMarker)
+    }
 }
 if ($arrRepositoryFailures.Count -gt 0) {
     throw "Agent-instruction contract failed:`n- $($arrRepositoryFailures -join "`n- ")"
@@ -5561,6 +5735,26 @@ if ($SelfTest) {
                 '--diff-filter=ACM'
             )
             'ACMR .md and .mdc'
+        )
+        ,@(
+            'hook omits staged-index lint'
+            $strRootPackageContent
+            $strWorkflowPackageContent
+            $strHuskyHookContent.Replace(
+                'if node .github/workflows/lint-staged-markdown.mjs; then',
+                'if true; then'
+            )
+            'lint-staged-markdown.mjs'
+        )
+        ,@(
+            'hook omits retained nested worktree lint'
+            $strRootPackageContent
+            $strWorkflowPackageContent
+            $strHuskyHookContent.Replace(
+                'if npm --prefix .github/workflows run lint:md:nested; then',
+                'if true; then'
+            )
+            'lint:md:nested'
         )
     )
     foreach ($arrHuskyMutation in $arrHuskyMutations) {
@@ -7184,6 +7378,65 @@ if ($SelfTest) {
             -Parents @($strMergeBaseCommit) `
             -Timestamp ($strMergeHistoricalDate + 'T12:00:00Z') `
             -Message 'merge fixture topic'
+        $strInvalidIntermediateContent = $strMergeBaseContent +
+            [Environment]::NewLine + 'Invalid internal topic metadata fixture.'
+        [System.IO.File]::WriteAllText(
+            [System.IO.Path]::Combine($strMergeFixtureRoot, 'AGENTS.md'),
+            $strInvalidIntermediateContent,
+            $objUtf8WithoutBom
+        )
+        & git -C $strMergeFixtureRoot add -- 'AGENTS.md'
+        $strInvalidIntermediateTree =
+            ([string] (& git -C $strMergeFixtureRoot write-tree)).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not create the invalid intermediate metadata tree.'
+        }
+        $strInvalidIntermediateCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strInvalidIntermediateTree `
+            -Parents @($strMergeBaseCommit) `
+            -Timestamp ($strMergeHistoricalDate + 'T09:00:00Z') `
+            -Message 'invalid internal topic metadata'
+        $strCorrectedFinalCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strMergeTopicTree `
+            -Parents @($strInvalidIntermediateCommit) `
+            -Timestamp ($strMergeHistoricalDate + 'T10:00:00Z') `
+            -Message 'correct final published metadata'
+        $arrCorrectedFinalFailures = @(Get-GovernedDocumentRangeTransitionFailure `
+                -Name 'AGENTS.md' `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -RepositoryRelativePath 'AGENTS.md' `
+                -MaximumBytes $intAgentsMaximumInputBytes `
+                -BaseRevision $strMergeBaseCommit `
+                -HeadRevision $strCorrectedFinalCommit `
+                -InputRevision $strCorrectedFinalCommit `
+                -IsNewRefRange $false `
+                -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
+                -PolicyMaximumBytes 1024 `
+                -PolicyMarker $strMetadataRangePolicyMarker)
+        if ($arrCorrectedFinalFailures.Count -ne 0) {
+            throw (
+                'Correct final metadata did not supersede an invalid internal state: ' +
+                ($arrCorrectedFinalFailures -join '; ')
+            )
+        }
+        $arrInvalidFinalFailures = @(Get-GovernedDocumentRangeTransitionFailure `
+                -Name 'AGENTS.md' `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -RepositoryRelativePath 'AGENTS.md' `
+                -MaximumBytes $intAgentsMaximumInputBytes `
+                -BaseRevision $strMergeBaseCommit `
+                -HeadRevision $strInvalidIntermediateCommit `
+                -InputRevision $strInvalidIntermediateCommit `
+                -IsNewRefRange $false `
+                -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
+                -PolicyMaximumBytes 1024 `
+                -PolicyMarker $strMetadataRangePolicyMarker)
+        if (-not ($arrInvalidFinalFailures -join '; ').Contains(
+                'Version revision must be greater',
+                [System.StringComparison]::Ordinal
+            )) {
+            throw 'Invalid final metadata was accepted as an internal-only state.'
+        }
         $strAdvancedBaseCommit = & $scriptBlockCreateMergeFixtureCommit `
             -Tree $strMergeBaseTree `
             -Parents @($strMergeBaseCommit) `
@@ -7418,7 +7671,7 @@ if ($SelfTest) {
         $strSecondTopicCommit = & $scriptBlockCreateMergeFixtureCommit `
             -Tree $strMergeTopicTree `
             -Parents @($strMergeTopicCommit) `
-            -Timestamp ($strMergeCurrentDate + 'T01:00:00Z') `
+            -Timestamp ($strMergeHistoricalDate + 'T13:00:00Z') `
             -Message 'second internal topic iteration'
         & git -C $strMergeFixtureRoot update-ref `
             refs/remotes/origin/main $strMergeBaseCommit
@@ -7493,8 +7746,8 @@ if ($SelfTest) {
             -RepositoryRelativePath 'AGENTS.md' `
             -MaximumBytes $intAgentsMaximumInputBytes `
             -PublishedBaselineRevision $strResolvedPublishedBaseline
-        if ($objDirtyPublishedContext.ParentRevision -cne 'HEAD' -or
-            $objDirtyPublishedContext.ParentContent -cne $strMergeTopicContent -or
+        if ($objDirtyPublishedContext.ParentRevision -cne $strMergeBaseCommit -or
+            $objDirtyPublishedContext.ParentContent -cne $strMergeBaseContent -or
             $objDirtyPublishedContext.ExpectedUtcDate -cne
                 $script:strMaximumMetadataUtcDate -or
             -not $objDirtyPublishedContext.IsWorktreeTransition) {
@@ -7713,17 +7966,193 @@ if ($SelfTest) {
             )
         }
     }
-    foreach ($strTrigger in @('push', 'pull_request_target')) {
+    $scriptBlockGetDispatchBaselineFailures = {
+        param([string] $WorkflowContent)
+
+        $objDispatchStepMatch = [regex]::Match(
+            $WorkflowContent,
+            '(?ms)^      - name: Fetch manual-run published baseline as data\r?\n' +
+                '(?<Body>.*?)(?=^      - name: |\z)'
+        )
+        if (-not $objDispatchStepMatch.Success) {
+            Write-Output 'The manual-run baseline acquisition step must occur exactly once.'
+            return
+        }
+        $strDispatchStepBody = $objDispatchStepMatch.Groups['Body'].Value
+        foreach ($strRequiredLiteral in @(
+                '        id: fetch_dispatch_baseline',
+                "        if: github.event_name == 'workflow_dispatch'",
+                '        shell: bash',
+                '          GITHUB_TOKEN: ${{ github.token }}',
+                '          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}',
+                '          set -euo pipefail',
+                '          default_ref="refs/heads/${DEFAULT_BRANCH}"',
+                '          remote_ref="refs/remotes/origin/${DEFAULT_BRANCH}"',
+                '          git check-ref-format "${default_ref}"',
+                '          git check-ref-format "${remote_ref}"',
+                '          authorization="$(printf ''x-access-token:%s'' "${GITHUB_TOKEN}" | base64 -w 0)"',
+                '          GIT_CONFIG_COUNT=1 \',
+                '            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \',
+                '            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \',
+                '            git fetch --no-tags --no-recurse-submodules origin \',
+                '              "${default_ref}:${remote_ref}"',
+                '          unset authorization',
+                '          fetched_baseline="$(git rev-parse --verify "${remote_ref}^{commit}")"',
+                '          [[ "${fetched_baseline}" =~ ^[0-9a-f]{40}$ ]]',
+                '          printf ''revision=%s\n'' "${fetched_baseline}" >> "${GITHUB_OUTPUT}"',
+                '          git diff --quiet --no-ext-diff',
+                '          git diff --cached --quiet --no-ext-diff'
+            )) {
+            if (-not $strDispatchStepBody.Contains(
+                    $strRequiredLiteral,
+                    [System.StringComparison]::Ordinal
+                )) {
+                Write-Output "The manual-run baseline acquisition is missing: $strRequiredLiteral"
+            }
+        }
+        if ([regex]::Matches(
+                $strDispatchStepBody,
+                '(?m)^\s+git fetch '
+            ).Count -ne 1 -or
+            $strDispatchStepBody -match '(?m)(^|\s)--force(\s|$)' -or
+            $strDispatchStepBody -match '"\+\$\{default_ref\}') {
+            Write-Output 'The manual-run baseline fetch must be exact and non-force.'
+        }
+        if ([regex]::Matches(
+                $WorkflowContent,
+                "github.event_name == 'workflow_dispatch' && github.sha"
+            ).Count -ne 2) {
+            Write-Output 'Manual runs must use github.sha for input and range head.'
+        }
+        if ([regex]::Matches(
+                $WorkflowContent,
+                'steps\.fetch_dispatch_baseline\.outputs\.revision'
+            ).Count -ne 1) {
+            Write-Output 'Manual runs must use the verified baseline step output once.'
+        }
+    }
+    $arrDispatchBaselineFailures = @(& $scriptBlockGetDispatchBaselineFailures `
+            -WorkflowContent $strAgentWorkflowContent)
+    if ($arrDispatchBaselineFailures.Count -gt 0) {
+        throw (
+            'The manual-run baseline acquisition contract failed: ' +
+            ($arrDispatchBaselineFailures -join '; ')
+        )
+    }
+    $arrDispatchBaselineMutations = @(
+        [pscustomobject]@{
+            Name = 'step removed'
+            From = 'Fetch manual-run published baseline as data'
+            To = 'Removed manual-run baseline acquisition'
+        },
+        [pscustomobject]@{
+            Name = 'default branch replaced'
+            From = 'DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}'
+            To = 'DEFAULT_BRANCH: main'
+        },
+        [pscustomobject]@{
+            Name = 'ref validation removed'
+            From = 'git check-ref-format "${default_ref}"'
+            To = 'test -n "${default_ref}"'
+        },
+        [pscustomobject]@{
+            Name = 'force enabled'
+            From = 'git fetch --no-tags --no-recurse-submodules origin \'
+            To = 'git fetch --force --no-tags --no-recurse-submodules origin \'
+        },
+        [pscustomobject]@{
+            Name = 'resolved SHA not checked'
+            From = '[[ "${fetched_baseline}" =~ ^[0-9a-f]{40}$ ]]'
+            To = 'test -n "${fetched_baseline}"'
+        },
+        [pscustomobject]@{
+            Name = 'input revision omitted'
+            From = "github.event_name == 'workflow_dispatch' && github.sha"
+            To = "github.event_name == 'workflow_dispatch' && ''"
+        },
+        [pscustomobject]@{
+            Name = 'baseline output omitted'
+            From = 'steps.fetch_dispatch_baseline.outputs.revision'
+            To = "''"
+        }
+    )
+    foreach ($objDispatchBaselineMutation in $arrDispatchBaselineMutations) {
+        if (-not $strAgentWorkflowContent.Contains(
+                $objDispatchBaselineMutation.From,
+                [System.StringComparison]::Ordinal
+            )) {
+            throw (
+                'The manual-run baseline mutation fixture is unavailable: ' +
+                $objDispatchBaselineMutation.Name
+            )
+        }
+        $strMutatedAgentWorkflowContent = $strAgentWorkflowContent.Replace(
+            $objDispatchBaselineMutation.From,
+            $objDispatchBaselineMutation.To
+        )
+        $arrMutatedDispatchBaselineFailures = @(
+            & $scriptBlockGetDispatchBaselineFailures `
+                -WorkflowContent $strMutatedAgentWorkflowContent
+        )
+        if ($arrMutatedDispatchBaselineFailures.Count -eq 0) {
+            throw (
+                'The manual-run baseline mutation was accepted: ' +
+                $objDispatchBaselineMutation.Name
+            )
+        }
+    }
+    $scriptBlockGetTriggerPathFailures = {
+        param(
+            [string] $WorkflowContent,
+            [string] $Trigger,
+            [string[]] $RequiredPath
+        )
+
         $objTriggerMatch = [regex]::Match(
-            $strAgentWorkflowContent,
-            "(?ms)^  $strTrigger`:\r?\n(?<Body>.*?)(?=^(?:\S| {2}\S)|\z)"
+            $WorkflowContent,
+            "(?ms)^  $Trigger`:\r?\n(?<Body>.*?)(?=^(?:\S| {2}\S)|\z)"
         )
         if (-not $objTriggerMatch.Success) {
-            throw "Could not parse the $strTrigger agent-validation trigger."
+            Write-Output "Could not parse the $Trigger agent-validation trigger."
+            return
+        }
+        $objPathFilterMatch = [regex]::Match(
+            $objTriggerMatch.Groups['Body'].Value,
+            '(?ms)^    paths:\r?\n(?<Paths>(?:      - [^\r\n]+\r?\n)+)'
+        )
+        if (-not $objPathFilterMatch.Success) {
+            Write-Output "Could not parse the $Trigger agent-validation path filter."
+            return
+        }
+        foreach ($strRequiredPath in $RequiredPath) {
+            if ([regex]::Matches(
+                    $objPathFilterMatch.Groups['Paths'].Value,
+                    "(?m)^      - $([regex]::Escape($strRequiredPath))\r?$"
+                ).Count -ne 1) {
+                Write-Output "$Trigger must cover consumed validation path $strRequiredPath once."
+            }
+        }
+    }
+
+    $arrRequiredTriggerPaths = @(
+        $script:arrCheckoutAttributePaths
+        $arrHuskyInputSpecs | ForEach-Object { $_.Path }
+    )
+    foreach ($strTrigger in @('push', 'pull_request_target')) {
+        $arrTriggerPathFailures = @(& $scriptBlockGetTriggerPathFailures `
+                -WorkflowContent $strAgentWorkflowContent `
+                -Trigger $strTrigger `
+                -RequiredPath $arrRequiredTriggerPaths)
+        if ($arrTriggerPathFailures.Count -gt 0) {
+            throw $arrTriggerPathFailures[0]
         }
         if ($strTrigger -ceq 'push') {
+            $objPushTriggerMatch = [regex]::Match(
+                $strAgentWorkflowContent,
+                '(?ms)^  push:\r?\n(?<Body>.*?)(?=^(?:\S| {2}\S)|\z)'
+            )
             $objBranchFilterMatch = [regex]::Match(
-                $objTriggerMatch.Groups['Body'].Value,
+                $objPushTriggerMatch.Groups['Body'].Value,
                 '(?ms)^    branches:\r?\n(?<Branches>(?:      - [^\r\n]+\r?\n)+)'
             )
             if (-not $objBranchFilterMatch.Success -or
@@ -7732,22 +8161,43 @@ if ($SelfTest) {
                 throw 'The push agent-validation trigger must cover all branches and exclude tags.'
             }
         }
-        $objPathFilterMatch = [regex]::Match(
-            $objTriggerMatch.Groups['Body'].Value,
-            '(?ms)^    paths:\r?\n(?<Paths>(?:      - [^\r\n]+\r?\n)+)'
-        )
-        if (-not $objPathFilterMatch.Success) {
-            throw "Could not parse the $strTrigger agent-validation path filter."
-        }
         foreach ($strAttributePath in $script:arrCheckoutAttributePaths) {
-            if (-not [regex]::IsMatch(
-                    $objPathFilterMatch.Groups['Paths'].Value,
-                    "(?m)^      - $([regex]::Escape($strAttributePath))\r?$"
-                )) {
-                throw "$strTrigger does not cover checkout attribute path $strAttributePath."
-            }
             if ($script:arrTrustRootPaths -cnotcontains $strAttributePath) {
                 throw "The trust-root gate omits checkout attribute path $strAttributePath."
+            }
+        }
+    }
+    foreach ($strTrigger in @('push', 'pull_request_target')) {
+        $objTriggerMatch = [regex]::Match(
+            $strAgentWorkflowContent,
+            "(?ms)^  $strTrigger`:\r?\n(?<Body>.*?)(?=^(?:\S| {2}\S)|\z)"
+        )
+        foreach ($objHuskyInputSpec in $arrHuskyInputSpecs) {
+            $objPathLineMatch = [regex]::Match(
+                $objTriggerMatch.Groups['Body'].Value,
+                "(?m)^      - $([regex]::Escape($objHuskyInputSpec.Path))\r?\n"
+            )
+            if (-not $objPathLineMatch.Success) {
+                throw "Could not create the $strTrigger path-removal mutation."
+            }
+            $intPathLineIndex =
+                $objTriggerMatch.Groups['Body'].Index + $objPathLineMatch.Index
+            $strMutatedAgentWorkflowContent = $strAgentWorkflowContent.Remove(
+                $intPathLineIndex,
+                $objPathLineMatch.Length
+            )
+            $arrMutatedTriggerFailures = @(& $scriptBlockGetTriggerPathFailures `
+                    -WorkflowContent $strMutatedAgentWorkflowContent `
+                    -Trigger $strTrigger `
+                    -RequiredPath $arrRequiredTriggerPaths)
+            if (-not ($arrMutatedTriggerFailures -match [regex]::Escape(
+                        "$strTrigger must cover consumed validation path " +
+                        "$($objHuskyInputSpec.Path) once."
+                    ))) {
+                throw (
+                    "$strTrigger path-removal mutation was accepted: " +
+                    $objHuskyInputSpec.Path
+                )
             }
         }
     }

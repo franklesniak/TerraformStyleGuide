@@ -9,6 +9,7 @@ on:
       - .gitattributes
       - .github/.gitattributes
       - .github/workflows/.gitattributes
+      - .github/workflows/package.json
       - .codex/config.toml
       - .cursor/rules/*.mdc
       - .github/copilot-instructions.md
@@ -18,6 +19,7 @@ on:
       - .github/workflows/Test-AgentInstructionParserManifest.mjs
       - .github/workflows/Test-AgentInstructions.ps1
       - .hermes.md
+      - .husky/pre-commit
       - .npmrc
       - AGENTS.md
       - CLAUDE.md
@@ -30,6 +32,7 @@ on:
       - .gitattributes
       - .github/.gitattributes
       - .github/workflows/.gitattributes
+      - .github/workflows/package.json
       - .codex/config.toml
       - .cursor/rules/*.mdc
       - .github/copilot-instructions.md
@@ -39,6 +42,7 @@ on:
       - .github/workflows/Test-AgentInstructionParserManifest.mjs
       - .github/workflows/Test-AgentInstructions.ps1
       - .hermes.md
+      - .husky/pre-commit
       - .npmrc
       - AGENTS.md
       - CLAUDE.md
@@ -136,6 +140,32 @@ jobs:
           git diff --quiet --no-ext-diff
           git diff --cached --quiet --no-ext-diff
 
+      - name: Fetch manual-run published baseline as data
+        id: fetch_dispatch_baseline
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          default_ref="refs/heads/${DEFAULT_BRANCH}"
+          remote_ref="refs/remotes/origin/${DEFAULT_BRANCH}"
+          git check-ref-format "${default_ref}"
+          git check-ref-format "${remote_ref}"
+          authorization="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 -w 0)"
+          GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \
+            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \
+            git fetch --no-tags --no-recurse-submodules origin \
+              "${default_ref}:${remote_ref}"
+          unset authorization
+          fetched_baseline="$(git rev-parse --verify "${remote_ref}^{commit}")"
+          [[ "${fetched_baseline}" =~ ^[0-9a-f]{40}$ ]]
+          printf 'revision=%s\n' "${fetched_baseline}" >> "${GITHUB_OUTPUT}"
+          git diff --quiet --no-ext-diff
+          git diff --cached --quiet --no-ext-diff
+
       - name: Validate parser manifests as inert data
         shell: bash
         env:
@@ -161,15 +191,19 @@ jobs:
           AGENT_INSTRUCTION_INPUT_REVISION: >-
             ${{ github.event_name == 'pull_request_target' &&
               github.event.pull_request.head.sha ||
-              github.event_name == 'push' && github.sha || '' }}
+              github.event_name == 'push' && github.sha ||
+              github.event_name == 'workflow_dispatch' && github.sha || '' }}
           AGENT_INSTRUCTION_RANGE_BASE: >-
             ${{ github.event_name == 'pull_request_target' &&
               github.event.pull_request.base.sha ||
-              github.event_name == 'push' && github.event.before || '' }}
+              github.event_name == 'push' && github.event.before ||
+              github.event_name == 'workflow_dispatch' &&
+              steps.fetch_dispatch_baseline.outputs.revision || '' }}
           AGENT_INSTRUCTION_RANGE_HEAD: >-
             ${{ github.event_name == 'pull_request_target' &&
               github.event.pull_request.head.sha ||
-              github.event_name == 'push' && github.sha || '' }}
+              github.event_name == 'push' && github.sha ||
+              github.event_name == 'workflow_dispatch' && github.sha || '' }}
           AGENT_INSTRUCTION_RANGE_IS_NEW_REF: >-
             ${{ github.event_name == 'push' && github.event.created || false }}
         run: >-

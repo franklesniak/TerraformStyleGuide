@@ -4,10 +4,9 @@
 
 ## Metadata
 
-<!-- Version: 1.0.20260907.0 -->
 - **Status:** Active
 - **Owner:** Repository maintainer (@franklesniak)
-- **Last Updated:** 2026-09-07
+- **Last Updated:** 2026-09-08
 - **Scope:** Active outer-file and recursive nested-Markdown lint behavior in TerraformStyleGuide.
 - **Related:** [Workflow script index](scripts-README.md), [Markdown workflow](markdownlint.yml)
 
@@ -15,7 +14,7 @@
 
 The outer lint checks repository `.md` and `.mdc` files with `.github/workflows/.markdownlint.jsonc`. The recursive lint uses `lint-nested-markdown.js` to parse Markdown and inspect fenced blocks whose language is `markdown` or `md`. It excludes dependency directories and reports the source path, source line, nesting depth, and parent-block path for each violation.
 
-The existing Husky hook runs both lint phases when staged Markdown changes. The `markdownlint.yml` workflow runs the same two phases in a separate lint job and preserves the repository's independent workflow-policy job. The separation prevents repository-controlled lint code and repository-controlled policy code from sharing a runner filesystem.
+The staged helper runs both lint phases against Markdown blobs from the Git index. The pre-commit framework uses that helper directly. The existing Husky hook runs the staged helper first and then retains both full-worktree lint commands when staged Markdown changes. The `markdownlint.yml` workflow runs the two full-worktree phases in a separate lint job and preserves the repository's independent workflow-policy job. The separation prevents repository-controlled lint code and repository-controlled policy code from sharing a runner filesystem.
 
 ## Local validation
 
@@ -38,4 +37,4 @@ Both lint phases exit 0 when no violation exists. A lint violation or tooling fa
 
 ## Nested-fence behavior
 
-The recursive parser handles empty fences, different fence lengths, `markdown` and `md` identifiers, sibling blocks, and Markdown nested to arbitrary depth. It disables MD041 only for extracted snippets because a snippet does not need a top-level heading. All other configured rules remain active.
+The recursive parser handles empty fences, different fence lengths, `markdown` and `md` identifiers, sibling blocks, and Markdown nested to arbitrary depth. It disables MD041 for extracted snippets because a snippet does not need a top-level heading. It also disables MD051 because example or placeholder fragment links can target anchors outside the extracted string. All other configured rules remain active.

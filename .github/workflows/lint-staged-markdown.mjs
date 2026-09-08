@@ -1,12 +1,33 @@
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const requiredNodeMajor = 20;
-const currentNodeMajor = Number(process.versions.node.split('.')[0]);
+const workflowsDir = dirname(fileURLToPath(import.meta.url));
+const repoRoot = resolve(workflowsDir, '../..');
+const rootPackagePath = resolve(repoRoot, 'package.json');
+const exactSemanticVersionPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u;
 
-if (!Number.isInteger(currentNodeMajor) || currentNodeMajor < requiredNodeMajor) {
-  console.error('pre-commit: Node.js 20 or newer is required to lint staged Markdown.');
+let rootPackage;
+
+try {
+  rootPackage = JSON.parse(readFileSync(rootPackagePath, 'utf8'));
+} catch {
+  console.error('pre-commit: Failed to read the root package.json Node.js selector.');
+  process.exit(2);
+}
+
+const requiredNodeVersion = rootPackage?.engines?.node;
+const currentNodeVersion = process.versions.node;
+
+if (typeof requiredNodeVersion !== 'string' || !exactSemanticVersionPattern.test(requiredNodeVersion)) {
+  console.error('pre-commit: Root package.json must declare engines.node as one exact semantic version.');
+  process.exit(2);
+}
+
+if (currentNodeVersion !== requiredNodeVersion) {
+  console.error(`pre-commit: Node.js ${requiredNodeVersion} is required to lint staged Markdown.`);
   console.error(`Current version: ${process.version || 'unknown'}`);
   console.error('If you use a Node version manager with a GUI Git client, add its initialization to');
   console.error('~/.config/husky/init.sh, which Husky sources before running hooks.');
@@ -14,8 +35,6 @@ if (!Number.isInteger(currentNodeMajor) || currentNodeMajor < requiredNodeMajor)
   process.exit(1);
 }
 
-const workflowsDir = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(workflowsDir, '../..');
 const maxBuffer = 100 * 1024 * 1024;
 
 const runGit = (args) => {
@@ -65,10 +84,13 @@ if (stagedMarkdownPaths.length === 0) {
 }
 
 const stagedMarkdownByAbsolutePosixPath = {};
+const stagedMarkdownInputs = [];
 
 try {
   for (const repoRelativePath of stagedMarkdownPaths) {
-    stagedMarkdownByAbsolutePosixPath[toAbsolutePosixPath(repoRelativePath)] = runGit(['show', `:${repoRelativePath}`]);
+    const content = runGit(['show', `:${repoRelativePath}`]);
+    stagedMarkdownByAbsolutePosixPath[toAbsolutePosixPath(repoRelativePath)] = content;
+    stagedMarkdownInputs.push({ filePath: repoRelativePath, content });
   }
 } catch (error) {
   console.error(error);
@@ -98,6 +120,30 @@ if (exitCode !== 0) {
   console.error('');
   console.error('pre-commit: Markdown lint failed for staged Markdown.');
   console.error('To check all Markdown files, run: npm --prefix .github/workflows run lint:md');
+} else {
+  try {
+    const require = createRequire(import.meta.url);
+    const {
+      displayResults,
+      lintNestedMarkdownContents
+    } = require('./lint-nested-markdown.js');
+    const { totalBlocks, allResults } = lintNestedMarkdownContents(
+      stagedMarkdownInputs,
+      undefined,
+      console.log
+    );
+    console.log(`\nTotal nested Markdown blocks found: ${totalBlocks}\n`);
+    if (displayResults(allResults)) {
+      console.error('pre-commit: Nested Markdown lint failed for staged Markdown.');
+      console.error('To check all Markdown files, run: npm --prefix .github/workflows run lint:md:nested');
+      exitCode = 1;
+    }
+  } catch (error) {
+    console.error(error);
+    console.error('pre-commit: Nested Markdown lint tooling failed to run.');
+    console.error('Try reinstalling dev dependencies: npm --prefix .github/workflows ci');
+    exitCode = 2;
+  }
 }
 
 process.exitCode = exitCode;

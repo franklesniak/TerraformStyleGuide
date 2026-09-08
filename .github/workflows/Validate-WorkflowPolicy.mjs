@@ -237,7 +237,7 @@ const NETWORK_CLIENT =/\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|ir
 // Separate jobs are separate runners with separate filesystems, which removes
 // the choice rather than making it.
 const REVIEWED_POLICY_STEP_DIGEST = 'd9a8b23d11e116fb5be4d77c3fbeb93e9d3334093d07ab47ad75f8659c514723';
-const REVIEWED_LINT_STEP_DIGEST = '96fd8e65637c876b9971c16cc2c8dfec97c195b4bfe7983d2f531ffffd09480a';
+const REVIEWED_LINT_STEP_DIGEST = '2626ad0d659e06d0942124712d7629ab72dc8ed6c46c49b5246817d292874ad5';
 
 // Both governed steps have to establish the same supply position before they
 // diverge: the pinned toolchain, the reviewed package metadata, and npm's
@@ -988,7 +988,7 @@ const REVIEWED_GENERATOR_DIGEST = '4ab4f6a9759671b545f5bc5df05f982df5f25b46095bd
 // so what the lint does is pinned alongside what it runs.
 const REVIEWED_LINT_DIGESTS = Object.freeze({
   '.markdownlint.jsonc': '5eb07bf7f30829e0091e82f235a96fdba21be1ef1160ca1e22cdbe8d82da5300',
-  'lint-nested-markdown.js': 'd8e513044f4e0b65d982e9353f1d2e668fb163dc02857e468fc71f1a21ac76e0',
+  'lint-nested-markdown.js': '3bcc8cf2dfbc92da28f8a9018708f20e350c2d9b9ed71df405581ca777b4db26',
 });
 
 // Round 45, finding C. The invocation allowlist below records only lines whose
