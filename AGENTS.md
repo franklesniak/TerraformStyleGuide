@@ -71,7 +71,7 @@ During downstream template adoption and stack selection, perform non-protected c
   - Retained JSON checks include strict JSON syntax (`check-json`).
   - Retained YAML checks include YAML parsing (`check-yaml`) and style (`yamllint`).
   - Retained GitHub Actions checks include GitHub Actions linting (`actionlint`).
-  - CI also runs `node .github/workflows/Validate-WorkflowPolicy.mjs build.yml markdownlint.yml` and the artifact generator's zero-drift check.
+  - CI also runs `node .github/workflows/Validate-WorkflowPolicy.mjs .github/workflows/build.yml .github/workflows/markdownlint.yml` and the artifact generator's zero-drift check.
 
 - **Modular instruction files**
   - Read the relevant file under `.github/instructions/` before modifying matching files:

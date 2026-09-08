@@ -195,3 +195,11 @@ jobs:
           fi
           npm --prefix .github/workflows ls --all
           git diff --exit-code -- "${immutable_inputs[@]}"
+
+      - name: Activate retained pre-commit hook
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix .github/workflows run prepare
+          test "$(git config --get core.hooksPath)" = '.husky/_'
+          test -x .husky/_/pre-commit

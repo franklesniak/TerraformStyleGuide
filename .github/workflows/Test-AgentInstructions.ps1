@@ -42,7 +42,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260908.1
+# Version: 1.2.20260908.2
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -81,6 +81,12 @@ $script:strMaximumMetadataUtcDate = $script:objValidationUtcNow.ToString('yyyy-M
 $script:objMaximumCommitUtcTimestamp = $script:objValidationUtcNow.AddMinutes(5)
 $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
+$script:strHuskyHookSha256 =
+    '8989ab5075c077599a6dea88e656ac2837af4800e0bb5daef364514f00255467'
+$script:strWorkflowPolicyCommandPrefix =
+    'node .github/workflows/Validate-WorkflowPolicy.mjs'
+$script:strWorkflowPolicyCommand = $script:strWorkflowPolicyCommandPrefix +
+    ' .github/workflows/build.yml .github/workflows/markdownlint.yml'
 $script:hashtableLegacyMetadataParentSha256 = @{
     'CLAUDE.md' = '28e77152391d51aed5ba93c59ed79af7f5c516d5ee0f1af2ce13cd4842e26387'
 }
@@ -1296,9 +1302,13 @@ function Get-HuskySetupContractFailure {
     # .PARAMETER HookContent
     # The `.husky/pre-commit` text that contains the staged-file guard.
     #
+    # .PARAMETER CopilotSetupContent
+    # The Copilot setup workflow text that activates the retained hook.
+    #
     # .EXAMPLE
     # Get-HuskySetupContractFailure -RootPackageContent $strRootPackage `
-    #     -WorkflowPackageContent $strWorkflowPackage -HookContent $strHook
+    #     -WorkflowPackageContent $strWorkflowPackage -HookContent $strHook `
+    #     -CopilotSetupContent $strCopilotSetup
     #
     # # Writes one string for each Husky setup-contract failure.
     #
@@ -1314,7 +1324,7 @@ function Get-HuskySetupContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.1.20260908.0
+    # Version: 1.3.20260908.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -1325,7 +1335,10 @@ function Get-HuskySetupContractFailure {
         [string] $WorkflowPackageContent,
 
         [Parameter(Mandatory)]
-        [string] $HookContent
+        [string] $HookContent,
+
+        [Parameter(Mandatory)]
+        [string] $CopilotSetupContent
     )
 
     try {
@@ -1386,6 +1399,83 @@ function Get-HuskySetupContractFailure {
         $intStagedLintIndex -gt $intOuterLintIndex -or
         $intOuterLintIndex -gt $intNestedLintIndex) {
         Write-Output 'Husky must lint the staged index before both retained worktree phases.'
+    }
+
+    $objSha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $arrHookHashBytes = $objSha256.ComputeHash(
+            [System.Text.UTF8Encoding]::new($false).GetBytes($HookContent)
+        )
+    }
+    finally {
+        $objSha256.Dispose()
+    }
+    $strHookSha256 = [System.BitConverter]::ToString(
+        $arrHookHashBytes
+    ).Replace('-', '').ToLowerInvariant()
+    if ($strHookSha256 -cne $script:strHuskyHookSha256) {
+        Write-Output 'Husky hook text must match the reviewed SHA-256 digest.'
+    }
+
+    $arrInstallCommands = @([regex]::Matches(
+            $CopilotSetupContent,
+            '(?m)^\s+npm ci(?:\s|\\)'
+        ))
+    $arrScriptDisabledInstalls = @([regex]::Matches(
+            $CopilotSetupContent,
+            '(?m)^\s+npm ci --ignore-scripts(?:\s|\\)'
+        ))
+    if ($arrInstallCommands.Count -ne 2 -or
+        $arrScriptDisabledInstalls.Count -ne 2) {
+        Write-Output 'Copilot setup must keep both locked installs script-disabled.'
+    }
+
+    $arrStepHeaders = @([regex]::Matches(
+            $CopilotSetupContent,
+            '(?m)^      - name: (?<Name>[^\r\n]+)\r?$'
+        ))
+    $intVerificationStepIndex = -1
+    $intActivationStepIndex = -1
+    for ($intStep = 0; $intStep -lt $arrStepHeaders.Count; $intStep++) {
+        if ($arrStepHeaders[$intStep].Groups['Name'].Value -ceq
+            'Verify locked dependency trees and immutable manifests') {
+            if ($intVerificationStepIndex -ne -1) {
+                $intVerificationStepIndex = -2
+                break
+            }
+            $intVerificationStepIndex = $intStep
+        }
+        if ($arrStepHeaders[$intStep].Groups['Name'].Value -ceq
+            'Activate retained pre-commit hook') {
+            if ($intActivationStepIndex -ne -1) {
+                $intActivationStepIndex = -2
+                break
+            }
+            $intActivationStepIndex = $intStep
+        }
+    }
+    if ($intVerificationStepIndex -lt 0 -or
+        $intActivationStepIndex -ne ($intVerificationStepIndex + 1)) {
+        Write-Output 'Copilot hook activation must occur once directly after dependency verification.'
+    }
+
+    $strActivationPattern =
+        '(?ms)^      - name: Activate retained pre-commit hook\r?\n' +
+        '        shell: bash\r?\n' +
+        '        run: \|\r?\n' +
+        '          set -euo pipefail\r?\n' +
+        '          npm --prefix \.github/workflows run prepare\r?\n' +
+        '          test "\$\(git config --get core\.hooksPath\)" = ''\.husky/_''\r?\n' +
+        '          test -x \.husky/_/pre-commit' +
+        '(?=\r?\n(?:\r?\n)?      - name: |\r?\n?\z)'
+    if ([regex]::Matches(
+            $CopilotSetupContent,
+            $strActivationPattern
+        ).Count -ne 1) {
+        Write-Output (
+            'Copilot hook activation must run nested prepare, require exact .husky/_ ' +
+            'hooksPath, and require its executable dispatcher.'
+        )
     }
 }
 
@@ -2709,6 +2799,54 @@ function Get-MarkdownLevelTwoSectionContext {
     }
 }
 
+function Test-MetadataCalendarDate {
+    # .SYNOPSIS
+    # Tests one metadata date as a real canonical calendar date.
+    #
+    # .DESCRIPTION
+    # Parses one yyyy-MM-dd value with the invariant Gregorian calendar.
+    #
+    # .PARAMETER Date
+    # The yyyy-MM-dd metadata date to validate.
+    #
+    # .EXAMPLE
+    # Test-MetadataCalendarDate -Date '2024-02-29'
+    #
+    # # Returns true for the canonical leap-day value.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [bool] True when the string is one real canonical calendar date.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the
+    # public API surface. Parameters, return shape, and positional
+    # contract may change without notice.
+    #
+    # This function does not support positional parameters.
+    # Version: 1.0.20260908.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Date
+    )
+
+    $objParsedDate = [datetime]::MinValue
+    return [datetime]::TryParseExact(
+        $Date,
+        'yyyy-MM-dd',
+        [System.Globalization.CultureInfo]::InvariantCulture,
+        [System.Globalization.DateTimeStyles]::None,
+        [ref] $objParsedDate
+    ) -and $objParsedDate.ToString(
+        'yyyy-MM-dd',
+        [System.Globalization.CultureInfo]::InvariantCulture
+    ) -ceq $Date
+}
+
 function Test-MetadataCalendarDatePair {
     # .SYNOPSIS
     # Tests one Version date and Last Updated date as a matching calendar date.
@@ -2752,21 +2890,11 @@ function Test-MetadataCalendarDatePair {
         [string] $UpdatedDate
     )
 
-    $objParsedDate = [datetime]::MinValue
-    if (-not [datetime]::TryParseExact(
-            $UpdatedDate,
-            'yyyy-MM-dd',
-            [System.Globalization.CultureInfo]::InvariantCulture,
-            [System.Globalization.DateTimeStyles]::None,
-            [ref] $objParsedDate
-        )) {
+    if (-not (Test-MetadataCalendarDate -Date $UpdatedDate)) {
         return $false
     }
 
-    return $objParsedDate.ToString(
-        'yyyyMMdd',
-        [System.Globalization.CultureInfo]::InvariantCulture
-    ) -ceq $VersionDate
+    return $UpdatedDate.Replace('-', '') -ceq $VersionDate
 }
 
 function ConvertTo-MetadataComparisonText {
@@ -2774,7 +2902,7 @@ function ConvertTo-MetadataComparisonText {
     # Normalizes governed text for metadata-only comparison.
     #
     # .DESCRIPTION
-    # Masks two validated header lines, then normalizes mechanical whitespace.
+    # Masks validated metadata-value lines, then normalizes mechanical whitespace.
     #
     # .PARAMETER Content
     # The governed document text to normalize.
@@ -2797,7 +2925,7 @@ function ConvertTo-MetadataComparisonText {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.1.20260820.0
+    # Version: 1.2.20260908.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -2809,19 +2937,23 @@ function ConvertTo-MetadataComparisonText {
     )
 
     $arrNormalizedLines = [regex]::Split($Content, '\r\n|\r|\n')
-    $intVersionLineIndex = [int]$MetadataContext.VersionLineIndex
     $intUpdatedLineIndex = [int]$MetadataContext.UpdatedLineIndex
-    if ($intVersionLineIndex -lt 0 -or
-        $intVersionLineIndex -ge $arrNormalizedLines.Count -or
-        $arrNormalizedLines[$intVersionLineIndex] -cnotmatch
-        '^\*\*Version:\*\* \d+\.\d+\.\d{8}\.\d+$' -or
-        $intUpdatedLineIndex -lt 0 -or
+    if ($intUpdatedLineIndex -lt 0 -or
         $intUpdatedLineIndex -ge $arrNormalizedLines.Count -or
         $arrNormalizedLines[$intUpdatedLineIndex] -cnotmatch
         '^- \*\*Last Updated:\*\* \d{4}-\d{2}-\d{2}$') {
         throw 'The metadata comparison received an invalid header field index.'
     }
-    $arrNormalizedLines[$intVersionLineIndex] = '**Version:** <metadata-version>'
+    if ($MetadataContext.HasVersion) {
+        $intVersionLineIndex = [int]$MetadataContext.VersionLineIndex
+        if ($intVersionLineIndex -lt 0 -or
+            $intVersionLineIndex -ge $arrNormalizedLines.Count -or
+            $arrNormalizedLines[$intVersionLineIndex] -cnotmatch
+            '^\*\*Version:\*\* \d+\.\d+\.\d{8}\.\d+$') {
+            throw 'The metadata comparison received an invalid Version field index.'
+        }
+        $arrNormalizedLines[$intVersionLineIndex] = '**Version:** <metadata-version>'
+    }
     $arrNormalizedLines[$intUpdatedLineIndex] = '- **Last Updated:** <metadata-date>'
 
     $listNormalizedLines = [System.Collections.Generic.List[string]]::new()
@@ -2935,7 +3067,8 @@ function Get-DocumentMetadataContext {
     # Gets validated document-level metadata context.
     #
     # .DESCRIPTION
-    # Locates Version and Last Updated in the parsed document header.
+    # Locates optional Version and required Last Updated metadata in the parsed
+    # document header.
     #
     # .PARAMETER Content
     # The governed Markdown document text.
@@ -2943,7 +3076,7 @@ function Get-DocumentMetadataContext {
     # .EXAMPLE
     # Get-DocumentMetadataContext -Content $strAgentsContent
     #
-    # # Returns validated Version and Last Updated values or a failure reason.
+    # # Returns validated optional Version and required Last Updated values.
     #
     # .INPUTS
     # None. You can't pipe objects to this function.
@@ -2957,7 +3090,7 @@ function Get-DocumentMetadataContext {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.3.20260908.0
+    # Version: 1.4.20260908.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
@@ -3036,33 +3169,47 @@ function Get-DocumentMetadataContext {
     }
 
     $intH1Index = $listH1Indices[0]
-    if ($listVersionRecords.Count -ne 1 -or
-        $listVersionRecords[0].BlockIndex -ne ($intH1Index + 1) -or
-        $listVersionRecords[0].Block.End -ne ($listVersionRecords[0].Block.Start + 1) -or
-        ($listVersionRecords[0].Block.Start - $intBodyStart) -ge 30) {
+    if ($listVersionRecords.Count -gt 1) {
         return [pscustomobject]@{
-            Failure = 'must contain one exact document-level Version paragraph immediately after the H1 and within the first 30 body lines.'
+            Failure = 'must contain at most one exact document-level Version paragraph immediately after the H1 and within the first 30 body lines.'
             VersionDate = $null
             UpdatedDate = $null
             Revision = $null
         }
     }
-    $objVersionMatch = [regex]::Match(
-        $arrLines[$listVersionRecords[0].Block.Start],
-        $strVersionPattern
-    )
-    if (-not $objVersionMatch.Success) {
-        return [pscustomobject]@{
-            Failure = 'must contain one exact document-level Version paragraph immediately after the H1 and within the first 30 body lines.'
-            VersionDate = $null
-            UpdatedDate = $null
-            Revision = $null
+    $boolHasVersion = $listVersionRecords.Count -eq 1
+    $objVersionMatch = $null
+    $intExpectedMetadataIndex = $intH1Index + 1
+    if ($boolHasVersion) {
+        if ($listVersionRecords[0].BlockIndex -ne ($intH1Index + 1) -or
+            $listVersionRecords[0].Block.End -ne
+            ($listVersionRecords[0].Block.Start + 1) -or
+            ($listVersionRecords[0].Block.Start - $intBodyStart) -ge 30) {
+            return [pscustomobject]@{
+                Failure = 'must contain at most one exact document-level Version paragraph immediately after the H1 and within the first 30 body lines.'
+                VersionDate = $null
+                UpdatedDate = $null
+                Revision = $null
+            }
         }
+        $objVersionMatch = [regex]::Match(
+            $arrLines[$listVersionRecords[0].Block.Start],
+            $strVersionPattern
+        )
+        if (-not $objVersionMatch.Success) {
+            return [pscustomobject]@{
+                Failure = 'must contain at most one exact document-level Version paragraph immediately after the H1 and within the first 30 body lines.'
+                VersionDate = $null
+                UpdatedDate = $null
+                Revision = $null
+            }
+        }
+        $intExpectedMetadataIndex = $listVersionRecords[0].BlockIndex + 1
     }
 
     if ($listH2Indices.Count -eq 0) {
         return [pscustomobject]@{
-            Failure = 'must place Metadata as the first level-two heading immediately after Version and within the first 30 body lines.'
+            Failure = 'must place Metadata as the first level-two heading immediately after the H1 or optional Version and within the first 30 body lines.'
             VersionDate = $null
             UpdatedDate = $null
             Revision = $null
@@ -3077,10 +3224,10 @@ function Get-DocumentMetadataContext {
     ).Count
     if ($objMetadataBlock.Text -cne 'Metadata' -or
         $intMetadataHeadingCount -ne 1 -or
-        $intMetadataIndex -ne ($listVersionRecords[0].BlockIndex + 1) -or
+        $intMetadataIndex -ne $intExpectedMetadataIndex -or
         ($objMetadataBlock.Start - $intBodyStart) -ge 30) {
         return [pscustomobject]@{
-            Failure = 'must place Metadata as the first level-two heading immediately after Version and within the first 30 body lines.'
+            Failure = 'must place Metadata as the first level-two heading immediately after the H1 or optional Version and within the first 30 body lines.'
             VersionDate = $null
             UpdatedDate = $null
             Revision = $null
@@ -3171,12 +3318,18 @@ function Get-DocumentMetadataContext {
 
     return [pscustomobject]@{
         Failure = $null
-        Major = $objVersionMatch.Groups['Major'].Value
-        Minor = $objVersionMatch.Groups['Minor'].Value
-        VersionDate = $objVersionMatch.Groups['Date'].Value
+        HasVersion = $boolHasVersion
+        Major = if ($boolHasVersion) { $objVersionMatch.Groups['Major'].Value } else { $null }
+        Minor = if ($boolHasVersion) { $objVersionMatch.Groups['Minor'].Value } else { $null }
+        VersionDate = if ($boolHasVersion) { $objVersionMatch.Groups['Date'].Value } else { $null }
         UpdatedDate = $objUpdatedMatch.Groups['Date'].Value
-        Revision = $objVersionMatch.Groups['Revision'].Value
-        VersionLineIndex = $listVersionRecords[0].Block.Start
+        Revision = if ($boolHasVersion) { $objVersionMatch.Groups['Revision'].Value } else { $null }
+        VersionLineIndex = if ($boolHasVersion) {
+            $listVersionRecords[0].Block.Start
+        }
+        else {
+            -1
+        }
         UpdatedLineIndex = $hashtableFieldLineIndices['Last Updated']
     }
 }
@@ -3287,7 +3440,7 @@ function Get-DocumentMetadataTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.5.20260908.0
+    # Version: 1.6.20260908.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -3318,10 +3471,14 @@ function Get-DocumentMetadataTransitionFailure {
         return
     }
 
-    $strCurrentVersionDate = $objCurrentMetadata.VersionDate
     $strCurrentUpdatedDate = $objCurrentMetadata.UpdatedDate
-    if (-not (Test-MetadataCalendarDatePair `
-            -VersionDate $strCurrentVersionDate `
+    if (-not (Test-MetadataCalendarDate -Date $strCurrentUpdatedDate)) {
+        Write-Output "$Name Last Updated must contain one real calendar date."
+        return
+    }
+    if ($objCurrentMetadata.HasVersion -and
+        -not (Test-MetadataCalendarDatePair `
+            -VersionDate $objCurrentMetadata.VersionDate `
             -UpdatedDate $strCurrentUpdatedDate)) {
         Write-Output "$Name Version and Last Updated must contain one real matching calendar date."
         return
@@ -3347,25 +3504,25 @@ function Get-DocumentMetadataTransitionFailure {
         if (-not $IsNewDocumentTransition) {
             return
         }
-        $intNewDocumentRevision = [int64] 0
-        if (-not [int64]::TryParse(
-                $objCurrentMetadata.Revision,
-                [ref] $intNewDocumentRevision
-            )) {
-            Write-Output "$Name Version revision must fit in a signed 64-bit integer."
-            return
-        }
-        if ($intNewDocumentRevision -ne 0) {
-            Write-Output "$Name Version revision must be 0 when no published baseline exists."
-            return
+        if ($objCurrentMetadata.HasVersion) {
+            $intNewDocumentRevision = [int64] 0
+            if (-not [int64]::TryParse(
+                    $objCurrentMetadata.Revision,
+                    [ref] $intNewDocumentRevision
+                )) {
+                Write-Output "$Name Version revision must fit in a signed 64-bit integer."
+                return
+            }
+            if ($intNewDocumentRevision -ne 0) {
+                Write-Output "$Name Version revision must be 0 when no published baseline exists."
+                return
+            }
         }
         if (-not $RequireExpectedUtcDateForRenderedChange) {
             return
         }
         if ([string]::IsNullOrEmpty($ExpectedUtcDate) -or
-            -not (Test-MetadataCalendarDatePair `
-                -VersionDate $ExpectedUtcDate.Replace('-', '') `
-                -UpdatedDate $ExpectedUtcDate)) {
+            -not (Test-MetadataCalendarDate -Date $ExpectedUtcDate)) {
             Write-Output "The expected UTC date for $Name is unavailable or invalid."
             return
         }
@@ -3382,10 +3539,14 @@ function Get-DocumentMetadataTransitionFailure {
         Write-Output "The parent of $Name $($objParentMetadata.Failure)"
         return
     }
-    $strParentVersionDate = $objParentMetadata.VersionDate
     $strParentUpdatedDate = $objParentMetadata.UpdatedDate
-    if (-not (Test-MetadataCalendarDatePair `
-            -VersionDate $strParentVersionDate `
+    if (-not (Test-MetadataCalendarDate -Date $strParentUpdatedDate)) {
+        Write-Output "The parent of $Name Last Updated must contain one real calendar date."
+        return
+    }
+    if ($objParentMetadata.HasVersion -and
+        -not (Test-MetadataCalendarDatePair `
+            -VersionDate $objParentMetadata.VersionDate `
             -UpdatedDate $strParentUpdatedDate)) {
         Write-Output "The parent of $Name must contain one real matching calendar date."
         return
@@ -3401,46 +3562,63 @@ function Get-DocumentMetadataTransitionFailure {
         return
     }
 
-    $intCurrentRevision = [int64] 0
-    $intParentRevision = [int64] 0
-    if (-not [int64]::TryParse(
-            $objCurrentMetadata.Revision,
-            [ref] $intCurrentRevision
-        ) -or
-        -not [int64]::TryParse(
-            $objParentMetadata.Revision,
-            [ref] $intParentRevision
-        )) {
-        Write-Output "$Name Version revision must fit in a signed 64-bit integer."
-        return
-    }
-
-    $strCurrentVersionIdentity =
-        "$($objCurrentMetadata.Major).$($objCurrentMetadata.Minor).$strCurrentVersionDate"
-    $strParentVersionIdentity =
-        "$($objParentMetadata.Major).$($objParentMetadata.Minor).$strParentVersionDate"
-    $boolSameVersionIdentity = $strCurrentVersionIdentity -ceq $strParentVersionIdentity
-    $intVersionDateComparison = [string]::CompareOrdinal(
-        $strCurrentVersionDate,
-        $strParentVersionDate
-    )
     $strCurrentComparison = ConvertTo-MetadataComparisonText `
         -Content $CurrentContent -MetadataContext $objCurrentMetadata
     $strParentComparison = ConvertTo-MetadataComparisonText `
         -Content $ParentContent -MetadataContext $objParentMetadata
     $boolRenderedContentChanged = $strCurrentComparison -cne $strParentComparison
-    if ($intVersionDateComparison -lt 0) {
-        Write-Output (
-            "$Name Version date must not move backward from $strParentVersionDate to " +
-            "$strCurrentVersionDate."
-        )
-    }
-    elseif ($boolSameVersionIdentity -and
-        $intCurrentRevision -lt $intParentRevision) {
-        Write-Output (
-            "$Name Version revision must not decrease from $intParentRevision to " +
-            "$intCurrentRevision."
-        )
+    $intCurrentRevision = [int64] 0
+    $intParentRevision = [int64] 0
+    $boolSameVersionIdentity = $false
+    if ($objCurrentMetadata.HasVersion) {
+        if (-not [int64]::TryParse(
+                $objCurrentMetadata.Revision,
+                [ref] $intCurrentRevision
+            )) {
+            Write-Output "$Name Version revision must fit in a signed 64-bit integer."
+            return
+        }
+        if ($objParentMetadata.HasVersion) {
+            if (-not [int64]::TryParse(
+                    $objParentMetadata.Revision,
+                    [ref] $intParentRevision
+                )) {
+                Write-Output "$Name Version revision must fit in a signed 64-bit integer."
+                return
+            }
+            $strCurrentVersionIdentity =
+                "$($objCurrentMetadata.Major).$($objCurrentMetadata.Minor)." +
+                $objCurrentMetadata.VersionDate
+            $strParentVersionIdentity =
+                "$($objParentMetadata.Major).$($objParentMetadata.Minor)." +
+                $objParentMetadata.VersionDate
+            $boolSameVersionIdentity =
+                $strCurrentVersionIdentity -ceq $strParentVersionIdentity
+            $intVersionDateComparison = [string]::CompareOrdinal(
+                $objCurrentMetadata.VersionDate,
+                $objParentMetadata.VersionDate
+            )
+            if ($intVersionDateComparison -lt 0) {
+                Write-Output (
+                    "$Name Version date must not move backward from " +
+                    "$($objParentMetadata.VersionDate) to " +
+                    "$($objCurrentMetadata.VersionDate)."
+                )
+            }
+            elseif ($boolSameVersionIdentity -and
+                $intCurrentRevision -lt $intParentRevision) {
+                Write-Output (
+                    "$Name Version revision must not decrease from " +
+                    "$intParentRevision to $intCurrentRevision."
+                )
+            }
+        }
+        elseif ($intCurrentRevision -ne 0) {
+            Write-Output (
+                "$Name Version revision must be 0 when Version is added to an " +
+                "unversioned published baseline; current revision is $intCurrentRevision."
+            )
+        }
     }
 
     if (-not $boolRenderedContentChanged) {
@@ -3448,9 +3626,8 @@ function Get-DocumentMetadataTransitionFailure {
     }
 
     if ($RequireExpectedUtcDateForRenderedChange) {
-        if (-not (Test-MetadataCalendarDatePair `
-                -VersionDate $ExpectedUtcDate.Replace('-', '') `
-                -UpdatedDate $ExpectedUtcDate)) {
+        if ([string]::IsNullOrEmpty($ExpectedUtcDate) -or
+            -not (Test-MetadataCalendarDate -Date $ExpectedUtcDate)) {
             Write-Output "The expected UTC date for $Name is unavailable or invalid."
             return
         }
@@ -3461,6 +3638,10 @@ function Get-DocumentMetadataTransitionFailure {
         }
     }
 
+    if (-not $objCurrentMetadata.HasVersion -or
+        -not $objParentMetadata.HasVersion) {
+        return
+    }
     if ($boolSameVersionIdentity) {
         if ($intParentRevision -eq [int64]::MaxValue) {
             Write-Output "The parent $Name Version revision cannot be incremented safely."
@@ -4655,7 +4836,7 @@ function Get-AgentInstructionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.0.20260819.0
+    # Version: 1.1.20260908.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -4776,6 +4957,7 @@ function Get-AgentInstructionFailure {
             PlacementProseContent = $objAgentsPlacementContext.ProseText
             SafetyContent = $objAgentsSafetyContext.Text
             SafetyProseContent = $objAgentsSafetyContext.ProseText
+            CodeSpans = [string[]]@($objAgentsMarkdownContext.ProseBlocks.Code)
         },
         [pscustomobject]@{
             Name = 'CLAUDE.md'
@@ -4792,10 +4974,28 @@ function Get-AgentInstructionFailure {
             PlacementProseContent = $objClaudeLoopContext.ProseText
             SafetyContent = $objClaudeLoopContext.Text
             SafetyProseContent = $objClaudeLoopContext.ProseText
+            CodeSpans = [string[]]@($objClaudeMarkdownContext.ProseBlocks.Code)
         }
     )
 
     foreach ($objDocument in $arrDocuments) {
+        $arrWorkflowPolicyCommands = @(
+            $objDocument.CodeSpans |
+                Where-Object {
+                    $_.StartsWith(
+                        $script:strWorkflowPolicyCommandPrefix,
+                        [System.StringComparison]::Ordinal
+                    )
+                }
+        )
+        if ($arrWorkflowPolicyCommands.Count -ne 1 -or
+            $arrWorkflowPolicyCommands[0] -cne $script:strWorkflowPolicyCommand) {
+            Write-Output (
+                "$($objDocument.Name) must contain one exact workflow-policy command: " +
+                $script:strWorkflowPolicyCommand
+            )
+        }
+
         $intDeferringWorkHeadingCount = @(
             $objDocument.LevelTwoHeadings |
                 Where-Object Text -CEQ 'Deferring Work'
@@ -5382,6 +5582,10 @@ $strDocsInstructionsPath = Join-Path `
 $arrHuskyInputSpecs = @(
     [pscustomobject]@{ Path = 'package.json'; MaximumBytes = 16384 }
     [pscustomobject]@{ Path = '.github/workflows/package.json'; MaximumBytes = 16384 }
+    [pscustomobject]@{
+        Path = '.github/workflows/copilot-setup-steps.yml'
+        MaximumBytes = 32768
+    }
     [pscustomobject]@{ Path = '.husky/pre-commit'; MaximumBytes = 16384 }
 )
 $arrGovernedInstructionDocuments = @(
@@ -5736,7 +5940,9 @@ $arrRepositoryFailures = @(Get-AgentInstructionFailure `
 $arrRepositoryFailures += @(Get-HuskySetupContractFailure `
         -RootPackageContent $hashtableHuskyInputContent['package.json'] `
         -WorkflowPackageContent $hashtableHuskyInputContent['.github/workflows/package.json'] `
-        -HookContent $hashtableHuskyInputContent['.husky/pre-commit'])
+        -HookContent $hashtableHuskyInputContent['.husky/pre-commit'] `
+        -CopilotSetupContent `
+            $hashtableHuskyInputContent['.github/workflows/copilot-setup-steps.yml'])
 foreach ($objDocumentContext in $listGovernedDocumentContexts) {
     if ([string]::IsNullOrEmpty($RangeBaseRevision) -and
         [string]::IsNullOrEmpty($RangeHeadRevision)) {
@@ -5808,6 +6014,8 @@ if ($SelfTest) {
     $strRootPackageContent = $hashtableHuskyInputContent['package.json']
     $strWorkflowPackageContent =
         $hashtableHuskyInputContent['.github/workflows/package.json']
+    $strCopilotSetupContent =
+        $hashtableHuskyInputContent['.github/workflows/copilot-setup-steps.yml']
     $strHuskyHookContent = $hashtableHuskyInputContent['.husky/pre-commit']
     $arrHuskyMutations = @(
         ,@(
@@ -5864,16 +6072,110 @@ if ($SelfTest) {
             )
             'lint:md:nested'
         )
+        ,@(
+            'hook exits before validation'
+            $strRootPackageContent
+            $strWorkflowPackageContent
+            $strHuskyHookContent.Replace(
+                "#!/bin/sh`n",
+                "#!/bin/sh`nexit 0`n"
+            )
+            'reviewed SHA-256 digest'
+        )
+        ,@(
+            'hook appends bypass control flow'
+            $strRootPackageContent
+            $strWorkflowPackageContent
+            ($strHuskyHookContent + "`nexit 0`n")
+            'reviewed SHA-256 digest'
+        )
+        ,@(
+            'hook changes semantic whitespace'
+            $strRootPackageContent
+            $strWorkflowPackageContent
+            $strHuskyHookContent.Replace(
+                'echo "Running staged Markdown lint against the Git index..."',
+                'echo  "Running staged Markdown lint against the Git index..."'
+            )
+            'reviewed SHA-256 digest'
+        )
+        ,@(
+            'hook changes line endings'
+            $strRootPackageContent
+            $strWorkflowPackageContent
+            ([regex]::Replace($strHuskyHookContent, '(?<!\r)\n', "`r`n"))
+            'reviewed SHA-256 digest'
+        )
     )
     foreach ($arrHuskyMutation in $arrHuskyMutations) {
         $arrHuskyMutationFailures = @(Get-HuskySetupContractFailure `
                 -RootPackageContent $arrHuskyMutation[1] `
                 -WorkflowPackageContent $arrHuskyMutation[2] `
-                -HookContent $arrHuskyMutation[3])
+                -HookContent $arrHuskyMutation[3] `
+                -CopilotSetupContent $strCopilotSetupContent)
         if (-not ($arrHuskyMutationFailures -match [regex]::Escape(
                     $arrHuskyMutation[4]
                 ))) {
             throw "Husky mutation '$($arrHuskyMutation[0])' did not fail closed."
+        }
+    }
+
+    $arrCopilotSetupMutations = @(
+        [pscustomobject]@{
+            Name = 'locked install enables scripts'
+            Content = $strCopilotSetupContent.Replace(
+                'npm ci --ignore-scripts',
+                'npm ci'
+            )
+            Failure = 'both locked installs script-disabled'
+        },
+        [pscustomobject]@{
+            Name = 'hook activation omits prepare'
+            Content = $strCopilotSetupContent.Replace(
+                '          npm --prefix .github/workflows run prepare' +
+                    "`n",
+                ''
+            )
+            Failure = 'must run nested prepare'
+        },
+        [pscustomobject]@{
+            Name = 'hook activation accepts another hooksPath'
+            Content = $strCopilotSetupContent.Replace(
+                "= '.husky/_'",
+                "= '.husky'"
+            )
+            Failure = 'require exact .husky/_ hooksPath'
+        },
+        [pscustomobject]@{
+            Name = 'hook activation omits executable dispatcher assertion'
+            Content = $strCopilotSetupContent.Replace(
+                '          test -x .husky/_/pre-commit' + "`n",
+                ''
+            )
+            Failure = 'require its executable dispatcher'
+        },
+        [pscustomobject]@{
+            Name = 'hook activation precedes dependency verification'
+            Content = $strCopilotSetupContent.Replace(
+                'Verify locked dependency trees and immutable manifests',
+                'Verify dependencies after hook activation'
+            )
+            Failure = 'once directly after dependency verification'
+        }
+    )
+    foreach ($objCopilotSetupMutation in $arrCopilotSetupMutations) {
+        $arrCopilotSetupFailures = @(Get-HuskySetupContractFailure `
+                -RootPackageContent $strRootPackageContent `
+                -WorkflowPackageContent $strWorkflowPackageContent `
+                -HookContent $strHuskyHookContent `
+                -CopilotSetupContent $objCopilotSetupMutation.Content)
+        if (-not ($arrCopilotSetupFailures -match [regex]::Escape(
+                    $objCopilotSetupMutation.Failure
+                ))) {
+            throw (
+                "Copilot setup mutation '$($objCopilotSetupMutation.Name)' " +
+                'did not fail closed.'
+            )
         }
     }
 
@@ -6534,6 +6836,65 @@ if ($SelfTest) {
             'invalid = [' + [Environment]::NewLine) `
         -ExpectedFailure 'The project configuration must contain valid TOML.'
 
+    $strWorkflowPolicyCommandFailure =
+        'must contain one exact workflow-policy command: ' +
+        $script:strWorkflowPolicyCommand
+    $strBareWorkflowPolicyCommand = $script:strWorkflowPolicyCommandPrefix +
+        ' build.yml markdownlint.yml'
+    foreach ($strDocumentName in @('AGENTS.md', 'CLAUDE.md')) {
+        $strDocumentContent = if ($strDocumentName -ceq 'AGENTS.md') {
+            $strAgentsContent
+        }
+        else {
+            $strClaudeContent
+        }
+        $arrWorkflowPolicyCommandMutations = @(
+            [pscustomobject]@{
+                Name = 'removed'
+                Content = $strDocumentContent.Replace(
+                    $script:strWorkflowPolicyCommand,
+                    'removed workflow-policy command'
+                )
+            },
+            [pscustomobject]@{
+                Name = 'uses bare workflow paths'
+                Content = $strDocumentContent.Replace(
+                    $script:strWorkflowPolicyCommand,
+                    $strBareWorkflowPolicyCommand
+                )
+            },
+            [pscustomobject]@{
+                Name = 'duplicated'
+                Content = $strDocumentContent + "`n`n" + [char]96 +
+                    $script:strWorkflowPolicyCommand + [char]96
+            }
+        )
+        foreach ($objMutation in $arrWorkflowPolicyCommandMutations) {
+            if ($objMutation.Content -ceq $strDocumentContent) {
+                throw (
+                    "Could not create $strDocumentName workflow-policy command " +
+                    "mutation: $($objMutation.Name)."
+                )
+            }
+            if ($strDocumentName -ceq 'AGENTS.md') {
+                Assert-MutationRejected `
+                    -Name "AGENTS workflow-policy command $($objMutation.Name)" `
+                    -AgentsContent $objMutation.Content `
+                    -ClaudeContent $strClaudeContent `
+                    -CodexConfigContent $strCodexConfigContent `
+                    -ExpectedFailure "AGENTS.md $strWorkflowPolicyCommandFailure"
+            }
+            else {
+                Assert-MutationRejected `
+                    -Name "CLAUDE workflow-policy command $($objMutation.Name)" `
+                    -AgentsContent $strAgentsContent `
+                    -ClaudeContent $objMutation.Content `
+                    -CodexConfigContent $strCodexConfigContent `
+                    -ExpectedFailure "CLAUDE.md $strWorkflowPolicyCommandFailure"
+            }
+        }
+    }
+
     $objAgentsVersionMatch = [regex]::Match(
         $strAgentsContent,
         '(?m)^\*\*Version:\*\* (?<Prefix>(?<Major>\d+)\.(?<Minor>\d+)\.)' +
@@ -6559,6 +6920,166 @@ if ($SelfTest) {
         throw 'Could not parse CLAUDE metadata for structural mutation tests.'
     }
 
+    $strUnversionedAgentsContent = $strAgentsContent.Remove(
+        $objAgentsVersionMatch.Index,
+        $objAgentsVersionMatch.Length
+    )
+    $arrOptionalVersionDirectFixtures = @(
+        [pscustomobject]@{
+            Name = 'versioned to versioned'
+            Current = $strAgentsContent
+            Parent = $strAgentsContent
+            IsNew = $false
+        },
+        [pscustomobject]@{
+            Name = 'unversioned to unversioned'
+            Current = $strUnversionedAgentsContent
+            Parent = $strUnversionedAgentsContent
+            IsNew = $false
+        },
+        [pscustomobject]@{
+            Name = 'unversioned to versioned revision zero'
+            Current = $strAgentsContent
+            Parent = $strUnversionedAgentsContent
+            IsNew = $false
+        },
+        [pscustomobject]@{
+            Name = 'versioned to unversioned'
+            Current = $strUnversionedAgentsContent
+            Parent = $strAgentsContent
+            IsNew = $false
+        },
+        [pscustomobject]@{
+            Name = 'new unversioned document'
+            Current = $strUnversionedAgentsContent
+            Parent = $null
+            IsNew = $true
+        }
+    )
+    foreach ($objOptionalVersionFixture in $arrOptionalVersionDirectFixtures) {
+        $arrOptionalVersionFailures = @(Get-DocumentMetadataTransitionFailure `
+                -Name 'AGENTS.md' `
+                -CurrentContent $objOptionalVersionFixture.Current `
+                -ParentContent $objOptionalVersionFixture.Parent `
+                -ExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
+                -IsNewDocumentTransition $objOptionalVersionFixture.IsNew)
+        if ($arrOptionalVersionFailures.Count -ne 0) {
+            throw (
+                "Optional-Version direct fixture '$($objOptionalVersionFixture.Name)' " +
+                "failed: $($arrOptionalVersionFailures -join '; ')"
+            )
+        }
+    }
+    $strHistoricalVersionedAgentsContent = $strAgentsContent.Replace(
+        $objAgentsVersionMatch.Value,
+        '**Version:** ' + $objAgentsVersionMatch.Groups['Prefix'].Value +
+            '20000101.' + $objAgentsVersionMatch.Groups['Revision'].Value
+    ).Replace(
+        $objAgentsUpdatedMatch.Value,
+        '- **Last Updated:** 2000-01-01'
+    )
+    $objHistoricalVersionMatch = [regex]::Match(
+        $strHistoricalVersionedAgentsContent,
+        '(?m)^\*\*Version:\*\* [^\r\n]+$'
+    )
+    if (-not $objHistoricalVersionMatch.Success) {
+        throw 'Could not create the historical optional-Version fixture.'
+    }
+    $strHistoricalUnversionedAgentsContent = $strHistoricalVersionedAgentsContent.Remove(
+        $objHistoricalVersionMatch.Index,
+        $objHistoricalVersionMatch.Length
+    )
+    $arrHistoricalUnversionedRenderedFailures = @(
+        Get-DocumentMetadataTransitionFailure `
+            -Name 'AGENTS.md' `
+            -CurrentContent (
+                $strHistoricalUnversionedAgentsContent +
+                "`nRendered unversioned fixture."
+            ) `
+            -ParentContent $strHistoricalUnversionedAgentsContent `
+            -ExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
+            -IsNewDocumentTransition $false
+    )
+    if (-not ($arrHistoricalUnversionedRenderedFailures -match
+            'Last Updated must be .* after a rendered-content change')) {
+        throw 'A rendered unversioned change with stale Last Updated was accepted.'
+    }
+    $arrHistoricalVersionRemovalFailures = @(
+        Get-DocumentMetadataTransitionFailure `
+            -Name 'AGENTS.md' `
+            -CurrentContent $strHistoricalUnversionedAgentsContent `
+            -ParentContent $strHistoricalVersionedAgentsContent `
+            -ExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
+            -IsNewDocumentTransition $false
+    )
+    if (-not ($arrHistoricalVersionRemovalFailures -match
+            'Last Updated must be .* after a rendered-content change')) {
+        throw 'A Version removal with stale Last Updated was accepted.'
+    }
+    $strInvalidUnversionedUpdated = $strUnversionedAgentsContent.Replace(
+        $objAgentsUpdatedMatch.Value,
+        '- **Last Updated:** 9999-99-99'
+    )
+    $arrInvalidUnversionedUpdatedFailures = @(
+        Get-DocumentMetadataTransitionFailure `
+            -Name 'AGENTS.md' `
+            -CurrentContent $strInvalidUnversionedUpdated `
+            -ParentContent $strUnversionedAgentsContent `
+            -ExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
+            -IsNewDocumentTransition $false
+    )
+    if (-not ($arrInvalidUnversionedUpdatedFailures -match
+            'Last Updated must contain one real calendar date')) {
+        throw 'An unversioned document with an invalid Last Updated date was accepted.'
+    }
+    $strFutureUnversionedUpdated = $strUnversionedAgentsContent.Replace(
+        $objAgentsUpdatedMatch.Value,
+        '- **Last Updated:** 2099-12-31'
+    )
+    $arrFutureUnversionedUpdatedFailures = @(
+        Get-DocumentMetadataTransitionFailure `
+            -Name 'AGENTS.md' `
+            -CurrentContent $strFutureUnversionedUpdated `
+            -ParentContent $strUnversionedAgentsContent `
+            -ExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
+            -IsNewDocumentTransition $false
+    )
+    if (-not ($arrFutureUnversionedUpdatedFailures -match
+            'Last Updated 2099-12-31 must not be later than trusted UTC date')) {
+        throw 'An unversioned document with a future Last Updated date was accepted.'
+    }
+    $strIntroducedNonzeroVersion = $strAgentsContent.Replace(
+        $objAgentsVersionMatch.Value,
+        '**Version:** ' + $objAgentsVersionMatch.Groups['Prefix'].Value +
+            $objAgentsVersionMatch.Groups['Date'].Value + '.1'
+    )
+    $arrIntroducedNonzeroFailures = @(Get-DocumentMetadataTransitionFailure `
+            -Name 'AGENTS.md' `
+            -CurrentContent $strIntroducedNonzeroVersion `
+            -ParentContent $strUnversionedAgentsContent `
+            -ExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
+            -IsNewDocumentTransition $false)
+    if (-not ($arrIntroducedNonzeroFailures -match
+            'Version revision must be 0 when Version is added')) {
+        throw 'An introduced Version with a nonzero revision was accepted.'
+    }
+    $strUnversionedMissingUpdated = $strUnversionedAgentsContent.Remove(
+        $objAgentsUpdatedMatch.Index - $objAgentsVersionMatch.Length,
+        $objAgentsUpdatedMatch.Length
+    )
+    $arrUnversionedMissingUpdatedFailures = @(
+        Get-DocumentMetadataTransitionFailure `
+            -Name 'AGENTS.md' `
+            -CurrentContent $strUnversionedMissingUpdated `
+            -ParentContent $strUnversionedAgentsContent `
+            -ExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
+            -IsNewDocumentTransition $false
+    )
+    if (-not ($arrUnversionedMissingUpdatedFailures -match
+            'one exact top-level Last Updated list item')) {
+        throw 'An unversioned document without Last Updated was accepted.'
+    }
+
     $arrMetadataStructureDocuments = @(
         [pscustomobject]@{
             Name = 'AGENTS.md'
@@ -6582,18 +7103,14 @@ if ($SelfTest) {
         $strCodeFence = '```'
         $strH1Failure = "$($objDocument.Name) must contain exactly one " +
             'document-level H1 within the first 30 body lines.'
-        $strVersionFailure = "$($objDocument.Name) must contain one exact " +
+        $strVersionFailure = "$($objDocument.Name) must contain at most one exact " +
             'document-level Version paragraph immediately after the H1 and within ' +
             'the first 30 body lines.'
         $strMetadataHeadingFailure = "$($objDocument.Name) must place Metadata as " +
-            'the first level-two heading immediately after Version and within the ' +
+            'the first level-two heading immediately after the H1 or optional Version and within the ' +
             'first 30 body lines.'
         $strUpdatedFailure = "$($objDocument.Name) must contain one exact top-level " +
             'Last Updated list item in the Metadata section and within the first 30 body lines.'
-        $strParentVersionFailure = "The parent of $($objDocument.Name) must contain " +
-            'one exact document-level Version paragraph immediately after the H1 and ' +
-            'within the first 30 body lines.'
-
         $arrMetadataStructureMutations = @(
             [pscustomobject]@{
                 Name = 'duplicate document-level H1'
@@ -6618,7 +7135,7 @@ if ($SelfTest) {
                     ($strCodeFence + "text`n" + $objDocument.VersionLine +
                         "`n" + $strCodeFence)
                 )
-                Failure = $strVersionFailure
+                Failure = $strMetadataHeadingFailure
             },
             [pscustomobject]@{
                 Name = 'Version in multiline HTML comment'
@@ -6626,7 +7143,7 @@ if ($SelfTest) {
                     $objDocument.VersionLine,
                     "<!--`n$($objDocument.VersionLine)`n-->"
                 )
-                Failure = $strVersionFailure
+                Failure = $strMetadataHeadingFailure
             },
             [pscustomobject]@{
                 Name = 'Version in block quote'
@@ -6634,7 +7151,7 @@ if ($SelfTest) {
                     $objDocument.VersionLine,
                     "> $($objDocument.VersionLine)"
                 )
-                Failure = $strVersionFailure
+                Failure = $strMetadataHeadingFailure
             },
             [pscustomobject]@{
                 Name = 'Version in raw HTML block'
@@ -6642,7 +7159,7 @@ if ($SelfTest) {
                     $objDocument.VersionLine,
                     "<div>`n$($objDocument.VersionLine)`n</div>"
                 )
-                Failure = $strVersionFailure
+                Failure = $strMetadataHeadingFailure
             },
             [pscustomobject]@{
                 Name = 'intervening paragraph before Version'
@@ -6813,7 +7330,7 @@ if ($SelfTest) {
             AgentsContent = $strAgentsContent
             ClaudeContent = $strClaudeContent
             CodexConfigContent = $strCodexConfigContent
-            ExpectedFailure = $strParentVersionFailure
+            ExpectedFailure = "The parent of $strMetadataHeadingFailure"
         }
         if ($objDocument.Name -ceq 'AGENTS.md') {
             $hashtableParentMutation.ParentAgentsContent = $strParentMutation
@@ -6896,7 +7413,7 @@ if ($SelfTest) {
             -CodexConfigContent $strCodexConfigContent `
             -ParentAgentsContent $strAgentsContent `
             -ExpectedFailure (
-                'AGENTS.md Version and Last Updated must contain one real matching calendar date.'
+                'AGENTS.md Last Updated must contain one real calendar date.'
             )
     }
 
@@ -6960,7 +7477,7 @@ if ($SelfTest) {
         -ClaudeContent $strClaudeContent `
         -CodexConfigContent $strCodexConfigContent `
         -ParentAgentsContent $strInvalidDateParent `
-        -ExpectedFailure 'The parent of AGENTS.md must contain one real matching calendar date.'
+        -ExpectedFailure 'The parent of AGENTS.md Last Updated must contain one real calendar date.'
 
     $strRenderedAgentsMutation = $strAgentsContent + [Environment]::NewLine +
         'A rendered governance note.' + [Environment]::NewLine
@@ -7610,7 +8127,7 @@ if ($SelfTest) {
                 -RequireMetadataTransition $true
         )
         if (-not ($arrMetadataRequiredRangeFailures -match
-                'must contain one exact document-level Version paragraph')) {
+                'must place Metadata as the first level-two heading')) {
             throw 'The same header-free Copilot range did not fail when metadata was required.'
         }
         $arrMetadataOptionalCommitFailures = @(
@@ -7635,7 +8152,7 @@ if ($SelfTest) {
                 -RequireMetadataTransition $true
         )
         if (-not ($arrMetadataRequiredCommitFailures -match
-                'must contain one exact document-level Version paragraph')) {
+                'must place Metadata as the first level-two heading')) {
             throw 'The same direct Copilot transition did not fail when metadata was required.'
         }
         $hashtableCopilotNewRefArguments = @{}
@@ -7810,6 +8327,174 @@ if ($SelfTest) {
                     [System.StringComparison]::Ordinal
                 )) {
                 throw "Unsafe $($objMetadataRangeFixture.Name) range passed."
+            }
+        }
+        $strMergeUnversionedContent = $strMergeBaseContent.Replace(
+            $strMergeBaseVersion,
+            ''
+        )
+        $arrOptionalVersionRangeFixtures = @(
+            [pscustomobject]@{
+                Name = 'versioned to versioned optional-Version shape'
+                ParentHasVersion = $true
+                CurrentVersion = 'same-identity-next'
+                ExpectedFailure = ''
+            },
+            [pscustomobject]@{
+                Name = 'unversioned to unversioned optional-Version shape'
+                ParentHasVersion = $false
+                CurrentVersion = 'absent'
+                ExpectedFailure = ''
+            },
+            [pscustomobject]@{
+                Name = 'unversioned to versioned optional-Version shape'
+                ParentHasVersion = $false
+                CurrentVersion = 'initial'
+                ExpectedFailure = ''
+            },
+            [pscustomobject]@{
+                Name = 'versioned to unversioned optional-Version shape'
+                ParentHasVersion = $true
+                CurrentVersion = 'absent'
+                ExpectedFailure = ''
+            },
+            [pscustomobject]@{
+                Name = 'duplicate optional Version range mutation'
+                ParentHasVersion = $true
+                CurrentVersion = 'duplicate'
+                ExpectedFailure = 'must contain at most one exact document-level Version'
+            },
+            [pscustomobject]@{
+                Name = 'malformed optional Version range mutation'
+                ParentHasVersion = $false
+                CurrentVersion = 'malformed'
+                ExpectedFailure = 'must contain at most one exact document-level Version'
+            }
+        )
+        for ($intOptionalRangeFixture = 0;
+            $intOptionalRangeFixture -lt $arrOptionalVersionRangeFixtures.Count;
+            $intOptionalRangeFixture++) {
+            $objOptionalRangeFixture =
+                $arrOptionalVersionRangeFixtures[$intOptionalRangeFixture]
+            & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Could not reset the optional-Version range fixture index.'
+            }
+            $strOptionalRangeParentContent = if (
+                $objOptionalRangeFixture.ParentHasVersion
+            ) {
+                $strMergeBaseContent
+            }
+            else {
+                $strMergeUnversionedContent
+            }
+            [System.IO.File]::WriteAllText(
+                [System.IO.Path]::Combine($strMergeFixtureRoot, 'AGENTS.md'),
+                $strOptionalRangeParentContent,
+                $objUtf8WithoutBom
+            )
+            & git -C $strMergeFixtureRoot add -- 'AGENTS.md'
+            $strOptionalRangeParentTree =
+                ([string] (& git -C $strMergeFixtureRoot write-tree)).Trim()
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Could not create the optional-Version parent tree.'
+            }
+            $strOptionalRangeParentCommit = & $scriptBlockCreateMergeFixtureCommit `
+                -Tree $strOptionalRangeParentTree `
+                -Parents @($strMergeBaseCommit) `
+                -Timestamp (
+                    $strMergeHistoricalDate +
+                    "T14:$($intOptionalRangeFixture.ToString('00')):00Z"
+                ) `
+                -Message ($objOptionalRangeFixture.Name + ' parent')
+
+            $strOptionalRangeCurrentContent = switch (
+                $objOptionalRangeFixture.CurrentVersion
+            ) {
+                'same-identity-next' {
+                    $strMergeBaseContent.Replace(
+                        $strMergeBaseVersion,
+                        '**Version:** ' +
+                            $objAgentsVersionMatch.Groups['Prefix'].Value +
+                            $strMergeHistoricalDate.Replace('-', '') + '.1'
+                    )
+                    break
+                }
+                'initial' {
+                    $strMergeBaseContent
+                    break
+                }
+                'absent' {
+                    $strMergeUnversionedContent
+                    break
+                }
+                'duplicate' {
+                    $strMergeBaseContent.Replace(
+                        $strMergeBaseVersion,
+                        "$strMergeBaseVersion`n`n$strMergeBaseVersion"
+                    )
+                    break
+                }
+                'malformed' {
+                    $strMergeBaseContent.Replace(
+                        $strMergeBaseVersion,
+                        '**Version:** malformed'
+                    )
+                    break
+                }
+                default {
+                    throw 'The optional-Version range fixture kind is unsupported.'
+                }
+            }
+            $strOptionalRangeCurrentContent += [Environment]::NewLine +
+                "Optional-Version range fixture: $($objOptionalRangeFixture.Name)."
+            [System.IO.File]::WriteAllText(
+                [System.IO.Path]::Combine($strMergeFixtureRoot, 'AGENTS.md'),
+                $strOptionalRangeCurrentContent,
+                $objUtf8WithoutBom
+            )
+            & git -C $strMergeFixtureRoot add -- 'AGENTS.md'
+            $strOptionalRangeCurrentTree =
+                ([string] (& git -C $strMergeFixtureRoot write-tree)).Trim()
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Could not create the optional-Version current tree.'
+            }
+            $strOptionalRangeCurrentCommit = & $scriptBlockCreateMergeFixtureCommit `
+                -Tree $strOptionalRangeCurrentTree `
+                -Parents @($strOptionalRangeParentCommit) `
+                -Timestamp (
+                    $strMergeHistoricalDate +
+                    "T15:$($intOptionalRangeFixture.ToString('00')):00Z"
+                ) `
+                -Message $objOptionalRangeFixture.Name
+            $arrOptionalRangeFailures = @(
+                Get-GovernedDocumentRangeTransitionFailure `
+                    -Name 'AGENTS.md' `
+                    -RepositoryRootPath $strMergeFixtureRoot `
+                    -RepositoryRelativePath 'AGENTS.md' `
+                    -MaximumBytes $intAgentsMaximumInputBytes `
+                    -BaseRevision $strOptionalRangeParentCommit `
+                    -HeadRevision $strOptionalRangeCurrentCommit `
+                    -InputRevision $strOptionalRangeCurrentCommit `
+                    -IsNewRefRange $false `
+                    -PolicyRepositoryRelativePath `
+                        '.github/workflows/Test-AgentInstructions.ps1' `
+                    -PolicyMaximumBytes 1024 `
+                    -PolicyMarker $strMetadataRangePolicyMarker
+            )
+            if ([string]::IsNullOrEmpty($objOptionalRangeFixture.ExpectedFailure)) {
+                if ($arrOptionalRangeFailures.Count -ne 0) {
+                    throw (
+                        "Safe $($objOptionalRangeFixture.Name) range failed: " +
+                        ($arrOptionalRangeFailures -join '; ')
+                    )
+                }
+            }
+            elseif (-not ($arrOptionalRangeFailures -join '; ').Contains(
+                    $objOptionalRangeFixture.ExpectedFailure,
+                    [System.StringComparison]::Ordinal
+                )) {
+                throw "Unsafe $($objOptionalRangeFixture.Name) range passed."
             }
         }
         & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
@@ -8874,6 +9559,7 @@ if ($SelfTest) {
         ''
     ) -join "`r`n"
     $objMetadataNormalizationContext = [pscustomobject]@{
+        HasVersion = $true
         VersionLineIndex = 0
         UpdatedLineIndex = 1
     }

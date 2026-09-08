@@ -16,6 +16,7 @@ on:
       - .github/instructions/*.instructions.md
       - .github/instructions/docs.instructions.md
       - .github/workflows/agent-instructions.yml
+      - .github/workflows/copilot-setup-steps.yml
       - .github/workflows/Test-AgentInstructionParserManifest.mjs
       - .github/workflows/Test-AgentInstructions.ps1
       - .hermes.md
@@ -39,6 +40,7 @@ on:
       - .github/instructions/*.instructions.md
       - .github/instructions/docs.instructions.md
       - .github/workflows/agent-instructions.yml
+      - .github/workflows/copilot-setup-steps.yml
       - .github/workflows/Test-AgentInstructionParserManifest.mjs
       - .github/workflows/Test-AgentInstructions.ps1
       - .hermes.md
