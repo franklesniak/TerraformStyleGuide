@@ -3161,6 +3161,43 @@ export function validatePackagePolicy(packageSource, lockSource) {
   }
 }
 
+export function validateNodeVersionAlignment(rootPackageSource, markdownSource, supplyFreezeSource) {
+  let rootPackage;
+  try {
+    rootPackage = JSON.parse(rootPackageSource);
+  } catch {
+    reject('toolchain-policy', 'root package.json is not parseable JSON');
+  }
+
+  const rootNode = rootPackage?.engines?.node;
+  if (typeof rootNode !== 'string' || !/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u.test(rootNode)) {
+    reject('toolchain-policy', 'root package.json engines.node is not one exact stable SemVer');
+  }
+
+  const workflowVersions = [...markdownSource.matchAll(
+    /^\s*\$strNodeUrl = 'https:\/\/nodejs\.org\/dist\/v([0-9]+\.[0-9]+\.[0-9]+)\/node-v\1-linux-x64\.tar\.xz'\s*$/gmu,
+  )].map((match) => match[1]);
+  if (workflowVersions.length === 0 || new Set(workflowVersions).size !== 1) {
+    reject('toolchain-policy', 'Markdown workflow does not use one reviewed Node version');
+  }
+
+  const supplyMatches = [...supplyFreezeSource.matchAll(
+    /^const REVIEWED_NODE = 'v([0-9]+\.[0-9]+\.[0-9]+)';$/gmu,
+  )];
+  if (supplyMatches.length !== 1) {
+    reject('toolchain-policy', 'supply-freeze helper does not declare one reviewed Node version');
+  }
+
+  const workflowNode = workflowVersions[0];
+  const supplyNode = supplyMatches[0][1];
+  if (rootNode !== workflowNode || rootNode !== supplyNode) {
+    reject(
+      'toolchain-policy',
+      `Node versions differ: root=${rootNode}; Markdown=${workflowNode}; supply-freeze=${supplyNode}`,
+    );
+  }
+}
+
 export function parseGeneratorVersion(source, expectedVersion = undefined) {
   const firstFunction = source.search(/^function\s+/mu);
   if (firstFunction < 0) reject('invalid-version', 'generator has no first function boundary');
@@ -3948,6 +3985,30 @@ const FIXTURE_INVENTORY = Object.freeze([
     parsed.packages[''].devDependencies.yaml = '^2.9.0';
     return [pkg, JSON.stringify(parsed, null, 2)];
   }],
+  ['T1-TOOLCHAIN-001', 'root Node selector differs from reviewed tooling', 'node-alignment', (rootPackage, markdown, supplyFreeze) => {
+    const parsed = JSON.parse(rootPackage);
+    parsed.engines.node = '24.18.0';
+    return [JSON.stringify(parsed, null, 2), markdown, supplyFreeze];
+  }],
+  ['T1-TOOLCHAIN-002', 'root Node selector is not exact', 'node-alignment', (rootPackage, markdown, supplyFreeze) => {
+    const parsed = JSON.parse(rootPackage);
+    parsed.engines.node = '24.x';
+    return [JSON.stringify(parsed, null, 2), markdown, supplyFreeze];
+  }],
+  ['T1-TOOLCHAIN-003', 'Markdown workflow Node selector differs from root', 'node-alignment', (rootPackage, markdown, supplyFreeze) => [
+    rootPackage,
+    replaceOnce(
+      markdown,
+      "$strNodeUrl = 'https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz'",
+      "$strNodeUrl = 'https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz'",
+    ),
+    supplyFreeze,
+  ]],
+  ['T1-TOOLCHAIN-004', 'supply-freeze Node selector differs from root', 'node-alignment', (rootPackage, markdown, supplyFreeze) => [
+    rootPackage,
+    markdown,
+    replaceOnce(supplyFreeze, "const REVIEWED_NODE = 'v24.18.1';", "const REVIEWED_NODE = 'v24.18.0';"),
+  ]],
   // Cycle 1 GF-HOSTS/GF-GIT repair. These cases are append-only after the 286
   // pre-repair fixtures and bind the authoring contract independently of a
   // reviewed digest re-baseline.
@@ -4265,6 +4326,10 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-036": "markdown-policy: markdown.markdownlint.lint is missing a required phase: supply: lint configuration or helper changed during installation",
   "T1-PACKAGE-005": "supply-policy: resolved yaml parser integrity is not the reviewed value",
   "T1-PACKAGE-006": "policy: lockfile root devDependencies differs from the locked policy",
+  "T1-TOOLCHAIN-001": "toolchain-policy: Node versions differ: root=24.18.0; Markdown=24.18.1; supply-freeze=24.18.1",
+  "T1-TOOLCHAIN-002": "toolchain-policy: root package.json engines.node is not one exact stable SemVer",
+  "T1-TOOLCHAIN-003": "toolchain-policy: Markdown workflow does not use one reviewed Node version",
+  "T1-TOOLCHAIN-004": "toolchain-policy: Node versions differ: root=24.18.1; Markdown=24.18.1; supply-freeze=24.18.0",
   "T1-GENERATOR-004": "supply-policy: the generator resolves a command through a shadowable lookup",
   "T1-MARKDOWN-056": "markdown-policy: markdown.markdownlint.lint adds a network client",
   "T1-MARKDOWN-057": "acquire-policy: markdown.policy.acquire adds a network client",
@@ -4327,7 +4392,15 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T2-GENERATOR-FILE-016": "side-effect-policy: build.verify no longer performs a reviewed drift guard: if ($listGeneratorContractViolations.Count -ne 0) {",
 });
 
-function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource, generatorSource) {
+function runNegativeFixtures(
+  buildSource,
+  markdownSource,
+  packageSource,
+  lockSource,
+  generatorSource,
+  rootPackageSource,
+  supplyFreezeSource,
+) {
   const ids = new Set();
   const consumed = new Set();
   for (const [id, description, kind, fixture] of FIXTURE_INVENTORY) {
@@ -4354,6 +4427,8 @@ function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSou
         decodeStrictText(fixture, id);
       } else if (kind === 'package') {
         validatePackagePolicy(...fixture(packageSource, lockSource));
+      } else if (kind === 'node-alignment') {
+        validateNodeVersionAlignment(...fixture(rootPackageSource, markdownSource, supplyFreezeSource));
       } else if (kind === 'generator') {
         validateGeneratorPolicy(fixture(generatorSource));
       } else if (kind === 'lint-asset') {
@@ -4714,6 +4789,12 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
   const packageSource = readOrdinaryText(join(workflowDirectory, 'package.json'), 'package.json');
   const lockSource = readOrdinaryText(join(workflowDirectory, 'package-lock.json'), 'package-lock.json');
   validatePackagePolicy(packageSource, lockSource);
+  const rootPackageSource = readOrdinaryText(join(repositoryRoot, 'package.json'), 'root package.json');
+  const supplyFreezeSource = readOrdinaryText(
+    join(workflowDirectory, 'Get-SupplyFreezeDigest.mjs'),
+    'Get-SupplyFreezeDigest.mjs',
+  );
+  validateNodeVersionAlignment(rootPackageSource, markdownSource, supplyFreezeSource);
   assertNoNpmConfiguration(repositoryRoot, repositoryRoot);
   // The digest covered every governed input but not the implementation defining
   // what those inputs were checked against, so removing an assertion here left
@@ -4725,7 +4806,15 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
   validateLintAssetPolicy(lintAssets);
   const validatorSource = readOrdinaryText(join(workflowDirectory, 'Validate-WorkflowPolicy.mjs'), 'validator');
 
-  const fixtureCount = runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource, generatorSource);
+  const fixtureCount = runNegativeFixtures(
+    buildSource,
+    markdownSource,
+    packageSource,
+    lockSource,
+    generatorSource,
+    rootPackageSource,
+    supplyFreezeSource,
+  );
   return Object.freeze({
     fixtureCount,
     generatorVersion: EXPECTED_VERSION,
@@ -4744,6 +4833,8 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
         ['generator', generatorSource],
         ['package.json', packageSource],
         ['package-lock.json', lockSource],
+        ['root package.json', rootPackageSource],
+        ['Get-SupplyFreezeDigest.mjs', supplyFreezeSource],
         ...Object.entries(lintAssets),
         ['validator', validatorSource],
       ]) {
@@ -4763,6 +4854,14 @@ export function validatePreflightPolicy() {
   const workflowDirectory = dirname(validatorPath);
   const githubDirectory = dirname(workflowDirectory);
   const repositoryRoot = dirname(githubDirectory);
+
+  const markdownSource = readOrdinaryText(join(workflowDirectory, 'markdownlint.yml'), 'markdownlint.yml');
+  const rootPackageSource = readOrdinaryText(join(repositoryRoot, 'package.json'), 'root package.json');
+  const supplyFreezeSource = readOrdinaryText(
+    join(workflowDirectory, 'Get-SupplyFreezeDigest.mjs'),
+    'Get-SupplyFreezeDigest.mjs',
+  );
+  validateNodeVersionAlignment(rootPackageSource, markdownSource, supplyFreezeSource);
 
   const packageSource = readOrdinaryText(join(workflowDirectory, 'package.json'), 'package.json');
   const lockSource = readOrdinaryText(join(workflowDirectory, 'package-lock.json'), 'package-lock.json');
