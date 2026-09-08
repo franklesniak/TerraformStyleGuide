@@ -42,7 +42,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260908.0
+# Version: 1.2.20260908.1
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -3895,9 +3895,9 @@ function Get-GovernedDocumentRangeTransitionFailure {
     # .DESCRIPTION
     # Validates event-range identities, locates the policy introduction when
     # needed, and evaluates one published-base-to-final-head document transition.
-    # Internal topic commits are inspected as range objects, not as separate
-    # published metadata transitions. New-ref ranges accept only Git's all-zero
-    # base sentinel.
+    # Internal topic commits are inspected for safe governed blobs, not as
+    # separate published metadata transitions. New-ref ranges accept only Git's
+    # all-zero base sentinel.
     #
     # .PARAMETER Name
     # The governed document name used in failure records.
@@ -3954,7 +3954,7 @@ function Get-GovernedDocumentRangeTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.3.20260908.0
+    # Version: 1.4.20260908.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -4164,6 +4164,23 @@ function Get-GovernedDocumentRangeTransitionFailure {
         throw 'Could not enumerate the metadata event range.'
     }
 
+    $boolRangePathSeen = $false
+    if (-not [string]::IsNullOrEmpty($strEffectiveBaseRevision)) {
+        $arrEffectiveBasePathEntries = @(
+            & git -C $RepositoryRootPath ls-tree --full-tree `
+                $strEffectiveBaseRevision -- $RepositoryRelativePath 2>&1
+        )
+        if ($LASTEXITCODE -ne 0) {
+            throw (
+                "Could not inspect published baseline " +
+                "$strEffectiveBaseRevision`:$RepositoryRelativePath in Git."
+            )
+        }
+        $boolRangePathSeen = $arrEffectiveBasePathEntries.Count -gt 0
+    }
+    $setValidatedRangeBlobIds = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase
+    )
     $strHeadTimestamp = ''
     $intHeadParentCount = 0
     $boolHeadInheritsParentPath = $false
@@ -4176,6 +4193,52 @@ function Get-GovernedDocumentRangeTransitionFailure {
             "$strRangeCommit`^{commit}" 2>$null
         if ($LASTEXITCODE -ne 0) {
             throw "Git returned an unavailable metadata range commit: $strRangeCommit"
+        }
+
+        $arrRangePathEntries = @(
+            & git -C $RepositoryRootPath ls-tree --full-tree `
+                $strRangeCommit -- $RepositoryRelativePath 2>&1
+        )
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not inspect $strRangeCommit`:$RepositoryRelativePath in Git."
+        }
+        if ($arrRangePathEntries.Count -eq 0) {
+            if ($boolRangePathSeen) {
+                throw (
+                    "Metadata range commit $strRangeCommit is missing governed path " +
+                    "$RepositoryRelativePath after that path first appeared."
+                )
+            }
+        }
+        else {
+            $strExpectedRangeEntryPattern =
+                '^100644 blob (?<ObjectId>(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64}))\t' +
+                [regex]::Escape($RepositoryRelativePath) + '$'
+            $objRangePathEntryMatch = if ($arrRangePathEntries.Count -eq 1) {
+                [regex]::Match(
+                    [string] $arrRangePathEntries[0],
+                    $strExpectedRangeEntryPattern
+                )
+            }
+            else {
+                [System.Text.RegularExpressions.Match]::Empty
+            }
+            if (-not $objRangePathEntryMatch.Success) {
+                throw (
+                    "Metadata range commit $strRangeCommit does not contain exactly one " +
+                    "regular 100644 blob at $RepositoryRelativePath."
+                )
+            }
+            $boolRangePathSeen = $true
+            $strRangeBlobId = $objRangePathEntryMatch.Groups['ObjectId'].Value
+            if ($setValidatedRangeBlobIds.Add($strRangeBlobId)) {
+                [void](Read-GitRevisionText `
+                        -RepositoryRootPath $RepositoryRootPath `
+                        -Revision $strRangeCommit `
+                        -RepositoryRelativePath $RepositoryRelativePath `
+                        -MaximumBytes $MaximumBytes `
+                        -RequireRegularFile)
+            }
         }
 
         $strParentLine = [string] (
@@ -7419,6 +7482,175 @@ if ($SelfTest) {
                 ($arrCorrectedFinalFailures -join '; ')
             )
         }
+
+        $strRangeBlobInputPath = [System.IO.Path]::Combine(
+            $strMergeFixtureRoot,
+            '.range-blob-input'
+        )
+        $scriptBlockCreateGovernedBlobTree = {
+            param(
+                [AllowNull()]
+                [byte[]] $ContentBytes,
+
+                [AllowEmptyString()]
+                [string] $Mode
+            )
+
+            & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Could not reset the unsafe range-blob fixture index.'
+            }
+            if ($null -eq $ContentBytes) {
+                & git -C $strMergeFixtureRoot update-index `
+                    --force-remove -- AGENTS.md
+            }
+            else {
+                [System.IO.File]::WriteAllBytes(
+                    $strRangeBlobInputPath,
+                    $ContentBytes
+                )
+                $strRangeBlobId = [string] (
+                    & git -C $strMergeFixtureRoot hash-object -w -- `
+                        $strRangeBlobInputPath
+                )
+                if ($LASTEXITCODE -ne 0 -or
+                    $strRangeBlobId.Trim() -notmatch `
+                        '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$') {
+                    throw 'Could not create the unsafe range-blob fixture object.'
+                }
+                & git -C $strMergeFixtureRoot update-index --add `
+                    --cacheinfo "$Mode,$($strRangeBlobId.Trim()),AGENTS.md"
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Could not create the unsafe range-blob fixture entry.'
+            }
+            $strRangeBlobTree = [string] (
+                & git -C $strMergeFixtureRoot write-tree
+            )
+            if ($LASTEXITCODE -ne 0 -or
+                $strRangeBlobTree.Trim() -notmatch `
+                    '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$') {
+                throw 'Could not create the unsafe range-blob fixture tree.'
+            }
+            return $strRangeBlobTree.Trim()
+        }
+
+        $scriptBlockAssertUnsafeCorrectedRangeRejected = {
+            param(
+                [string] $Name,
+                [string] $InvalidTree,
+                [string] $ExpectedFailure,
+                [int] $FixtureIndex
+            )
+
+            $intInvalidMinute = 10 + ($FixtureIndex * 2)
+            $strInvalidRangeCommit = & $scriptBlockCreateMergeFixtureCommit `
+                -Tree $InvalidTree `
+                -Parents @($strMergeBaseCommit) `
+                -Timestamp (
+                    $strMergeHistoricalDate +
+                    "T09:$($intInvalidMinute.ToString('00')):00Z"
+                ) `
+                -Message "unsafe intermediate $Name"
+            $strCorrectedRangeCommit = & $scriptBlockCreateMergeFixtureCommit `
+                -Tree $strMergeTopicTree `
+                -Parents @($strInvalidRangeCommit) `
+                -Timestamp (
+                    $strMergeHistoricalDate +
+                    "T09:$((($intInvalidMinute + 1)).ToString('00')):00Z"
+                ) `
+                -Message "corrected final after $Name"
+            $boolExpectedFailureObserved = $false
+            try {
+                $arrUnsafeRangeFailures = @(
+                    Get-GovernedDocumentRangeTransitionFailure `
+                        -Name 'AGENTS.md' `
+                        -RepositoryRootPath $strMergeFixtureRoot `
+                        -RepositoryRelativePath 'AGENTS.md' `
+                        -MaximumBytes $intAgentsMaximumInputBytes `
+                        -BaseRevision $strMergeBaseCommit `
+                        -HeadRevision $strCorrectedRangeCommit `
+                        -InputRevision $strCorrectedRangeCommit `
+                        -IsNewRefRange $false `
+                        -PolicyRepositoryRelativePath `
+                            '.github/workflows/Test-AgentInstructions.ps1' `
+                        -PolicyMaximumBytes 1024 `
+                        -PolicyMarker $strMetadataRangePolicyMarker
+                )
+                $boolExpectedFailureObserved = ($arrUnsafeRangeFailures -join '; ').Contains(
+                    $ExpectedFailure,
+                    [System.StringComparison]::Ordinal
+                )
+            }
+            catch {
+                $boolExpectedFailureObserved = $_.Exception.Message.Contains(
+                    $ExpectedFailure,
+                    [System.StringComparison]::Ordinal
+                )
+            }
+            if (-not $boolExpectedFailureObserved) {
+                throw (
+                    "A corrected final state concealed an unsafe $Name " +
+                    'intermediate governed path.'
+                )
+            }
+        }
+
+        $arrUnsafeRangeBlobFixtures = @(
+            [pscustomobject]@{
+                Name = 'missing-path'
+                Tree = & $scriptBlockCreateGovernedBlobTree `
+                    -ContentBytes $null `
+                    -Mode ''
+                ExpectedFailure = 'is missing governed path AGENTS.md'
+            },
+            [pscustomobject]@{
+                Name = 'wrong-mode'
+                Tree = & $scriptBlockCreateGovernedBlobTree `
+                    -ContentBytes $objUtf8WithoutBom.GetBytes($strMergeBaseContent) `
+                    -Mode '100755'
+                ExpectedFailure = 'does not contain exactly one regular 100644 blob'
+            },
+            [pscustomobject]@{
+                Name = 'symbolic-link'
+                Tree = & $scriptBlockCreateGovernedBlobTree `
+                    -ContentBytes $objUtf8WithoutBom.GetBytes('outside-target') `
+                    -Mode '120000'
+                ExpectedFailure = 'does not contain exactly one regular 100644 blob'
+            },
+            [pscustomobject]@{
+                Name = 'oversized-blob'
+                Tree = & $scriptBlockCreateGovernedBlobTree `
+                    -ContentBytes ([byte[]]::new($intAgentsMaximumInputBytes + 1)) `
+                    -Mode '100644'
+                ExpectedFailure = "must not exceed $intAgentsMaximumInputBytes bytes"
+            },
+            [pscustomobject]@{
+                Name = 'malformed-UTF-8'
+                Tree = & $scriptBlockCreateGovernedBlobTree `
+                    -ContentBytes ([byte[]] @(0xC3, 0x28)) `
+                    -Mode '100644'
+                ExpectedFailure = 'must contain valid UTF-8 without a BOM'
+            },
+            [pscustomobject]@{
+                Name = 'UTF-8-BOM'
+                Tree = & $scriptBlockCreateGovernedBlobTree `
+                    -ContentBytes ([byte[]] @(0xEF, 0xBB, 0xBF, 0x41)) `
+                    -Mode '100644'
+                ExpectedFailure = 'must contain valid UTF-8 without a BOM'
+            }
+        )
+        for ($intUnsafeFixture = 0;
+            $intUnsafeFixture -lt $arrUnsafeRangeBlobFixtures.Count;
+            $intUnsafeFixture++) {
+            $objUnsafeRangeBlobFixture = $arrUnsafeRangeBlobFixtures[$intUnsafeFixture]
+            & $scriptBlockAssertUnsafeCorrectedRangeRejected `
+                -Name $objUnsafeRangeBlobFixture.Name `
+                -InvalidTree $objUnsafeRangeBlobFixture.Tree `
+                -ExpectedFailure $objUnsafeRangeBlobFixture.ExpectedFailure `
+                -FixtureIndex $intUnsafeFixture
+        }
+
         $arrInvalidFinalFailures = @(Get-GovernedDocumentRangeTransitionFailure `
                 -Name 'AGENTS.md' `
                 -RepositoryRootPath $strMergeFixtureRoot `
