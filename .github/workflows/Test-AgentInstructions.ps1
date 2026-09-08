@@ -5879,9 +5879,8 @@ if ($SelfTest) {
 
     $objLegacyClaudeContext = $listGovernedDocumentContexts |
         Where-Object { $_.Path -ceq 'CLAUDE.md' }
-    if ($null -eq $objLegacyClaudeContext -or
-        [string]::IsNullOrEmpty($objLegacyClaudeContext.ParentContent)) {
-        throw 'Could not locate the legacy CLAUDE.md parent for mutation tests.'
+    if ($null -eq $objLegacyClaudeContext) {
+        throw 'Could not locate CLAUDE.md for legacy-parent mutation tests.'
     }
     $objLegacyClaudeMetadataContext = Get-DocumentMetadataContext `
         -Content $objLegacyClaudeContext.Content
@@ -5889,57 +5888,82 @@ if ($SelfTest) {
         throw 'Could not parse CLAUDE.md metadata for legacy-parent mutation tests.'
     }
     $strLegacyClaudeExpectedUtcDate = $objLegacyClaudeMetadataContext.UpdatedDate
-    $arrLegacyClaudeControlFailures = @(Get-DocumentMetadataTransitionFailure `
-            -Name 'CLAUDE.md' `
-            -CurrentContent $objLegacyClaudeContext.Content `
-            -ParentContent $objLegacyClaudeContext.ParentContent `
-            -ExpectedUtcDate $strLegacyClaudeExpectedUtcDate `
-            -IsNewDocumentTransition $false)
-    if ($arrLegacyClaudeControlFailures.Count -ne 0) {
-        throw 'The exact legacy CLAUDE.md parent did not pass its one-time transition.'
+    $strLegacyClaudeParentFixture = "# Legacy CLAUDE fixture`n"
+    $objLegacyClaudeFixtureSha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $arrLegacyClaudeFixtureHashBytes = $objLegacyClaudeFixtureSha256.ComputeHash(
+            [System.Text.UTF8Encoding]::new($false).GetBytes(
+                $strLegacyClaudeParentFixture
+            )
+        )
     }
-    $arrLegacyClaudeMutationFailures = @(Get-DocumentMetadataTransitionFailure `
-            -Name 'CLAUDE.md' `
-            -CurrentContent $objLegacyClaudeContext.Content `
-            -ParentContent ($objLegacyClaudeContext.ParentContent + ' ') `
-            -ExpectedUtcDate $strLegacyClaudeExpectedUtcDate `
-            -IsNewDocumentTransition $false)
-    if (-not ($arrLegacyClaudeMutationFailures -match 'The parent of CLAUDE.md')) {
-        throw 'A mutated legacy CLAUDE.md parent was accepted.'
+    finally {
+        $objLegacyClaudeFixtureSha256.Dispose()
     }
-    $arrLegacyClaudeWrongNameFailures = @(Get-DocumentMetadataTransitionFailure `
-            -Name 'AGENTS.md' `
-            -CurrentContent $objLegacyClaudeContext.Content `
-            -ParentContent $objLegacyClaudeContext.ParentContent `
-            -ExpectedUtcDate $strLegacyClaudeExpectedUtcDate `
-            -IsNewDocumentTransition $false)
-    if (-not ($arrLegacyClaudeWrongNameFailures -match 'The parent of AGENTS.md')) {
-        throw 'The legacy CLAUDE.md parent exception applied to a different path.'
+    $strLegacyClaudeFixtureHash = [System.BitConverter]::ToString(
+        $arrLegacyClaudeFixtureHashBytes
+    ).Replace('-', '').ToLowerInvariant()
+    $strOriginalLegacyClaudeHash =
+        $script:hashtableLegacyMetadataParentSha256['CLAUDE.md']
+    try {
+        $script:hashtableLegacyMetadataParentSha256['CLAUDE.md'] =
+            $strLegacyClaudeFixtureHash
+        $arrLegacyClaudeControlFailures = @(Get-DocumentMetadataTransitionFailure `
+                -Name 'CLAUDE.md' `
+                -CurrentContent $objLegacyClaudeContext.Content `
+                -ParentContent $strLegacyClaudeParentFixture `
+                -ExpectedUtcDate $strLegacyClaudeExpectedUtcDate `
+                -IsNewDocumentTransition $false)
+        if ($arrLegacyClaudeControlFailures.Count -ne 0) {
+            throw 'The exact legacy CLAUDE.md parent did not pass its one-time transition.'
+        }
+        $arrLegacyClaudeMutationFailures = @(Get-DocumentMetadataTransitionFailure `
+                -Name 'CLAUDE.md' `
+                -CurrentContent $objLegacyClaudeContext.Content `
+                -ParentContent ($strLegacyClaudeParentFixture + ' ') `
+                -ExpectedUtcDate $strLegacyClaudeExpectedUtcDate `
+                -IsNewDocumentTransition $false)
+        if (-not ($arrLegacyClaudeMutationFailures -match 'The parent of CLAUDE.md')) {
+            throw 'A mutated legacy CLAUDE.md parent was accepted.'
+        }
+        $arrLegacyClaudeWrongNameFailures = @(Get-DocumentMetadataTransitionFailure `
+                -Name 'AGENTS.md' `
+                -CurrentContent $objLegacyClaudeContext.Content `
+                -ParentContent $strLegacyClaudeParentFixture `
+                -ExpectedUtcDate $strLegacyClaudeExpectedUtcDate `
+                -IsNewDocumentTransition $false)
+        if (-not ($arrLegacyClaudeWrongNameFailures -match 'The parent of AGENTS.md')) {
+            throw 'The legacy CLAUDE.md parent exception applied to a different path.'
+        }
+        $objLegacyClaudeExpectedDate = [DateTime]::ParseExact(
+            $strLegacyClaudeExpectedUtcDate,
+            'yyyy-MM-dd',
+            [System.Globalization.CultureInfo]::InvariantCulture
+        )
+        $strLegacyClaudeStaleDate = $objLegacyClaudeExpectedDate.AddDays(-1).ToString(
+            'yyyy-MM-dd',
+            [System.Globalization.CultureInfo]::InvariantCulture
+        )
+        $strLegacyClaudeStaleCurrent = $objLegacyClaudeContext.Content.Replace(
+            $strLegacyClaudeExpectedUtcDate.Replace('-', ''),
+            $strLegacyClaudeStaleDate.Replace('-', '')
+        ).Replace(
+            "- **Last Updated:** $strLegacyClaudeExpectedUtcDate",
+            "- **Last Updated:** $strLegacyClaudeStaleDate"
+        )
+        $arrLegacyClaudeStaleFailures = @(Get-DocumentMetadataTransitionFailure `
+                -Name 'CLAUDE.md' `
+                -CurrentContent $strLegacyClaudeStaleCurrent `
+                -ParentContent $strLegacyClaudeParentFixture `
+                -ExpectedUtcDate $strLegacyClaudeExpectedUtcDate `
+                -IsNewDocumentTransition $false)
+        if (-not ($arrLegacyClaudeStaleFailures -match 'Last Updated must be')) {
+            throw 'The legacy CLAUDE.md transition accepted a stale current date.'
+        }
     }
-    $objLegacyClaudeExpectedDate = [DateTime]::ParseExact(
-        $strLegacyClaudeExpectedUtcDate,
-        'yyyy-MM-dd',
-        [System.Globalization.CultureInfo]::InvariantCulture
-    )
-    $strLegacyClaudeStaleDate = $objLegacyClaudeExpectedDate.AddDays(-1).ToString(
-        'yyyy-MM-dd',
-        [System.Globalization.CultureInfo]::InvariantCulture
-    )
-    $strLegacyClaudeStaleCurrent = $objLegacyClaudeContext.Content.Replace(
-        $strLegacyClaudeExpectedUtcDate.Replace('-', ''),
-        $strLegacyClaudeStaleDate.Replace('-', '')
-    ).Replace(
-        "- **Last Updated:** $strLegacyClaudeExpectedUtcDate",
-        "- **Last Updated:** $strLegacyClaudeStaleDate"
-    )
-    $arrLegacyClaudeStaleFailures = @(Get-DocumentMetadataTransitionFailure `
-            -Name 'CLAUDE.md' `
-            -CurrentContent $strLegacyClaudeStaleCurrent `
-            -ParentContent $objLegacyClaudeContext.ParentContent `
-            -ExpectedUtcDate $strLegacyClaudeExpectedUtcDate `
-            -IsNewDocumentTransition $false)
-    if (-not ($arrLegacyClaudeStaleFailures -match 'Last Updated must be')) {
-        throw 'The legacy CLAUDE.md transition accepted a stale current date.'
+    finally {
+        $script:hashtableLegacyMetadataParentSha256['CLAUDE.md'] =
+            $strOriginalLegacyClaudeHash
     }
     $arrDocsStaleMetadataFailures = @(Get-DocumentMetadataTransitionFailure `
             -Name '.github/instructions/docs.instructions.md' `
