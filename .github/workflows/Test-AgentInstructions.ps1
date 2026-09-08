@@ -42,7 +42,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260907.2
+# Version: 1.2.20260908.0
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -1033,7 +1033,9 @@ function Get-GovernedDocumentParentContext {
     #
     # .DESCRIPTION
     # Selects the worktree comparison source or the first parent of an explicit
-    # input revision and derives the applicable UTC metadata date.
+    # input revision and derives the applicable UTC metadata date. A local
+    # published baseline supplies committed-range validation separately. Dirty
+    # governed paths use HEAD as their direct worktree parent.
     #
     # .PARAMETER RepositoryRootPath
     # The absolute repository root path used by Git.
@@ -1068,7 +1070,7 @@ function Get-GovernedDocumentParentContext {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.1.20260820.0
+    # Version: 1.2.20260908.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
@@ -1150,12 +1152,25 @@ function Get-GovernedDocumentParentContext {
         if ($LASTEXITCODE -ne 0) {
             throw "The local published-baseline commit is unavailable: $PublishedBaselineRevision"
         }
+        & git -C $RepositoryRootPath diff --quiet HEAD -- $RepositoryRelativePath
+        $intDiffExitCode = $LASTEXITCODE
+        if ($intDiffExitCode -notin @(0, 1)) {
+            throw "Could not compare $RepositoryRelativePath with HEAD."
+        }
+        if ($intDiffExitCode -eq 1) {
+            $strParentRevision = 'HEAD'
+            $strExpectedUtcDate = [DateTimeOffset]::UtcNow.ToString('yyyy-MM-dd')
+        }
+        else {
+            $strParentRevision = $PublishedBaselineRevision
+            $strExpectedUtcDate = ''
+        }
         & git -C $RepositoryRootPath cat-file -e `
-            "$PublishedBaselineRevision`:$RepositoryRelativePath" 2>$null
+            "$strParentRevision`:$RepositoryRelativePath" 2>$null
         $strParentContent = if ($LASTEXITCODE -eq 0) {
             Read-GitRevisionText `
                 -RepositoryRootPath $RepositoryRootPath `
-                -Revision $PublishedBaselineRevision `
+                -Revision $strParentRevision `
                 -RepositoryRelativePath $RepositoryRelativePath `
                 -MaximumBytes $MaximumBytes `
                 -RequireRegularFile
@@ -1165,9 +1180,9 @@ function Get-GovernedDocumentParentContext {
         }
         return [pscustomobject]@{
             ParentContent = $strParentContent
-            ExpectedUtcDate = [DateTimeOffset]::UtcNow.ToString('yyyy-MM-dd')
-            ParentRevision = $PublishedBaselineRevision
-            IsWorktreeTransition = $false
+            ExpectedUtcDate = $strExpectedUtcDate
+            ParentRevision = $strParentRevision
+            IsWorktreeTransition = $intDiffExitCode -eq 1
             UsesPublishedBaseline = $true
         }
     }
@@ -4754,6 +4769,131 @@ function Get-AgentInstructionFailure {
     }
 }
 
+function Get-PushRangeBaseFetchContractFailure {
+    # .SYNOPSIS
+    # Validates the workflow step that acquires an existing push range base.
+    #
+    # .DESCRIPTION
+    # Parses the named workflow step as inert text. Confirms that only an
+    # existing, non-deleted push runs the step, that the authenticated event's
+    # exact prior SHA is fetched without force or a local destination, that the
+    # resolved commit matches, and that the operation leaves tracked state clean.
+    #
+    # .PARAMETER WorkflowContent
+    # The complete agent-instruction workflow YAML text to inspect.
+    #
+    # .EXAMPLE
+    # Get-PushRangeBaseFetchContractFailure -WorkflowContent $strWorkflow
+    #
+    # # Returns no output when the acquisition step satisfies the contract.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [string] One record for each contract failure.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the
+    # public API surface. Parameters, return shape, and positional
+    # contract may change without notice.
+    #
+    # This function does not support positional parameters.
+    # Version: 1.0.20260907.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $WorkflowContent
+    )
+
+    $arrStepMatches = @([regex]::Matches(
+        $WorkflowContent,
+        '(?ms)^      - name: Fetch existing push range base as data\r?\n' +
+            '(?<Body>.*?)(?=^      - name: |\z)'
+    ))
+    if ($arrStepMatches.Count -ne 1) {
+        Write-Output 'The push range-base acquisition step must occur exactly once.'
+        return
+    }
+    $objStepMatch = $arrStepMatches[0]
+    $strStepBody = $objStepMatch.Groups['Body'].Value
+    if ($strStepBody -notmatch
+        '(?ms)^        if: >-\r?\n' +
+            "          github\.event_name == 'push' &&\r?\n" +
+            '          !github\.event\.created &&\r?\n' +
+            '          !github\.event\.deleted\r?$') {
+        Write-Output 'The push range-base acquisition condition is not exact.'
+    }
+    if ($strStepBody -notmatch '(?m)^        shell: bash\r?$') {
+        Write-Output 'The push range-base acquisition does not use bash.'
+    }
+    foreach ($objEnvironmentContract in @(
+            [pscustomobject]@{
+                Pattern = '(?m)^          GITHUB_TOKEN: \$\{\{ github\.token \}\}\r?$'
+                Failure = 'The push range-base acquisition does not use the event token.'
+            },
+            [pscustomobject]@{
+                Pattern = '(?m)^          RANGE_BASE_SHA: \$\{\{ github\.event\.before \}\}\r?$'
+                Failure = 'The push range-base acquisition does not use the event before SHA.'
+            }
+        )) {
+        if ($strStepBody -notmatch $objEnvironmentContract.Pattern) {
+            Write-Output $objEnvironmentContract.Failure
+        }
+    }
+    $objRunMatch = [regex]::Match(
+        $strStepBody,
+        '(?ms)^        run: \|\r?\n(?<Run>.*)\z'
+    )
+    if (-not $objRunMatch.Success) {
+        Write-Output 'The push range-base acquisition script is missing.'
+        return
+    }
+    $strRun = $objRunMatch.Groups['Run'].Value
+    if ([regex]::Matches($strRun, '(?m)^\s+git fetch ').Count -ne 1) {
+        Write-Output 'The push range-base acquisition must contain exactly one Git fetch.'
+    }
+    foreach ($strRequiredLiteral in @(
+            '          set -euo pipefail',
+            '          [[ "${RANGE_BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]',
+            '          test "${RANGE_BASE_SHA}" != "0000000000000000000000000000000000000000"',
+            '          authorization="$(printf ''x-access-token:%s'' "${GITHUB_TOKEN}" | base64 -w 0)"',
+            '          GIT_CONFIG_COUNT=1 \',
+            '            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \',
+            '            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \',
+            '          unset authorization',
+            '          fetched_base="$(git rev-parse --verify "${RANGE_BASE_SHA}^{commit}")"',
+            '          test "${fetched_base}" = "${RANGE_BASE_SHA}"',
+            '          git diff --quiet --no-ext-diff',
+            '          git diff --cached --quiet --no-ext-diff'
+        )) {
+        if (-not $strRun.Contains(
+                $strRequiredLiteral,
+                [System.StringComparison]::Ordinal
+            )) {
+            Write-Output "The push range-base acquisition is missing: $strRequiredLiteral"
+        }
+    }
+    $objFetchMatch = [regex]::Match(
+        $strRun,
+        '(?ms)^            git fetch (?<Command>.+?)^          unset authorization$'
+    )
+    if (-not $objFetchMatch.Success) {
+        Write-Output 'Could not parse the push range-base fetch command.'
+        return
+    }
+    $strFetchCommand = $objFetchMatch.Groups['Command'].Value
+    if ($strFetchCommand -notmatch
+        '(?m)^--no-tags --no-recurse-submodules origin "\$\{RANGE_BASE_SHA\}"\r?\n?$') {
+        Write-Output 'The push range-base fetch does not request only the exact event SHA.'
+    }
+    if ($strFetchCommand -match '(?m)(^|\s)--force(\s|$)' -or
+        $strFetchCommand -match '"\+\$\{RANGE_BASE_SHA\}') {
+        Write-Output 'The push range-base fetch uses a force update.'
+    }
+}
+
 function Assert-MutationRejected {
     # .SYNOPSIS
     # Confirms that an agent-instruction mutation fails closed.
@@ -5263,20 +5403,13 @@ foreach ($objDocumentSpec in $arrGovernedInstructionDocuments) {
         -MaximumBytes $objDocumentSpec.MaximumBytes `
         -Revision $strValidatedInputRevision `
         -PublishedBaselineRevision $strLocalPublishedBaselineRevision
-    $boolDirectTransition = if ($objParentContext.UsesPublishedBaseline) {
-        $hashtableGovernedInstructionContent[$objDocumentSpec.Path] -cne
-            $objParentContext.ParentContent
-    }
-    else {
-        $objParentContext.IsWorktreeTransition
-    }
     $listGovernedDocumentContexts.Add([pscustomobject]@{
             Path = $objDocumentSpec.Path
             MaximumBytes = $objDocumentSpec.MaximumBytes
             Content = $hashtableGovernedInstructionContent[$objDocumentSpec.Path]
             ParentContent = $objParentContext.ParentContent
             ExpectedUtcDate = $objParentContext.ExpectedUtcDate
-            IsWorktreeTransition = $boolDirectTransition
+            IsWorktreeTransition = $objParentContext.IsWorktreeTransition
         })
 }
 
@@ -5300,6 +5433,27 @@ if ([string]::IsNullOrEmpty($RangeBaseRevision) -and
     $arrNoRangeCommitAndParents = @($strNoRangeParentLine.Trim() -split '\s+')
     $boolNoRangeCommitHasParent = $arrNoRangeCommitAndParents.Count -gt 1
 }
+$boolUseLocalPublishedRange = -not [string]::IsNullOrEmpty(
+    $strLocalPublishedBaselineRevision
+)
+$strEffectiveRangeBaseRevision = if ($boolUseLocalPublishedRange) {
+    $strLocalPublishedBaselineRevision
+}
+else {
+    $RangeBaseRevision
+}
+$strEffectiveRangeHeadRevision = if ($boolUseLocalPublishedRange) {
+    $strCheckedOutRevision
+}
+else {
+    $RangeHeadRevision
+}
+$boolEffectiveRangeIsNewRef = if ($boolUseLocalPublishedRange) {
+    $false
+}
+else {
+    [bool]$RangeIsNewRef
+}
 
 $arrRepositoryFailures = @(Get-AgentInstructionFailure `
         -AgentsContent $strAgentsContent `
@@ -5312,7 +5466,19 @@ $arrRepositoryFailures += @(Get-HuskySetupContractFailure `
 foreach ($objDocumentContext in $listGovernedDocumentContexts) {
     if ([string]::IsNullOrEmpty($RangeBaseRevision) -and
         [string]::IsNullOrEmpty($RangeHeadRevision)) {
-        if ($objDocumentContext.IsWorktreeTransition -or
+        if ($boolUseLocalPublishedRange) {
+            if ($objDocumentContext.IsWorktreeTransition) {
+                $arrRepositoryFailures += @(Get-DocumentMetadataTransitionFailure `
+                        -Name $objDocumentContext.Path `
+                        -CurrentContent $objDocumentContext.Content `
+                        -ParentContent $objDocumentContext.ParentContent `
+                        -ExpectedUtcDate $objDocumentContext.ExpectedUtcDate `
+                        -IsNewDocumentTransition (
+                            $null -eq $objDocumentContext.ParentContent
+                        ))
+            }
+        }
+        elseif ($objDocumentContext.IsWorktreeTransition -or
             -not $boolNoRangeCommitHasParent) {
             $arrRepositoryFailures += @(Get-DocumentMetadataTransitionFailure `
                     -Name $objDocumentContext.Path `
@@ -5338,10 +5504,10 @@ foreach ($objDocumentContext in $listGovernedDocumentContexts) {
             -RepositoryRootPath $strRepositoryRootPath `
             -RepositoryRelativePath $objDocumentContext.Path `
             -MaximumBytes $objDocumentContext.MaximumBytes `
-            -BaseRevision $RangeBaseRevision `
-            -HeadRevision $RangeHeadRevision `
+            -BaseRevision $strEffectiveRangeBaseRevision `
+            -HeadRevision $strEffectiveRangeHeadRevision `
             -InputRevision $strValidatedInputRevision `
-            -IsNewRefRange ([bool]$RangeIsNewRef) `
+            -IsNewRefRange $boolEffectiveRangeIsNewRef `
             -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
             -PolicyMaximumBytes $intValidatorMaximumInputBytes `
             -PolicyMarker $strMetadataRangePolicyMarker)
@@ -5717,11 +5883,17 @@ if ($SelfTest) {
         [string]::IsNullOrEmpty($objLegacyClaudeContext.ParentContent)) {
         throw 'Could not locate the legacy CLAUDE.md parent for mutation tests.'
     }
+    $objLegacyClaudeMetadataContext = Get-DocumentMetadataContext `
+        -Content $objLegacyClaudeContext.Content
+    if ($null -ne $objLegacyClaudeMetadataContext.Failure) {
+        throw 'Could not parse CLAUDE.md metadata for legacy-parent mutation tests.'
+    }
+    $strLegacyClaudeExpectedUtcDate = $objLegacyClaudeMetadataContext.UpdatedDate
     $arrLegacyClaudeControlFailures = @(Get-DocumentMetadataTransitionFailure `
             -Name 'CLAUDE.md' `
             -CurrentContent $objLegacyClaudeContext.Content `
             -ParentContent $objLegacyClaudeContext.ParentContent `
-            -ExpectedUtcDate $objLegacyClaudeContext.ExpectedUtcDate `
+            -ExpectedUtcDate $strLegacyClaudeExpectedUtcDate `
             -IsNewDocumentTransition $false)
     if ($arrLegacyClaudeControlFailures.Count -ne 0) {
         throw 'The exact legacy CLAUDE.md parent did not pass its one-time transition.'
@@ -5730,7 +5902,7 @@ if ($SelfTest) {
             -Name 'CLAUDE.md' `
             -CurrentContent $objLegacyClaudeContext.Content `
             -ParentContent ($objLegacyClaudeContext.ParentContent + ' ') `
-            -ExpectedUtcDate $objLegacyClaudeContext.ExpectedUtcDate `
+            -ExpectedUtcDate $strLegacyClaudeExpectedUtcDate `
             -IsNewDocumentTransition $false)
     if (-not ($arrLegacyClaudeMutationFailures -match 'The parent of CLAUDE.md')) {
         throw 'A mutated legacy CLAUDE.md parent was accepted.'
@@ -5739,13 +5911,13 @@ if ($SelfTest) {
             -Name 'AGENTS.md' `
             -CurrentContent $objLegacyClaudeContext.Content `
             -ParentContent $objLegacyClaudeContext.ParentContent `
-            -ExpectedUtcDate $objLegacyClaudeContext.ExpectedUtcDate `
+            -ExpectedUtcDate $strLegacyClaudeExpectedUtcDate `
             -IsNewDocumentTransition $false)
     if (-not ($arrLegacyClaudeWrongNameFailures -match 'The parent of AGENTS.md')) {
         throw 'The legacy CLAUDE.md parent exception applied to a different path.'
     }
     $objLegacyClaudeExpectedDate = [DateTime]::ParseExact(
-        $objLegacyClaudeContext.ExpectedUtcDate,
+        $strLegacyClaudeExpectedUtcDate,
         'yyyy-MM-dd',
         [System.Globalization.CultureInfo]::InvariantCulture
     )
@@ -5754,17 +5926,17 @@ if ($SelfTest) {
         [System.Globalization.CultureInfo]::InvariantCulture
     )
     $strLegacyClaudeStaleCurrent = $objLegacyClaudeContext.Content.Replace(
-        $objLegacyClaudeContext.ExpectedUtcDate.Replace('-', ''),
+        $strLegacyClaudeExpectedUtcDate.Replace('-', ''),
         $strLegacyClaudeStaleDate.Replace('-', '')
     ).Replace(
-        "- **Last Updated:** $($objLegacyClaudeContext.ExpectedUtcDate)",
+        "- **Last Updated:** $strLegacyClaudeExpectedUtcDate",
         "- **Last Updated:** $strLegacyClaudeStaleDate"
     )
     $arrLegacyClaudeStaleFailures = @(Get-DocumentMetadataTransitionFailure `
             -Name 'CLAUDE.md' `
             -CurrentContent $strLegacyClaudeStaleCurrent `
             -ParentContent $objLegacyClaudeContext.ParentContent `
-            -ExpectedUtcDate $objLegacyClaudeContext.ExpectedUtcDate `
+            -ExpectedUtcDate $strLegacyClaudeExpectedUtcDate `
             -IsNewDocumentTransition $false)
     if (-not ($arrLegacyClaudeStaleFailures -match 'Last Updated must be')) {
         throw 'The legacy CLAUDE.md transition accepted a stale current date.'
@@ -7253,8 +7425,34 @@ if ($SelfTest) {
         if ($strResolvedPublishedBaseline -cne $strMergeBaseCommit -or
             $objCleanPublishedContext.ParentRevision -cne $strMergeBaseCommit -or
             $objCleanPublishedContext.ParentContent -cne $strMergeBaseContent -or
+            $objCleanPublishedContext.ExpectedUtcDate -cne '' -or
+            $objCleanPublishedContext.IsWorktreeTransition -or
             -not $objCleanPublishedContext.UsesPublishedBaseline) {
-            throw 'A clean multi-commit topic did not use the remote published baseline.'
+            throw (
+                'A clean multi-commit topic did not use the remote published baseline ' +
+                'without creating a direct worktree transition.'
+            )
+        }
+        $arrCleanPublishedRangeFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                -Name 'AGENTS.md' `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -RepositoryRelativePath 'AGENTS.md' `
+                -MaximumBytes $intAgentsMaximumInputBytes `
+                -BaseRevision $strResolvedPublishedBaseline `
+                -HeadRevision $strSecondTopicCommit `
+                -InputRevision $strSecondTopicCommit `
+                -IsNewRefRange $false `
+                -PolicyRepositoryRelativePath `
+                    '.github/workflows/Test-AgentInstructions.ps1' `
+                -PolicyMaximumBytes 1024 `
+                -PolicyMarker $strMetadataRangePolicyMarker
+        )
+        if ($arrCleanPublishedRangeFailures.Count -ne 0) {
+            throw (
+                'A clean published range with an unrelated later commit failed: ' +
+                ($arrCleanPublishedRangeFailures -join '; ')
+            )
         }
 
         [System.IO.File]::WriteAllText(
@@ -7271,9 +7469,30 @@ if ($SelfTest) {
             -RepositoryRelativePath 'AGENTS.md' `
             -MaximumBytes $intAgentsMaximumInputBytes `
             -PublishedBaselineRevision $strResolvedPublishedBaseline
-        if ($objDirtyPublishedContext.ParentRevision -cne $strMergeBaseCommit -or
-            $objDirtyPublishedContext.ParentContent -cne $strMergeBaseContent) {
-            throw 'A dirty multi-commit topic did not retain the remote published baseline.'
+        if ($objDirtyPublishedContext.ParentRevision -cne 'HEAD' -or
+            $objDirtyPublishedContext.ParentContent -cne $strMergeTopicContent -or
+            $objDirtyPublishedContext.ExpectedUtcDate -cne
+                $script:strMaximumMetadataUtcDate -or
+            -not $objDirtyPublishedContext.IsWorktreeTransition) {
+            throw (
+                'A dirty multi-commit topic did not use HEAD and the current UTC date.'
+            )
+        }
+        $arrDirtyPublishedFailures = @(Get-DocumentMetadataTransitionFailure `
+                -Name 'AGENTS.md' `
+                -CurrentContent (
+                    $strMergeTopicContent + [Environment]::NewLine +
+                    'Dirty final state.'
+                ) `
+                -ParentContent $objDirtyPublishedContext.ParentContent `
+                -ExpectedUtcDate $objDirtyPublishedContext.ExpectedUtcDate `
+                -IsNewDocumentTransition $false)
+        if ($arrDirtyPublishedFailures.Count -eq 0 -or
+            -not ($arrDirtyPublishedFailures -join '; ').Contains(
+                "Last Updated must be $script:strMaximumMetadataUtcDate",
+                [System.StringComparison]::Ordinal
+            )) {
+            throw 'Dirty published-baseline metadata did not require the current UTC date.'
         }
 
         & git -C $strMergeFixtureRoot symbolic-ref --delete refs/remotes/origin/HEAD
@@ -7384,6 +7603,91 @@ if ($SelfTest) {
         $objProposedHeadFetch.Groups['Command'].Value -match
             '(?m)(^|\s)--force(\s|$)') {
         throw 'The proposed-head fetch force-updates its local destination.'
+    }
+    $arrPushRangeFetchFailures = @(Get-PushRangeBaseFetchContractFailure `
+            -WorkflowContent $strAgentWorkflowContent)
+    if ($arrPushRangeFetchFailures.Count -gt 0) {
+        throw (
+            'The push range-base acquisition contract failed: ' +
+            ($arrPushRangeFetchFailures -join '; ')
+        )
+    }
+    $arrPushRangeFetchMutations = @(
+        [pscustomobject]@{
+            Name = 'wrong event type'
+            From = "github.event_name == 'push' &&"
+            To = "github.event_name == 'workflow_dispatch' &&"
+        },
+        [pscustomobject]@{
+            Name = 'created-ref guard inverted'
+            From = '!github.event.created &&'
+            To = 'github.event.created &&'
+        },
+        [pscustomobject]@{
+            Name = 'deleted-ref guard inverted'
+            From = '!github.event.deleted'
+            To = 'github.event.deleted'
+        },
+        [pscustomobject]@{
+            Name = 'event head substituted for event base'
+            From = 'RANGE_BASE_SHA: ${{ github.event.before }}'
+            To = 'RANGE_BASE_SHA: ${{ github.event.after }}'
+        },
+        [pscustomobject]@{
+            Name = 'SHA shape check widened'
+            From = '[[ "${RANGE_BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]'
+            To = '[[ "${RANGE_BASE_SHA}" =~ ^[0-9a-f]+$ ]]'
+        },
+        [pscustomobject]@{
+            Name = 'new-ref sentinel accepted'
+            From = 'test "${RANGE_BASE_SHA}" != "0000000000000000000000000000000000000000"'
+            To = 'test -n "${RANGE_BASE_SHA}"'
+        },
+        [pscustomobject]@{
+            Name = 'event base replaced by a moving ref'
+            From = 'git fetch --no-tags --no-recurse-submodules origin "${RANGE_BASE_SHA}"'
+            To = 'git fetch --no-tags --no-recurse-submodules origin main'
+        },
+        [pscustomobject]@{
+            Name = 'force enabled for range-base fetch'
+            From = 'git fetch --no-tags --no-recurse-submodules origin "${RANGE_BASE_SHA}"'
+            To = 'git fetch --force --no-tags --no-recurse-submodules origin "${RANGE_BASE_SHA}"'
+        },
+        [pscustomobject]@{
+            Name = 'resolved commit identity not compared'
+            From = 'test "${fetched_base}" = "${RANGE_BASE_SHA}"'
+            To = 'test -n "${fetched_base}"'
+        },
+        [pscustomobject]@{
+            Name = 'index cleanliness check removed'
+            From = 'git diff --cached --quiet --no-ext-diff'
+            To = 'git status --short'
+        }
+    )
+    foreach ($objPushRangeFetchMutation in $arrPushRangeFetchMutations) {
+        if (-not $strAgentWorkflowContent.Contains(
+                $objPushRangeFetchMutation.From,
+                [System.StringComparison]::Ordinal
+            )) {
+            throw (
+                "The push range-base mutation fixture is unavailable: " +
+                $objPushRangeFetchMutation.Name
+            )
+        }
+        $strMutatedAgentWorkflowContent = $strAgentWorkflowContent.Replace(
+            $objPushRangeFetchMutation.From,
+            $objPushRangeFetchMutation.To
+        )
+        $arrMutatedPushRangeFetchFailures = @(
+            Get-PushRangeBaseFetchContractFailure `
+                -WorkflowContent $strMutatedAgentWorkflowContent
+        )
+        if ($arrMutatedPushRangeFetchFailures.Count -eq 0) {
+            throw (
+                "The push range-base mutation was accepted: " +
+                $objPushRangeFetchMutation.Name
+            )
+        }
     }
     foreach ($strTrigger in @('push', 'pull_request_target')) {
         $objTriggerMatch = [regex]::Match(

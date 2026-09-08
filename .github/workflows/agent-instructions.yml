@@ -112,6 +112,30 @@ jobs:
           git diff --quiet --no-ext-diff
           git diff --cached --quiet --no-ext-diff
 
+      - name: Fetch existing push range base as data
+        if: >-
+          github.event_name == 'push' &&
+          !github.event.created &&
+          !github.event.deleted
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RANGE_BASE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          [[ "${RANGE_BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          test "${RANGE_BASE_SHA}" != "0000000000000000000000000000000000000000"
+          authorization="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 -w 0)"
+          GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \
+            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \
+            git fetch --no-tags --no-recurse-submodules origin "${RANGE_BASE_SHA}"
+          unset authorization
+          fetched_base="$(git rev-parse --verify "${RANGE_BASE_SHA}^{commit}")"
+          test "${fetched_base}" = "${RANGE_BASE_SHA}"
+          git diff --quiet --no-ext-diff
+          git diff --cached --quiet --no-ext-diff
+
       - name: Validate parser manifests as inert data
         shell: bash
         env:
