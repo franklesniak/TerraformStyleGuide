@@ -42,7 +42,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260908.2
+# Version: 1.2.20260908.3
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -5239,13 +5239,14 @@ function Get-AgentInstructionFailure {
 
 function Get-PushRangeBaseFetchContractFailure {
     # .SYNOPSIS
-    # Validates the workflow step that acquires an existing push range base.
+    # Validates the workflow step that acquires a default-branch push range base.
     #
     # .DESCRIPTION
     # Parses the named workflow step as inert text. Confirms that only an
-    # existing, non-deleted push runs the step, that the authenticated event's
-    # exact prior SHA is fetched without force or a local destination, that the
-    # resolved commit matches, and that the operation leaves tracked state clean.
+    # existing, non-deleted default-branch push runs the step, that the
+    # authenticated event's exact prior SHA is fetched without force or a local
+    # destination, that the resolved commit matches, and that the operation
+    # leaves tracked state clean.
     #
     # .PARAMETER WorkflowContent
     # The complete agent-instruction workflow YAML text to inspect.
@@ -5267,7 +5268,7 @@ function Get-PushRangeBaseFetchContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.0.20260907.0
+    # Version: 1.1.20260908.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -5289,6 +5290,7 @@ function Get-PushRangeBaseFetchContractFailure {
     if ($strStepBody -notmatch
         '(?ms)^        if: >-\r?\n' +
             "          github\.event_name == 'push' &&\r?\n" +
+            '          github\.ref_name == github\.event\.repository\.default_branch &&\r?\n' +
             '          !github\.event\.created &&\r?\n' +
             '          !github\.event\.deleted\r?$') {
         Write-Output 'The push range-base acquisition condition is not exact.'
@@ -9193,6 +9195,11 @@ if ($SelfTest) {
             To = "github.event_name == 'workflow_dispatch' &&"
         },
         [pscustomobject]@{
+            Name = 'non-default push uses its prior topic commit'
+            From = 'github.ref_name == github.event.repository.default_branch &&'
+            To = 'github.ref_name != github.event.repository.default_branch &&'
+        },
+        [pscustomobject]@{
             Name = 'created-ref guard inverted'
             From = '!github.event.created &&'
             To = 'github.event.created &&'
@@ -9263,23 +9270,35 @@ if ($SelfTest) {
             )
         }
     }
-    $scriptBlockGetDispatchBaselineFailures = {
+    $scriptBlockGetDefaultBaselineFailures = {
         param([string] $WorkflowContent)
 
-        $objDispatchStepMatch = [regex]::Match(
+        $arrDefaultStepMatches = @([regex]::Matches(
             $WorkflowContent,
-            '(?ms)^      - name: Fetch manual-run published baseline as data\r?\n' +
+            '(?ms)^      - name: Fetch default-branch published baseline as data\r?\n' +
                 '(?<Body>.*?)(?=^      - name: |\z)'
-        )
-        if (-not $objDispatchStepMatch.Success) {
-            Write-Output 'The manual-run baseline acquisition step must occur exactly once.'
+        ))
+        if ($arrDefaultStepMatches.Count -ne 1) {
+            Write-Output 'The default-branch baseline acquisition step must occur exactly once.'
             return
         }
-        $strDispatchStepBody = $objDispatchStepMatch.Groups['Body'].Value
+        $strDefaultStepBody = $arrDefaultStepMatches[0].Groups['Body'].Value
+        $strNormalizedWorkflow = $WorkflowContent -replace '\r\n?', "`n"
+        $strExpectedCondition = @(
+            '        id: fetch_default_baseline',
+            '        if: >-',
+            "          github.event_name == 'workflow_dispatch' ||",
+            "          (github.event_name == 'push' &&",
+            '          github.ref_name != github.event.repository.default_branch)',
+            '        shell: bash'
+        ) -join "`n"
+        if (-not $strNormalizedWorkflow.Contains(
+                $strExpectedCondition,
+                [System.StringComparison]::Ordinal
+            )) {
+            Write-Output 'The default-branch baseline acquisition condition is not exact.'
+        }
         foreach ($strRequiredLiteral in @(
-                '        id: fetch_dispatch_baseline',
-                "        if: github.event_name == 'workflow_dispatch'",
-                '        shell: bash',
                 '          GITHUB_TOKEN: ${{ github.token }}',
                 '          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}',
                 '          set -euo pipefail',
@@ -9300,20 +9319,20 @@ if ($SelfTest) {
                 '          git diff --quiet --no-ext-diff',
                 '          git diff --cached --quiet --no-ext-diff'
             )) {
-            if (-not $strDispatchStepBody.Contains(
+            if (-not $strDefaultStepBody.Contains(
                     $strRequiredLiteral,
                     [System.StringComparison]::Ordinal
                 )) {
-                Write-Output "The manual-run baseline acquisition is missing: $strRequiredLiteral"
+                Write-Output "The default-branch baseline acquisition is missing: $strRequiredLiteral"
             }
         }
         if ([regex]::Matches(
-                $strDispatchStepBody,
+                $strDefaultStepBody,
                 '(?m)^\s+git fetch '
             ).Count -ne 1 -or
-            $strDispatchStepBody -match '(?m)(^|\s)--force(\s|$)' -or
-            $strDispatchStepBody -match '"\+\$\{default_ref\}') {
-            Write-Output 'The manual-run baseline fetch must be exact and non-force.'
+            $strDefaultStepBody -match '(?m)(^|\s)--force(\s|$)' -or
+            $strDefaultStepBody -match '"\+\$\{default_ref\}') {
+            Write-Output 'The default-branch baseline fetch must be exact and non-force.'
         }
         if ([regex]::Matches(
                 $WorkflowContent,
@@ -9323,29 +9342,67 @@ if ($SelfTest) {
         }
         if ([regex]::Matches(
                 $WorkflowContent,
-                'steps\.fetch_dispatch_baseline\.outputs\.revision'
+                'steps\.fetch_default_baseline\.outputs\.revision'
             ).Count -ne 1) {
-            Write-Output 'Manual runs must use the verified baseline step output once.'
+            Write-Output (
+                'Manual and non-default push runs must use the verified default-branch ' +
+                'baseline output once.'
+            )
+        }
+        $strExpectedRangeBase = @(
+            '          AGENT_INSTRUCTION_RANGE_BASE: >-',
+            "            `${{ github.event_name == 'pull_request_target' &&",
+            '              github.event.pull_request.base.sha ||',
+            "              github.event_name == 'push' &&",
+            '              github.ref_name == github.event.repository.default_branch &&',
+            '              github.event.before ||',
+            "              (github.event_name == 'push' &&",
+            '              github.ref_name != github.event.repository.default_branch ||',
+            "              github.event_name == 'workflow_dispatch') &&",
+            "              steps.fetch_default_baseline.outputs.revision || '' }}"
+        ) -join "`n"
+        if (-not $strNormalizedWorkflow.Contains(
+                $strExpectedRangeBase,
+                [System.StringComparison]::Ordinal
+            )) {
+            Write-Output 'The event-specific published-baseline selection is not exact.'
+        }
+        $strExpectedNewRef = @(
+            '          AGENT_INSTRUCTION_RANGE_IS_NEW_REF: >-',
+            "            `${{ github.event_name == 'push' &&",
+            '              github.ref_name == github.event.repository.default_branch &&',
+            '              github.event.created || false }}'
+        ) -join "`n"
+        if (-not $strNormalizedWorkflow.Contains(
+                $strExpectedNewRef,
+                [System.StringComparison]::Ordinal
+            )) {
+            Write-Output 'Only a new default branch may use new-ref range semantics.'
         }
     }
-    $arrDispatchBaselineFailures = @(& $scriptBlockGetDispatchBaselineFailures `
+    $arrDefaultBaselineFailures = @(& $scriptBlockGetDefaultBaselineFailures `
             -WorkflowContent $strAgentWorkflowContent)
-    if ($arrDispatchBaselineFailures.Count -gt 0) {
+    if ($arrDefaultBaselineFailures.Count -gt 0) {
         throw (
-            'The manual-run baseline acquisition contract failed: ' +
-            ($arrDispatchBaselineFailures -join '; ')
+            'The default-branch baseline acquisition contract failed: ' +
+            ($arrDefaultBaselineFailures -join '; ')
         )
     }
-    $arrDispatchBaselineMutations = @(
+    $arrDefaultBaselineMutations = @(
         [pscustomobject]@{
             Name = 'step removed'
-            From = 'Fetch manual-run published baseline as data'
-            To = 'Removed manual-run baseline acquisition'
+            From = 'Fetch default-branch published baseline as data'
+            To = 'Removed default-branch baseline acquisition'
         },
         [pscustomobject]@{
             Name = 'default branch replaced'
             From = 'DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}'
             To = 'DEFAULT_BRANCH: main'
+        },
+        [pscustomobject]@{
+            Name = 'non-default push omitted'
+            From = 'github.ref_name != github.event.repository.default_branch)'
+            To = 'github.ref_name == github.event.repository.default_branch)'
         },
         [pscustomobject]@{
             Name = 'ref validation removed'
@@ -9368,33 +9425,43 @@ if ($SelfTest) {
             To = "github.event_name == 'workflow_dispatch' && ''"
         },
         [pscustomobject]@{
-            Name = 'baseline output omitted'
-            From = 'steps.fetch_dispatch_baseline.outputs.revision'
-            To = "''"
+            Name = 'baseline output replaced by topic predecessor'
+            From = 'steps.fetch_default_baseline.outputs.revision'
+            To = 'github.event.before'
+        },
+        [pscustomobject]@{
+            Name = 'topic push baseline condition inverted'
+            From = 'github.ref_name != github.event.repository.default_branch ||'
+            To = 'github.ref_name == github.event.repository.default_branch ||'
+        },
+        [pscustomobject]@{
+            Name = 'topic branch allowed new-ref semantics'
+            From = 'github.ref_name == github.event.repository.default_branch &&'
+            To = 'github.ref_name != github.event.repository.default_branch &&'
         }
     )
-    foreach ($objDispatchBaselineMutation in $arrDispatchBaselineMutations) {
+    foreach ($objDefaultBaselineMutation in $arrDefaultBaselineMutations) {
         if (-not $strAgentWorkflowContent.Contains(
-                $objDispatchBaselineMutation.From,
+                $objDefaultBaselineMutation.From,
                 [System.StringComparison]::Ordinal
             )) {
             throw (
-                'The manual-run baseline mutation fixture is unavailable: ' +
-                $objDispatchBaselineMutation.Name
+                'The default-branch baseline mutation fixture is unavailable: ' +
+                $objDefaultBaselineMutation.Name
             )
         }
         $strMutatedAgentWorkflowContent = $strAgentWorkflowContent.Replace(
-            $objDispatchBaselineMutation.From,
-            $objDispatchBaselineMutation.To
+            $objDefaultBaselineMutation.From,
+            $objDefaultBaselineMutation.To
         )
-        $arrMutatedDispatchBaselineFailures = @(
-            & $scriptBlockGetDispatchBaselineFailures `
+        $arrMutatedDefaultBaselineFailures = @(
+            & $scriptBlockGetDefaultBaselineFailures `
                 -WorkflowContent $strMutatedAgentWorkflowContent
         )
-        if ($arrMutatedDispatchBaselineFailures.Count -eq 0) {
+        if ($arrMutatedDefaultBaselineFailures.Count -eq 0) {
             throw (
-                'The manual-run baseline mutation was accepted: ' +
-                $objDispatchBaselineMutation.Name
+                'The default-branch baseline mutation was accepted: ' +
+                $objDefaultBaselineMutation.Name
             )
         }
     }

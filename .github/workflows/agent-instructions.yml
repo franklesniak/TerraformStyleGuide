@@ -121,6 +121,7 @@ jobs:
       - name: Fetch existing push range base as data
         if: >-
           github.event_name == 'push' &&
+          github.ref_name == github.event.repository.default_branch &&
           !github.event.created &&
           !github.event.deleted
         shell: bash
@@ -142,9 +143,12 @@ jobs:
           git diff --quiet --no-ext-diff
           git diff --cached --quiet --no-ext-diff
 
-      - name: Fetch manual-run published baseline as data
-        id: fetch_dispatch_baseline
-        if: github.event_name == 'workflow_dispatch'
+      - name: Fetch default-branch published baseline as data
+        id: fetch_default_baseline
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          (github.event_name == 'push' &&
+          github.ref_name != github.event.repository.default_branch)
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -198,16 +202,22 @@ jobs:
           AGENT_INSTRUCTION_RANGE_BASE: >-
             ${{ github.event_name == 'pull_request_target' &&
               github.event.pull_request.base.sha ||
-              github.event_name == 'push' && github.event.before ||
-              github.event_name == 'workflow_dispatch' &&
-              steps.fetch_dispatch_baseline.outputs.revision || '' }}
+              github.event_name == 'push' &&
+              github.ref_name == github.event.repository.default_branch &&
+              github.event.before ||
+              (github.event_name == 'push' &&
+              github.ref_name != github.event.repository.default_branch ||
+              github.event_name == 'workflow_dispatch') &&
+              steps.fetch_default_baseline.outputs.revision || '' }}
           AGENT_INSTRUCTION_RANGE_HEAD: >-
             ${{ github.event_name == 'pull_request_target' &&
               github.event.pull_request.head.sha ||
               github.event_name == 'push' && github.sha ||
               github.event_name == 'workflow_dispatch' && github.sha || '' }}
           AGENT_INSTRUCTION_RANGE_IS_NEW_REF: >-
-            ${{ github.event_name == 'push' && github.event.created || false }}
+            ${{ github.event_name == 'push' &&
+              github.ref_name == github.event.repository.default_branch &&
+              github.event.created || false }}
         run: >-
           ./.github/workflows/Test-AgentInstructions.ps1 -SelfTest
           -InputRevision $env:AGENT_INSTRUCTION_INPUT_REVISION
