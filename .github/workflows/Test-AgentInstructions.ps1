@@ -83,8 +83,6 @@ $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
 $script:hashtableLegacyMetadataParentSha256 = @{
     'CLAUDE.md' = '28e77152391d51aed5ba93c59ed79af7f5c516d5ee0f1af2ce13cd4842e26387'
-    '.github/copilot-instructions.md' =
-        '81fbe1615dd96fe99afca2738ff5888a6f7b7390068c1087d3d817fad73ff614'
 }
 $script:arrAllowedMetadataStatuses = @(
     'Draft', 'Proposed', 'Active', 'Accepted', 'Superseded', 'Deprecated'
@@ -2959,7 +2957,7 @@ function Get-DocumentMetadataContext {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.2.20260820.0
+    # Version: 1.3.20260908.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
@@ -3173,6 +3171,8 @@ function Get-DocumentMetadataContext {
 
     return [pscustomobject]@{
         Failure = $null
+        Major = $objVersionMatch.Groups['Major'].Value
+        Minor = $objVersionMatch.Groups['Minor'].Value
         VersionDate = $objVersionMatch.Groups['Date'].Value
         UpdatedDate = $objUpdatedMatch.Groups['Date'].Value
         Revision = $objVersionMatch.Groups['Revision'].Value
@@ -3287,7 +3287,7 @@ function Get-DocumentMetadataTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.4.20260821.1
+    # Version: 1.5.20260908.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -3415,6 +3415,11 @@ function Get-DocumentMetadataTransitionFailure {
         return
     }
 
+    $strCurrentVersionIdentity =
+        "$($objCurrentMetadata.Major).$($objCurrentMetadata.Minor).$strCurrentVersionDate"
+    $strParentVersionIdentity =
+        "$($objParentMetadata.Major).$($objParentMetadata.Minor).$strParentVersionDate"
+    $boolSameVersionIdentity = $strCurrentVersionIdentity -ceq $strParentVersionIdentity
     $intVersionDateComparison = [string]::CompareOrdinal(
         $strCurrentVersionDate,
         $strParentVersionDate
@@ -3430,7 +3435,7 @@ function Get-DocumentMetadataTransitionFailure {
             "$strCurrentVersionDate."
         )
     }
-    elseif ($intVersionDateComparison -eq 0 -and
+    elseif ($boolSameVersionIdentity -and
         $intCurrentRevision -lt $intParentRevision) {
         Write-Output (
             "$Name Version revision must not decrease from $intParentRevision to " +
@@ -3456,16 +3461,26 @@ function Get-DocumentMetadataTransitionFailure {
         }
     }
 
-    if ($intVersionDateComparison -eq 0) {
+    if ($boolSameVersionIdentity) {
         if ($intParentRevision -eq [int64]::MaxValue) {
             Write-Output "The parent $Name Version revision cannot be incremented safely."
         }
-        elseif ($intCurrentRevision -eq $intParentRevision) {
-            Write-Output (
-                "$Name Version revision must be greater than $intParentRevision after a " +
-                'same-day content change.'
-            )
+        else {
+            $intExpectedRevision = $intParentRevision + 1
+            if ($intCurrentRevision -ne $intExpectedRevision) {
+                Write-Output (
+                    "$Name Version revision must be $intExpectedRevision after a content " +
+                    "change with unchanged major, minor, and date; baseline revision is " +
+                    "$intParentRevision."
+                )
+            }
         }
+    }
+    elseif ($intCurrentRevision -ne 0) {
+        Write-Output (
+            "$Name Version revision must be 0 when major, minor, or date changes; " +
+            "current revision is $intCurrentRevision."
+        )
     }
 }
 
@@ -3720,6 +3735,9 @@ function Get-GovernedDocumentCommitTransitionFailure {
     # .PARAMETER CommitRevision
     # The exact commit whose direct transition is validated.
     #
+    # .PARAMETER RequireMetadataTransition
+    # Indicates that visible document metadata must be validated after Git safety checks.
+    #
     # .EXAMPLE
     # Get-GovernedDocumentCommitTransitionFailure -Name 'AGENTS.md' `
     #     -RepositoryRootPath $strRoot -RepositoryRelativePath 'AGENTS.md' `
@@ -3739,7 +3757,7 @@ function Get-GovernedDocumentCommitTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.0.20260821.0
+    # Version: 1.1.20260908.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -3757,7 +3775,10 @@ function Get-GovernedDocumentCommitTransitionFailure {
         [int] $MaximumBytes,
 
         [Parameter(Mandatory)]
-        [string] $CommitRevision
+        [string] $CommitRevision,
+
+        [Parameter()]
+        [bool] $RequireMetadataTransition = $true
     )
 
     $strObjectIdPattern = '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$'
@@ -3883,6 +3904,10 @@ function Get-GovernedDocumentCommitTransitionFailure {
             })
     }
 
+    if (-not $RequireMetadataTransition) {
+        return [string[]] @()
+    }
+
     return Get-DocumentMetadataRangeTransitionFailure `
         -Name $Name `
         -TransitionContext $listTransitions.ToArray()
@@ -3932,6 +3957,9 @@ function Get-GovernedDocumentRangeTransitionFailure {
     # .PARAMETER PolicyMarker
     # The literal that identifies the policy introduction.
     #
+    # .PARAMETER RequireMetadataTransition
+    # Indicates that visible document metadata must be validated after Git safety checks.
+    #
     # .EXAMPLE
     # Get-GovernedDocumentRangeTransitionFailure -Name 'AGENTS.md' `
     #     -RepositoryRootPath $strRoot -RepositoryRelativePath 'AGENTS.md' `
@@ -3954,7 +3982,7 @@ function Get-GovernedDocumentRangeTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.4.20260908.0
+    # Version: 1.5.20260908.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -3994,7 +4022,10 @@ function Get-GovernedDocumentRangeTransitionFailure {
         [int] $PolicyMaximumBytes,
 
         [Parameter(Mandatory)]
-        [string] $PolicyMarker
+        [string] $PolicyMarker,
+
+        [Parameter()]
+        [bool] $RequireMetadataTransition = $true
     )
 
     if ([string]::IsNullOrEmpty($BaseRevision) -and
@@ -4338,6 +4369,10 @@ function Get-GovernedDocumentRangeTransitionFailure {
         if ($intPublishedDiffExitCode -ne 1) {
             throw "Could not compare the published metadata endpoints for $RepositoryRelativePath."
         }
+    }
+
+    if (-not $RequireMetadataTransition) {
+        return [string[]] @()
     }
 
     $strCurrentContent = Read-GitRevisionText `
@@ -5353,22 +5388,27 @@ $arrGovernedInstructionDocuments = @(
     [pscustomobject]@{
         Path = 'AGENTS.md'
         MaximumBytes = $intAgentsMaximumInputBytes
+        RequiresMetadata = $true
     },
     [pscustomobject]@{
         Path = 'CLAUDE.md'
         MaximumBytes = $intClaudeMaximumInputBytes
+        RequiresMetadata = $true
     },
     [pscustomobject]@{
         Path = '.github/copilot-instructions.md'
         MaximumBytes = $intInstructionDocumentMaximumInputBytes
+        RequiresMetadata = $false
     },
     [pscustomobject]@{
         Path = '.github/instructions/docs.instructions.md'
         MaximumBytes = $intDocsInstructionsMaximumInputBytes
+        RequiresMetadata = $true
     },
     [pscustomobject]@{
         Path = '.github/instructions/yaml.instructions.md'
         MaximumBytes = $intInstructionDocumentMaximumInputBytes
+        RequiresMetadata = $true
     }
 )
 $strValidatedInputRevision = ''
@@ -5639,6 +5679,7 @@ foreach ($objDocumentSpec in $arrGovernedInstructionDocuments) {
     $listGovernedDocumentContexts.Add([pscustomobject]@{
             Path = $objDocumentSpec.Path
             MaximumBytes = $objDocumentSpec.MaximumBytes
+            RequiresMetadata = $objDocumentSpec.RequiresMetadata
             Content = $hashtableGovernedInstructionContent[$objDocumentSpec.Path]
             ParentContent = $objParentContext.ParentContent
             ExpectedUtcDate = $objParentContext.ExpectedUtcDate
@@ -5700,7 +5741,8 @@ foreach ($objDocumentContext in $listGovernedDocumentContexts) {
     if ([string]::IsNullOrEmpty($RangeBaseRevision) -and
         [string]::IsNullOrEmpty($RangeHeadRevision)) {
         if ($boolUseLocalPublishedRange) {
-            if ($objDocumentContext.IsWorktreeTransition) {
+            if ($objDocumentContext.RequiresMetadata -and
+                $objDocumentContext.IsWorktreeTransition) {
                 $arrRepositoryFailures += @(Get-DocumentMetadataTransitionFailure `
                         -Name $objDocumentContext.Path `
                         -CurrentContent $objDocumentContext.Content `
@@ -5711,8 +5753,9 @@ foreach ($objDocumentContext in $listGovernedDocumentContexts) {
                         ))
             }
         }
-        elseif ($objDocumentContext.IsWorktreeTransition -or
-            -not $boolNoRangeCommitHasParent) {
+        elseif ($objDocumentContext.RequiresMetadata -and
+            ($objDocumentContext.IsWorktreeTransition -or
+                -not $boolNoRangeCommitHasParent)) {
             $arrRepositoryFailures += @(Get-DocumentMetadataTransitionFailure `
                     -Name $objDocumentContext.Path `
                     -CurrentContent $objDocumentContext.Content `
@@ -5729,7 +5772,8 @@ foreach ($objDocumentContext in $listGovernedDocumentContexts) {
                     -RepositoryRootPath $strRepositoryRootPath `
                     -RepositoryRelativePath $objDocumentContext.Path `
                     -MaximumBytes $objDocumentContext.MaximumBytes `
-                    -CommitRevision $strNoRangeCommitRevision)
+                    -CommitRevision $strNoRangeCommitRevision `
+                    -RequireMetadataTransition $objDocumentContext.RequiresMetadata)
         }
     }
     $boolWorktreeReplacesLocalRange =
@@ -5746,7 +5790,8 @@ foreach ($objDocumentContext in $listGovernedDocumentContexts) {
                 -IsNewRefRange $boolEffectiveRangeIsNewRef `
                 -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
                 -PolicyMaximumBytes $intValidatorMaximumInputBytes `
-                -PolicyMarker $strMetadataRangePolicyMarker)
+                -PolicyMarker $strMetadataRangePolicyMarker `
+                -RequireMetadataTransition $objDocumentContext.RequiresMetadata)
     }
 }
 if ($arrRepositoryFailures.Count -gt 0) {
@@ -6229,7 +6274,7 @@ if ($SelfTest) {
             -ExpectedUtcDate $objDocsMetadataContext.UpdatedDate `
             -IsNewDocumentTransition $false)
     if (-not ($arrDocsStaleMetadataFailures -match [regex]::Escape(
-                '.github/instructions/docs.instructions.md Version revision must be greater than'
+                '.github/instructions/docs.instructions.md Version revision must be'
             ))) {
         throw 'The docs-only stale-metadata mutation did not fail closed.'
     }
@@ -6257,7 +6302,7 @@ if ($SelfTest) {
                 -ParentContent $objDocumentContext.Content `
                 -ExpectedUtcDate $objMetadataContext.UpdatedDate `
                 -IsNewDocumentTransition $false)
-        $strExpectedFailure = "$strNewlyCoveredPath Version revision must be greater than"
+        $strExpectedFailure = "$strNewlyCoveredPath Version revision must be"
         if (-not ($arrStaleMetadataFailures -match [regex]::Escape(
                     $strExpectedFailure
                 ))) {
@@ -6279,27 +6324,30 @@ if ($SelfTest) {
         throw 'The governed-instruction inventory mutation did not fail closed.'
     }
 
-    $objLegacyCopilotContext = $listGovernedDocumentContexts |
-        Where-Object { $_.Path -ceq '.github/copilot-instructions.md' }
-    if ($null -eq $objLegacyCopilotContext -or
-        -not (Test-LegacyMetadataParentContent `
-            -Name $objLegacyCopilotContext.Path `
-            -Content $objLegacyCopilotContext.Content)) {
-        throw 'Could not recognize the exact legacy Copilot instruction document.'
+    $arrMetadataOptionalContexts = @(
+        $listGovernedDocumentContexts |
+            Where-Object { -not $_.RequiresMetadata }
+    )
+    if ($arrMetadataOptionalContexts.Count -ne 1 -or
+        $arrMetadataOptionalContexts[0].Path -cne '.github/copilot-instructions.md') {
+        throw 'Only the Copilot instruction document can omit visible metadata.'
     }
-    if (Test-LegacyMetadataParentContent `
-            -Name $objLegacyCopilotContext.Path `
-            -Content ($objLegacyCopilotContext.Content + ' ')) {
-        throw 'A mutated legacy Copilot instruction document was accepted.'
-    }
-    if (Test-LegacyMetadataParentContent `
-            -Name 'CLAUDE.md' `
-            -Content $objLegacyCopilotContext.Content) {
-        throw 'The legacy Copilot instruction exception applied to a different path.'
+    $arrUnexpectedMetadataRequirements = @(
+        $listGovernedDocumentContexts |
+            Where-Object {
+                $_.Path -cne '.github/copilot-instructions.md' -and
+                -not $_.RequiresMetadata
+            }
+    )
+    if ($arrUnexpectedMetadataRequirements.Count -ne 0) {
+        throw 'A metadata-required governed document was marked optional.'
     }
 
     $listMetadataSelfTestContexts = [System.Collections.Generic.List[pscustomobject]]::new()
-    foreach ($objDocumentContext in $listGovernedDocumentContexts) {
+    foreach ($objDocumentContext in @(
+            $listGovernedDocumentContexts |
+                Where-Object { $_.RequiresMetadata }
+        )) {
         $objMetadataContext = Get-DocumentMetadataContext `
             -Content $objDocumentContext.Content
         if ($null -eq $objMetadataContext.Failure) {
@@ -6488,7 +6536,7 @@ if ($SelfTest) {
 
     $objAgentsVersionMatch = [regex]::Match(
         $strAgentsContent,
-        '(?m)^\*\*Version:\*\* (?<Prefix>\d+\.\d+\.)' +
+        '(?m)^\*\*Version:\*\* (?<Prefix>(?<Major>\d+)\.(?<Minor>\d+)\.)' +
             '(?<Date>\d{8})\.(?<Revision>\d+)$'
     )
     $objAgentsUpdatedMatch = [regex]::Match(
@@ -6932,8 +6980,20 @@ if ($SelfTest) {
         -CodexConfigContent $strCodexConfigContent `
         -ParentAgentsContent $strAgentsContent `
         -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-        -ExpectedFailure ("AGENTS.md Version revision must be greater than " +
-            "$intAgentsRevision after a same-day content change.")
+        -ExpectedFailure ("AGENTS.md Version revision must be $intNextAgentsRevision after " +
+            'a content change with unchanged major, minor, and date')
+
+    $strExactNextRevisionContent = $strRenderedAgentsMutation.Replace(
+        $objAgentsVersionMatch.Value,
+        $strAgentsVersionStem + $intNextAgentsRevision
+    )
+    Assert-FixtureAccepted `
+        -Name 'same-identity exact next revision' `
+        -AgentsContent $strExactNextRevisionContent `
+        -ClaudeContent $strClaudeContent `
+        -CodexConfigContent $strCodexConfigContent `
+        -ParentAgentsContent $strAgentsContent `
+        -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value
 
     $strHigherRevisionParent = $strAgentsContent.Replace(
         $objAgentsVersionMatch.Value,
@@ -6981,13 +7041,67 @@ if ($SelfTest) {
         $objAgentsVersionMatch.Value,
         $strAgentsVersionStem + $intJumpedAgentsRevision
     )
-    Assert-FixtureAccepted `
-        -Name 'same-day squash-preserved revision jump' `
+    Assert-MutationRejected `
+        -Name 'same-identity revision gap' `
         -AgentsContent $strSameDayRevisionJump `
         -ClaudeContent $strClaudeContent `
         -CodexConfigContent $strCodexConfigContent `
         -ParentAgentsContent $strAgentsContent `
-        -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value
+        -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
+        -ExpectedFailure ("AGENTS.md Version revision must be $intNextAgentsRevision after " +
+            'a content change with unchanged major, minor, and date')
+
+    $strMaximumRevisionMutation = $strMaximumRevisionContent +
+        [Environment]::NewLine + 'Maximum revision rendered mutation.'
+    Assert-MutationRejected `
+        -Name 'same-identity maximum revision cannot increment' `
+        -AgentsContent $strMaximumRevisionMutation `
+        -ClaudeContent $strClaudeContent `
+        -CodexConfigContent $strCodexConfigContent `
+        -ParentAgentsContent $strMaximumRevisionContent `
+        -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
+        -ExpectedFailure 'The parent AGENTS.md Version revision cannot be incremented safely.'
+
+    $intHigherMajor = [int64] $objAgentsVersionMatch.Groups['Major'].Value + 1
+    $intHigherMinor = [int64] $objAgentsVersionMatch.Groups['Minor'].Value + 1
+    $arrHigherVersionFixtures = @(
+        [pscustomobject]@{
+            Name = 'major'
+            Prefix = "$intHigherMajor.0."
+        },
+        [pscustomobject]@{
+            Name = 'minor'
+            Prefix = "$($objAgentsVersionMatch.Groups['Major'].Value).$intHigherMinor."
+        }
+    )
+    foreach ($objHigherVersionFixture in $arrHigherVersionFixtures) {
+        $strHigherVersionStem = '**Version:** ' + $objHigherVersionFixture.Prefix +
+            $objAgentsVersionMatch.Groups['Date'].Value + '.'
+        $strHigherVersionReset = $strRenderedAgentsMutation.Replace(
+            $objAgentsVersionMatch.Value,
+            $strHigherVersionStem + '0'
+        )
+        Assert-FixtureAccepted `
+            -Name "$($objHigherVersionFixture.Name) change resets revision" `
+            -AgentsContent $strHigherVersionReset `
+            -ClaudeContent $strClaudeContent `
+            -CodexConfigContent $strCodexConfigContent `
+            -ParentAgentsContent $strAgentsContent `
+            -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value
+        Assert-MutationRejected `
+            -Name "$($objHigherVersionFixture.Name) change retains nonzero revision" `
+            -AgentsContent $strHigherVersionReset.Replace(
+                $strHigherVersionStem + '0',
+                $strHigherVersionStem + '1'
+            ) `
+            -ClaudeContent $strClaudeContent `
+            -CodexConfigContent $strCodexConfigContent `
+            -ParentAgentsContent $strAgentsContent `
+            -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
+            -ExpectedFailure (
+                'AGENTS.md Version revision must be 0 when major, minor, or date changes'
+            )
+    }
 
     Assert-MutationRejected `
         -Name 'rendered change with stale UTC date' `
@@ -7006,12 +7120,27 @@ if ($SelfTest) {
         '- **Last Updated:** 2000-01-01'
     )
     Assert-FixtureAccepted `
-        -Name 'new-day squash-preserved terminal revision' `
+        -Name 'new-day zero revision' `
         -AgentsContent $strRenderedAgentsMutation `
         -ClaudeContent $strClaudeContent `
         -CodexConfigContent $strCodexConfigContent `
         -ParentAgentsContent $strPreviousDateParent `
         -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value
+
+    $strNewDayNonzeroRevision = $strRenderedAgentsMutation.Replace(
+        $objAgentsVersionMatch.Value,
+        $strAgentsVersionStem + '1'
+    )
+    Assert-MutationRejected `
+        -Name 'new-day nonzero revision' `
+        -AgentsContent $strNewDayNonzeroRevision `
+        -ClaudeContent $strClaudeContent `
+        -CodexConfigContent $strCodexConfigContent `
+        -ParentAgentsContent $strPreviousDateParent `
+        -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
+        -ExpectedFailure (
+            'AGENTS.md Version revision must be 0 when major, minor, or date changes'
+        )
 
     $strNewDayReset = $strRenderedAgentsMutation.Replace(
         $objAgentsVersionMatch.Value,
@@ -7102,7 +7231,7 @@ if ($SelfTest) {
             [System.StringComparison]::Ordinal
         ) -or
         -not $arrMultiCommitTransitionFailures[0].Contains(
-            'Version revision must be greater',
+            'Version revision must be',
             [System.StringComparison]::Ordinal
         )) {
         throw 'Multi-commit metadata validation did not preserve an earlier invalid transition.'
@@ -7379,8 +7508,20 @@ if ($SelfTest) {
             $strMetadataRangePolicyMarker,
             $objUtf8WithoutBom
         )
+        $strMergeCopilotPath = [System.IO.Path]::Combine(
+            $strMergeFixtureRoot,
+            '.github',
+            'copilot-instructions.md'
+        )
+        $strMergeCopilotBaseContent = "# Copilot fixture`n`nBaseline instructions.`n"
+        [System.IO.File]::WriteAllText(
+            $strMergeCopilotPath,
+            $strMergeCopilotBaseContent,
+            $objUtf8WithoutBom
+        )
         & git -C $strMergeFixtureRoot add -- `
-            'AGENTS.md' '.github/workflows/Test-AgentInstructions.ps1'
+            'AGENTS.md' '.github/copilot-instructions.md' `
+            '.github/workflows/Test-AgentInstructions.ps1'
         $strMergeBaseTree = [string] (& git -C $strMergeFixtureRoot write-tree)
         if ($LASTEXITCODE -ne 0 -or
             $strMergeBaseTree.Trim() -notmatch '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$') {
@@ -7421,6 +7562,101 @@ if ($SelfTest) {
             -Parents @() `
             -Timestamp ($strMergeHistoricalDate + 'T08:00:00Z') `
             -Message 'merge fixture base'
+        $strMergeCopilotChangedContent =
+            $strMergeCopilotBaseContent + "Changed instructions.`n"
+        [System.IO.File]::WriteAllText(
+            $strMergeCopilotPath,
+            $strMergeCopilotChangedContent,
+            $objUtf8WithoutBom
+        )
+        & git -C $strMergeFixtureRoot add -- '.github/copilot-instructions.md'
+        $strMergeCopilotChangedTree =
+            ([string] (& git -C $strMergeFixtureRoot write-tree)).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not create the metadata-optional Copilot tree.'
+        }
+        $strMergeCopilotChangedCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strMergeCopilotChangedTree `
+            -Parents @($strMergeBaseCommit) `
+            -Timestamp ($strMergeHistoricalDate + 'T08:30:00Z') `
+            -Message 'metadata-optional Copilot change'
+        $hashtableCopilotTransitionArguments = @{
+            Name = '.github/copilot-instructions.md'
+            RepositoryRootPath = $strMergeFixtureRoot
+            RepositoryRelativePath = '.github/copilot-instructions.md'
+            MaximumBytes = $intInstructionDocumentMaximumInputBytes
+            BaseRevision = $strMergeBaseCommit
+            HeadRevision = $strMergeCopilotChangedCommit
+            InputRevision = $strMergeCopilotChangedCommit
+            IsNewRefRange = $false
+            PolicyRepositoryRelativePath = '.github/workflows/Test-AgentInstructions.ps1'
+            PolicyMaximumBytes = 1024
+            PolicyMarker = $strMetadataRangePolicyMarker
+        }
+        $arrMetadataOptionalRangeFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                @hashtableCopilotTransitionArguments `
+                -RequireMetadataTransition $false
+        )
+        if ($arrMetadataOptionalRangeFailures.Count -ne 0) {
+            throw (
+                'A safe metadata-optional Copilot range change failed: ' +
+                ($arrMetadataOptionalRangeFailures -join '; ')
+            )
+        }
+        $arrMetadataRequiredRangeFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                @hashtableCopilotTransitionArguments `
+                -RequireMetadataTransition $true
+        )
+        if (-not ($arrMetadataRequiredRangeFailures -match
+                'must contain one exact document-level Version paragraph')) {
+            throw 'The same header-free Copilot range did not fail when metadata was required.'
+        }
+        $arrMetadataOptionalCommitFailures = @(
+            Get-GovernedDocumentCommitTransitionFailure `
+                -Name '.github/copilot-instructions.md' `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -RepositoryRelativePath '.github/copilot-instructions.md' `
+                -MaximumBytes $intInstructionDocumentMaximumInputBytes `
+                -CommitRevision $strMergeCopilotChangedCommit `
+                -RequireMetadataTransition $false
+        )
+        if ($arrMetadataOptionalCommitFailures.Count -ne 0) {
+            throw 'A safe metadata-optional direct Copilot transition failed.'
+        }
+        $arrMetadataRequiredCommitFailures = @(
+            Get-GovernedDocumentCommitTransitionFailure `
+                -Name '.github/copilot-instructions.md' `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -RepositoryRelativePath '.github/copilot-instructions.md' `
+                -MaximumBytes $intInstructionDocumentMaximumInputBytes `
+                -CommitRevision $strMergeCopilotChangedCommit `
+                -RequireMetadataTransition $true
+        )
+        if (-not ($arrMetadataRequiredCommitFailures -match
+                'must contain one exact document-level Version paragraph')) {
+            throw 'The same direct Copilot transition did not fail when metadata was required.'
+        }
+        $hashtableCopilotNewRefArguments = @{}
+        foreach ($strCopilotArgumentName in $hashtableCopilotTransitionArguments.Keys) {
+            $hashtableCopilotNewRefArguments[$strCopilotArgumentName] =
+                $hashtableCopilotTransitionArguments[$strCopilotArgumentName]
+        }
+        $hashtableCopilotNewRefArguments.BaseRevision = '0' * 40
+        $hashtableCopilotNewRefArguments.IsNewRefRange = $true
+        $arrMetadataOptionalNewRefFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                @hashtableCopilotNewRefArguments `
+                -RequireMetadataTransition $false
+        )
+        if ($arrMetadataOptionalNewRefFailures.Count -ne 0) {
+            throw 'A safe metadata-optional new-ref Copilot range failed.'
+        }
+        & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not restore the merge-transition fixture base tree.'
+        }
         $strMergeTopicContent = $strMergeBaseContent.Replace(
             $strMergeBaseVersion,
             '**Version:** ' + $objAgentsVersionMatch.Groups['Prefix'].Value +
@@ -7441,6 +7677,145 @@ if ($SelfTest) {
             -Parents @($strMergeBaseCommit) `
             -Timestamp ($strMergeHistoricalDate + 'T12:00:00Z') `
             -Message 'merge fixture topic'
+        $intRangeFixtureMajor = [int64] $objAgentsVersionMatch.Groups['Major'].Value
+        $intRangeFixtureMinor = [int64] $objAgentsVersionMatch.Groups['Minor'].Value
+        $arrMetadataRangeFixtures = @(
+            [pscustomobject]@{
+                Name = 'same identity exact next revision'
+                Prefix = $objAgentsVersionMatch.Groups['Prefix'].Value
+                Date = $strMergeHistoricalDate
+                Revision = '1'
+                ExpectedFailure = ''
+            },
+            [pscustomobject]@{
+                Name = 'same identity revision gap'
+                Prefix = $objAgentsVersionMatch.Groups['Prefix'].Value
+                Date = $strMergeHistoricalDate
+                Revision = '2'
+                ExpectedFailure = 'Version revision must be 1 after a content change'
+            },
+            [pscustomobject]@{
+                Name = 'major change reset revision'
+                Prefix = "$($intRangeFixtureMajor + 1).0."
+                Date = $strMergeHistoricalDate
+                Revision = '0'
+                ExpectedFailure = ''
+            },
+            [pscustomobject]@{
+                Name = 'major change nonzero revision'
+                Prefix = "$($intRangeFixtureMajor + 1).0."
+                Date = $strMergeHistoricalDate
+                Revision = '1'
+                ExpectedFailure = 'Version revision must be 0 when major, minor, or date changes'
+            },
+            [pscustomobject]@{
+                Name = 'minor change reset revision'
+                Prefix = "$intRangeFixtureMajor.$($intRangeFixtureMinor + 1)."
+                Date = $strMergeHistoricalDate
+                Revision = '0'
+                ExpectedFailure = ''
+            },
+            [pscustomobject]@{
+                Name = 'minor change nonzero revision'
+                Prefix = "$intRangeFixtureMajor.$($intRangeFixtureMinor + 1)."
+                Date = $strMergeHistoricalDate
+                Revision = '1'
+                ExpectedFailure = 'Version revision must be 0 when major, minor, or date changes'
+            },
+            [pscustomobject]@{
+                Name = 'date change reset revision'
+                Prefix = $objAgentsVersionMatch.Groups['Prefix'].Value
+                Date = $strMergeCurrentDate
+                Revision = '0'
+                ExpectedFailure = ''
+            },
+            [pscustomobject]@{
+                Name = 'date change nonzero revision'
+                Prefix = $objAgentsVersionMatch.Groups['Prefix'].Value
+                Date = $strMergeCurrentDate
+                Revision = '1'
+                ExpectedFailure = 'Version revision must be 0 when major, minor, or date changes'
+            }
+        )
+        for ($intRangeFixture = 0;
+            $intRangeFixture -lt $arrMetadataRangeFixtures.Count;
+            $intRangeFixture++) {
+            $objMetadataRangeFixture = $arrMetadataRangeFixtures[$intRangeFixture]
+            & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Could not reset the metadata range-transition fixture index.'
+            }
+            $strRangeFixtureVersion = '**Version:** ' +
+                $objMetadataRangeFixture.Prefix +
+                $objMetadataRangeFixture.Date.Replace('-', '') + '.' +
+                $objMetadataRangeFixture.Revision
+            $strRangeFixtureContent = $strMergeBaseContent.Replace(
+                $strMergeBaseVersion,
+                $strRangeFixtureVersion
+            ).Replace(
+                "- **Last Updated:** $strMergeHistoricalDate",
+                "- **Last Updated:** $($objMetadataRangeFixture.Date)"
+            ) + [Environment]::NewLine +
+                "Range fixture: $($objMetadataRangeFixture.Name)."
+            [System.IO.File]::WriteAllText(
+                [System.IO.Path]::Combine($strMergeFixtureRoot, 'AGENTS.md'),
+                $strRangeFixtureContent,
+                $objUtf8WithoutBom
+            )
+            & git -C $strMergeFixtureRoot add -- 'AGENTS.md'
+            $strRangeFixtureTree =
+                ([string] (& git -C $strMergeFixtureRoot write-tree)).Trim()
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not create range fixture tree: $($objMetadataRangeFixture.Name)"
+            }
+            $strRangeFixtureTimestamp = if (
+                $objMetadataRangeFixture.Date -ceq $strMergeCurrentDate
+            ) {
+                $strMergeCurrentDate + 'T00:01:00Z'
+            }
+            else {
+                $strMergeHistoricalDate +
+                    "T13:$($intRangeFixture.ToString('00')):00Z"
+            }
+            $strRangeFixtureCommit = & $scriptBlockCreateMergeFixtureCommit `
+                -Tree $strRangeFixtureTree `
+                -Parents @($strMergeBaseCommit) `
+                -Timestamp $strRangeFixtureTimestamp `
+                -Message $objMetadataRangeFixture.Name
+            $arrMetadataRangeFailures = @(
+                Get-GovernedDocumentRangeTransitionFailure `
+                    -Name 'AGENTS.md' `
+                    -RepositoryRootPath $strMergeFixtureRoot `
+                    -RepositoryRelativePath 'AGENTS.md' `
+                    -MaximumBytes $intAgentsMaximumInputBytes `
+                    -BaseRevision $strMergeBaseCommit `
+                    -HeadRevision $strRangeFixtureCommit `
+                    -InputRevision $strRangeFixtureCommit `
+                    -IsNewRefRange $false `
+                    -PolicyRepositoryRelativePath `
+                        '.github/workflows/Test-AgentInstructions.ps1' `
+                    -PolicyMaximumBytes 1024 `
+                    -PolicyMarker $strMetadataRangePolicyMarker
+            )
+            if ([string]::IsNullOrEmpty($objMetadataRangeFixture.ExpectedFailure)) {
+                if ($arrMetadataRangeFailures.Count -ne 0) {
+                    throw (
+                        "Safe $($objMetadataRangeFixture.Name) range failed: " +
+                        ($arrMetadataRangeFailures -join '; ')
+                    )
+                }
+            }
+            elseif (-not ($arrMetadataRangeFailures -join '; ').Contains(
+                    $objMetadataRangeFixture.ExpectedFailure,
+                    [System.StringComparison]::Ordinal
+                )) {
+                throw "Unsafe $($objMetadataRangeFixture.Name) range passed."
+            }
+        }
+        & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not restore the base tree after metadata range-transition fixtures.'
+        }
         $strInvalidIntermediateContent = $strMergeBaseContent +
             [Environment]::NewLine + 'Invalid internal topic metadata fixture.'
         [System.IO.File]::WriteAllText(
@@ -7560,39 +7935,44 @@ if ($SelfTest) {
                     "T09:$((($intInvalidMinute + 1)).ToString('00')):00Z"
                 ) `
                 -Message "corrected final after $Name"
-            $boolExpectedFailureObserved = $false
-            try {
-                $arrUnsafeRangeFailures = @(
-                    Get-GovernedDocumentRangeTransitionFailure `
-                        -Name 'AGENTS.md' `
-                        -RepositoryRootPath $strMergeFixtureRoot `
-                        -RepositoryRelativePath 'AGENTS.md' `
-                        -MaximumBytes $intAgentsMaximumInputBytes `
-                        -BaseRevision $strMergeBaseCommit `
-                        -HeadRevision $strCorrectedRangeCommit `
-                        -InputRevision $strCorrectedRangeCommit `
-                        -IsNewRefRange $false `
-                        -PolicyRepositoryRelativePath `
-                            '.github/workflows/Test-AgentInstructions.ps1' `
-                        -PolicyMaximumBytes 1024 `
-                        -PolicyMarker $strMetadataRangePolicyMarker
-                )
-                $boolExpectedFailureObserved = ($arrUnsafeRangeFailures -join '; ').Contains(
-                    $ExpectedFailure,
-                    [System.StringComparison]::Ordinal
-                )
-            }
-            catch {
-                $boolExpectedFailureObserved = $_.Exception.Message.Contains(
-                    $ExpectedFailure,
-                    [System.StringComparison]::Ordinal
-                )
-            }
-            if (-not $boolExpectedFailureObserved) {
-                throw (
-                    "A corrected final state concealed an unsafe $Name " +
-                    'intermediate governed path.'
-                )
+            foreach ($boolRequireMetadataTransition in @($true, $false)) {
+                $boolExpectedFailureObserved = $false
+                try {
+                    $arrUnsafeRangeFailures = @(
+                        Get-GovernedDocumentRangeTransitionFailure `
+                            -Name 'AGENTS.md' `
+                            -RepositoryRootPath $strMergeFixtureRoot `
+                            -RepositoryRelativePath 'AGENTS.md' `
+                            -MaximumBytes $intAgentsMaximumInputBytes `
+                            -BaseRevision $strMergeBaseCommit `
+                            -HeadRevision $strCorrectedRangeCommit `
+                            -InputRevision $strCorrectedRangeCommit `
+                            -IsNewRefRange $false `
+                            -PolicyRepositoryRelativePath `
+                                '.github/workflows/Test-AgentInstructions.ps1' `
+                            -PolicyMaximumBytes 1024 `
+                            -PolicyMarker $strMetadataRangePolicyMarker `
+                            -RequireMetadataTransition $boolRequireMetadataTransition
+                    )
+                    $boolExpectedFailureObserved =
+                        ($arrUnsafeRangeFailures -join '; ').Contains(
+                            $ExpectedFailure,
+                            [System.StringComparison]::Ordinal
+                        )
+                }
+                catch {
+                    $boolExpectedFailureObserved = $_.Exception.Message.Contains(
+                        $ExpectedFailure,
+                        [System.StringComparison]::Ordinal
+                    )
+                }
+                if (-not $boolExpectedFailureObserved) {
+                    throw (
+                        "A corrected final state concealed an unsafe $Name " +
+                        "intermediate governed path when RequireMetadataTransition was " +
+                        "$boolRequireMetadataTransition."
+                    )
+                }
             }
         }
 
@@ -7664,7 +8044,7 @@ if ($SelfTest) {
                 -PolicyMaximumBytes 1024 `
                 -PolicyMarker $strMetadataRangePolicyMarker)
         if (-not ($arrInvalidFinalFailures -join '; ').Contains(
-                'Version revision must be greater',
+                'Version revision must be',
                 [System.StringComparison]::Ordinal
             )) {
             throw 'Invalid final metadata was accepted as an internal-only state.'
