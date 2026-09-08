@@ -8,6 +8,11 @@ const workflowsDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(workflowsDir, '../..');
 const rootPackagePath = resolve(repoRoot, 'package.json');
 const exactSemanticVersionPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u;
+const exitStatus = Object.freeze({
+  success: 0,
+  lintFailure: 1,
+  toolingFailure: 2
+});
 
 let rootPackage;
 
@@ -15,7 +20,7 @@ try {
   rootPackage = JSON.parse(readFileSync(rootPackagePath, 'utf8'));
 } catch {
   console.error('pre-commit: Failed to read the root package.json Node.js selector.');
-  process.exit(2);
+  process.exit(exitStatus.toolingFailure);
 }
 
 const requiredNodeVersion = rootPackage?.engines?.node;
@@ -23,7 +28,7 @@ const currentNodeVersion = process.versions.node;
 
 if (typeof requiredNodeVersion !== 'string' || !exactSemanticVersionPattern.test(requiredNodeVersion)) {
   console.error('pre-commit: Root package.json must declare engines.node as one exact semantic version.');
-  process.exit(2);
+  process.exit(exitStatus.toolingFailure);
 }
 
 if (currentNodeVersion !== requiredNodeVersion) {
@@ -32,7 +37,7 @@ if (currentNodeVersion !== requiredNodeVersion) {
   console.error('If you use a Node version manager with a GUI Git client, add its initialization to');
   console.error('~/.config/husky/init.sh, which Husky sources before running hooks.');
   console.error('To bypass this one commit only, use: git commit --no-verify');
-  process.exit(1);
+  process.exit(exitStatus.toolingFailure);
 }
 
 const maxBuffer = 100 * 1024 * 1024;
@@ -76,11 +81,11 @@ try {
 } catch (error) {
   console.error(error);
   console.error('pre-commit: Failed to inspect staged Markdown files.');
-  process.exit(2);
+  process.exit(exitStatus.toolingFailure);
 }
 
 if (stagedMarkdownPaths.length === 0) {
-  process.exit(0);
+  process.exit(exitStatus.success);
 }
 
 const stagedMarkdownByAbsolutePosixPath = {};
@@ -95,7 +100,7 @@ try {
 } catch (error) {
   console.error(error);
   console.error('pre-commit: Failed to read staged Markdown content from Git.');
-  process.exit(2);
+  process.exit(exitStatus.toolingFailure);
 }
 
 let exitCode;
@@ -113,7 +118,7 @@ try {
   console.error(error);
   console.error('pre-commit: Markdown lint tooling failed to run.');
   console.error('Try reinstalling dev dependencies: npm --prefix .github/workflows ci');
-  process.exit(2);
+  process.exit(exitStatus.toolingFailure);
 }
 
 if (exitCode !== 0) {
@@ -136,13 +141,13 @@ if (exitCode !== 0) {
     if (displayResults(allResults)) {
       console.error('pre-commit: Nested Markdown lint failed for staged Markdown.');
       console.error('To check all Markdown files, run: npm --prefix .github/workflows run lint:md:nested');
-      exitCode = 1;
+      exitCode = exitStatus.lintFailure;
     }
   } catch (error) {
     console.error(error);
     console.error('pre-commit: Nested Markdown lint tooling failed to run.');
     console.error('Try reinstalling dev dependencies: npm --prefix .github/workflows ci');
-    exitCode = 2;
+    exitCode = exitStatus.toolingFailure;
   }
 }
 
