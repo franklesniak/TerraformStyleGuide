@@ -42,7 +42,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260908.3
+# Version: 1.2.20260908.4
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -73,7 +73,7 @@ $intClaudeMaximumInputBytes = 131072
 $intCodexConfigMaximumInputBytes = 65536
 $intDocsInstructionsMaximumInputBytes = 131072
 $intInstructionDocumentMaximumInputBytes = 131072
-$intValidatorMaximumInputBytes = 458752
+$intValidatorMaximumInputBytes = 524288
 $intMetadataMaximumParents = 64
 $strMetadataRangePolicyMarker = 'metadata-range-transition-policy-v1'
 $script:objValidationUtcNow = [DateTimeOffset]::UtcNow
@@ -6012,6 +6012,48 @@ Write-Output 'Agent-instruction contract passed.'
 
 if ($SelfTest) {
     #region Mutation self-tests
+
+    $objValidatorBoundaryStream = [System.IO.MemoryStream]::new(
+        [byte[]]::new($intValidatorMaximumInputBytes),
+        $false
+    )
+    try {
+        [byte[]] $arrValidatorBoundaryBytes = Read-BoundedStreamData `
+            -Stream $objValidatorBoundaryStream `
+            -MaximumBytes $intValidatorMaximumInputBytes `
+            -DisplayName 'validator boundary control'
+        if ($arrValidatorBoundaryBytes.Count -ne $intValidatorMaximumInputBytes) {
+            throw 'The validator byte boundary rejected its exact maximum.'
+        }
+    }
+    finally {
+        $objValidatorBoundaryStream.Dispose()
+    }
+    $objValidatorOversizeStream = [System.IO.MemoryStream]::new(
+        [byte[]]::new($intValidatorMaximumInputBytes + 1),
+        $false
+    )
+    try {
+        [void](Read-BoundedStreamData `
+                -Stream $objValidatorOversizeStream `
+                -MaximumBytes $intValidatorMaximumInputBytes `
+                -DisplayName 'validator oversized mutation')
+        throw 'The validator byte boundary accepted one excess byte.'
+    }
+    catch [System.IO.InvalidDataException] {
+        $strExpectedValidatorOversizeFailure =
+            "validator oversized mutation must not exceed " +
+            "$intValidatorMaximumInputBytes bytes."
+        if ($_.Exception.Message -cne $strExpectedValidatorOversizeFailure) {
+            throw (
+                'The validator oversized mutation returned an unexpected failure: ' +
+                $_.Exception.Message
+            )
+        }
+    }
+    finally {
+        $objValidatorOversizeStream.Dispose()
+    }
 
     $strRootPackageContent = $hashtableHuskyInputContent['package.json']
     $strWorkflowPackageContent =
