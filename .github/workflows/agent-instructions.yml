@@ -17,6 +17,7 @@ on:
       - .github/instructions/docs.instructions.md
       - .github/workflows/agent-instructions.yml
       - .github/workflows/copilot-setup-steps.yml
+      - .github/workflows/scripts-README.md
       - .github/workflows/Test-AgentInstructionParserManifest.mjs
       - .github/workflows/Test-AgentInstructions.ps1
       - .hermes.md
@@ -28,6 +29,7 @@ on:
       - npm-shrinkwrap.json
       - package-lock.json
       - package.json
+      - requirements-dev.txt
   pull_request_target:
     paths:
       - .gitattributes
@@ -41,6 +43,7 @@ on:
       - .github/instructions/docs.instructions.md
       - .github/workflows/agent-instructions.yml
       - .github/workflows/copilot-setup-steps.yml
+      - .github/workflows/scripts-README.md
       - .github/workflows/Test-AgentInstructionParserManifest.mjs
       - .github/workflows/Test-AgentInstructions.ps1
       - .hermes.md
@@ -52,6 +55,7 @@ on:
       - npm-shrinkwrap.json
       - package-lock.json
       - package.json
+      - requirements-dev.txt
 
 permissions:
   contents: read

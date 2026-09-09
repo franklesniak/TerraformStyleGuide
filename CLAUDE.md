@@ -1,13 +1,13 @@
 <!-- markdownlint-disable MD013 -->
 # Agent Instructions for Claude Code
 
-**Version:** 1.9.20260908.0
+**Version:** 1.9.20260909.0
 
 ## Metadata
 
 - **Status:** Active
 - **Owner:** Repository maintainer (@franklesniak)
-- **Last Updated:** 2026-09-08
+- **Last Updated:** 2026-09-09
 - **Scope:** Agent-specific entry point for Claude Code and compatible AI coding agents operating in TerraformStyleGuide. Mirrors a minimal inline summary of the highest-priority shared rules; `.github/copilot-instructions.md` remains the canonical documentation-authoring source of truth.
 <!-- template-sync: begin markdown-reference-only -->
 - **Related:** [Repository Copilot Instructions](.github/copilot-instructions.md), [Documentation Writing Style](.github/instructions/docs.instructions.md)
@@ -54,9 +54,9 @@ Tracked `CLAUDE.local.md` files are prohibited at every supported project scope.
   - Respect allowlisted file access boundaries; reject path traversal and symlink escapes.
 
 - **Pre-commit and validation**
-  - Install Python 3.12 before validation. On Windows, use `py -3.12`; otherwise, expose `python3.12`, `python3`, or `python` on `PATH` as Python 3.12.
+  - Install Python 3.12 and the pinned runner. On Windows, run `py -3.12 -m pip install --requirement requirements-dev.txt`. Elsewhere, run `python3.12 -m pip install --requirement requirements-dev.txt`; substitute a verified Python 3.12 command if needed.
   - Run `npm run bootstrap:agent-instructions` once after each fresh clone or lockfile change. This installs only the locked Node.js dependencies required by the system-language hook.
-  - Run `pre-commit run --all-files` before every commit.
+  - Before every commit, run `py -3.12 -m pre_commit run --all-files` on Windows or `python3.12 -m pre_commit run --all-files` elsewhere; make the same substitution if needed.
   - Retain the repository's existing Husky pre-commit checks for staged Markdown. They run `npm --prefix .github/workflows run lint:md` and `npm --prefix .github/workflows run lint:md:nested`.
   - Include all auto-fixes in the same commit as the related change.
   - Do not push code when pre-commit or required validation checks are failing; fix issues and re-run until the checks pass.
@@ -64,7 +64,7 @@ Tracked `CLAUDE.local.md` files are prohibited at every supported project scope.
     - `npm run lint:md`
     - `npm run lint:md:nested`
     - `npm run test:agent-instructions`
-  - The `pre-commit run --all-files` command exercises the active hooks configured in [`.pre-commit-config.yaml`](.pre-commit-config.yaml), the authoritative list of active hooks.
+  - These module commands use the active hooks in [`.pre-commit-config.yaml`](.pre-commit-config.yaml), the authoritative list.
   - Retained JSON checks include strict JSON syntax (`check-json`).
   - Retained YAML checks include YAML parsing (`check-yaml`) and style (`yamllint`).
   - Retained GitHub Actions checks include GitHub Actions linting (`actionlint`).

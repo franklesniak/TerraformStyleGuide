@@ -42,7 +42,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260908.4
+# Version: 1.2.20260908.5
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -1476,6 +1476,99 @@ function Get-HuskySetupContractFailure {
             'Copilot hook activation must run nested prepare, require exact .husky/_ ' +
             'hooksPath, and require its executable dispatcher.'
         )
+    }
+}
+
+function Get-PreCommitBootstrapContractFailure {
+    # .SYNOPSIS
+    # Finds failures in the documented pre-commit runner bootstrap contract.
+    #
+    # .DESCRIPTION
+    # Requires one exact pre-commit version pin and exact interpreter-qualified
+    # Windows and POSIX install and run commands in both agent entry points and
+    # the workflow script index.
+    #
+    # .PARAMETER AgentsContent
+    # The AGENTS.md text that documents the shared validation workflow.
+    #
+    # .PARAMETER ClaudeContent
+    # The CLAUDE.md text that documents the shared validation workflow.
+    #
+    # .PARAMETER ScriptIndexContent
+    # The workflow script-index text that documents local setup.
+    #
+    # .PARAMETER RequirementsContent
+    # The requirements-dev.txt text that pins the pre-commit runner.
+    #
+    # .EXAMPLE
+    # Get-PreCommitBootstrapContractFailure -AgentsContent $strAgents `
+    #     -ClaudeContent $strClaude -ScriptIndexContent $strScriptIndex `
+    #     -RequirementsContent $strRequirements
+    #
+    # # Writes one string for each bootstrap-contract failure.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [string] One record for each bootstrap-contract failure.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the
+    # public API surface. Parameters, return shape, and positional
+    # contract may change without notice.
+    #
+    # This function does not support positional parameters.
+    # Version: 1.0.20260908.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $AgentsContent,
+
+        [Parameter(Mandatory)]
+        [string] $ClaudeContent,
+
+        [Parameter(Mandatory)]
+        [string] $ScriptIndexContent,
+
+        [Parameter(Mandatory)]
+        [string] $RequirementsContent
+    )
+
+    $strExpectedRequirement = "pre-commit==4.6.2`n"
+    $strNormalizedRequirements = $RequirementsContent.Replace("`r`n", "`n").Replace(
+        "`r",
+        "`n"
+    )
+    if ($strNormalizedRequirements -cne $strExpectedRequirement) {
+        Write-Output 'requirements-dev.txt must contain only the exact pre-commit 4.6.2 pin.'
+    }
+
+    $arrRequiredCommands = @(
+        'py -3.12 -m pip install --requirement requirements-dev.txt',
+        'python3.12 -m pip install --requirement requirements-dev.txt',
+        'py -3.12 -m pre_commit run --all-files',
+        'python3.12 -m pre_commit run --all-files'
+    )
+    foreach ($objDocument in @(
+            [pscustomobject]@{ Name = 'AGENTS.md'; Content = $AgentsContent },
+            [pscustomobject]@{ Name = 'CLAUDE.md'; Content = $ClaudeContent },
+            [pscustomobject]@{
+                Name = '.github/workflows/scripts-README.md'
+                Content = $ScriptIndexContent
+            }
+        )) {
+        $objMarkdownContext = Get-OperativeMarkdownContext -Content $objDocument.Content
+        $arrCodeSpans = @($objMarkdownContext.ProseBlocks.Code)
+        foreach ($strRequiredCommand in $arrRequiredCommands) {
+            if (@($arrCodeSpans | Where-Object { $_ -ceq $strRequiredCommand }).Count -ne 1) {
+                Write-Output (
+                    "$($objDocument.Name) must contain this setup command exactly once: " +
+                    $strRequiredCommand
+                )
+            }
+        }
     }
 }
 
@@ -5581,7 +5674,7 @@ $strCodexConfigPath = Join-Path -Path $strRepositoryRootPath -ChildPath '.codex/
 $strDocsInstructionsPath = Join-Path `
     -Path $strRepositoryRootPath `
     -ChildPath '.github/instructions/docs.instructions.md'
-$arrHuskyInputSpecs = @(
+$arrAgentSetupInputSpecs = @(
     [pscustomobject]@{ Path = 'package.json'; MaximumBytes = 16384 }
     [pscustomobject]@{ Path = '.github/workflows/package.json'; MaximumBytes = 16384 }
     [pscustomobject]@{
@@ -5589,6 +5682,11 @@ $arrHuskyInputSpecs = @(
         MaximumBytes = 32768
     }
     [pscustomobject]@{ Path = '.husky/pre-commit'; MaximumBytes = 16384 }
+    [pscustomobject]@{
+        Path = '.github/workflows/scripts-README.md'
+        MaximumBytes = 32768
+    }
+    [pscustomobject]@{ Path = 'requirements-dev.txt'; MaximumBytes = 4096 }
 )
 $arrGovernedInstructionDocuments = @(
     [pscustomobject]@{
@@ -5732,7 +5830,7 @@ if ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
             }
     )
     $arrRequiredPaths += @(
-        $arrHuskyInputSpecs |
+        $arrAgentSetupInputSpecs |
             ForEach-Object {
                 Join-Path -Path $strRepositoryRootPath -ChildPath $_.Path
             }
@@ -5816,30 +5914,31 @@ else {
         -MaximumBytes $intDocsInstructionsMaximumInputBytes `
         -RequireRegularFile
 }
-$hashtableHuskyInputContent = @{}
-foreach ($objHuskyInputSpec in $arrHuskyInputSpecs) {
-    $strHuskyInputPath = Join-Path `
+$hashtableAgentSetupInputContent = @{}
+foreach ($objAgentSetupInputSpec in $arrAgentSetupInputSpecs) {
+    $strAgentSetupInputPath = Join-Path `
         -Path $strRepositoryRootPath `
-        -ChildPath $objHuskyInputSpec.Path
-    $strHuskyInputContent = if ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
+        -ChildPath $objAgentSetupInputSpec.Path
+    $strAgentSetupInputContent = if ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
         ConvertFrom-StrictUtf8Data `
             -Bytes (Read-RepositoryInputData `
-                -Path $strHuskyInputPath `
+                -Path $strAgentSetupInputPath `
                 -RepositoryRootPath $strRepositoryRootPath `
-                -RepositoryRelativePath $objHuskyInputSpec.Path `
-                -DisplayName $objHuskyInputSpec.Path `
-                -MaximumBytes $objHuskyInputSpec.MaximumBytes) `
-            -DisplayName $objHuskyInputSpec.Path
+                -RepositoryRelativePath $objAgentSetupInputSpec.Path `
+                -DisplayName $objAgentSetupInputSpec.Path `
+                -MaximumBytes $objAgentSetupInputSpec.MaximumBytes) `
+            -DisplayName $objAgentSetupInputSpec.Path
     }
     else {
         Read-GitRevisionText `
             -RepositoryRootPath $strRepositoryRootPath `
             -Revision $strValidatedInputRevision `
-            -RepositoryRelativePath $objHuskyInputSpec.Path `
-            -MaximumBytes $objHuskyInputSpec.MaximumBytes `
+            -RepositoryRelativePath $objAgentSetupInputSpec.Path `
+            -MaximumBytes $objAgentSetupInputSpec.MaximumBytes `
             -RequireRegularFile
     }
-    $hashtableHuskyInputContent[$objHuskyInputSpec.Path] = $strHuskyInputContent
+    $hashtableAgentSetupInputContent[$objAgentSetupInputSpec.Path] =
+        $strAgentSetupInputContent
 }
 $hashtableGovernedInstructionContent = @{
     'AGENTS.md' = $strAgentsContent
@@ -5940,11 +6039,18 @@ $arrRepositoryFailures = @(Get-AgentInstructionFailure `
         -ClaudeContent $strClaudeContent `
         -CodexConfigContent $strCodexConfigContent)
 $arrRepositoryFailures += @(Get-HuskySetupContractFailure `
-        -RootPackageContent $hashtableHuskyInputContent['package.json'] `
-        -WorkflowPackageContent $hashtableHuskyInputContent['.github/workflows/package.json'] `
-        -HookContent $hashtableHuskyInputContent['.husky/pre-commit'] `
+        -RootPackageContent $hashtableAgentSetupInputContent['package.json'] `
+        -WorkflowPackageContent `
+            $hashtableAgentSetupInputContent['.github/workflows/package.json'] `
+        -HookContent $hashtableAgentSetupInputContent['.husky/pre-commit'] `
         -CopilotSetupContent `
-            $hashtableHuskyInputContent['.github/workflows/copilot-setup-steps.yml'])
+            $hashtableAgentSetupInputContent['.github/workflows/copilot-setup-steps.yml'])
+$arrRepositoryFailures += @(Get-PreCommitBootstrapContractFailure `
+        -AgentsContent $strAgentsContent `
+        -ClaudeContent $strClaudeContent `
+        -ScriptIndexContent `
+            $hashtableAgentSetupInputContent['.github/workflows/scripts-README.md'] `
+        -RequirementsContent $hashtableAgentSetupInputContent['requirements-dev.txt'])
 foreach ($objDocumentContext in $listGovernedDocumentContexts) {
     if ([string]::IsNullOrEmpty($RangeBaseRevision) -and
         [string]::IsNullOrEmpty($RangeHeadRevision)) {
@@ -6055,12 +6161,102 @@ if ($SelfTest) {
         $objValidatorOversizeStream.Dispose()
     }
 
-    $strRootPackageContent = $hashtableHuskyInputContent['package.json']
+    $strRootPackageContent = $hashtableAgentSetupInputContent['package.json']
     $strWorkflowPackageContent =
-        $hashtableHuskyInputContent['.github/workflows/package.json']
+        $hashtableAgentSetupInputContent['.github/workflows/package.json']
     $strCopilotSetupContent =
-        $hashtableHuskyInputContent['.github/workflows/copilot-setup-steps.yml']
-    $strHuskyHookContent = $hashtableHuskyInputContent['.husky/pre-commit']
+        $hashtableAgentSetupInputContent['.github/workflows/copilot-setup-steps.yml']
+    $strHuskyHookContent = $hashtableAgentSetupInputContent['.husky/pre-commit']
+    $strScriptIndexContent =
+        $hashtableAgentSetupInputContent['.github/workflows/scripts-README.md']
+    $strRequirementsContent =
+        $hashtableAgentSetupInputContent['requirements-dev.txt']
+
+    $arrPreCommitBootstrapControlFailures = @(
+        Get-PreCommitBootstrapContractFailure `
+            -AgentsContent $strAgentsContent `
+            -ClaudeContent $strClaudeContent `
+            -ScriptIndexContent $strScriptIndexContent `
+            -RequirementsContent $strRequirementsContent
+    )
+    if ($arrPreCommitBootstrapControlFailures.Count -ne 0) {
+        throw (
+            'The pre-commit bootstrap control fixture failed: ' +
+            ($arrPreCommitBootstrapControlFailures -join '; ')
+        )
+    }
+    $arrPreCommitBootstrapMutations = @(
+        [pscustomobject]@{
+            Name = 'runner pin changed'
+            Agents = $strAgentsContent
+            Claude = $strClaudeContent
+            ScriptIndex = $strScriptIndexContent
+            Requirements = $strRequirementsContent.Replace('4.6.2', '4.6.1')
+            Failure = 'exact pre-commit 4.6.2 pin'
+        },
+        [pscustomobject]@{
+            Name = 'AGENTS Windows install command changed'
+            Agents = $strAgentsContent.Replace(
+                'py -3.12 -m pip install --requirement requirements-dev.txt',
+                'pip install pre-commit'
+            )
+            Claude = $strClaudeContent
+            ScriptIndex = $strScriptIndexContent
+            Requirements = $strRequirementsContent
+            Failure = 'AGENTS.md must contain this setup command exactly once'
+        },
+        [pscustomobject]@{
+            Name = 'CLAUDE POSIX install command changed'
+            Agents = $strAgentsContent
+            Claude = $strClaudeContent.Replace(
+                'python3.12 -m pip install --requirement requirements-dev.txt',
+                'pip install pre-commit'
+            )
+            ScriptIndex = $strScriptIndexContent
+            Requirements = $strRequirementsContent
+            Failure = 'CLAUDE.md must contain this setup command exactly once'
+        },
+        [pscustomobject]@{
+            Name = 'script index Windows run command changed'
+            Agents = $strAgentsContent
+            Claude = $strClaudeContent
+            ScriptIndex = $strScriptIndexContent.Replace(
+                'py -3.12 -m pre_commit run --all-files',
+                'pre-commit run --all-files'
+            )
+            Requirements = $strRequirementsContent
+            Failure = '.github/workflows/scripts-README.md must contain this setup command exactly once'
+        },
+        [pscustomobject]@{
+            Name = 'script index POSIX run command changed'
+            Agents = $strAgentsContent
+            Claude = $strClaudeContent
+            ScriptIndex = $strScriptIndexContent.Replace(
+                'python3.12 -m pre_commit run --all-files',
+                'pre-commit run --all-files'
+            )
+            Requirements = $strRequirementsContent
+            Failure = '.github/workflows/scripts-README.md must contain this setup command exactly once'
+        }
+    )
+    foreach ($objPreCommitBootstrapMutation in $arrPreCommitBootstrapMutations) {
+        $arrPreCommitBootstrapMutationFailures = @(
+            Get-PreCommitBootstrapContractFailure `
+                -AgentsContent $objPreCommitBootstrapMutation.Agents `
+                -ClaudeContent $objPreCommitBootstrapMutation.Claude `
+                -ScriptIndexContent $objPreCommitBootstrapMutation.ScriptIndex `
+                -RequirementsContent $objPreCommitBootstrapMutation.Requirements
+        )
+        if (-not ($arrPreCommitBootstrapMutationFailures -match [regex]::Escape(
+                    $objPreCommitBootstrapMutation.Failure
+                ))) {
+            throw (
+                "Pre-commit bootstrap mutation '$($objPreCommitBootstrapMutation.Name)' " +
+                'did not fail closed.'
+            )
+        }
+    }
+
     $arrHuskyMutations = @(
         ,@(
             'bootstrap omits prepare'
@@ -9542,7 +9738,7 @@ if ($SelfTest) {
 
     $arrRequiredTriggerPaths = @(
         $script:arrCheckoutAttributePaths
-        $arrHuskyInputSpecs | ForEach-Object { $_.Path }
+        $arrAgentSetupInputSpecs | ForEach-Object { $_.Path }
     )
     foreach ($strTrigger in @('push', 'pull_request_target')) {
         $arrTriggerPathFailures = @(& $scriptBlockGetTriggerPathFailures `
@@ -9578,10 +9774,10 @@ if ($SelfTest) {
             $strAgentWorkflowContent,
             "(?ms)^  $strTrigger`:\r?\n(?<Body>.*?)(?=^(?:\S| {2}\S)|\z)"
         )
-        foreach ($objHuskyInputSpec in $arrHuskyInputSpecs) {
+        foreach ($objAgentSetupInputSpec in $arrAgentSetupInputSpecs) {
             $objPathLineMatch = [regex]::Match(
                 $objTriggerMatch.Groups['Body'].Value,
-                "(?m)^      - $([regex]::Escape($objHuskyInputSpec.Path))\r?\n"
+                "(?m)^      - $([regex]::Escape($objAgentSetupInputSpec.Path))\r?\n"
             )
             if (-not $objPathLineMatch.Success) {
                 throw "Could not create the $strTrigger path-removal mutation."
@@ -9598,11 +9794,11 @@ if ($SelfTest) {
                     -RequiredPath $arrRequiredTriggerPaths)
             if (-not ($arrMutatedTriggerFailures -match [regex]::Escape(
                         "$strTrigger must cover consumed validation path " +
-                        "$($objHuskyInputSpec.Path) once."
+                        "$($objAgentSetupInputSpec.Path) once."
                     ))) {
                 throw (
                     "$strTrigger path-removal mutation was accepted: " +
-                    $objHuskyInputSpec.Path
+                    $objAgentSetupInputSpec.Path
                 )
             }
         }

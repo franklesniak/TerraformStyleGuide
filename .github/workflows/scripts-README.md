@@ -24,6 +24,6 @@
 
 ## Setup and validation
 
-Use the exact Node and npm versions in the root `package.json`. After a fresh clone or lock change, run `npm run bootstrap:agent-instructions`. Run `pre-commit run --all-files` before a commit. The existing Husky hook remains active for staged Markdown.
+Use the exact Node and npm versions in the root `package.json`. After a fresh clone or lock change, run `npm run bootstrap:agent-instructions`. Install the pinned Python tools after a fresh clone or `requirements-dev.txt` change. On Windows, run `py -3.12 -m pip install --requirement requirements-dev.txt`; on other platforms, run `python3.12 -m pip install --requirement requirements-dev.txt`, with a verified Python 3.12 command substituted when necessary. Before a commit, run `py -3.12 -m pre_commit run --all-files` on Windows or `python3.12 -m pre_commit run --all-files` on other platforms, with the same substitution when necessary. The existing Husky hook remains active for staged Markdown.
 
 The nested Markdown linter uses `.github/workflows/.markdownlint.jsonc`. It reports the outer file, source line, nesting depth, and parent path. It exits 0 only when all extracted blocks pass.
