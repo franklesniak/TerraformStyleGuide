@@ -42,7 +42,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260909.0
+# Version: 1.2.20260909.1
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -1324,7 +1324,7 @@ function Get-HuskySetupContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.3.20260908.0
+    # Version: 1.4.20260909.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -1356,6 +1356,24 @@ function Get-HuskySetupContractFailure {
     if ([string]$objRootPackage.scripts.'bootstrap:agent-instructions' -cne
         $strExpectedBootstrap) {
         Write-Output 'Bootstrap needs two script-disabled locked installs, then workflow prepare.'
+    }
+    $strExpectedRootOuterLint = 'npm --prefix .github/workflows run lint:md'
+    if ([string]$objRootPackage.scripts.'lint:md' -cne $strExpectedRootOuterLint) {
+        Write-Output 'Root lint:md must delegate to the workflow-local lint:md script.'
+    }
+    $strExpectedRootNestedLint = 'npm --prefix .github/workflows run lint:md:nested'
+    if ([string]$objRootPackage.scripts.'lint:md:nested' -cne $strExpectedRootNestedLint) {
+        Write-Output 'Root lint:md:nested must delegate to the workflow-local lint:md:nested script.'
+    }
+    foreach ($strForbiddenRootLintDependency in @('markdownlint', 'markdownlint-cli2')) {
+        if ($null -ne $objRootPackage.devDependencies.PSObject.Properties[
+                $strForbiddenRootLintDependency
+            ]) {
+            Write-Output (
+                "Root package must not declare direct $strForbiddenRootLintDependency " +
+                'because the workflow-local package owns Markdown linting.'
+            )
+        }
     }
     if ([string]$objWorkflowPackage.scripts.prepare -cne 'cd ../.. && husky') {
         Write-Output 'Workflow prepare must run Husky and expose failure.'
@@ -6283,7 +6301,58 @@ if ($SelfTest) {
         }
     }
 
+    $objRootOuterLintMutation = $strRootPackageContent | ConvertFrom-Json
+    $objRootOuterLintMutation.scripts.'lint:md' = 'markdownlint-cli2 "**/*.md"'
+    $strRootOuterLintMutation = $objRootOuterLintMutation | ConvertTo-Json -Depth 10
+
+    $objRootNestedLintMutation = $strRootPackageContent | ConvertFrom-Json
+    $objRootNestedLintMutation.scripts.'lint:md:nested' =
+        'node .github/workflows/lint-nested-markdown.js'
+    $strRootNestedLintMutation = $objRootNestedLintMutation | ConvertTo-Json -Depth 10
+
+    $objRootMarkdownlintDependencyMutation = $strRootPackageContent | ConvertFrom-Json
+    $objRootMarkdownlintDependencyMutation.devDependencies | Add-Member `
+        -NotePropertyName 'markdownlint' `
+        -NotePropertyValue '0.41.0'
+    $strRootMarkdownlintDependencyMutation =
+        $objRootMarkdownlintDependencyMutation | ConvertTo-Json -Depth 10
+
+    $objRootMarkdownlintCliDependencyMutation = $strRootPackageContent | ConvertFrom-Json
+    $objRootMarkdownlintCliDependencyMutation.devDependencies | Add-Member `
+        -NotePropertyName 'markdownlint-cli2' `
+        -NotePropertyValue '0.23.2'
+    $strRootMarkdownlintCliDependencyMutation =
+        $objRootMarkdownlintCliDependencyMutation | ConvertTo-Json -Depth 10
+
     $arrHuskyMutations = @(
+        ,@(
+            'root outer lint stops delegating'
+            $strRootOuterLintMutation
+            $strWorkflowPackageContent
+            $strHuskyHookContent
+            'Root lint:md must delegate'
+        )
+        ,@(
+            'root nested lint stops delegating'
+            $strRootNestedLintMutation
+            $strWorkflowPackageContent
+            $strHuskyHookContent
+            'Root lint:md:nested must delegate'
+        )
+        ,@(
+            'root adds direct markdownlint dependency'
+            $strRootMarkdownlintDependencyMutation
+            $strWorkflowPackageContent
+            $strHuskyHookContent
+            'must not declare direct markdownlint because'
+        )
+        ,@(
+            'root adds direct markdownlint-cli2 dependency'
+            $strRootMarkdownlintCliDependencyMutation
+            $strWorkflowPackageContent
+            $strHuskyHookContent
+            'must not declare direct markdownlint-cli2 because'
+        )
         ,@(
             'bootstrap omits prepare'
             $strRootPackageContent.Replace(
