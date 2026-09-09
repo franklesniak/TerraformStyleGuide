@@ -42,7 +42,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260909.2
+# Version: 1.2.20260909.3
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -6840,21 +6840,37 @@ if ($SelfTest) {
         '.github/workflows/MARKDOWN-LINTING-IMPLEMENTATION.md'
         '.github/workflows/scripts-README.md'
     )
+    $strLegacyProcessBaselineRevision = $strEffectiveRangeBaseRevision
+    if ([string]::IsNullOrEmpty($strLegacyProcessBaselineRevision) -or
+        $strLegacyProcessBaselineRevision -match '^0+$') {
+        $strLegacyProcessBaselineRevision = Get-LocalPublishedBaselineRevision `
+            -RepositoryRootPath $strRepositoryRootPath
+    }
     foreach ($strLegacyProcessPath in $arrLegacyProcessPaths) {
         $objLegacyProcessContext = $listGovernedDocumentContexts |
             Where-Object { $_.Path -ceq $strLegacyProcessPath }
-        if ($null -eq $objLegacyProcessContext -or
-            [string]::IsNullOrEmpty($objLegacyProcessContext.ParentContent)) {
-            throw "Could not locate legacy process parent: $strLegacyProcessPath"
+        if ($null -eq $objLegacyProcessContext) {
+            throw "Could not locate legacy process context: $strLegacyProcessPath"
         }
+        $objLegacyProcessMetadataContext = Get-DocumentMetadataContext `
+            -Content $objLegacyProcessContext.Content
+        if ($null -ne $objLegacyProcessMetadataContext.Failure) {
+            throw "Could not parse legacy process metadata: $strLegacyProcessPath"
+        }
+        $strLegacyProcessParentContent = Read-GitRevisionText `
+            -RepositoryRootPath $strRepositoryRootPath `
+            -Revision $strLegacyProcessBaselineRevision `
+            -RepositoryRelativePath $strLegacyProcessPath `
+            -MaximumBytes $objLegacyProcessContext.MaximumBytes `
+            -RequireRegularFile
         if (-not (Test-LegacyMetadataParentContent `
                 -Name $strLegacyProcessPath `
-                -Content $objLegacyProcessContext.ParentContent)) {
+                -Content $strLegacyProcessParentContent)) {
             throw "The exact legacy process parent was not accepted: $strLegacyProcessPath"
         }
         if (Test-LegacyMetadataParentContent `
                 -Name $strLegacyProcessPath `
-                -Content ($objLegacyProcessContext.ParentContent + ' ')) {
+                -Content ($strLegacyProcessParentContent + ' ')) {
             throw "A changed legacy process parent was accepted: $strLegacyProcessPath"
         }
         $strOtherLegacyProcessPath = @(
@@ -6863,11 +6879,11 @@ if ($SelfTest) {
         )[0]
         if (Test-LegacyMetadataParentContent `
                 -Name $strOtherLegacyProcessPath `
-                -Content $objLegacyProcessContext.ParentContent) {
+                -Content $strLegacyProcessParentContent) {
             throw "A legacy process parent matched the wrong path: $strLegacyProcessPath"
         }
         $objLegacyProcessExpectedDate = [DateTime]::ParseExact(
-            $objLegacyProcessContext.ExpectedUtcDate,
+            $objLegacyProcessMetadataContext.UpdatedDate,
             'yyyy-MM-dd',
             [System.Globalization.CultureInfo]::InvariantCulture
         )
@@ -6876,14 +6892,14 @@ if ($SelfTest) {
             [System.Globalization.CultureInfo]::InvariantCulture
         )
         $strLegacyProcessStaleCurrent = $objLegacyProcessContext.Content.Replace(
-            "- **Last Updated:** $($objLegacyProcessContext.ExpectedUtcDate)",
+            "- **Last Updated:** $($objLegacyProcessMetadataContext.UpdatedDate)",
             "- **Last Updated:** $strLegacyProcessStaleDate"
         )
         $arrLegacyProcessStaleFailures = @(Get-DocumentMetadataTransitionFailure `
                 -Name $strLegacyProcessPath `
                 -CurrentContent $strLegacyProcessStaleCurrent `
-                -ParentContent $objLegacyProcessContext.ParentContent `
-                -ExpectedUtcDate $objLegacyProcessContext.ExpectedUtcDate `
+                -ParentContent $strLegacyProcessParentContent `
+                -ExpectedUtcDate $objLegacyProcessMetadataContext.UpdatedDate `
                 -IsNewDocumentTransition $false)
         if (-not ($arrLegacyProcessStaleFailures -match 'Last Updated must be')) {
             throw "A legacy process transition accepted a stale date: $strLegacyProcessPath"
