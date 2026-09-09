@@ -76,6 +76,7 @@ on:
       - requirements-dev.txt
 
 permissions:
+  actions: read
   contents: read
   pull-requests: read
 
@@ -115,6 +116,69 @@ jobs:
           expected_npm="$(node -p 'require("./package.json").engines.npm')"
           test "$(node --version)" = "v${expected_node}"
           test "$(npm --version)" = "${expected_npm}"
+
+      - name: Resolve trusted workflow-run finalization time
+        id: resolve_run_time
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          API_URL: ${{ github.api_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          EVENT_NAME: ${{ github.event_name }}
+          TRUSTED_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+
+          const objectId = /^[0-9a-f]{40}$/u;
+          const positiveInteger = /^[1-9][0-9]*$/u;
+          const rfc3339Utc = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/u;
+          const apiUrl = process.env.API_URL;
+          const repository = process.env.REPOSITORY;
+          const runId = process.env.RUN_ID;
+          const runAttempt = process.env.RUN_ATTEMPT;
+          const eventName = process.env.EVENT_NAME;
+          const trustedRevision = process.env.TRUSTED_REVISION;
+          const token = process.env.GITHUB_TOKEN;
+          const output = process.env.GITHUB_OUTPUT;
+          if (!apiUrl || !repository || !positiveInteger.test(runId ?? '') ||
+              !positiveInteger.test(runAttempt ?? '') || !eventName ||
+              !objectId.test(trustedRevision ?? '') || !token || !output) {
+            throw new Error('Trusted workflow-run inputs are unavailable or invalid.');
+          }
+
+          const root = apiUrl.replace(/\/+$/u, '');
+          const response = await fetch(
+            `${root}/repos/${repository}/actions/runs/${runId}`,
+            {
+              headers: {
+                Accept: 'application/vnd.github+json',
+                Authorization: `Bearer ${token}`,
+                'X-GitHub-Api-Version': '2022-11-28',
+              },
+            },
+          );
+          if (!response.ok) {
+            throw new Error(`Workflow-run lookup failed: ${response.status}.`);
+          }
+          const run = await response.json();
+          if (String(run?.id) !== runId ||
+              run?.repository?.full_name !== repository ||
+              run?.head_sha !== trustedRevision || run?.event !== eventName ||
+              String(run?.run_attempt) !== runAttempt) {
+            throw new Error('The workflow-run response identity does not match this run.');
+          }
+          const createdAt = run?.created_at;
+          const createdTime = Date.parse(createdAt ?? '');
+          if (!rfc3339Utc.test(createdAt ?? '') || !Number.isFinite(createdTime) ||
+              createdTime > Date.now() + 300_000) {
+            throw new Error('The workflow-run creation time is unavailable or invalid.');
+          }
+          appendFileSync(output, `timestamp=${createdAt}\n`, 'utf8');
+          NODE
 
       - name: Fetch pull request head as data
         if: github.event_name == 'pull_request_target'
@@ -369,6 +433,8 @@ jobs:
               github.event.created || false }}
           AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE: >-
             ${{ steps.resolve_automated_merge_source.outputs.source_revision || '' }}
+          AGENT_INSTRUCTION_TRUSTED_FINALIZATION_TIMESTAMP: >-
+            ${{ steps.resolve_run_time.outputs.timestamp }}
         run: >-
           ./.github/workflows/Test-AgentInstructions.ps1 -SelfTest
           -InputRevision $env:AGENT_INSTRUCTION_INPUT_REVISION
@@ -377,3 +443,5 @@ jobs:
           -RangeIsNewRef:([bool]::Parse($env:AGENT_INSTRUCTION_RANGE_IS_NEW_REF))
           -AutomatedMergeSourceRevision
           $env:AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE
+          -TrustedFinalizationTimestamp
+          $env:AGENT_INSTRUCTION_TRUSTED_FINALIZATION_TIMESTAMP

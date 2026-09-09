@@ -30,6 +30,9 @@
 # The authenticated pull-request head for a one-parent automated merge result.
 # The empty default disables that narrowly proved transition mode.
 #
+# .PARAMETER TrustedFinalizationTimestamp
+# The authenticated workflow-run creation time for an event-range validation.
+#
 # .EXAMPLE
 # & ./.github/workflows/Test-AgentInstructions.ps1 -SelfTest
 #
@@ -46,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260909.5
+# Version: 1.2.20260909.6
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -71,7 +74,11 @@ param(
 
     [Parameter()]
     [AllowEmptyString()]
-    [string] $AutomatedMergeSourceRevision = ''
+    [string] $AutomatedMergeSourceRevision = '',
+
+    [Parameter()]
+    [AllowEmptyString()]
+    [string] $TrustedFinalizationTimestamp = ''
 )
 
 Set-StrictMode -Version Latest
@@ -4201,6 +4208,9 @@ function Get-GovernedDocumentCommitTransitionFailure {
     # .PARAMETER RequireMetadataTransition
     # Indicates that visible document metadata must be validated after Git safety checks.
     #
+    # .PARAMETER TrustedFinalizationTimestamp
+    # The authenticated workflow-run creation time for the published transition.
+    #
     # .EXAMPLE
     # Get-GovernedDocumentCommitTransitionFailure -Name 'AGENTS.md' `
     #     -RepositoryRootPath $strRoot -RepositoryRelativePath 'AGENTS.md' `
@@ -4452,7 +4462,7 @@ function Get-GovernedDocumentRangeTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.7.20260909.0
+    # Version: 1.8.20260909.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -4499,8 +4509,31 @@ function Get-GovernedDocumentRangeTransitionFailure {
         [string] $PolicyMarker,
 
         [Parameter()]
-        [bool] $RequireMetadataTransition = $true
+        [bool] $RequireMetadataTransition = $true,
+
+        [Parameter()]
+        [AllowEmptyString()]
+        [string] $TrustedFinalizationTimestamp = ''
     )
+
+    $strTrustedFinalizationUtcDate = ''
+    if (-not [string]::IsNullOrEmpty($TrustedFinalizationTimestamp)) {
+        $objTrustedFinalizationTimestamp = [DateTimeOffset]::MinValue
+        if (-not [DateTimeOffset]::TryParseExact(
+                $TrustedFinalizationTimestamp,
+                "yyyy-MM-dd'T'HH:mm:ss'Z'",
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::AssumeUniversal,
+                [ref] $objTrustedFinalizationTimestamp
+            )) {
+            throw 'The trusted finalization timestamp is invalid.'
+        }
+        if ($objTrustedFinalizationTimestamp -gt $script:objMaximumCommitUtcTimestamp) {
+            throw 'The trusted finalization timestamp is later than trusted UTC.'
+        }
+        $strTrustedFinalizationUtcDate =
+            $objTrustedFinalizationTimestamp.UtcDateTime.ToString('yyyy-MM-dd')
+    }
 
     if ([string]::IsNullOrEmpty($BaseRevision) -and
         [string]::IsNullOrEmpty($HeadRevision)) {
@@ -4948,7 +4981,12 @@ function Get-GovernedDocumentRangeTransitionFailure {
 
     $boolHeadInheritsMergeParentPath =
         $intHeadParentCount -gt 1 -and $boolHeadInheritsParentPath
-    $strFinalizationTimestamp = if ($boolHeadMatchesAutomatedMergeSourcePath) {
+    $strFinalizationTimestamp = if (-not [string]::IsNullOrEmpty(
+            $strTrustedFinalizationUtcDate
+        )) {
+        $strTrustedFinalizationUtcDate
+    }
+    elseif ($boolHeadMatchesAutomatedMergeSourcePath) {
         $strAutomatedMergeSourceTimestamp
     }
     else {
@@ -5745,12 +5783,12 @@ function Get-PushRangeBaseFetchContractFailure {
 
 function Get-AutomatedMergeSourceWorkflowContractFailure {
     # .SYNOPSIS
-    # Validates the authenticated one-parent merge-source workflow contract.
+    # Validates trusted run-time and one-parent merge-source workflow contracts.
     #
     # .DESCRIPTION
-    # Requires exact default-branch push scoping, authenticated and paginated
-    # associated-PR lookup, exact merge identity filters, non-force PR-head
-    # acquisition, SHA readback, and validator handoff.
+    # Requires authenticated run-created time, exact default-branch push scoping,
+    # associated-PR lookup, merge identity filters, non-force PR-head acquisition,
+    # SHA readback, and validator handoff.
     #
     # .PARAMETER WorkflowContent
     # The complete agent-instruction workflow YAML text to inspect.
@@ -5772,7 +5810,7 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.0.20260909.0
+    # Version: 1.1.20260909.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -5781,7 +5819,16 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
     )
 
     $arrExactLiterals = @(
+        '  actions: read',
         '  pull-requests: read',
+        '      - name: Resolve trusted workflow-run finalization time',
+        '        id: resolve_run_time',
+        '            `${root}/repos/${repository}/actions/runs/${runId}`',
+        '              run?.repository?.full_name !== repository ||',
+        '              run?.head_sha !== trustedRevision || run?.event !== eventName ||',
+        '              String(run?.run_attempt) !== runAttempt)',
+        '          const createdAt = run?.created_at;',
+        '          appendFileSync(output, `timestamp=${createdAt}\n`, ''utf8'');',
         '      - name: Resolve authenticated one-parent merge source',
         '          if (( ${#head_and_parents[@]} != 2 )); then',
         '              `/repos/${repository}/commits/${head}/pulls?per_page=100&page=${page}`',
@@ -5799,7 +5846,11 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
         '          AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE: >-',
         "            `${{ steps.resolve_automated_merge_source.outputs.source_revision || '' }}",
         '          -AutomatedMergeSourceRevision',
-        '          $env:AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE'
+        '          $env:AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE',
+        '          AGENT_INSTRUCTION_TRUSTED_FINALIZATION_TIMESTAMP: >-',
+        "            `${{ steps.resolve_run_time.outputs.timestamp }}",
+        '          -TrustedFinalizationTimestamp',
+        '          $env:AGENT_INSTRUCTION_TRUSTED_FINALIZATION_TIMESTAMP'
     )
     foreach ($strExactLiteral in $arrExactLiterals) {
         if ([regex]::Matches(
@@ -6452,6 +6503,12 @@ if ([string]::IsNullOrEmpty($RangeBaseRevision) -and
 $boolUseLocalPublishedRange = -not [string]::IsNullOrEmpty(
     $strLocalPublishedBaselineRevision
 )
+$boolHasExplicitEventRange = -not [string]::IsNullOrEmpty($RangeBaseRevision) -or
+    -not [string]::IsNullOrEmpty($RangeHeadRevision)
+if ($boolHasExplicitEventRange -and
+    [string]::IsNullOrEmpty($TrustedFinalizationTimestamp)) {
+    throw 'An event-range validation requires a trusted finalization timestamp.'
+}
 $strEffectiveRangeBaseRevision = if ($boolUseLocalPublishedRange) {
     $strLocalPublishedBaselineRevision
 }
@@ -6545,7 +6602,8 @@ foreach ($objDocumentContext in $listGovernedDocumentContexts) {
                 -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
                 -PolicyMaximumBytes $intValidatorMaximumInputBytes `
                 -PolicyMarker $strMetadataRangePolicyMarker `
-                -RequireMetadataTransition $objDocumentContext.RequiresMetadata)
+                -RequireMetadataTransition $objDocumentContext.RequiresMetadata `
+                -TrustedFinalizationTimestamp $TrustedFinalizationTimestamp)
     }
 }
 if ($arrRepositoryFailures.Count -gt 0) {
@@ -9184,6 +9242,50 @@ if ($SelfTest) {
             -Parents @($strMergeBaseCommit) `
             -Timestamp ($strMergeHistoricalDate + 'T12:00:00Z') `
             -Message 'merge fixture topic'
+        $arrBackdatedFinalizationFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                -Name 'AGENTS.md' `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -RepositoryRelativePath 'AGENTS.md' `
+                -MaximumBytes $intAgentsMaximumInputBytes `
+                -BaseRevision $strMergeBaseCommit `
+                -HeadRevision $strMergeTopicCommit `
+                -InputRevision $strMergeTopicCommit `
+                -IsNewRefRange $false `
+                -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
+                -PolicyMaximumBytes 1024 `
+                -PolicyMarker $strMetadataRangePolicyMarker `
+                -TrustedFinalizationTimestamp ($strMergeCurrentDate + 'T00:00:00Z')
+        )
+        if (-not ($arrBackdatedFinalizationFailures -match
+                [regex]::Escape("Last Updated must be $strMergeCurrentDate"))) {
+            throw 'A contributor-backdated finalization passed trusted run-time validation.'
+        }
+        $boolMalformedFinalizationTimeRejected = $false
+        try {
+            [void](Get-GovernedDocumentRangeTransitionFailure `
+                    -Name 'AGENTS.md' `
+                    -RepositoryRootPath $strMergeFixtureRoot `
+                    -RepositoryRelativePath 'AGENTS.md' `
+                    -MaximumBytes $intAgentsMaximumInputBytes `
+                    -BaseRevision $strMergeBaseCommit `
+                    -HeadRevision $strMergeTopicCommit `
+                    -InputRevision $strMergeTopicCommit `
+                    -IsNewRefRange $false `
+                    -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
+                    -PolicyMaximumBytes 1024 `
+                    -PolicyMarker $strMetadataRangePolicyMarker `
+                    -TrustedFinalizationTimestamp '2026-09-09T00:00:00+00:00')
+        }
+        catch {
+            $boolMalformedFinalizationTimeRejected = $_.Exception.Message.Contains(
+                'trusted finalization timestamp is invalid',
+                [System.StringComparison]::Ordinal
+            )
+        }
+        if (-not $boolMalformedFinalizationTimeRejected) {
+            throw 'A noncanonical trusted finalization timestamp was accepted.'
+        }
         $strAutomatedSingleParentCommit = & $scriptBlockCreateMergeFixtureCommit `
             -Tree $strMergeTopicTree `
             -Parents @($strMergeBaseCommit) `
@@ -10398,6 +10500,26 @@ if ($SelfTest) {
         [pscustomobject]@{
             Name = 'validator source handoff removed'
             From = '          -AutomatedMergeSourceRevision'
+            To = '          -Verbose'
+        },
+        [pscustomobject]@{
+            Name = 'Actions read permission removed'
+            From = '  actions: read'
+            To = '  actions: none'
+        },
+        [pscustomobject]@{
+            Name = 'workflow-run repository identity removed'
+            From = '              run?.repository?.full_name !== repository ||'
+            To = '              false ||'
+        },
+        [pscustomobject]@{
+            Name = 'contributor timestamp substituted for trusted time'
+            From = '          const createdAt = run?.created_at;'
+            To = '          const createdAt = run?.head_commit?.timestamp;'
+        },
+        [pscustomobject]@{
+            Name = 'trusted finalization handoff removed'
+            From = '          -TrustedFinalizationTimestamp'
             To = '          -Verbose'
         }
     )
