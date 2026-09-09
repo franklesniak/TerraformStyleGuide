@@ -9,6 +9,7 @@ on:
       - .gitattributes
       - .github/.gitattributes
       - .github/workflows/.gitattributes
+      - .github/workflows/package-lock.json
       - .github/workflows/package.json
       - .codex/config.toml
       - .claude/commands/review-loop.md
@@ -25,10 +26,12 @@ on:
       - .hermes.md
       - .husky/pre-commit
       - .npmrc
+      - .pre-commit-config.yaml
       - AGENTS.md
       - "**/AGENTS.md"
       - CLAUDE.md
       - GEMINI.md
+      - STYLE_GUIDE.md
       - STYLE_GUIDE_RATIONALE.md
       - docs/ISSUE_EVALUATION_PROMPT.md
       - docs/T1-SUPPLY-FREEZE-v1.md
@@ -44,6 +47,7 @@ on:
       - .gitattributes
       - .github/.gitattributes
       - .github/workflows/.gitattributes
+      - .github/workflows/package-lock.json
       - .github/workflows/package.json
       - .codex/config.toml
       - .claude/commands/review-loop.md
@@ -60,10 +64,12 @@ on:
       - .hermes.md
       - .husky/pre-commit
       - .npmrc
+      - .pre-commit-config.yaml
       - AGENTS.md
       - "**/AGENTS.md"
       - CLAUDE.md
       - GEMINI.md
+      - STYLE_GUIDE.md
       - STYLE_GUIDE_RATIONALE.md
       - docs/ISSUE_EVALUATION_PROMPT.md
       - docs/T1-SUPPLY-FREEZE-v1.md

@@ -38,7 +38,7 @@ jobs:
   copilot-setup-steps:
     name: Install locked repository validation tools
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,13 +81,27 @@ jobs:
           set -euo pipefail
           workflow_manifest='.github/workflows/package.json'
           workflow_lock='.github/workflows/package-lock.json'
+          pre_commit_config='.pre-commit-config.yaml'
 
-          for required_file in "${workflow_manifest}" "${workflow_lock}"; do
+          for required_file in \
+            "${workflow_manifest}" \
+            "${workflow_lock}" \
+            "${pre_commit_config}"; do
             if [[ ! -f "${required_file}" || -L "${required_file}" ]]; then
               echo "::error file=${required_file}::Required locked npm input" \
                 'is missing or is not a regular file.'
               exit 1
             fi
+          done
+
+          declare -Ar reviewed_sha256=(
+            ["${workflow_manifest}"]='b1d079c7c16a08b89c074f5a5f9378be156428af2204e96902e2f358d9492e02'
+            ["${workflow_lock}"]='876b3018e35745243c74482e4c58d2652a19bd21be51be425de5ee36240d1c70'
+            ["${pre_commit_config}"]='26e8e61502d1003ca8e7f15afdb3d2c539c57721fadb2c89cda782ff8e8576ce'
+          )
+          for reviewed_input in "${!reviewed_sha256[@]}"; do
+            actual_sha256="$(sha256sum -- "${reviewed_input}" | cut -d ' ' -f 1)"
+            test "${actual_sha256}" = "${reviewed_sha256[${reviewed_input}]}"
           done
 
           classify_npm_input() {
@@ -234,3 +248,9 @@ jobs:
           npm --prefix .github/workflows run prepare
           test "$(git config --get core.hooksPath)" = '.husky/_'
           test -x .husky/_/pre-commit
+
+      - name: Run complete repository validation hook set
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pre_commit run --all-files

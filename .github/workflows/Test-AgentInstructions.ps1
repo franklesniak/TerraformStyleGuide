@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260909.7
+# Version: 1.2.20260909.8
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -88,7 +88,7 @@ $intClaudeMaximumInputBytes = 131072
 $intCodexConfigMaximumInputBytes = 65536
 $intDocsInstructionsMaximumInputBytes = 131072
 $intInstructionDocumentMaximumInputBytes = 131072
-$intValidatorMaximumInputBytes = 524288
+$intValidatorMaximumInputBytes = 557056
 $intMetadataMaximumParents = 64
 $strMetadataRangePolicyMarker = 'metadata-range-transition-policy-v1'
 $script:objValidationUtcNow = [DateTimeOffset]::UtcNow
@@ -96,8 +96,18 @@ $script:strMaximumMetadataUtcDate = $script:objValidationUtcNow.ToString('yyyy-M
 $script:objMaximumCommitUtcTimestamp = $script:objValidationUtcNow.AddMinutes(5)
 $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
-$script:strHuskyHookSha256 =
-    '8989ab5075c077599a6dea88e656ac2837af4800e0bb5daef364514f00255467'
+$script:hashtableReviewedAgentSetupSha256 = @{
+    '.github/workflows/copilot-setup-steps.yml' =
+        '87b232fb4259f08935ae017107bf4e8f6bf2e774708562a54d3fea4d136e3071'
+    '.github/workflows/package.json' =
+        'b1d079c7c16a08b89c074f5a5f9378be156428af2204e96902e2f358d9492e02'
+    '.github/workflows/package-lock.json' =
+        '876b3018e35745243c74482e4c58d2652a19bd21be51be425de5ee36240d1c70'
+    '.husky/pre-commit' =
+        '8989ab5075c077599a6dea88e656ac2837af4800e0bb5daef364514f00255467'
+    '.pre-commit-config.yaml' =
+        '26e8e61502d1003ca8e7f15afdb3d2c539c57721fadb2c89cda782ff8e8576ce'
+}
 $script:strWorkflowPolicyCommandPrefix =
     'node .github/workflows/Validate-WorkflowPolicy.mjs'
 $script:strWorkflowPolicyCommand = $script:strWorkflowPolicyCommandPrefix +
@@ -1332,16 +1342,24 @@ function Get-HuskySetupContractFailure {
     # .PARAMETER WorkflowPackageContent
     # The workflow-local package.json text that defines the prepare command.
     #
+    # .PARAMETER WorkflowPackageLockContent
+    # The workflow-local package-lock.json text installed before hook activation.
+    #
     # .PARAMETER HookContent
     # The `.husky/pre-commit` text that contains the staged-file guard.
     #
     # .PARAMETER CopilotSetupContent
     # The Copilot setup workflow text that activates the retained hook.
     #
+    # .PARAMETER PreCommitConfigContent
+    # The pre-commit configuration text executed by the setup workflow.
+    #
     # .EXAMPLE
     # Get-HuskySetupContractFailure -RootPackageContent $strRootPackage `
-    #     -WorkflowPackageContent $strWorkflowPackage -HookContent $strHook `
-    #     -CopilotSetupContent $strCopilotSetup
+    #     -WorkflowPackageContent $strWorkflowPackage `
+    #     -WorkflowPackageLockContent $strWorkflowLock -HookContent $strHook `
+    #     -CopilotSetupContent $strCopilotSetup `
+    #     -PreCommitConfigContent $strPreCommitConfig
     #
     # # Writes one string for each Husky setup-contract failure.
     #
@@ -1357,7 +1375,7 @@ function Get-HuskySetupContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.6.20260909.0
+    # Version: 1.7.20260909.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -1368,10 +1386,16 @@ function Get-HuskySetupContractFailure {
         [string] $WorkflowPackageContent,
 
         [Parameter(Mandatory)]
+        [string] $WorkflowPackageLockContent,
+
+        [Parameter(Mandatory)]
         [string] $HookContent,
 
         [Parameter(Mandatory)]
-        [string] $CopilotSetupContent
+        [string] $CopilotSetupContent,
+
+        [Parameter(Mandatory)]
+        [string] $PreCommitConfigContent
     )
 
     try {
@@ -1452,20 +1476,64 @@ function Get-HuskySetupContractFailure {
         Write-Output 'Husky must lint the staged index before both retained worktree phases.'
     }
 
+    $hashtableReviewedSetupContent = @{
+        '.github/workflows/copilot-setup-steps.yml' = $CopilotSetupContent
+        '.github/workflows/package.json' = $WorkflowPackageContent
+        '.github/workflows/package-lock.json' = $WorkflowPackageLockContent
+        '.husky/pre-commit' = $HookContent
+        '.pre-commit-config.yaml' = $PreCommitConfigContent
+    }
     $objSha256 = [System.Security.Cryptography.SHA256]::Create()
     try {
-        $arrHookHashBytes = $objSha256.ComputeHash(
-            [System.Text.UTF8Encoding]::new($false).GetBytes($HookContent)
-        )
+        foreach ($objReviewedSetupContentEntry in
+            $hashtableReviewedSetupContent.GetEnumerator()) {
+            $arrReviewedHashBytes = $objSha256.ComputeHash(
+                [System.Text.UTF8Encoding]::new($false).GetBytes(
+                    $objReviewedSetupContentEntry.Value
+                )
+            )
+            $strReviewedSha256 = [System.BitConverter]::ToString(
+                $arrReviewedHashBytes
+            ).Replace('-', '').ToLowerInvariant()
+            if ($strReviewedSha256 -cne
+                $script:hashtableReviewedAgentSetupSha256[
+                    $objReviewedSetupContentEntry.Key
+                ]) {
+                Write-Output (
+                    "$($objReviewedSetupContentEntry.Key) text must match the " +
+                    'reviewed SHA-256 digest.'
+                )
+            }
+        }
     }
     finally {
         $objSha256.Dispose()
     }
-    $strHookSha256 = [System.BitConverter]::ToString(
-        $arrHookHashBytes
-    ).Replace('-', '').ToLowerInvariant()
-    if ($strHookSha256 -cne $script:strHuskyHookSha256) {
-        Write-Output 'Husky hook text must match the reviewed SHA-256 digest.'
+
+    $hashtableExpectedActionLineCount = @{
+        '        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1' = 1
+        '        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0' = 1
+        '        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0' = 2
+    }
+    $arrActionLines = @([regex]::Matches(
+            $CopilotSetupContent,
+            '(?m)^\s+uses:\s+[^\r\n]+\r?$'
+        ))
+    if ($arrActionLines.Count -ne 4) {
+        Write-Output 'Copilot setup must contain exactly four reviewed action executions.'
+    }
+    foreach ($objExpectedActionLineCount in
+        $hashtableExpectedActionLineCount.GetEnumerator()) {
+        if ([regex]::Matches(
+                $CopilotSetupContent,
+                '(?m)^' + [regex]::Escape($objExpectedActionLineCount.Key) + '\r?$'
+            ).Count -ne $objExpectedActionLineCount.Value) {
+            Write-Output (
+                'Copilot setup must contain the reviewed action line exactly ' +
+                "$($objExpectedActionLineCount.Value) time(s): " +
+                $objExpectedActionLineCount.Key
+            )
+        }
     }
 
     $arrInstallCommands = @([regex]::Matches(
@@ -1539,6 +1607,7 @@ function Get-HuskySetupContractFailure {
         ))
     $intVerificationStepIndex = -1
     $intActivationStepIndex = -1
+    $intPreCommitRunStepIndex = -1
     $intPythonSetupStepIndex = -1
     $intPythonInstallStepIndex = -1
     for ($intStep = 0; $intStep -lt $arrStepHeaders.Count; $intStep++) {
@@ -1566,6 +1635,10 @@ function Get-HuskySetupContractFailure {
             }
             $intActivationStepIndex = $intStep
         }
+        if ($arrStepHeaders[$intStep].Groups['Name'].Value -ceq
+            'Run complete repository validation hook set') {
+            $intPreCommitRunStepIndex = $intStep
+        }
     }
     if ($intVerificationStepIndex -lt 0 -or
         $intActivationStepIndex -ne ($intVerificationStepIndex + 1)) {
@@ -1574,6 +1647,13 @@ function Get-HuskySetupContractFailure {
     if ($intPythonSetupStepIndex -lt 0 -or
         $intPythonInstallStepIndex -ne ($intPythonSetupStepIndex + 1)) {
         Write-Output 'Copilot must install locked Python tools directly after Python setup.'
+    }
+    if ($intPreCommitRunStepIndex -ne ($intActivationStepIndex + 1) -or
+        [regex]::Matches(
+            $CopilotSetupContent,
+            '(?m)^          python -m pre_commit run --all-files\r?$'
+        ).Count -ne 1) {
+        Write-Output 'Copilot must run the complete pre-commit gate directly after activation.'
     }
 
     $strActivationPattern =
@@ -6120,10 +6200,15 @@ $arrAgentSetupInputSpecs = @(
     [pscustomobject]@{ Path = 'package.json'; MaximumBytes = 16384 }
     [pscustomobject]@{ Path = '.github/workflows/package.json'; MaximumBytes = 16384 }
     [pscustomobject]@{
+        Path = '.github/workflows/package-lock.json'
+        MaximumBytes = 131072
+    }
+    [pscustomobject]@{
         Path = '.github/workflows/copilot-setup-steps.yml'
         MaximumBytes = 32768
     }
     [pscustomobject]@{ Path = '.husky/pre-commit'; MaximumBytes = 16384 }
+    [pscustomobject]@{ Path = '.pre-commit-config.yaml'; MaximumBytes = 16384 }
     [pscustomobject]@{
         Path = '.github/workflows/scripts-README.md'
         MaximumBytes = 32768
@@ -6171,6 +6256,11 @@ $arrGovernedNonInstructionDocuments = @(
     [pscustomobject]@{
         Path = '.claude/commands/review-loop.md'
         MaximumBytes = 16384
+        RequiresMetadata = $true
+    },
+    [pscustomobject]@{
+        Path = 'STYLE_GUIDE.md'
+        MaximumBytes = 262144
         RequiresMetadata = $true
     },
     [pscustomobject]@{
@@ -6544,9 +6634,13 @@ $arrRepositoryFailures += @(Get-HuskySetupContractFailure `
         -RootPackageContent $hashtableAgentSetupInputContent['package.json'] `
         -WorkflowPackageContent `
             $hashtableAgentSetupInputContent['.github/workflows/package.json'] `
+        -WorkflowPackageLockContent `
+            $hashtableAgentSetupInputContent['.github/workflows/package-lock.json'] `
         -HookContent $hashtableAgentSetupInputContent['.husky/pre-commit'] `
         -CopilotSetupContent `
-            $hashtableAgentSetupInputContent['.github/workflows/copilot-setup-steps.yml'])
+            $hashtableAgentSetupInputContent['.github/workflows/copilot-setup-steps.yml'] `
+        -PreCommitConfigContent `
+            $hashtableAgentSetupInputContent['.pre-commit-config.yaml'])
 $arrRepositoryFailures += @(Get-PreCommitBootstrapContractFailure `
         -AgentsContent $strAgentsContent `
         -ClaudeContent $strClaudeContent `
@@ -6668,9 +6762,13 @@ if ($SelfTest) {
     $strRootPackageContent = $hashtableAgentSetupInputContent['package.json']
     $strWorkflowPackageContent =
         $hashtableAgentSetupInputContent['.github/workflows/package.json']
+    $strWorkflowPackageLockContent =
+        $hashtableAgentSetupInputContent['.github/workflows/package-lock.json']
     $strCopilotSetupContent =
         $hashtableAgentSetupInputContent['.github/workflows/copilot-setup-steps.yml']
     $strHuskyHookContent = $hashtableAgentSetupInputContent['.husky/pre-commit']
+    $strPreCommitConfigContent =
+        $hashtableAgentSetupInputContent['.pre-commit-config.yaml']
     $strScriptIndexContent =
         $hashtableAgentSetupInputContent['.github/workflows/scripts-README.md']
     $strRequirementsContent =
@@ -6906,8 +7004,10 @@ if ($SelfTest) {
         $arrHuskyMutationFailures = @(Get-HuskySetupContractFailure `
                 -RootPackageContent $arrHuskyMutation[1] `
                 -WorkflowPackageContent $arrHuskyMutation[2] `
+                -WorkflowPackageLockContent $strWorkflowPackageLockContent `
                 -HookContent $arrHuskyMutation[3] `
-                -CopilotSetupContent $strCopilotSetupContent)
+                -CopilotSetupContent $strCopilotSetupContent `
+                -PreCommitConfigContent $strPreCommitConfigContent)
         if (-not ($arrHuskyMutationFailures -match [regex]::Escape(
                     $arrHuskyMutation[4]
                 ))) {
@@ -6915,7 +7015,73 @@ if ($SelfTest) {
         }
     }
 
+    $arrReviewedSetupInputMutations = @(
+        [pscustomobject]@{
+            Name = 'workflow package changes semantic whitespace'
+            WorkflowPackage = $strWorkflowPackageContent + "`n"
+            WorkflowLock = $strWorkflowPackageLockContent
+            PreCommitConfig = $strPreCommitConfigContent
+            Path = '.github/workflows/package.json'
+        },
+        [pscustomobject]@{
+            Name = 'workflow lock changes bytes'
+            WorkflowPackage = $strWorkflowPackageContent
+            WorkflowLock = $strWorkflowPackageLockContent + "`n"
+            PreCommitConfig = $strPreCommitConfigContent
+            Path = '.github/workflows/package-lock.json'
+        },
+        [pscustomobject]@{
+            Name = 'pre-commit configuration changes bytes'
+            WorkflowPackage = $strWorkflowPackageContent
+            WorkflowLock = $strWorkflowPackageLockContent
+            PreCommitConfig = $strPreCommitConfigContent + "`n# mutation"
+            Path = '.pre-commit-config.yaml'
+        }
+    )
+    foreach ($objReviewedSetupInputMutation in $arrReviewedSetupInputMutations) {
+        $arrReviewedSetupInputFailures = @(Get-HuskySetupContractFailure `
+                -RootPackageContent $strRootPackageContent `
+                -WorkflowPackageContent $objReviewedSetupInputMutation.WorkflowPackage `
+                -WorkflowPackageLockContent $objReviewedSetupInputMutation.WorkflowLock `
+                -HookContent $strHuskyHookContent `
+                -CopilotSetupContent $strCopilotSetupContent `
+                -PreCommitConfigContent $objReviewedSetupInputMutation.PreCommitConfig)
+        $strExpectedReviewedSetupInputFailure =
+            "$($objReviewedSetupInputMutation.Path) text must match the reviewed SHA-256 digest."
+        if (-not ($arrReviewedSetupInputFailures -ccontains
+                $strExpectedReviewedSetupInputFailure)) {
+            throw (
+                "Reviewed setup input mutation '$($objReviewedSetupInputMutation.Name)' " +
+                'did not fail closed.'
+            )
+        }
+    }
+
     $arrCopilotSetupMutations = @(
+        [pscustomobject]@{
+            Name = 'checkout action commit drifts'
+            Content = $strCopilotSetupContent.Replace(
+                '3d3c42e5aac5ba805825da76410c181273ba90b1',
+                '0000000000000000000000000000000000000000'
+            )
+            Failure = '.github/workflows/copilot-setup-steps.yml text must match'
+        },
+        [pscustomobject]@{
+            Name = 'setup-node action commit drifts'
+            Content = $strCopilotSetupContent.Replace(
+                '820762786026740c76f36085b0efc47a31fe5020',
+                '0000000000000000000000000000000000000000'
+            )
+            Failure = '.github/workflows/copilot-setup-steps.yml text must match'
+        },
+        [pscustomobject]@{
+            Name = 'job timeout drifts'
+            Content = $strCopilotSetupContent.Replace(
+                '    timeout-minutes: 30',
+                '    timeout-minutes: 31'
+            )
+            Failure = '.github/workflows/copilot-setup-steps.yml text must match'
+        },
         [pscustomobject]@{
             Name = 'locked install enables scripts'
             Content = $strCopilotSetupContent.Replace(
@@ -7006,6 +7172,14 @@ if ($SelfTest) {
             Failure = 'locked Python setup line once'
         },
         [pscustomobject]@{
+            Name = 'complete pre-commit gate is removed'
+            Content = $strCopilotSetupContent.Replace(
+                '          python -m pre_commit run --all-files' + "`n",
+                ''
+            )
+            Failure = 'complete pre-commit gate directly after activation'
+        },
+        [pscustomobject]@{
             Name = 'requirements file is removed from immutable inputs'
             Content = $strCopilotSetupContent.Replace(
                 '              requirements-dev.txt' + "`n",
@@ -7018,8 +7192,10 @@ if ($SelfTest) {
         $arrCopilotSetupFailures = @(Get-HuskySetupContractFailure `
                 -RootPackageContent $strRootPackageContent `
                 -WorkflowPackageContent $strWorkflowPackageContent `
+                -WorkflowPackageLockContent $strWorkflowPackageLockContent `
                 -HookContent $strHuskyHookContent `
-                -CopilotSetupContent $objCopilotSetupMutation.Content)
+                -CopilotSetupContent $objCopilotSetupMutation.Content `
+                -PreCommitConfigContent $strPreCommitConfigContent)
         if (-not ($arrCopilotSetupFailures -match [regex]::Escape(
                     $objCopilotSetupMutation.Failure
                 ))) {
@@ -7503,7 +7679,8 @@ if ($SelfTest) {
     }
 
     $arrNewlyCoveredPaths = @(
-        '.github/instructions/yaml.instructions.md'
+        '.github/instructions/yaml.instructions.md',
+        'STYLE_GUIDE.md'
     )
     foreach ($strNewlyCoveredPath in $arrNewlyCoveredPaths) {
         $objDocumentContext = $listGovernedDocumentContexts |
