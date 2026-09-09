@@ -42,7 +42,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260908.5
+# Version: 1.2.20260909.0
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -3513,6 +3513,10 @@ function Get-DocumentMetadataTransitionFailure {
     # .PARAMETER RequireExpectedUtcDateForRenderedChange
     # Indicates that changed content must use the transition commit's UTC date.
     #
+    # .PARAMETER RequirePublishedRevisionConvention
+    # Indicates that changed content must recompute its revision from the
+    # published baseline. Inherited merge results disable only this computation.
+    #
     # .EXAMPLE
     # Get-DocumentMetadataTransitionFailure -Name 'AGENTS.md' `
     #     -CurrentContent $strCurrent -ParentContent $strParent `
@@ -3533,7 +3537,7 @@ function Get-DocumentMetadataTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.6.20260908.0
+    # Version: 1.6.20260909.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -3555,7 +3559,10 @@ function Get-DocumentMetadataTransitionFailure {
         [bool] $IsNewDocumentTransition,
 
         [Parameter()]
-        [bool] $RequireExpectedUtcDateForRenderedChange = $true
+        [bool] $RequireExpectedUtcDateForRenderedChange = $true,
+
+        [Parameter()]
+        [bool] $RequirePublishedRevisionConvention = $true
     )
 
     $objCurrentMetadata = Get-DocumentMetadataContext -Content $CurrentContent
@@ -3597,7 +3604,7 @@ function Get-DocumentMetadataTransitionFailure {
         if (-not $IsNewDocumentTransition) {
             return
         }
-        if ($objCurrentMetadata.HasVersion) {
+        if ($objCurrentMetadata.HasVersion -and $RequirePublishedRevisionConvention) {
             $intNewDocumentRevision = [int64] 0
             if (-not [int64]::TryParse(
                     $objCurrentMetadata.Revision,
@@ -3706,7 +3713,7 @@ function Get-DocumentMetadataTransitionFailure {
                 )
             }
         }
-        elseif ($intCurrentRevision -ne 0) {
+        elseif ($RequirePublishedRevisionConvention -and $intCurrentRevision -ne 0) {
             Write-Output (
                 "$Name Version revision must be 0 when Version is added to an " +
                 "unversioned published baseline; current revision is $intCurrentRevision."
@@ -3733,6 +3740,9 @@ function Get-DocumentMetadataTransitionFailure {
 
     if (-not $objCurrentMetadata.HasVersion -or
         -not $objParentMetadata.HasVersion) {
+        return
+    }
+    if (-not $RequirePublishedRevisionConvention) {
         return
     }
     if ($boolSameVersionIdentity) {
@@ -3770,7 +3780,8 @@ function Get-DocumentMetadataRangeTransitionFailure {
     # The governed document name used in failure records.
     #
     # .PARAMETER TransitionContext
-    # The ordered transition records to validate.
+    # The ordered transition records to validate. Optional date and published-
+    # revision requirements default to true when absent.
     #
     # .EXAMPLE
     # Get-DocumentMetadataRangeTransitionFailure -Name 'AGENTS.md' `
@@ -3790,7 +3801,7 @@ function Get-DocumentMetadataRangeTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.0.20260819.0
+    # Version: 1.1.20260909.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -3811,13 +3822,22 @@ function Get-DocumentMetadataRangeTransitionFailure {
         else {
             [bool] $objDateRequirementProperty.Value
         }
+        $objRevisionRequirementProperty =
+            $objTransition.PSObject.Properties['RequirePublishedRevisionConvention']
+        $boolRequirePublishedRevision = if ($null -eq $objRevisionRequirementProperty) {
+            $true
+        }
+        else {
+            [bool] $objRevisionRequirementProperty.Value
+        }
         $arrTransitionFailures = @(Get-DocumentMetadataTransitionFailure `
                 -Name $Name `
                 -CurrentContent $objTransition.CurrentContent `
                 -ParentContent $objTransition.ParentContent `
                 -ExpectedUtcDate $objTransition.ExpectedUtcDate `
                 -IsNewDocumentTransition ($null -eq $objTransition.ParentContent) `
-                -RequireExpectedUtcDateForRenderedChange $boolRequireExpectedUtcDate)
+                -RequireExpectedUtcDateForRenderedChange $boolRequireExpectedUtcDate `
+                -RequirePublishedRevisionConvention $boolRequirePublishedRevision)
         foreach ($strFailure in $arrTransitionFailures) {
             Write-Output (
                 "$Name transition $($objTransition.ParentRevision).." +
@@ -4031,7 +4051,7 @@ function Get-GovernedDocumentCommitTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.1.20260908.0
+    # Version: 1.2.20260909.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -4175,6 +4195,9 @@ function Get-GovernedDocumentCommitTransitionFailure {
                 CurrentRevision = $CommitRevision
                 ParentRevision = $strChangedParentRevision
                 RequireExpectedUtcDateForRenderedChange = $boolRequireExpectedUtcDate
+                RequirePublishedRevisionConvention = -not (
+                    $intParentCount -gt 1 -and $boolInheritsParentPath
+                )
             })
     }
 
@@ -4256,7 +4279,7 @@ function Get-GovernedDocumentRangeTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.5.20260908.0
+    # Version: 1.6.20260909.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -4678,6 +4701,9 @@ function Get-GovernedDocumentRangeTransitionFailure {
         CurrentRevision = $HeadRevision
         ParentRevision = $strParentRevisionLabel
         RequireExpectedUtcDateForRenderedChange = -not (
+            $intHeadParentCount -gt 1 -and $boolHeadInheritsParentPath
+        )
+        RequirePublishedRevisionConvention = -not (
             $intHeadParentCount -gt 1 -and $boolHeadInheritsParentPath
         )
     }
@@ -8414,10 +8440,12 @@ if ($SelfTest) {
         if ($LASTEXITCODE -ne 0) {
             throw 'Could not restore the merge-transition fixture base tree.'
         }
+        $strMergeTopicVersion = '**Version:** ' +
+            $objAgentsVersionMatch.Groups['Prefix'].Value +
+            $strMergeHistoricalDate.Replace('-', '') + '.1'
         $strMergeTopicContent = $strMergeBaseContent.Replace(
             $strMergeBaseVersion,
-            '**Version:** ' + $objAgentsVersionMatch.Groups['Prefix'].Value +
-                $strMergeHistoricalDate.Replace('-', '') + '.1'
+            $strMergeTopicVersion
         ) + [Environment]::NewLine + 'Inherited merge fixture.'
         [System.IO.File]::WriteAllText(
             [System.IO.Path]::Combine($strMergeFixtureRoot, 'AGENTS.md'),
@@ -8974,10 +9002,29 @@ if ($SelfTest) {
             )) {
             throw 'Invalid final metadata was accepted as an internal-only state.'
         }
+        & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not reset the advanced merge-base fixture index.'
+        }
+        $strAdvancedBaseContent = $strMergeBaseContent.Replace(
+            $strMergeBaseVersion,
+            $strMergeTopicVersion
+        ) + [Environment]::NewLine + 'Advanced first-parent merge fixture.'
+        [System.IO.File]::WriteAllText(
+            [System.IO.Path]::Combine($strMergeFixtureRoot, 'AGENTS.md'),
+            $strAdvancedBaseContent,
+            $objUtf8WithoutBom
+        )
+        & git -C $strMergeFixtureRoot add -- 'AGENTS.md'
+        $strAdvancedBaseTree =
+            ([string] (& git -C $strMergeFixtureRoot write-tree)).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not create the advanced merge-base fixture tree.'
+        }
         $strAdvancedBaseCommit = & $scriptBlockCreateMergeFixtureCommit `
-            -Tree $strMergeBaseTree `
+            -Tree $strAdvancedBaseTree `
             -Parents @($strMergeBaseCommit) `
-            -Timestamp ($strMergeCurrentDate + 'T00:00:00Z') `
+            -Timestamp ($strMergeHistoricalDate + 'T13:00:00Z') `
             -Message 'merge fixture advanced base'
         $strInheritedMergeCommit = & $scriptBlockCreateMergeFixtureCommit `
             -Tree $strMergeTopicTree `
@@ -9013,6 +9060,61 @@ if ($SelfTest) {
                 'Direct validation rejected content inherited from a non-first parent: ' +
                 ($arrDirectInheritedFailures -join '; ')
             )
+        }
+
+        & git -C $strMergeFixtureRoot read-tree $strAdvancedBaseTree
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not reset the unique same-revision merge fixture index.'
+        }
+        $strUniqueSameRevisionContent = $strAdvancedBaseContent +
+            [Environment]::NewLine + 'Merge-authored same-revision fixture.'
+        [System.IO.File]::WriteAllText(
+            [System.IO.Path]::Combine($strMergeFixtureRoot, 'AGENTS.md'),
+            $strUniqueSameRevisionContent,
+            $objUtf8WithoutBom
+        )
+        & git -C $strMergeFixtureRoot add -- 'AGENTS.md'
+        $strUniqueSameRevisionTree =
+            ([string] (& git -C $strMergeFixtureRoot write-tree)).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not create the unique same-revision merge fixture tree.'
+        }
+        $strUniqueSameRevisionCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strUniqueSameRevisionTree `
+            -Parents @($strAdvancedBaseCommit, $strMergeTopicCommit) `
+            -Timestamp ($strMergeHistoricalDate + 'T14:00:00Z') `
+            -Message 'merge fixture unique same revision'
+        $arrUniqueSameRevisionFailures = @(Get-GovernedDocumentRangeTransitionFailure `
+                -Name 'AGENTS.md' `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -RepositoryRelativePath 'AGENTS.md' `
+                -MaximumBytes $intAgentsMaximumInputBytes `
+                -BaseRevision $strAdvancedBaseCommit `
+                -HeadRevision $strUniqueSameRevisionCommit `
+                -InputRevision $strUniqueSameRevisionCommit `
+                -IsNewRefRange $false `
+                -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
+                -PolicyMaximumBytes 1024 `
+                -PolicyMarker $strMetadataRangePolicyMarker)
+        if (-not ($arrUniqueSameRevisionFailures -join '; ').Contains(
+                'Version revision must be 2 after a content change',
+                [System.StringComparison]::Ordinal
+            )) {
+            throw 'A merge-authored same-revision result received the inheritance exemption.'
+        }
+        $arrDirectUniqueSameRevisionFailures = @(
+            Get-GovernedDocumentCommitTransitionFailure `
+                -Name 'AGENTS.md' `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -RepositoryRelativePath 'AGENTS.md' `
+                -MaximumBytes $intAgentsMaximumInputBytes `
+                -CommitRevision $strUniqueSameRevisionCommit
+        )
+        if (-not ($arrDirectUniqueSameRevisionFailures -join '; ').Contains(
+                'Version revision must be 2 after a content change',
+                [System.StringComparison]::Ordinal
+            )) {
+            throw 'Direct validation exempted a merge-authored same-revision result.'
         }
 
         $strFutureTopicCommit = & $scriptBlockCreateMergeFixtureCommit `
@@ -9165,6 +9267,73 @@ if ($SelfTest) {
                 [System.StringComparison]::Ordinal
             )) {
             throw 'Direct validation accepted an inherited metadata rollback.'
+        }
+
+        & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not reset the inherited revision-rollback fixture index.'
+        }
+        $strHigherRevisionParentVersion = '**Version:** ' +
+            $objAgentsVersionMatch.Groups['Prefix'].Value +
+            $strMergeHistoricalDate.Replace('-', '') + '.2'
+        $strHigherRevisionParentContent = $strAdvancedBaseContent.Replace(
+            $strMergeTopicVersion,
+            $strHigherRevisionParentVersion
+        )
+        [System.IO.File]::WriteAllText(
+            [System.IO.Path]::Combine($strMergeFixtureRoot, 'AGENTS.md'),
+            $strHigherRevisionParentContent,
+            $objUtf8WithoutBom
+        )
+        & git -C $strMergeFixtureRoot add -- 'AGENTS.md'
+        $strHigherRevisionParentTree =
+            ([string] (& git -C $strMergeFixtureRoot write-tree)).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not create the inherited revision-rollback parent tree.'
+        }
+        $strHigherRevisionParentCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strHigherRevisionParentTree `
+            -Parents @($strMergeBaseCommit) `
+            -Timestamp ($strMergeHistoricalDate + 'T15:00:00Z') `
+            -Message 'merge fixture higher revision parent'
+        $strRevisionRegressingMergeCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strMergeTopicTree `
+            -Parents @($strHigherRevisionParentCommit, $strMergeTopicCommit) `
+            -Timestamp ($strMergeCurrentDate + 'T00:05:00Z') `
+            -Message 'merge fixture inherited revision rollback'
+        $arrRevisionRegressingMergeFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                -Name 'AGENTS.md' `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -RepositoryRelativePath 'AGENTS.md' `
+                -MaximumBytes $intAgentsMaximumInputBytes `
+                -BaseRevision $strHigherRevisionParentCommit `
+                -HeadRevision $strRevisionRegressingMergeCommit `
+                -InputRevision $strRevisionRegressingMergeCommit `
+                -IsNewRefRange $false `
+                -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
+                -PolicyMaximumBytes 1024 `
+                -PolicyMarker $strMetadataRangePolicyMarker
+        )
+        if (-not ($arrRevisionRegressingMergeFailures -join '; ').Contains(
+                'Version revision must not decrease from 2 to 1',
+                [System.StringComparison]::Ordinal
+            )) {
+            throw 'An inherited same-identity revision rollback did not fail closed.'
+        }
+        $arrDirectRevisionRegressingFailures = @(
+            Get-GovernedDocumentCommitTransitionFailure `
+                -Name 'AGENTS.md' `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -RepositoryRelativePath 'AGENTS.md' `
+                -MaximumBytes $intAgentsMaximumInputBytes `
+                -CommitRevision $strRevisionRegressingMergeCommit
+        )
+        if (-not ($arrDirectRevisionRegressingFailures -join '; ').Contains(
+                'Version revision must not decrease from 2 to 1',
+                [System.StringComparison]::Ordinal
+            )) {
+            throw 'Direct validation accepted an inherited revision rollback.'
         }
 
         $listExcessParents = [System.Collections.Generic.List[string]]::new()
