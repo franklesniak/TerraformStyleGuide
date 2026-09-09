@@ -139,6 +139,9 @@ jobs:
           test "$(python -c \
             'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" \
             = '3.12'
+          reviewed_requirements_sha256='2ef47e05168e86c3cdc43a54646949e9487d8dd02af3d493fe055967a31a9b73'
+          test "$(sha256sum requirements-dev.txt | cut -d ' ' -f 1)" \
+            = "${reviewed_requirements_sha256}"
           python -m pip install --requirement requirements-dev.txt
           test "$(python -m pre_commit --version)" = 'pre-commit 4.6.2'
           python -m pip check

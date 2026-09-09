@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260909.6
+# Version: 1.2.20260909.7
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -1357,7 +1357,7 @@ function Get-HuskySetupContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.5.20260909.0
+    # Version: 1.6.20260909.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -1510,6 +1510,18 @@ function Get-HuskySetupContractFailure {
                 $strRequiredPythonSetupLine
             )
         }
+    }
+    $strExpectedPythonInstallSequence = @'
+          reviewed_requirements_sha256='2ef47e05168e86c3cdc43a54646949e9487d8dd02af3d493fe055967a31a9b73'
+          test "$(sha256sum requirements-dev.txt | cut -d ' ' -f 1)" \
+            = "${reviewed_requirements_sha256}"
+          python -m pip install --requirement requirements-dev.txt
+'@.TrimEnd()
+    if ([regex]::Matches(
+            $CopilotSetupContent,
+            [regex]::Escape($strExpectedPythonInstallSequence)
+        ).Count -ne 1) {
+        Write-Output 'Copilot must authenticate requirements before pip installs them.'
     }
     if ([regex]::Matches(
             $CopilotSetupContent,
@@ -4462,7 +4474,7 @@ function Get-GovernedDocumentRangeTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.8.20260909.0
+    # Version: 1.9.20260909.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -4753,7 +4765,6 @@ function Get-GovernedDocumentRangeTransitionFailure {
     $intHeadParentCount = 0
     $boolHeadInheritsParentPath = $false
     $boolHeadMatchesAutomatedMergeSourcePath = $false
-    $strAutomatedMergeSourceTimestamp = ''
     if (-not [string]::IsNullOrEmpty($AutomatedMergeSourceRevision)) {
         $strSourceTimestamp = [string] (
             & git -C $RepositoryRootPath show -s --format=%cI `
@@ -4772,8 +4783,6 @@ function Get-GovernedDocumentRangeTransitionFailure {
         if ($objSourceTimestamp -gt $script:objMaximumCommitUtcTimestamp) {
             throw 'The automated merge source timestamp is later than trusted UTC.'
         }
-        $strAutomatedMergeSourceTimestamp =
-            $objSourceTimestamp.UtcDateTime.ToString('yyyy-MM-dd')
     }
     foreach ($strRangeCommitValue in $arrRangeCommits) {
         $strRangeCommit = ([string]$strRangeCommitValue).Trim()
@@ -4981,13 +4990,14 @@ function Get-GovernedDocumentRangeTransitionFailure {
 
     $boolHeadInheritsMergeParentPath =
         $intHeadParentCount -gt 1 -and $boolHeadInheritsParentPath
+    $boolHeadInheritsAutomatedMergeSourcePath =
+        $intHeadParentCount -eq 1 -and $boolHeadMatchesAutomatedMergeSourcePath
+    $boolHeadInheritsPublishedContent = $boolHeadInheritsMergeParentPath -or
+        $boolHeadInheritsAutomatedMergeSourcePath
     $strFinalizationTimestamp = if (-not [string]::IsNullOrEmpty(
             $strTrustedFinalizationUtcDate
         )) {
         $strTrustedFinalizationUtcDate
-    }
-    elseif ($boolHeadMatchesAutomatedMergeSourcePath) {
-        $strAutomatedMergeSourceTimestamp
     }
     else {
         $strHeadTimestamp
@@ -4998,12 +5008,8 @@ function Get-GovernedDocumentRangeTransitionFailure {
         ExpectedUtcDate = $strFinalizationTimestamp
         CurrentRevision = $HeadRevision
         ParentRevision = $strParentRevisionLabel
-        RequireExpectedUtcDateForRenderedChange = -not (
-            $boolHeadInheritsMergeParentPath
-        )
-        RequirePublishedRevisionConvention = -not (
-            $boolHeadInheritsMergeParentPath
-        )
+        RequireExpectedUtcDateForRenderedChange = -not $boolHeadInheritsPublishedContent
+        RequirePublishedRevisionConvention = -not $boolHeadInheritsPublishedContent
     }
     return Get-DocumentMetadataRangeTransitionFailure `
         -Name $Name `
@@ -6981,7 +6987,15 @@ if ($SelfTest) {
                 '          python -m pip install --requirement requirements-dev.txt',
                 '          python -m pip install pre-commit'
             )
-            Failure = 'locked Python setup line once'
+            Failure = 'authenticate requirements before pip installs them'
+        },
+        [pscustomobject]@{
+            Name = 'reviewed Python requirements digest drifts'
+            Content = $strCopilotSetupContent.Replace(
+                '2ef47e05168e86c3cdc43a54646949e9487d8dd02af3d493fe055967a31a9b73',
+                ('0' * 64)
+            )
+            Failure = 'authenticate requirements before pip installs them'
         },
         [pscustomobject]@{
             Name = 'Python dependency verification is removed'
@@ -9242,19 +9256,22 @@ if ($SelfTest) {
             -Parents @($strMergeBaseCommit) `
             -Timestamp ($strMergeHistoricalDate + 'T12:00:00Z') `
             -Message 'merge fixture topic'
+        $hashtableBackdatedFinalizationArguments = @{
+            Name = 'AGENTS.md'
+            RepositoryRootPath = $strMergeFixtureRoot
+            RepositoryRelativePath = 'AGENTS.md'
+            MaximumBytes = $intAgentsMaximumInputBytes
+            BaseRevision = $strMergeBaseCommit
+            HeadRevision = $strMergeTopicCommit
+            InputRevision = $strMergeTopicCommit
+            IsNewRefRange = $false
+            PolicyRepositoryRelativePath = '.github/workflows/Test-AgentInstructions.ps1'
+            PolicyMaximumBytes = 1024
+            PolicyMarker = $strMetadataRangePolicyMarker
+        }
         $arrBackdatedFinalizationFailures = @(
             Get-GovernedDocumentRangeTransitionFailure `
-                -Name 'AGENTS.md' `
-                -RepositoryRootPath $strMergeFixtureRoot `
-                -RepositoryRelativePath 'AGENTS.md' `
-                -MaximumBytes $intAgentsMaximumInputBytes `
-                -BaseRevision $strMergeBaseCommit `
-                -HeadRevision $strMergeTopicCommit `
-                -InputRevision $strMergeTopicCommit `
-                -IsNewRefRange $false `
-                -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
-                -PolicyMaximumBytes 1024 `
-                -PolicyMarker $strMetadataRangePolicyMarker `
+                @hashtableBackdatedFinalizationArguments `
                 -TrustedFinalizationTimestamp ($strMergeCurrentDate + 'T00:00:00Z')
         )
         if (-not ($arrBackdatedFinalizationFailures -match
@@ -9264,17 +9281,7 @@ if ($SelfTest) {
         $boolMalformedFinalizationTimeRejected = $false
         try {
             [void](Get-GovernedDocumentRangeTransitionFailure `
-                    -Name 'AGENTS.md' `
-                    -RepositoryRootPath $strMergeFixtureRoot `
-                    -RepositoryRelativePath 'AGENTS.md' `
-                    -MaximumBytes $intAgentsMaximumInputBytes `
-                    -BaseRevision $strMergeBaseCommit `
-                    -HeadRevision $strMergeTopicCommit `
-                    -InputRevision $strMergeTopicCommit `
-                    -IsNewRefRange $false `
-                    -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
-                    -PolicyMaximumBytes 1024 `
-                    -PolicyMarker $strMetadataRangePolicyMarker `
+                    @hashtableBackdatedFinalizationArguments `
                     -TrustedFinalizationTimestamp '2026-09-09T00:00:00+00:00')
         }
         catch {
@@ -9315,7 +9322,8 @@ if ($SelfTest) {
         $arrProvedAutomatedMergeFailures = @(
             Get-GovernedDocumentRangeTransitionFailure `
                 @hashtableAutomatedMergeArguments `
-                -AutomatedMergeSourceRevision $strMergeTopicCommit
+                -AutomatedMergeSourceRevision $strMergeTopicCommit `
+                -TrustedFinalizationTimestamp ($strMergeCurrentDate + 'T00:00:00Z')
         )
         if ($arrProvedAutomatedMergeFailures.Count -ne 0) {
             throw (

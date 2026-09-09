@@ -44,6 +44,9 @@ jobs:
                 .devcontainer|.devcontainer/*|.devcontainer.json)
                   return 0
                   ;;
+                */.devcontainer|*/.devcontainer/*|*/.devcontainer.json)
+                  return 0
+                  ;;
               esac
             done
             return 1
@@ -65,8 +68,30 @@ jobs:
             printf '%s\n' 'Case-folded root-file boundary fixture was not rejected.' >&2
             exit 1
           }
+          has_devcontainer_entry \
+            <<< 'module/.devcontainer/devcontainer.json' || {
+            printf '%s\n' 'Nested directory boundary fixture was not rejected.' >&2
+            exit 1
+          }
+          has_devcontainer_entry <<< 'module/.devcontainer.json' || {
+            printf '%s\n' 'Nested file boundary fixture was not rejected.' >&2
+            exit 1
+          }
+          has_devcontainer_entry <<< 'MODULE/.DEVCONTAINER/DEVCONTAINER.JSON' || {
+            printf '%s\n' 'Case-folded nested boundary fixture was not rejected.' >&2
+            exit 1
+          }
           if has_devcontainer_entry <<< '.env'; then
             printf '%s\n' 'Unrelated dot-file boundary fixture was rejected.' >&2
+            exit 1
+          fi
+          if has_devcontainer_entry \
+            <<< 'module/.devcontainer-example/devcontainer.json'; then
+            printf '%s\n' 'Similar nested directory fixture was rejected.' >&2
+            exit 1
+          fi
+          if has_devcontainer_entry <<< 'module/.devcontainer.json.bak'; then
+            printf '%s\n' 'Similar nested file fixture was rejected.' >&2
             exit 1
           fi
 
@@ -94,7 +119,7 @@ jobs:
           )"
 
           devcontainer_entries="$(
-            /usr/bin/git -C "${checkout_root}" ls-tree --name-only \
+            /usr/bin/git -C "${checkout_root}" ls-tree -r --name-only \
               "${fetched_revision}"
           )"
           readonly devcontainer_entries
