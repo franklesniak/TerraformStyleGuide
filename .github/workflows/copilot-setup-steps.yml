@@ -48,13 +48,25 @@ jobs:
           token: ${{ github.token }}
           persist-credentials: false
           clean: true
-          fetch-depth: 1
+          fetch-depth: 0
           fetch-tags: false
           show-progress: true
           lfs: false
           submodules: false
           set-safe-directory: true
           allow-unsafe-pr-checkout: false
+
+      - name: Establish published baseline reference
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote set-head origin --auto
+          published_ref="$(git symbolic-ref --quiet refs/remotes/origin/HEAD)"
+          case "${published_ref}" in
+            refs/remotes/origin/*) ;;
+            *) exit 1 ;;
+          esac
+          git rev-parse --verify "${published_ref}^{commit}"
 
       - name: Reject alternate npm install inputs
         shell: bash

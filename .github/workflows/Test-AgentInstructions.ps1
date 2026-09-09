@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260909.8
+# Version: 1.2.20260909.9
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -98,7 +98,7 @@ $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
 $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/copilot-setup-steps.yml' =
-        '87b232fb4259f08935ae017107bf4e8f6bf2e774708562a54d3fea4d136e3071'
+        '61186c93adce037f627e35b296250887d60564866abd26436cc37b692e8765c4'
     '.github/workflows/package.json' =
         'b1d079c7c16a08b89c074f5a5f9378be156428af2204e96902e2f358d9492e02'
     '.github/workflows/package-lock.json' =
@@ -7058,6 +7058,22 @@ if ($SelfTest) {
     }
 
     $arrCopilotSetupMutations = @(
+        [pscustomobject]@{
+            Name = 'history fetch depth drifts'
+            Content = $strCopilotSetupContent.Replace(
+                '          fetch-depth: 0',
+                '          fetch-depth: 1'
+            )
+            Failure = '.github/workflows/copilot-setup-steps.yml text must match'
+        },
+        [pscustomobject]@{
+            Name = 'published baseline setup is removed'
+            Content = $strCopilotSetupContent.Replace(
+                '          git remote set-head origin --auto' + "`n",
+                ''
+            )
+            Failure = '.github/workflows/copilot-setup-steps.yml text must match'
+        },
         [pscustomobject]@{
             Name = 'checkout action commit drifts'
             Content = $strCopilotSetupContent.Replace(
