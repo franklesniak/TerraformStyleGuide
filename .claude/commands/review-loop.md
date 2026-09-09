@@ -40,8 +40,8 @@ Neither reviewer is advisory.
 ## Processing review comments
 
 For every review comment from either reviewer, follow the decision protocol in `CLAUDE.md` at the
-repository root — all six steps, with the three gates (options, rubric, scoring table) satisfied
-in your posted reply before you continue.
+repository root — the complete numbered workflow, with the three gates (options, rubric, scoring
+table) satisfied in your posted reply before you continue.
 
 That protocol is not optional here and it is not a summary of what to do; it is the process. A
 reply that validates a finding and then argues a conclusion in prose has **not** followed it, no

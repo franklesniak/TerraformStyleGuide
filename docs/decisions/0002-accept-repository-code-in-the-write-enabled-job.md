@@ -8,7 +8,7 @@
 - **Scope:** Records the accepted risk of repository-controlled code in the former write-enabled job and the later removal of that job.
 - **Related:** [T1 supply-freeze record](../T1-SUPPLY-FREEZE-v1.md)
 
-## Status
+## 1. Context, concern, and current effect
 
 **Superseded on 2026-08-02.** The `temporary-writer` job was deleted in T1 itself — the
 change this record accompanies, issue #20 — and not in a later slate issue. No job in this
@@ -48,8 +48,6 @@ review triggers in the last section fire, this decision must be reopened.
 
 This decision carries an obligation on issue #22 that the other accepted limitation in this
 directory does not. Section 6 explains why, and section 7 states the required action.
-
-## 1. The concern, and whether it is real
 
 The `temporary-writer` job in `.github/workflows/build.yml` is the only job in this
 repository holding `contents: write`. Within it, two things happen in order:
