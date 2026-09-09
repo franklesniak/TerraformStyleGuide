@@ -1,5 +1,13 @@
 # T1-SUPPLY-FREEZE-v1
 
+## Metadata
+
+- **Status:** Active
+- **Owner:** TerraformStyleGuide Repository Maintainers
+- **Last Updated:** 2026-09-09
+- **Scope:** Defines the reproducible supply-input freeze for the T1 merge and the exact evidence that later work must compare.
+- **Related:** [Decision records](decisions/)
+
 ## Status
 
 **Active.** Recorded against the T1 merge commit
@@ -1072,10 +1080,10 @@ untraversable parent — the control is what distinguishes the two.
 
 Two consequences follow, and the second is the one this record cares about most:
 
-* **A denying ACL is invisible here, and it is a denial.** It cannot substitute content; it makes
+- **A denying ACL is invisible here, and it is a denial.** It cannot substitute content; it makes
   a module unloadable for some user, which surfaces as a build failure rather than as a silently
   wrong tree.
-* **A write-granting ACL is the dangerous shape, because it makes a "frozen" tree mutable by a
+- **A write-granting ACL is the dangerous shape, because it makes a "frozen" tree mutable by a
   principal the record never accounted for** — and it lands exactly on `0644` → `0664`, the delta
   a previous revision of this document dismissed as harmless while declining to compare the
   histograms. That is why the histograms are now compared fields.
@@ -1150,17 +1158,17 @@ description did not follow.
 Without this, "length-prefixed" admits several incompatible encodings that all satisfy the prose
 and produce different digests. The hash is SHA-256 over a single byte stream built as follows.
 
-* A **tag** is one ASCII character, written with no separator around it.
-* A **length-prefixed field** is the field's byte length in ASCII decimal, then a single `:`
+- A **tag** is one ASCII character, written with no separator around it.
+- A **length-prefixed field** is the field's byte length in ASCII decimal, then a single `:`
   (`0x3A`), then exactly that many bytes. Nothing separates one field from the next.
-* **Paths** are the entry's path relative to `node_modules`, `/`-separated, with no leading
+- **Paths** are the entry's path relative to `node_modules`, `/`-separated, with no leading
   slash, encoded UTF-8.
-* **Permission masks** are the masked mode as a three-character, zero-padded, lower-case octal
+- **Permission masks** are the masked mode as a three-character, zero-padded, lower-case octal
   ASCII string — `0o755 & 0o555` is written `555`, `0o644 & 0o555` is written `444` — and that
   string is then length-prefixed like any other field.
-* **Device numbers** are the raw `rdev` integer in ASCII decimal, length-prefixed.
-* **Symlink targets** are the raw bytes the kernel stored, never a decoded string.
-* **File content** is the file's bytes, length-prefixed.
+- **Device numbers** are the raw `rdev` integer in ASCII decimal, length-prefixed.
+- **Symlink targets** are the raw bytes the kernel stored, never a decoded string.
+- **File content** is the file's bytes, length-prefixed.
 
 Directory entries are emitted in ascending order of name, compared as JavaScript strings — that
 is, by UTF-16 code unit — and a directory's own record is written before the records of the
@@ -1318,9 +1326,9 @@ A symlink target is different in kind from a name, being an arbitrary byte strin
 than a validated one, and inside the *installed tree* it is still folded byte-exact rather than
 refused. Two rules therefore apply to targets, and reimplementers need both:
 
-* **Folding** a target under `node_modules` reads it as raw bytes and hashes those bytes. An
+- **Folding** a target under `node_modules` reads it as raw bytes and hashes those bytes. An
   undecodable target does not stop the fold.
-* **Resolving** a target — the `node_modules` root symlink chain, and the package-link resolver
+- **Resolving** a target — the `node_modules` root symlink chain, and the package-link resolver
   that decides containment — refuses an undecodable target with exit `7` (root chain) or records
   it as an unresolved link, which a non-bypassed run reports as exit `11`.
 

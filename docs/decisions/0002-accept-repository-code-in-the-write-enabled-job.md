@@ -1,5 +1,13 @@
 # Decision 0002: Accept repository-controlled code running in the write-enabled job
 
+## Metadata
+
+- **Status:** Superseded
+- **Owner:** TerraformStyleGuide Repository Maintainers
+- **Last Updated:** 2026-09-09
+- **Scope:** Records the accepted risk of repository-controlled code in the former write-enabled job and the later removal of that job.
+- **Related:** [T1 supply-freeze record](../T1-SUPPLY-FREEZE-v1.md)
+
 ## Status
 
 **Superseded on 2026-08-02.** The `temporary-writer` job was deleted in T1 itself — the

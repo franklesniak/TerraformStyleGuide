@@ -5,6 +5,14 @@ argument-hint: <pull-request-url>
 
 # PR review loop
 
+## Metadata
+
+- **Status:** Active
+- **Owner:** TerraformStyleGuide Repository Maintainers
+- **Last Updated:** 2026-09-09
+- **Scope:** Defines the repository-local Claude command that runs the Copilot and Codex pull-request review loop.
+- **Related:** [Claude agent instructions](../../CLAUDE.md)
+
 Target pull request: **$ARGUMENTS**
 
 If no pull request URL was supplied above, ask which one to work on before doing anything else.
@@ -69,7 +77,7 @@ is unfinished, and should be finished.
 
 Continue until **either**:
 
-* both reviewers return a clean review in the same round, **or**
-* 80 rounds have been completed.
+- both reviewers return a clean review in the same round, **or**
+- 80 rounds have been completed.
 
 Report which condition ended the loop.

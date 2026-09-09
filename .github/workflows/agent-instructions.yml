@@ -61,6 +61,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   validate-agent-instructions:
@@ -149,6 +150,132 @@ jobs:
           git diff --quiet --no-ext-diff
           git diff --cached --quiet --no-ext-diff
 
+      - name: Resolve authenticated one-parent merge source
+        id: resolve_automated_merge_source
+        if: >-
+          github.event_name == 'push' &&
+          github.ref_name == github.event.repository.default_branch &&
+          !github.event.created &&
+          !github.event.deleted
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          API_URL: ${{ github.api_url }}
+          REPOSITORY: ${{ github.repository }}
+          RANGE_HEAD_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          [[ "${RANGE_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          IFS=' ' read -r -a head_and_parents <<< "$(
+            git rev-list --parents -n 1 "${RANGE_HEAD_SHA}"
+          )"
+          test "${head_and_parents[0]}" = "${RANGE_HEAD_SHA}"
+          if (( ${#head_and_parents[@]} != 2 )); then
+            printf 'source_revision=\npull_number=\n' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+
+          const objectId = /^[0-9a-f]{40}$/u;
+          const positiveInteger = /^[1-9][0-9]*$/u;
+          const apiUrl = process.env.API_URL;
+          const repository = process.env.REPOSITORY;
+          const head = process.env.RANGE_HEAD_SHA;
+          const defaultBranch = process.env.DEFAULT_BRANCH;
+          const token = process.env.GITHUB_TOKEN;
+          const output = process.env.GITHUB_OUTPUT;
+          if (!apiUrl || !repository || !objectId.test(head ?? '') ||
+              !defaultBranch || !token || !output) {
+            throw new Error('Automated merge-source inputs are unavailable or invalid.');
+          }
+
+          const records = [];
+          for (let page = 1; page <= 20; page += 1) {
+            const url = new URL(
+              `/repos/${repository}/commits/${head}/pulls?per_page=100&page=${page}`,
+              apiUrl,
+            );
+            const response = await fetch(url, {
+              headers: {
+                Accept: 'application/vnd.github+json',
+                Authorization: `Bearer ${token}`,
+                'X-GitHub-Api-Version': '2022-11-28',
+              },
+            });
+            if (!response.ok) {
+              throw new Error(`Associated pull-request lookup failed: ${response.status}.`);
+            }
+            const pageRecords = await response.json();
+            if (!Array.isArray(pageRecords)) {
+              throw new Error('Associated pull-request response is not an array.');
+            }
+            records.push(...pageRecords);
+            const link = response.headers.get('link') ?? '';
+            if (!link.includes('rel="next"')) {
+              break;
+            }
+            if (page === 20) {
+              throw new Error('Associated pull-request pagination exceeded 20 pages.');
+            }
+          }
+
+          const matches = records.filter((pull) =>
+            pull?.merged_at &&
+            pull?.state === 'closed' &&
+            pull?.base?.repo?.full_name === repository &&
+            pull?.base?.ref === defaultBranch &&
+            pull?.merge_commit_sha === head &&
+            Number.isSafeInteger(pull?.number) &&
+            pull.number > 0 &&
+            objectId.test(pull?.head?.sha ?? '') &&
+            pull.head.sha !== head,
+          );
+          if (matches.length > 1) {
+            throw new Error('More than one exact automated merge source matched the pushed head.');
+          }
+          if (matches.length === 0) {
+            appendFileSync(output, 'source_revision=\npull_number=\n', 'utf8');
+          } else {
+            const match = matches[0];
+            if (!positiveInteger.test(String(match.number))) {
+              throw new Error('The automated merge pull-request number is invalid.');
+            }
+            appendFileSync(
+              output,
+              `source_revision=${match.head.sha}\npull_number=${match.number}\n`,
+              'utf8',
+            );
+          }
+          NODE
+
+      - name: Fetch authenticated one-parent merge source as data
+        if: steps.resolve_automated_merge_source.outputs.source_revision != ''
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SOURCE_REVISION: >-
+            ${{ steps.resolve_automated_merge_source.outputs.source_revision }}
+          PR_NUMBER: ${{ steps.resolve_automated_merge_source.outputs.pull_number }}
+        run: |
+          set -euo pipefail
+          [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
+          source_ref="refs/remotes/automated-merge/${PR_NUMBER}/head"
+          git check-ref-format "${source_ref}"
+          authorization="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 -w 0)"
+          GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \
+            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \
+            git fetch --no-tags --no-recurse-submodules origin \
+              "refs/pull/${PR_NUMBER}/head:${source_ref}"
+          unset authorization
+          fetched_source="$(git rev-parse --verify "${source_ref}^{commit}")"
+          test "${fetched_source}" = "${SOURCE_REVISION}"
+          git diff --quiet --no-ext-diff
+          git diff --cached --quiet --no-ext-diff
+
       - name: Fetch default-branch published baseline as data
         id: fetch_default_baseline
         if: >-
@@ -224,9 +351,13 @@ jobs:
             ${{ github.event_name == 'push' &&
               github.ref_name == github.event.repository.default_branch &&
               github.event.created || false }}
+          AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE: >-
+            ${{ steps.resolve_automated_merge_source.outputs.source_revision || '' }}
         run: >-
           ./.github/workflows/Test-AgentInstructions.ps1 -SelfTest
           -InputRevision $env:AGENT_INSTRUCTION_INPUT_REVISION
           -RangeBaseRevision $env:AGENT_INSTRUCTION_RANGE_BASE
           -RangeHeadRevision $env:AGENT_INSTRUCTION_RANGE_HEAD
           -RangeIsNewRef:([bool]::Parse($env:AGENT_INSTRUCTION_RANGE_IS_NEW_REF))
+          -AutomatedMergeSourceRevision
+          $env:AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE

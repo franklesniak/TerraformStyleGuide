@@ -26,6 +26,10 @@
 # Indicates that a push created the ref and RangeBaseRevision is Git's
 # all-zero no-prior-ref sentinel.
 #
+# .PARAMETER AutomatedMergeSourceRevision
+# The authenticated pull-request head for a one-parent automated merge result.
+# The empty default disables that narrowly proved transition mode.
+#
 # .EXAMPLE
 # & ./.github/workflows/Test-AgentInstructions.ps1 -SelfTest
 #
@@ -42,7 +46,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260909.3
+# Version: 1.2.20260909.5
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -63,7 +67,11 @@ param(
     [string] $RangeHeadRevision = '',
 
     [Parameter()]
-    [switch] $RangeIsNewRef
+    [switch] $RangeIsNewRef,
+
+    [Parameter()]
+    [AllowEmptyString()]
+    [string] $AutomatedMergeSourceRevision = ''
 )
 
 Set-StrictMode -Version Latest
@@ -3177,6 +3185,54 @@ function Get-GovernedInstructionInventoryFailure {
     }
 }
 
+function Get-ProhibitedTrackedClaudeLocalFailure {
+    # .SYNOPSIS
+    # Finds tracked personal Claude project-memory files.
+    #
+    # .DESCRIPTION
+    # Rejects the exact CLAUDE.local.md name at the repository root or below a
+    # tracked repository directory. Similar names remain permitted.
+    #
+    # .PARAMETER TrackedPaths
+    # The complete tracked repository-relative path inventory.
+    #
+    # .EXAMPLE
+    # Get-ProhibitedTrackedClaudeLocalFailure `
+    #     -TrackedPaths @('CLAUDE.local.md', 'module/CLAUDE.local.md')
+    #
+    # # Reports both prohibited paths.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [string] One record for each prohibited tracked path.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the
+    # public API surface. Parameters, return shape, and positional
+    # contract may change without notice.
+    #
+    # This function does not support positional parameters.
+    # Version: 1.0.20260909.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]] $TrackedPaths
+    )
+
+    foreach ($strTrackedPath in $TrackedPaths) {
+        if ($strTrackedPath -cmatch '(?:^|/)CLAUDE\.local\.md$') {
+            Write-Output (
+                'Tracked personal Claude project memory is prohibited: ' +
+                $strTrackedPath
+            )
+        }
+    }
+}
+
 function Get-DocumentMetadataContext {
     # .SYNOPSIS
     # Gets validated document-level metadata context.
@@ -3205,7 +3261,7 @@ function Get-DocumentMetadataContext {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.4.20260908.0
+    # Version: 1.5.20260909.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
@@ -3322,39 +3378,62 @@ function Get-DocumentMetadataContext {
         $intExpectedMetadataIndex = $listVersionRecords[0].BlockIndex + 1
     }
 
-    if ($listH2Indices.Count -eq 0) {
-        return [pscustomobject]@{
-            Failure = 'must place Metadata as the first level-two heading immediately after the H1 or optional Version and within the first 30 body lines.'
-            VersionDate = $null
-            UpdatedDate = $null
-            Revision = $null
-        }
-    }
-
-    $intMetadataIndex = $listH2Indices[0]
-    $objMetadataBlock = $arrTopLevelBlocks[$intMetadataIndex]
-    $intMetadataHeadingCount = @(
+    $arrMetadataHeadingIndices = @(
         $listH2Indices |
         Where-Object { $arrTopLevelBlocks[$_].Text -ceq 'Metadata' }
-    ).Count
-    if ($objMetadataBlock.Text -cne 'Metadata' -or
-        $intMetadataHeadingCount -ne 1 -or
-        $intMetadataIndex -ne $intExpectedMetadataIndex -or
-        ($objMetadataBlock.Start - $intBodyStart) -ge 30) {
-        return [pscustomobject]@{
-            Failure = 'must place Metadata as the first level-two heading immediately after the H1 or optional Version and within the first 30 body lines.'
-            VersionDate = $null
-            UpdatedDate = $null
-            Revision = $null
+    )
+    $boolHasMetadataHeading = $arrMetadataHeadingIndices.Count -gt 0
+    $intMetadataContentStart = -1
+    $intMetadataContentEnd = -1
+    $strMetadataContainerName = 'metadata header block'
+    if ($boolHasMetadataHeading) {
+        $intMetadataIndex = $arrMetadataHeadingIndices[0]
+        $objMetadataBlock = $arrTopLevelBlocks[$intMetadataIndex]
+        if ($arrMetadataHeadingIndices.Count -ne 1 -or
+            $intMetadataIndex -ne $intExpectedMetadataIndex -or
+            ($objMetadataBlock.Start - $intBodyStart) -ge 30) {
+            return [pscustomobject]@{
+                Failure = 'must place Metadata as the first level-two heading immediately after the H1 or optional Version and within the first 30 body lines.'
+                VersionDate = $null
+                UpdatedDate = $null
+                Revision = $null
+            }
+        }
+
+        $intMetadataContentStart = $objMetadataBlock.Start
+        $intMetadataContentEnd = $arrLines.Count
+        $strMetadataContainerName = 'Metadata section'
+        foreach ($intH2Index in $listH2Indices) {
+            if ($intH2Index -gt $intMetadataIndex) {
+                $intMetadataContentEnd = $arrTopLevelBlocks[$intH2Index].Start
+                break
+            }
         }
     }
-
-    $intMetadataSectionEnd = $arrLines.Count
-    foreach ($intH2Index in $listH2Indices) {
-        if ($intH2Index -gt $intMetadataIndex) {
-            $intMetadataSectionEnd = $arrTopLevelBlocks[$intH2Index].Start
-            break
+    else {
+        if ($intExpectedMetadataIndex -ge $arrTopLevelBlocks.Count) {
+            return [pscustomobject]@{
+                Failure = 'must place the metadata header block immediately after the H1 or optional Version and within the first 30 body lines.'
+                VersionDate = $null
+                UpdatedDate = $null
+                Revision = $null
+            }
         }
+
+        $objMetadataBlock = $arrTopLevelBlocks[$intExpectedMetadataIndex]
+        if ($objMetadataBlock.Type -cne 'bullet_list_open' -or
+            $objMetadataBlock.Tag -cne 'ul' -or
+            ($objMetadataBlock.Start - $intBodyStart) -ge 30) {
+            return [pscustomobject]@{
+                Failure = 'must place the metadata header block immediately after the H1 or optional Version and within the first 30 body lines.'
+                VersionDate = $null
+                UpdatedDate = $null
+                Revision = $null
+            }
+        }
+
+        $intMetadataContentStart = $objMetadataBlock.Start - 1
+        $intMetadataContentEnd = $objMetadataBlock.End
     }
 
     $arrRequiredFields = @(
@@ -3388,13 +3467,13 @@ function Get-DocumentMetadataContext {
                         "$($objField.Name):",
                         [System.StringComparison]::Ordinal
                     ) -and
-                    $_.Start -gt $objMetadataBlock.Start -and
-                    $_.Start -lt $intMetadataSectionEnd -and
+                    $_.Start -gt $intMetadataContentStart -and
+                    $_.Start -lt $intMetadataContentEnd -and
                     ($_.Start - $intBodyStart) -lt 30
                 }
         )
         $strFieldFailure = "must contain one exact top-level $($objField.Name) " +
-            'list item in the Metadata section and within the first 30 body lines.'
+            "list item in the $strMetadataContainerName and within the first 30 body lines."
         $boolFieldHasContinuation = $false
         if ($arrFieldRecords.Count -eq 1) {
             for ($intLine = $arrFieldRecords[0].Start + 1;
@@ -4264,6 +4343,10 @@ function Get-GovernedDocumentRangeTransitionFailure {
     # .PARAMETER InputRevision
     # The optional commit that supplies the current governed input state.
     #
+    # .PARAMETER AutomatedMergeSourceRevision
+    # The authenticated pull-request head for a one-parent automated merge.
+    # A matching document blob uses that commit's date as the finalization date.
+    #
     # .PARAMETER IsNewRefRange
     # Indicates that the event created a ref and supplied an all-zero base.
     #
@@ -4301,7 +4384,7 @@ function Get-GovernedDocumentRangeTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.6.20260909.0
+    # Version: 1.7.20260909.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -4330,6 +4413,10 @@ function Get-GovernedDocumentRangeTransitionFailure {
         [AllowEmptyString()]
         [string] $InputRevision = '',
 
+        [Parameter()]
+        [AllowEmptyString()]
+        [string] $AutomatedMergeSourceRevision = '',
+
         [Parameter(Mandatory)]
         [bool] $IsNewRefRange,
 
@@ -4352,6 +4439,9 @@ function Get-GovernedDocumentRangeTransitionFailure {
         if ($IsNewRefRange) {
             throw 'A new-ref metadata event range must supply base and head revisions.'
         }
+        if (-not [string]::IsNullOrEmpty($AutomatedMergeSourceRevision)) {
+            throw 'An automated merge source requires a metadata event range.'
+        }
         return [string[]] @()
     }
     if ([string]::IsNullOrEmpty($BaseRevision) -or
@@ -4370,6 +4460,33 @@ function Get-GovernedDocumentRangeTransitionFailure {
     }
     if ($HeadRevision -match $strZeroObjectIdPattern) {
         throw 'The metadata event-range head must not be an all-zero object ID.'
+    }
+
+    if (-not [string]::IsNullOrEmpty($AutomatedMergeSourceRevision)) {
+        if ($IsNewRefRange) {
+            throw 'A new-ref metadata event range cannot use an automated merge source.'
+        }
+        if ($AutomatedMergeSourceRevision -notmatch $strObjectIdPattern -or
+            $AutomatedMergeSourceRevision -match $strZeroObjectIdPattern) {
+            throw 'The automated merge source revision is invalid.'
+        }
+        if ([string]::Equals(
+                $AutomatedMergeSourceRevision,
+                $HeadRevision,
+                [System.StringComparison]::OrdinalIgnoreCase
+            ) -or
+            [string]::Equals(
+                $AutomatedMergeSourceRevision,
+                $BaseRevision,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )) {
+            throw 'The automated merge source must differ from the event endpoints.'
+        }
+        & git -C $RepositoryRootPath cat-file -e `
+            "$AutomatedMergeSourceRevision`^{commit}" 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            throw 'The automated merge source commit is unavailable.'
+        }
     }
 
     foreach ($strRevision in @($BaseRevision, $HeadRevision)) {
@@ -4534,6 +4651,29 @@ function Get-GovernedDocumentRangeTransitionFailure {
     $strHeadTimestamp = ''
     $intHeadParentCount = 0
     $boolHeadInheritsParentPath = $false
+    $boolHeadMatchesAutomatedMergeSourcePath = $false
+    $strAutomatedMergeSourceTimestamp = ''
+    if (-not [string]::IsNullOrEmpty($AutomatedMergeSourceRevision)) {
+        $strSourceTimestamp = [string] (
+            & git -C $RepositoryRootPath show -s --format=%cI `
+                $AutomatedMergeSourceRevision
+        )
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not read the automated merge source timestamp.'
+        }
+        $objSourceTimestamp = [DateTimeOffset]::MinValue
+        if (-not [DateTimeOffset]::TryParse(
+                $strSourceTimestamp.Trim(),
+                [ref] $objSourceTimestamp
+            )) {
+            throw 'The automated merge source has an invalid timestamp.'
+        }
+        if ($objSourceTimestamp -gt $script:objMaximumCommitUtcTimestamp) {
+            throw 'The automated merge source timestamp is later than trusted UTC.'
+        }
+        $strAutomatedMergeSourceTimestamp =
+            $objSourceTimestamp.UtcDateTime.ToString('yyyy-MM-dd')
+    }
     foreach ($strRangeCommitValue in $arrRangeCommits) {
         $strRangeCommit = ([string]$strRangeCommitValue).Trim()
         if ($strRangeCommit -notmatch $strObjectIdPattern) {
@@ -4678,6 +4818,28 @@ function Get-GovernedDocumentRangeTransitionFailure {
         throw 'The metadata event range did not contain its head commit.'
     }
 
+    if (-not [string]::IsNullOrEmpty($AutomatedMergeSourceRevision)) {
+        if ($intHeadParentCount -ne 1) {
+            throw 'An automated merge source requires a one-parent event-range head.'
+        }
+        & git -C $RepositoryRootPath cat-file -e `
+            "$AutomatedMergeSourceRevision`:$RepositoryRelativePath" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            & git -C $RepositoryRootPath diff --quiet --no-ext-diff --no-textconv `
+                $AutomatedMergeSourceRevision $HeadRevision -- $RepositoryRelativePath
+            $intSourceDiffExitCode = $LASTEXITCODE
+            if ($intSourceDiffExitCode -eq 0) {
+                $boolHeadMatchesAutomatedMergeSourcePath = $true
+            }
+            elseif ($intSourceDiffExitCode -ne 1) {
+                throw (
+                    'Could not compare the automated merge source for ' +
+                    $RepositoryRelativePath + '.'
+                )
+            }
+        }
+    }
+
     if (-not [string]::IsNullOrEmpty($strEffectiveBaseRevision)) {
         & git -C $RepositoryRootPath diff --quiet --no-ext-diff --no-textconv `
             $strEffectiveBaseRevision $HeadRevision -- $RepositoryRelativePath
@@ -4716,17 +4878,25 @@ function Get-GovernedDocumentRangeTransitionFailure {
         }
     }
 
+    $boolHeadInheritsMergeParentPath =
+        $intHeadParentCount -gt 1 -and $boolHeadInheritsParentPath
+    $strFinalizationTimestamp = if ($boolHeadMatchesAutomatedMergeSourcePath) {
+        $strAutomatedMergeSourceTimestamp
+    }
+    else {
+        $strHeadTimestamp
+    }
     $objPublishedTransition = [pscustomobject]@{
         CurrentContent = $strCurrentContent
         ParentContent = $strParentContent
-        ExpectedUtcDate = $strHeadTimestamp
+        ExpectedUtcDate = $strFinalizationTimestamp
         CurrentRevision = $HeadRevision
         ParentRevision = $strParentRevisionLabel
         RequireExpectedUtcDateForRenderedChange = -not (
-            $intHeadParentCount -gt 1 -and $boolHeadInheritsParentPath
+            $boolHeadInheritsMergeParentPath
         )
         RequirePublishedRevisionConvention = -not (
-            $intHeadParentCount -gt 1 -and $boolHeadInheritsParentPath
+            $boolHeadInheritsMergeParentPath
         )
     }
     return Get-DocumentMetadataRangeTransitionFailure `
@@ -5505,6 +5675,105 @@ function Get-PushRangeBaseFetchContractFailure {
     }
 }
 
+function Get-AutomatedMergeSourceWorkflowContractFailure {
+    # .SYNOPSIS
+    # Validates the authenticated one-parent merge-source workflow contract.
+    #
+    # .DESCRIPTION
+    # Requires exact default-branch push scoping, authenticated and paginated
+    # associated-PR lookup, exact merge identity filters, non-force PR-head
+    # acquisition, SHA readback, and validator handoff.
+    #
+    # .PARAMETER WorkflowContent
+    # The complete agent-instruction workflow YAML text to inspect.
+    #
+    # .EXAMPLE
+    # Get-AutomatedMergeSourceWorkflowContractFailure -WorkflowContent $strWorkflow
+    #
+    # # Returns no output when the one-parent merge-source contract is intact.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [string] One record for each workflow-contract failure.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the
+    # public API surface. Parameters, return shape, and positional
+    # contract may change without notice.
+    #
+    # This function does not support positional parameters.
+    # Version: 1.0.20260909.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $WorkflowContent
+    )
+
+    $arrExactLiterals = @(
+        '  pull-requests: read',
+        '      - name: Resolve authenticated one-parent merge source',
+        '          if (( ${#head_and_parents[@]} != 2 )); then',
+        '              `/repos/${repository}/commits/${head}/pulls?per_page=100&page=${page}`',
+        "            pull?.state === 'closed' &&",
+        '            pull?.base?.repo?.full_name === repository &&',
+        '            pull?.base?.ref === defaultBranch &&',
+        '            pull?.merge_commit_sha === head &&',
+        '            pull.head.sha !== head,',
+        "              throw new Error('Associated pull-request pagination exceeded 20 pages.');",
+        "            throw new Error('More than one exact automated merge source matched the pushed head.');",
+        '      - name: Fetch authenticated one-parent merge source as data',
+        "        if: steps.resolve_automated_merge_source.outputs.source_revision != ''",
+        '              "refs/pull/${PR_NUMBER}/head:${source_ref}"',
+        '          test "${fetched_source}" = "${SOURCE_REVISION}"',
+        '          AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE: >-',
+        "            `${{ steps.resolve_automated_merge_source.outputs.source_revision || '' }}",
+        '          -AutomatedMergeSourceRevision',
+        '          $env:AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE'
+    )
+    foreach ($strExactLiteral in $arrExactLiterals) {
+        if ([regex]::Matches(
+                $WorkflowContent,
+                [regex]::Escape($strExactLiteral)
+            ).Count -ne 1) {
+            Write-Output (
+                'The automated merge-source workflow contract must contain exactly once: ' +
+                $strExactLiteral
+            )
+        }
+    }
+
+    $strResolveCondition = @"
+        if: >-
+          github.event_name == 'push' &&
+          github.ref_name == github.event.repository.default_branch &&
+          !github.event.created &&
+          !github.event.deleted
+"@.TrimEnd()
+    if (-not $WorkflowContent.Contains(
+            $strResolveCondition,
+            [System.StringComparison]::Ordinal
+        )) {
+        Write-Output 'The automated merge-source resolver condition is not exact.'
+    }
+
+    $arrUnsafeResolverPatterns = @(
+        '(?m)^\s*continue-on-error:\s*true\s*$',
+        '(?m)^\s*git fetch .*--force(?:\s|$)',
+        '(?m)^\s*git fetch .+"\+refs/pull/'
+    )
+    foreach ($strUnsafeResolverPattern in $arrUnsafeResolverPatterns) {
+        if ($WorkflowContent -match $strUnsafeResolverPattern) {
+            Write-Output (
+                'The automated merge-source workflow contains an unsafe fallback: ' +
+                $strUnsafeResolverPattern
+            )
+        }
+    }
+}
+
 function Assert-MutationRejected {
     # .SYNOPSIS
     # Confirms that an agent-instruction mutation fails closed.
@@ -6102,6 +6371,8 @@ $arrRepositoryFailures = @(Get-AgentInstructionFailure `
         -AgentsContent $strAgentsContent `
         -ClaudeContent $strClaudeContent `
         -CodexConfigContent $strCodexConfigContent)
+$arrRepositoryFailures += @(Get-ProhibitedTrackedClaudeLocalFailure `
+        -TrackedPaths $arrTrackedRepositoryPaths)
 $arrRepositoryFailures += @(Get-HuskySetupContractFailure `
         -RootPackageContent $hashtableAgentSetupInputContent['package.json'] `
         -WorkflowPackageContent `
@@ -6165,6 +6436,7 @@ foreach ($objDocumentContext in $listGovernedDocumentContexts) {
                 -BaseRevision $strEffectiveRangeBaseRevision `
                 -HeadRevision $strEffectiveRangeHeadRevision `
                 -InputRevision $strValidatedInputRevision `
+                -AutomatedMergeSourceRevision $AutomatedMergeSourceRevision `
                 -IsNewRefRange $boolEffectiveRangeIsNewRef `
                 -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
                 -PolicyMaximumBytes $intValidatorMaximumInputBytes `
@@ -7051,6 +7323,44 @@ if ($SelfTest) {
         throw 'The governed-instruction inventory mutation did not fail closed.'
     }
 
+    $arrAcceptedClaudeLocalInventoryFailures = @(
+        Get-ProhibitedTrackedClaudeLocalFailure -TrackedPaths @(
+            'CLAUDE-local.md',
+            'CLAUDE.local.MD',
+            'module/CLAUDE.md',
+            'module/CLAUDE.local.md.bak'
+        )
+    )
+    if ($arrAcceptedClaudeLocalInventoryFailures.Count -ne 0) {
+        throw 'A similar non-prohibited Claude path failed validation.'
+    }
+    $arrRejectedClaudeLocalInventoryFailures = @(
+        Get-ProhibitedTrackedClaudeLocalFailure -TrackedPaths @(
+            'CLAUDE.local.md',
+            'module/CLAUDE.local.md',
+            'module/nested/CLAUDE.local.md'
+        )
+    )
+    $arrExpectedClaudeLocalInventoryFailures = @(
+        'Tracked personal Claude project memory is prohibited: CLAUDE.local.md',
+        'Tracked personal Claude project memory is prohibited: module/CLAUDE.local.md',
+        'Tracked personal Claude project memory is prohibited: module/nested/CLAUDE.local.md'
+    )
+    if ($arrRejectedClaudeLocalInventoryFailures.Count -ne
+        $arrExpectedClaudeLocalInventoryFailures.Count) {
+        throw 'The Claude local-memory inventory mutation count was not exact.'
+    }
+    foreach ($strExpectedClaudeLocalInventoryFailure in
+        $arrExpectedClaudeLocalInventoryFailures) {
+        if ($arrRejectedClaudeLocalInventoryFailures -cnotcontains
+            $strExpectedClaudeLocalInventoryFailure) {
+            throw (
+                'The Claude local-memory inventory mutation did not fail closed: ' +
+                $strExpectedClaudeLocalInventoryFailure
+            )
+        }
+    }
+
     $arrMetadataOptionalContexts = @(
         $listGovernedDocumentContexts |
             Where-Object { -not $_.RequiresMetadata }
@@ -7118,6 +7428,51 @@ if ($SelfTest) {
     }
 
     $objRepresentativeDocument = $listGovernedDocumentContexts[0]
+    $objMetadataHeadingPattern = [regex]::new(
+        '(?m)^## Metadata\r?\n(?:\r?\n)?'
+    )
+    $strBareMetadataListMutation = $objMetadataHeadingPattern.Replace(
+        $objRepresentativeDocument.Content,
+        '',
+        1
+    )
+    if ([string]::Equals(
+            $strBareMetadataListMutation,
+            $objRepresentativeDocument.Content,
+            [System.StringComparison]::Ordinal
+        )) {
+        throw 'Could not construct the bare metadata-list mutation.'
+    }
+    $objBareMetadataListContext = Get-DocumentMetadataContext `
+        -Content $strBareMetadataListMutation
+    if ($null -ne $objBareMetadataListContext.Failure) {
+        throw (
+            'A documented direct metadata list failed validation: ' +
+            $objBareMetadataListContext.Failure
+        )
+    }
+    $strInterveningMetadataListMutation = $objMetadataHeadingPattern.Replace(
+        $objRepresentativeDocument.Content,
+        "Intervening paragraph.`n`n",
+        1
+    )
+    $objInterveningMetadataListContext = Get-DocumentMetadataContext `
+        -Content $strInterveningMetadataListMutation
+    if ($objInterveningMetadataListContext.Failure -notmatch
+        'must place the metadata header block') {
+        throw 'An intervening paragraph before a direct metadata list did not fail closed.'
+    }
+    $strMixedMetadataLayoutMutation = $objMetadataHeadingPattern.Replace(
+        $objRepresentativeDocument.Content,
+        "- **Status:** Active`n`n## Metadata`n`n",
+        1
+    )
+    $objMixedMetadataLayoutContext = Get-DocumentMetadataContext `
+        -Content $strMixedMetadataLayoutMutation
+    if ($objMixedMetadataLayoutContext.Failure -notmatch
+        'must place Metadata as the first level-two heading') {
+        throw 'A mixed direct-list and Metadata-heading layout did not fail closed.'
+    }
     $strStatusLine = [regex]::Match(
         $objRepresentativeDocument.Content,
         '(?m)^- \*\*Status:\*\* [^\r\n]+$'
@@ -8552,7 +8907,7 @@ if ($SelfTest) {
                 -RequireMetadataTransition $true
         )
         if (-not ($arrMetadataRequiredRangeFailures -match
-                'must place Metadata as the first level-two heading')) {
+                'must place the metadata header block')) {
             throw 'The same header-free Copilot range did not fail when metadata was required.'
         }
         $arrMetadataOptionalCommitFailures = @(
@@ -8577,7 +8932,7 @@ if ($SelfTest) {
                 -RequireMetadataTransition $true
         )
         if (-not ($arrMetadataRequiredCommitFailures -match
-                'must place Metadata as the first level-two heading')) {
+                'must place the metadata header block')) {
             throw 'The same direct Copilot transition did not fail when metadata was required.'
         }
         $hashtableCopilotNewRefArguments = @{}
@@ -8621,6 +8976,67 @@ if ($SelfTest) {
             -Parents @($strMergeBaseCommit) `
             -Timestamp ($strMergeHistoricalDate + 'T12:00:00Z') `
             -Message 'merge fixture topic'
+        $strAutomatedSingleParentCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strMergeTopicTree `
+            -Parents @($strMergeBaseCommit) `
+            -Timestamp ($strMergeCurrentDate + 'T00:30:00Z') `
+            -Message 'automated single-parent merge result'
+        $hashtableAutomatedMergeArguments = @{
+            Name = 'AGENTS.md'
+            RepositoryRootPath = $strMergeFixtureRoot
+            RepositoryRelativePath = 'AGENTS.md'
+            MaximumBytes = $intAgentsMaximumInputBytes
+            BaseRevision = $strMergeBaseCommit
+            HeadRevision = $strAutomatedSingleParentCommit
+            InputRevision = $strAutomatedSingleParentCommit
+            IsNewRefRange = $false
+            PolicyRepositoryRelativePath = '.github/workflows/Test-AgentInstructions.ps1'
+            PolicyMaximumBytes = 1024
+            PolicyMarker = $strMetadataRangePolicyMarker
+        }
+        $arrUnprovedAutomatedMergeFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                @hashtableAutomatedMergeArguments
+        )
+        if (-not ($arrUnprovedAutomatedMergeFailures -match
+                [regex]::Escape("Last Updated must be $strMergeCurrentDate"))) {
+            throw 'An unproved single-parent merge result received a date exemption.'
+        }
+        $arrProvedAutomatedMergeFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                @hashtableAutomatedMergeArguments `
+                -AutomatedMergeSourceRevision $strMergeTopicCommit
+        )
+        if ($arrProvedAutomatedMergeFailures.Count -ne 0) {
+            throw (
+                'A proved single-parent merge result failed validation: ' +
+                ($arrProvedAutomatedMergeFailures -join '; ')
+            )
+        }
+        $arrMismatchedAutomatedMergeFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                @hashtableAutomatedMergeArguments `
+                -AutomatedMergeSourceRevision $strMergeCopilotChangedCommit
+        )
+        if (-not ($arrMismatchedAutomatedMergeFailures -match
+                [regex]::Escape("Last Updated must be $strMergeCurrentDate"))) {
+            throw 'A mismatched automated merge source received a date exemption.'
+        }
+        $boolEndpointAutomatedMergeSourceRejected = $false
+        try {
+            [void](Get-GovernedDocumentRangeTransitionFailure `
+                    @hashtableAutomatedMergeArguments `
+                    -AutomatedMergeSourceRevision $strAutomatedSingleParentCommit)
+        }
+        catch {
+            $boolEndpointAutomatedMergeSourceRejected = $_.Exception.Message.Contains(
+                'must differ from the event endpoints',
+                [System.StringComparison]::Ordinal
+            )
+        }
+        if (-not $boolEndpointAutomatedMergeSourceRejected) {
+            throw 'An event endpoint was accepted as its own automated merge source.'
+        }
         $intRangeFixtureMajor = [int64] $objAgentsVersionMatch.Groups['Major'].Value
         $intRangeFixtureMinor = [int64] $objAgentsVersionMatch.Groups['Minor'].Value
         $arrMetadataRangeFixtures = @(
@@ -9725,6 +10141,84 @@ if ($SelfTest) {
     $strAgentWorkflowContent = [System.IO.File]::ReadAllText(
         [System.IO.Path]::Combine($PSScriptRoot, 'agent-instructions.yml')
     )
+    $arrAutomatedMergeWorkflowFailures = @(
+        Get-AutomatedMergeSourceWorkflowContractFailure `
+            -WorkflowContent $strAgentWorkflowContent
+    )
+    if ($arrAutomatedMergeWorkflowFailures.Count -gt 0) {
+        throw (
+            'The automated merge-source workflow contract failed: ' +
+            ($arrAutomatedMergeWorkflowFailures -join '; ')
+        )
+    }
+    $arrAutomatedMergeWorkflowMutations = @(
+        [pscustomobject]@{
+            Name = 'one-parent gate removed'
+            From = '          if (( ${#head_and_parents[@]} != 2 )); then'
+            To = '          if (( ${#head_and_parents[@]} != 3 )); then'
+        },
+        [pscustomobject]@{
+            Name = 'merge head identity removed'
+            From = '            pull?.merge_commit_sha === head &&'
+            To = '            pull?.merge_commit_sha !== head &&'
+        },
+        [pscustomobject]@{
+            Name = 'unchanged source identity accepted'
+            From = '            pull.head.sha !== head,'
+            To = '            pull.head.sha === head,'
+        },
+        [pscustomobject]@{
+            Name = 'base repository identity removed'
+            From = '            pull?.base?.repo?.full_name === repository &&'
+            To = '            pull?.base?.repo?.full_name !== repository &&'
+        },
+        [pscustomobject]@{
+            Name = 'ambiguous result accepted'
+            From = "            throw new Error('More than one exact automated merge source matched the pushed head.');"
+            To = '            matches.splice(1);'
+        },
+        [pscustomobject]@{
+            Name = 'force fetch enabled'
+            From = '            git fetch --no-tags --no-recurse-submodules origin \'
+            To = '            git fetch --force --no-tags --no-recurse-submodules origin \'
+        },
+        [pscustomobject]@{
+            Name = 'source SHA readback removed'
+            From = '          test "${fetched_source}" = "${SOURCE_REVISION}"'
+            To = '          test -n "${fetched_source}"'
+        },
+        [pscustomobject]@{
+            Name = 'validator source handoff removed'
+            From = '          -AutomatedMergeSourceRevision'
+            To = '          -Verbose'
+        }
+    )
+    foreach ($objAutomatedMergeWorkflowMutation in
+        $arrAutomatedMergeWorkflowMutations) {
+        if (-not $strAgentWorkflowContent.Contains(
+                $objAutomatedMergeWorkflowMutation.From,
+                [System.StringComparison]::Ordinal
+            )) {
+            throw (
+                'The automated merge-source workflow mutation fixture is unavailable: ' +
+                $objAutomatedMergeWorkflowMutation.Name
+            )
+        }
+        $strMutatedAgentWorkflowContent = $strAgentWorkflowContent.Replace(
+            $objAutomatedMergeWorkflowMutation.From,
+            $objAutomatedMergeWorkflowMutation.To
+        )
+        $arrMutatedAutomatedMergeWorkflowFailures = @(
+            Get-AutomatedMergeSourceWorkflowContractFailure `
+                -WorkflowContent $strMutatedAgentWorkflowContent
+        )
+        if ($arrMutatedAutomatedMergeWorkflowFailures.Count -eq 0) {
+            throw (
+                'The automated merge-source workflow mutation was accepted: ' +
+                $objAutomatedMergeWorkflowMutation.Name
+            )
+        }
+    }
     if ($strAgentWorkflowContent -notmatch
         "(?s)AGENT_INSTRUCTION_INPUT_REVISION:.+github.event_name == 'push' && github.sha") {
         throw 'The push workflow does not read governed input from the event commit.'

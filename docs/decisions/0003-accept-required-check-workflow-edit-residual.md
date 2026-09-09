@@ -1,5 +1,13 @@
 # Decision 0003: Accept that workflow edits can satisfy required checks by skipping them
 
+## Metadata
+
+- **Status:** Accepted
+- **Owner:** Frank Lesniak, TerraformStyleGuide Repository Owner
+- **Last Updated:** 2026-09-09
+- **Scope:** Records the accepted ruleset limitation for pull requests that edit required-check workflows and the related implementation constraint.
+- **Related:** [T1 supply-freeze record](../T1-SUPPLY-FREEZE-v1.md)
+
 ## Status
 
 Accepted on 2026-08-10 by Frank Lesniak, TerraformStyleGuide repository owner.

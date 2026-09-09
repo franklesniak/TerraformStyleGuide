@@ -1,5 +1,13 @@
 # Decision 0001: Accept that regenerated artifacts are linted one cycle late
 
+## Metadata
+
+- **Status:** Superseded
+- **Owner:** TerraformStyleGuide Repository Maintainers
+- **Last Updated:** 2026-09-09
+- **Scope:** Records the accepted generated-artifact lint lag, its limits, and the later change that removed the affected writer job.
+- **Related:** [T1 supply-freeze record](../T1-SUPPLY-FREEZE-v1.md)
+
 ## Status
 
 **Superseded on 2026-08-02.** The `temporary-writer` job was deleted in T1 itself — the
