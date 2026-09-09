@@ -6,7 +6,7 @@
 
 - **Status:** Active
 - **Owner:** Repository maintainer (@franklesniak)
-- **Last Updated:** 2026-09-08
+- **Last Updated:** 2026-09-09
 - **Scope:** Repository-owned scripts in `.github/workflows` and their supported local entry points.
 - **Related:** [Markdown lint implementation](MARKDOWN-LINTING-IMPLEMENTATION.md)
 

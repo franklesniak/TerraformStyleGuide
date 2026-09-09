@@ -42,7 +42,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260909.1
+# Version: 1.2.20260909.2
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -89,6 +89,10 @@ $script:strWorkflowPolicyCommand = $script:strWorkflowPolicyCommandPrefix +
     ' .github/workflows/build.yml .github/workflows/markdownlint.yml'
 $script:hashtableLegacyMetadataParentSha256 = @{
     'CLAUDE.md' = '28e77152391d51aed5ba93c59ed79af7f5c516d5ee0f1af2ce13cd4842e26387'
+    '.github/workflows/MARKDOWN-LINTING-IMPLEMENTATION.md' =
+        'fae26a5d050b70311594d51b175f73d01b355f2c1f082a7c646fdb2f018c49d0'
+    '.github/workflows/scripts-README.md' =
+        '9cfd7038a8d4aaa540f33860e8a3dfd356fbafaef8117c470a1702c21a5a76a2'
 }
 $script:arrAllowedMetadataStatuses = @(
     'Draft', 'Proposed', 'Active', 'Accepted', 'Superseded', 'Deprecated'
@@ -5759,6 +5763,22 @@ $arrGovernedInstructionDocuments = @(
         RequiresMetadata = $true
     }
 )
+$arrGovernedProcessDocuments = @(
+    [pscustomobject]@{
+        Path = '.github/workflows/MARKDOWN-LINTING-IMPLEMENTATION.md'
+        MaximumBytes = 32768
+        RequiresMetadata = $true
+    },
+    [pscustomobject]@{
+        Path = '.github/workflows/scripts-README.md'
+        MaximumBytes = 32768
+        RequiresMetadata = $true
+    }
+)
+$arrGovernedMetadataDocuments = @(
+    $arrGovernedInstructionDocuments
+    $arrGovernedProcessDocuments
+)
 $strValidatedInputRevision = ''
 
 if (-not [string]::IsNullOrEmpty($InputRevision)) {
@@ -5868,7 +5888,7 @@ if ($arrGovernedInstructionInventoryFailures.Count -gt 0) {
 if ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
     $arrRequiredPaths = @($strCodexConfigPath)
     $arrRequiredPaths += @(
-        $arrGovernedInstructionDocuments |
+        $arrGovernedMetadataDocuments |
             ForEach-Object {
                 Join-Path -Path $strRepositoryRootPath -ChildPath $_.Path
             }
@@ -5984,13 +6004,13 @@ foreach ($objAgentSetupInputSpec in $arrAgentSetupInputSpecs) {
     $hashtableAgentSetupInputContent[$objAgentSetupInputSpec.Path] =
         $strAgentSetupInputContent
 }
-$hashtableGovernedInstructionContent = @{
+$hashtableGovernedDocumentContent = @{
     'AGENTS.md' = $strAgentsContent
     'CLAUDE.md' = $strClaudeContent
     '.github/instructions/docs.instructions.md' = $strDocsInstructionsContent
 }
-foreach ($objDocumentSpec in $arrGovernedInstructionDocuments) {
-    if ($hashtableGovernedInstructionContent.ContainsKey($objDocumentSpec.Path)) {
+foreach ($objDocumentSpec in $arrGovernedMetadataDocuments) {
+    if ($hashtableGovernedDocumentContent.ContainsKey($objDocumentSpec.Path)) {
         continue
     }
     $strDocumentPath = Join-Path `
@@ -6014,11 +6034,11 @@ foreach ($objDocumentSpec in $arrGovernedInstructionDocuments) {
             -MaximumBytes $objDocumentSpec.MaximumBytes `
             -RequireRegularFile
     }
-    $hashtableGovernedInstructionContent[$objDocumentSpec.Path] = $strDocumentContent
+    $hashtableGovernedDocumentContent[$objDocumentSpec.Path] = $strDocumentContent
 }
 
 $listGovernedDocumentContexts = [System.Collections.Generic.List[pscustomobject]]::new()
-foreach ($objDocumentSpec in $arrGovernedInstructionDocuments) {
+foreach ($objDocumentSpec in $arrGovernedMetadataDocuments) {
     $objParentContext = Get-GovernedDocumentParentContext `
         -RepositoryRootPath $strRepositoryRootPath `
         -RepositoryRelativePath $objDocumentSpec.Path `
@@ -6029,7 +6049,7 @@ foreach ($objDocumentSpec in $arrGovernedInstructionDocuments) {
             Path = $objDocumentSpec.Path
             MaximumBytes = $objDocumentSpec.MaximumBytes
             RequiresMetadata = $objDocumentSpec.RequiresMetadata
-            Content = $hashtableGovernedInstructionContent[$objDocumentSpec.Path]
+            Content = $hashtableGovernedDocumentContent[$objDocumentSpec.Path]
             ParentContent = $objParentContext.ParentContent
             ExpectedUtcDate = $objParentContext.ExpectedUtcDate
             IsWorktreeTransition = $objParentContext.IsWorktreeTransition
@@ -6813,6 +6833,60 @@ if ($SelfTest) {
                 -IsNewDocumentTransition $true)
         if (-not ($arrNewDocumentFailures -match 'Last Updated must be')) {
             throw "A new document with date $strNewDocumentDate did not fail closed."
+        }
+    }
+
+    $arrLegacyProcessPaths = @(
+        '.github/workflows/MARKDOWN-LINTING-IMPLEMENTATION.md'
+        '.github/workflows/scripts-README.md'
+    )
+    foreach ($strLegacyProcessPath in $arrLegacyProcessPaths) {
+        $objLegacyProcessContext = $listGovernedDocumentContexts |
+            Where-Object { $_.Path -ceq $strLegacyProcessPath }
+        if ($null -eq $objLegacyProcessContext -or
+            [string]::IsNullOrEmpty($objLegacyProcessContext.ParentContent)) {
+            throw "Could not locate legacy process parent: $strLegacyProcessPath"
+        }
+        if (-not (Test-LegacyMetadataParentContent `
+                -Name $strLegacyProcessPath `
+                -Content $objLegacyProcessContext.ParentContent)) {
+            throw "The exact legacy process parent was not accepted: $strLegacyProcessPath"
+        }
+        if (Test-LegacyMetadataParentContent `
+                -Name $strLegacyProcessPath `
+                -Content ($objLegacyProcessContext.ParentContent + ' ')) {
+            throw "A changed legacy process parent was accepted: $strLegacyProcessPath"
+        }
+        $strOtherLegacyProcessPath = @(
+            $arrLegacyProcessPaths |
+                Where-Object { $_ -cne $strLegacyProcessPath }
+        )[0]
+        if (Test-LegacyMetadataParentContent `
+                -Name $strOtherLegacyProcessPath `
+                -Content $objLegacyProcessContext.ParentContent) {
+            throw "A legacy process parent matched the wrong path: $strLegacyProcessPath"
+        }
+        $objLegacyProcessExpectedDate = [DateTime]::ParseExact(
+            $objLegacyProcessContext.ExpectedUtcDate,
+            'yyyy-MM-dd',
+            [System.Globalization.CultureInfo]::InvariantCulture
+        )
+        $strLegacyProcessStaleDate = $objLegacyProcessExpectedDate.AddDays(-1).ToString(
+            'yyyy-MM-dd',
+            [System.Globalization.CultureInfo]::InvariantCulture
+        )
+        $strLegacyProcessStaleCurrent = $objLegacyProcessContext.Content.Replace(
+            "- **Last Updated:** $($objLegacyProcessContext.ExpectedUtcDate)",
+            "- **Last Updated:** $strLegacyProcessStaleDate"
+        )
+        $arrLegacyProcessStaleFailures = @(Get-DocumentMetadataTransitionFailure `
+                -Name $strLegacyProcessPath `
+                -CurrentContent $strLegacyProcessStaleCurrent `
+                -ParentContent $objLegacyProcessContext.ParentContent `
+                -ExpectedUtcDate $objLegacyProcessContext.ExpectedUtcDate `
+                -IsNewDocumentTransition $false)
+        if (-not ($arrLegacyProcessStaleFailures -match 'Last Updated must be')) {
+            throw "A legacy process transition accepted a stale date: $strLegacyProcessPath"
         }
     }
 
@@ -9977,7 +10051,12 @@ if ($SelfTest) {
     $arrRequiredTriggerPaths = @(
         $script:arrCheckoutAttributePaths
         $arrAgentSetupInputSpecs | ForEach-Object { $_.Path }
-    )
+        $arrGovernedProcessDocuments | ForEach-Object { $_.Path }
+    ) | Select-Object -Unique
+    $arrConsumedTriggerPaths = @(
+        $arrAgentSetupInputSpecs | ForEach-Object { $_.Path }
+        $arrGovernedProcessDocuments | ForEach-Object { $_.Path }
+    ) | Select-Object -Unique
     foreach ($strTrigger in @('push', 'pull_request_target')) {
         $arrTriggerPathFailures = @(& $scriptBlockGetTriggerPathFailures `
                 -WorkflowContent $strAgentWorkflowContent `
@@ -10012,10 +10091,10 @@ if ($SelfTest) {
             $strAgentWorkflowContent,
             "(?ms)^  $strTrigger`:\r?\n(?<Body>.*?)(?=^(?:\S| {2}\S)|\z)"
         )
-        foreach ($objAgentSetupInputSpec in $arrAgentSetupInputSpecs) {
+        foreach ($strConsumedTriggerPath in $arrConsumedTriggerPaths) {
             $objPathLineMatch = [regex]::Match(
                 $objTriggerMatch.Groups['Body'].Value,
-                "(?m)^      - $([regex]::Escape($objAgentSetupInputSpec.Path))\r?\n"
+                "(?m)^      - $([regex]::Escape($strConsumedTriggerPath))\r?\n"
             )
             if (-not $objPathLineMatch.Success) {
                 throw "Could not create the $strTrigger path-removal mutation."
@@ -10032,11 +10111,11 @@ if ($SelfTest) {
                     -RequiredPath $arrRequiredTriggerPaths)
             if (-not ($arrMutatedTriggerFailures -match [regex]::Escape(
                         "$strTrigger must cover consumed validation path " +
-                        "$($objAgentSetupInputSpec.Path) once."
+                        "$strConsumedTriggerPath once."
                     ))) {
                 throw (
                     "$strTrigger path-removal mutation was accepted: " +
-                    $objAgentSetupInputSpec.Path
+                    $strConsumedTriggerPath
                 )
             }
         }

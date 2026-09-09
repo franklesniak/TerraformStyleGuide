@@ -6,7 +6,7 @@
 
 - **Status:** Active
 - **Owner:** Repository maintainer (@franklesniak)
-- **Last Updated:** 2026-09-08
+- **Last Updated:** 2026-09-09
 - **Scope:** Active outer-file and recursive nested-Markdown lint behavior in TerraformStyleGuide.
 - **Related:** [Workflow script index](scripts-README.md), [Markdown workflow](markdownlint.yml)
 
