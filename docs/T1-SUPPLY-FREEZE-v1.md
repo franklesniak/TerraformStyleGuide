@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD013 -->
 # T1-SUPPLY-FREEZE-v1
 
 ## Metadata

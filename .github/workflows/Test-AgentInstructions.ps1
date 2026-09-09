@@ -97,10 +97,24 @@ $script:strWorkflowPolicyCommand = $script:strWorkflowPolicyCommandPrefix +
     ' .github/workflows/build.yml .github/workflows/markdownlint.yml'
 $script:hashtableLegacyMetadataParentSha256 = @{
     'CLAUDE.md' = '28e77152391d51aed5ba93c59ed79af7f5c516d5ee0f1af2ce13cd4842e26387'
+    '.claude/commands/review-loop.md' =
+        '0deae99c3c8ced1fded917af0c71f4ab2125dcc713088fa4c104f74c7867131a'
     '.github/workflows/MARKDOWN-LINTING-IMPLEMENTATION.md' =
         'fae26a5d050b70311594d51b175f73d01b355f2c1f082a7c646fdb2f018c49d0'
     '.github/workflows/scripts-README.md' =
         '9cfd7038a8d4aaa540f33860e8a3dfd356fbafaef8117c470a1702c21a5a76a2'
+    'STYLE_GUIDE_RATIONALE.md' =
+        'cbd625dc72a051d814abbb1cd0cb4ad34634ad3611069db242e7c1950dbba1d5'
+    'docs/ISSUE_EVALUATION_PROMPT.md' =
+        '86f765d6a185b1aad93b6cefee4b211233e36197fca822c2734be2b27a260703'
+    'docs/T1-SUPPLY-FREEZE-v1.md' =
+        '28ef3ea522c676a9fe3f8522331a1d82dd1d0fd38a6a6569332544fa5d6365a1'
+    'docs/decisions/0001-accept-generated-artifact-lint-lag.md' =
+        '5978df44197fe113ca91166d18f2b393a956e7dc46681aa1e078e4382114e35a'
+    'docs/decisions/0002-accept-repository-code-in-the-write-enabled-job.md' =
+        'a23525f4b5aebba2a73c25abd2fe231916ec43feb6f49d512e095c3b1b05ed50'
+    'docs/decisions/0003-accept-required-check-workflow-edit-residual.md' =
+        'c4ac1757ef081ff085f2e5c112682181b97d3d202acd9418253ac63c1d492f97'
 }
 $script:arrAllowedMetadataStatuses = @(
     'Draft', 'Proposed', 'Active', 'Accepted', 'Superseded', 'Deprecated'
@@ -1336,7 +1350,7 @@ function Get-HuskySetupContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.4.20260909.0
+    # Version: 1.5.20260909.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -1460,13 +1474,63 @@ function Get-HuskySetupContractFailure {
         Write-Output 'Copilot setup must keep both locked installs script-disabled.'
     }
 
+    $strSetupPythonLine =
+        '        uses: actions/setup-python@' +
+        '5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0'
+    if ([regex]::Matches(
+            $CopilotSetupContent,
+            '(?m)^' + [regex]::Escape($strSetupPythonLine) + '\r?$'
+        ).Count -ne 1) {
+        Write-Output 'Copilot setup must use the reviewed setup-python v7.0.0 commit once.'
+    }
+    $arrRequiredPythonSetupLines = @(
+        '      # See: https://github.com/actions/setup-python/releases/latest',
+        '          python-version: "3.12"',
+        '          cache: pip',
+        '          cache-dependency-path: requirements-dev.txt',
+        '          if [[ ! -f requirements-dev.txt || -L requirements-dev.txt ]]; then',
+        '          python -m pip install --requirement requirements-dev.txt',
+        '          test "$(python -m pre_commit --version)" = ''pre-commit 4.6.2''',
+        '          python -m pip check'
+    )
+    foreach ($strRequiredPythonSetupLine in $arrRequiredPythonSetupLines) {
+        if ([regex]::Matches(
+                $CopilotSetupContent,
+                '(?m)^' + [regex]::Escape($strRequiredPythonSetupLine) + '\r?$'
+            ).Count -ne 1) {
+            Write-Output (
+                'Copilot setup must contain this locked Python setup line once: ' +
+                $strRequiredPythonSetupLine
+            )
+        }
+    }
+    if ([regex]::Matches(
+            $CopilotSetupContent,
+            '(?m)^              requirements-dev\.txt\r?$'
+        ).Count -ne 2) {
+        Write-Output (
+            'Copilot setup must protect requirements-dev.txt in both immutable-input ' +
+            'layouts.'
+        )
+    }
+
     $arrStepHeaders = @([regex]::Matches(
             $CopilotSetupContent,
             '(?m)^      - name: (?<Name>[^\r\n]+)\r?$'
         ))
     $intVerificationStepIndex = -1
     $intActivationStepIndex = -1
+    $intPythonSetupStepIndex = -1
+    $intPythonInstallStepIndex = -1
     for ($intStep = 0; $intStep -lt $arrStepHeaders.Count; $intStep++) {
+        if ($arrStepHeaders[$intStep].Groups['Name'].Value -ceq
+            'Set up Python 3.12') {
+            $intPythonSetupStepIndex = $intStep
+        }
+        if ($arrStepHeaders[$intStep].Groups['Name'].Value -ceq
+            'Install locked Python validation tools') {
+            $intPythonInstallStepIndex = $intStep
+        }
         if ($arrStepHeaders[$intStep].Groups['Name'].Value -ceq
             'Verify locked dependency trees and immutable manifests') {
             if ($intVerificationStepIndex -ne -1) {
@@ -1487,6 +1551,10 @@ function Get-HuskySetupContractFailure {
     if ($intVerificationStepIndex -lt 0 -or
         $intActivationStepIndex -ne ($intVerificationStepIndex + 1)) {
         Write-Output 'Copilot hook activation must occur once directly after dependency verification.'
+    }
+    if ($intPythonSetupStepIndex -lt 0 -or
+        $intPythonInstallStepIndex -ne ($intPythonSetupStepIndex + 1)) {
+        Write-Output 'Copilot must install locked Python tools directly after Python setup.'
     }
 
     $strActivationPattern =
@@ -6032,7 +6100,7 @@ $arrGovernedInstructionDocuments = @(
         RequiresMetadata = $true
     }
 )
-$arrGovernedProcessDocuments = @(
+$arrGovernedNonInstructionDocuments = @(
     [pscustomobject]@{
         Path = '.github/workflows/MARKDOWN-LINTING-IMPLEMENTATION.md'
         MaximumBytes = 32768
@@ -6042,11 +6110,46 @@ $arrGovernedProcessDocuments = @(
         Path = '.github/workflows/scripts-README.md'
         MaximumBytes = 32768
         RequiresMetadata = $true
+    },
+    [pscustomobject]@{
+        Path = '.claude/commands/review-loop.md'
+        MaximumBytes = 16384
+        RequiresMetadata = $true
+    },
+    [pscustomobject]@{
+        Path = 'STYLE_GUIDE_RATIONALE.md'
+        MaximumBytes = 131072
+        RequiresMetadata = $true
+    },
+    [pscustomobject]@{
+        Path = 'docs/ISSUE_EVALUATION_PROMPT.md'
+        MaximumBytes = 16384
+        RequiresMetadata = $true
+    },
+    [pscustomobject]@{
+        Path = 'docs/T1-SUPPLY-FREEZE-v1.md'
+        MaximumBytes = 131072
+        RequiresMetadata = $true
+    },
+    [pscustomobject]@{
+        Path = 'docs/decisions/0001-accept-generated-artifact-lint-lag.md'
+        MaximumBytes = 32768
+        RequiresMetadata = $true
+    },
+    [pscustomobject]@{
+        Path = 'docs/decisions/0002-accept-repository-code-in-the-write-enabled-job.md'
+        MaximumBytes = 32768
+        RequiresMetadata = $true
+    },
+    [pscustomobject]@{
+        Path = 'docs/decisions/0003-accept-required-check-workflow-edit-residual.md'
+        MaximumBytes = 32768
+        RequiresMetadata = $true
     }
 )
 $arrGovernedMetadataDocuments = @(
     $arrGovernedInstructionDocuments
-    $arrGovernedProcessDocuments
+    $arrGovernedNonInstructionDocuments
 )
 $strValidatedInputRevision = ''
 
@@ -6137,6 +6240,7 @@ $arrTrackedGovernedInstructionPaths = @(
         Where-Object {
             $strTrackedPath = [string] $_
             $arrGovernedRootPaths -ccontains $strTrackedPath -or
+            $strTrackedPath -cmatch '(?:^|/)AGENTS\.md$' -or
             $strTrackedPath -cmatch `
                 '^\.github/instructions/[^/]+\.instructions\.md$' -or
             $strTrackedPath -cmatch '^\.cursor/rules/[^/]+\.mdc$'
@@ -6788,6 +6892,54 @@ if ($SelfTest) {
                 'Verify dependencies after hook activation'
             )
             Failure = 'once directly after dependency verification'
+        },
+        [pscustomobject]@{
+            Name = 'setup-python commit drifts'
+            Content = $strCopilotSetupContent.Replace(
+                '5fda3b95a4ea91299a34e894583c3862153e4b97',
+                '0000000000000000000000000000000000000000'
+            )
+            Failure = 'reviewed setup-python v7.0.0 commit once'
+        },
+        [pscustomobject]@{
+            Name = 'Python selector drifts'
+            Content = $strCopilotSetupContent.Replace(
+                '          python-version: "3.12"',
+                '          python-version: "3.11"'
+            )
+            Failure = 'locked Python setup line once'
+        },
+        [pscustomobject]@{
+            Name = 'Python requirements cache input is removed'
+            Content = $strCopilotSetupContent.Replace(
+                '          cache-dependency-path: requirements-dev.txt' + "`n",
+                ''
+            )
+            Failure = 'locked Python setup line once'
+        },
+        [pscustomobject]@{
+            Name = 'Python install bypasses the requirements file'
+            Content = $strCopilotSetupContent.Replace(
+                '          python -m pip install --requirement requirements-dev.txt',
+                '          python -m pip install pre-commit'
+            )
+            Failure = 'locked Python setup line once'
+        },
+        [pscustomobject]@{
+            Name = 'Python dependency verification is removed'
+            Content = $strCopilotSetupContent.Replace(
+                '          python -m pip check' + "`n",
+                ''
+            )
+            Failure = 'locked Python setup line once'
+        },
+        [pscustomobject]@{
+            Name = 'requirements file is removed from immutable inputs'
+            Content = $strCopilotSetupContent.Replace(
+                '              requirements-dev.txt' + "`n",
+                ''
+            )
+            Failure = 'protect requirements-dev.txt in both immutable-input layouts'
         }
     )
     foreach ($objCopilotSetupMutation in $arrCopilotSetupMutations) {
@@ -7309,18 +7461,74 @@ if ($SelfTest) {
         }
     }
 
-    $strFutureInstructionPath = '.github/instructions/future.instructions.md'
-    $arrInventoryMutationFailures = @(
-        Get-GovernedInstructionInventoryFailure `
-            -CatalogPaths @($arrGovernedInstructionDocuments.Path) `
-            -TrackedPaths @(
-                $arrTrackedGovernedInstructionPaths + $strFutureInstructionPath
-            )
+    $arrNewlyCoveredUnversionedPaths = @(
+        '.claude/commands/review-loop.md',
+        'STYLE_GUIDE_RATIONALE.md',
+        'docs/ISSUE_EVALUATION_PROMPT.md',
+        'docs/T1-SUPPLY-FREEZE-v1.md',
+        'docs/decisions/0001-accept-generated-artifact-lint-lag.md',
+        'docs/decisions/0002-accept-repository-code-in-the-write-enabled-job.md',
+        'docs/decisions/0003-accept-required-check-workflow-edit-residual.md'
     )
-    $strExpectedInventoryFailure =
-        "Tracked governed instruction is missing from the catalog: $strFutureInstructionPath"
-    if (-not ($arrInventoryMutationFailures -ccontains $strExpectedInventoryFailure)) {
-        throw 'The governed-instruction inventory mutation did not fail closed.'
+    foreach ($strNewlyCoveredPath in $arrNewlyCoveredUnversionedPaths) {
+        $objDocumentContext = $listGovernedDocumentContexts |
+            Where-Object { $_.Path -ceq $strNewlyCoveredPath }
+        if ($null -eq $objDocumentContext) {
+            throw "Could not locate newly covered metadata input: $strNewlyCoveredPath"
+        }
+        $objMetadataContext = Get-DocumentMetadataContext `
+            -Content $objDocumentContext.Content
+        if ($null -ne $objMetadataContext.Failure -or
+            $objMetadataContext.HasVersion) {
+            throw "Could not parse unversioned metadata input: $strNewlyCoveredPath"
+        }
+        $objUpdatedDate = [DateTime]::ParseExact(
+            $objMetadataContext.UpdatedDate,
+            'yyyy-MM-dd',
+            [System.Globalization.CultureInfo]::InvariantCulture
+        )
+        $strStaleUpdatedDate = $objUpdatedDate.AddDays(-1).ToString(
+            'yyyy-MM-dd',
+            [System.Globalization.CultureInfo]::InvariantCulture
+        )
+        $strStaleMetadataMutation = $objDocumentContext.Content.Replace(
+            "- **Last Updated:** $($objMetadataContext.UpdatedDate)",
+            "- **Last Updated:** $strStaleUpdatedDate"
+        ) + [Environment]::NewLine + [Environment]::NewLine +
+            'Rendered governed-document metadata mutation.'
+        $arrStaleMetadataFailures = @(Get-DocumentMetadataTransitionFailure `
+                -Name $strNewlyCoveredPath `
+                -CurrentContent $strStaleMetadataMutation `
+                -ParentContent $objDocumentContext.Content `
+                -ExpectedUtcDate $objMetadataContext.UpdatedDate `
+                -IsNewDocumentTransition $false)
+        $strExpectedFailure =
+            "$strNewlyCoveredPath Last Updated must be " +
+            "$($objMetadataContext.UpdatedDate) after a rendered-content change."
+        if ($arrStaleMetadataFailures -cnotcontains $strExpectedFailure) {
+            throw "$strNewlyCoveredPath stale-metadata mutation did not fail closed."
+        }
+    }
+
+    foreach ($strFutureInstructionPath in @(
+            '.github/instructions/future.instructions.md',
+            'module/nested/AGENTS.md'
+        )) {
+        $arrInventoryMutationFailures = @(
+            Get-GovernedInstructionInventoryFailure `
+                -CatalogPaths @($arrGovernedInstructionDocuments.Path) `
+                -TrackedPaths @(
+                    $arrTrackedGovernedInstructionPaths + $strFutureInstructionPath
+                )
+        )
+        $strExpectedInventoryFailure =
+            "Tracked governed instruction is missing from the catalog: $strFutureInstructionPath"
+        if (-not ($arrInventoryMutationFailures -ccontains $strExpectedInventoryFailure)) {
+            throw (
+                'The governed-instruction inventory mutation did not fail closed: ' +
+                $strFutureInstructionPath
+            )
+        }
     }
 
     $arrAcceptedClaudeLocalInventoryFailures = @(
@@ -10561,11 +10769,13 @@ if ($SelfTest) {
     $arrRequiredTriggerPaths = @(
         $script:arrCheckoutAttributePaths
         $arrAgentSetupInputSpecs | ForEach-Object { $_.Path }
-        $arrGovernedProcessDocuments | ForEach-Object { $_.Path }
+        $arrGovernedNonInstructionDocuments | ForEach-Object { $_.Path }
+        '"**/AGENTS.md"'
     ) | Select-Object -Unique
     $arrConsumedTriggerPaths = @(
         $arrAgentSetupInputSpecs | ForEach-Object { $_.Path }
-        $arrGovernedProcessDocuments | ForEach-Object { $_.Path }
+        $arrGovernedNonInstructionDocuments | ForEach-Object { $_.Path }
+        '"**/AGENTS.md"'
     ) | Select-Object -Unique
     foreach ($strTrigger in @('push', 'pull_request_target')) {
         $arrTriggerPathFailures = @(& $scriptBlockGetTriggerPathFailures `
@@ -10594,6 +10804,46 @@ if ($SelfTest) {
             if ($script:arrTrustRootPaths -cnotcontains $strAttributePath) {
                 throw "The trust-root gate omits checkout attribute path $strAttributePath."
             }
+        }
+    }
+
+    foreach ($strTrigger in @('push', 'pull_request')) {
+        $arrCopilotTriggerFailures = @(& $scriptBlockGetTriggerPathFailures `
+                -WorkflowContent $strCopilotSetupContent `
+                -Trigger $strTrigger `
+                -RequiredPath @('requirements-dev.txt'))
+        if ($arrCopilotTriggerFailures.Count -gt 0) {
+            throw $arrCopilotTriggerFailures[0]
+        }
+        $objCopilotTriggerMatch = [regex]::Match(
+            $strCopilotSetupContent,
+            "(?ms)^  $strTrigger`:\r?\n(?<Body>.*?)(?=^(?:\S| {2}\S)|\z)"
+        )
+        $objRequirementsPathMatch = [regex]::Match(
+            $objCopilotTriggerMatch.Groups['Body'].Value,
+            '(?m)^      - requirements-dev\.txt\r?\n'
+        )
+        if (-not $objRequirementsPathMatch.Success) {
+            throw "Could not create the $strTrigger requirements-trigger mutation."
+        }
+        $intRequirementsPathIndex =
+            $objCopilotTriggerMatch.Groups['Body'].Index +
+            $objRequirementsPathMatch.Index
+        $strMutatedCopilotSetupContent = $strCopilotSetupContent.Remove(
+            $intRequirementsPathIndex,
+            $objRequirementsPathMatch.Length
+        )
+        $arrMutatedCopilotTriggerFailures = @(
+            & $scriptBlockGetTriggerPathFailures `
+                -WorkflowContent $strMutatedCopilotSetupContent `
+                -Trigger $strTrigger `
+                -RequiredPath @('requirements-dev.txt')
+        )
+        if (-not ($arrMutatedCopilotTriggerFailures -match [regex]::Escape(
+                    "$strTrigger must cover consumed validation path " +
+                    'requirements-dev.txt once.'
+                ))) {
+            throw "$strTrigger requirements-trigger mutation was accepted."
         }
     }
     foreach ($strTrigger in @('push', 'pull_request_target')) {

@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD013 -->
 # Decision 0003: Accept that workflow edits can satisfy required checks by skipping them
 
 ## Metadata

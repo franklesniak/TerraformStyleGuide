@@ -16,6 +16,7 @@ on:
       - npm-shrinkwrap.json
       - package.json
       - package-lock.json
+      - requirements-dev.txt
   pull_request:
     paths:
       - .github/workflows/.npmrc
@@ -28,6 +29,7 @@ on:
       - npm-shrinkwrap.json
       - package.json
       - package-lock.json
+      - requirements-dev.txt
 
 permissions:
   contents: read
@@ -117,6 +119,30 @@ jobs:
             exit 1
           fi
 
+      # See: https://github.com/actions/setup-python/releases/latest
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install locked Python validation tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f requirements-dev.txt || -L requirements-dev.txt ]]; then
+            echo '::error file=requirements-dev.txt::The locked Python' \
+              'requirements input is missing or is not a regular file.'
+            exit 1
+          fi
+          test "$(python -c \
+            'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" \
+            = '3.12'
+          python -m pip install --requirement requirements-dev.txt
+          test "$(python -m pre_commit --version)" = 'pre-commit 4.6.2'
+          python -m pip check
+
       - name: Set up Node.js for the modern layout
         if: steps.toolchain.outputs.layout == 'modern'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -183,11 +209,13 @@ jobs:
               package-lock.json
               .github/workflows/package.json
               .github/workflows/package-lock.json
+              requirements-dev.txt
             )
           elif [[ "${TOOLCHAIN_LAYOUT}" == legacy ]]; then
             immutable_inputs=(
               .github/workflows/package.json
               .github/workflows/package-lock.json
+              requirements-dev.txt
             )
           else
             echo '::error::The validation-tool layout is unsupported.'

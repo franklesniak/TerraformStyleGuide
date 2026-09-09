@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD013 -->
 # Decision 0001: Accept that regenerated artifacts are linted one cycle late
 
 ## Metadata

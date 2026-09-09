@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD013 -->
 # Decision 0002: Accept repository-controlled code running in the write-enabled job
 
 ## Metadata

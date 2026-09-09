@@ -1,3 +1,4 @@
+<!-- markdownlint-disable MD013 -->
 # Terraform Writing Style — Rationale and Design Philosophy
 
 - **Status:** Active

@@ -3,6 +3,7 @@ description: Run the automated dual-reviewer PR review loop (Copilot + Codex) to
 argument-hint: <pull-request-url>
 ---
 
+<!-- markdownlint-disable MD013 -->
 # PR review loop
 
 ## Metadata
