@@ -15,7 +15,7 @@ on:
       - .claude/commands/review-loop.md
       - ".cursor/rules/**/*.mdc"
       - .github/copilot-instructions.md
-      - .github/instructions/*.instructions.md
+      - ".github/instructions/**/*.instructions.md"
       - .github/instructions/docs.instructions.md
       - .github/workflows/MARKDOWN-LINTING-IMPLEMENTATION.md
       - .github/workflows/agent-instructions.yml
@@ -52,7 +52,7 @@ on:
       - .claude/commands/review-loop.md
       - ".cursor/rules/**/*.mdc"
       - .github/copilot-instructions.md
-      - .github/instructions/*.instructions.md
+      - ".github/instructions/**/*.instructions.md"
       - .github/instructions/docs.instructions.md
       - .github/workflows/MARKDOWN-LINTING-IMPLEMENTATION.md
       - .github/workflows/agent-instructions.yml

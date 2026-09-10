@@ -124,12 +124,12 @@ const EXPECTED_TRIGGER = Object.freeze({
 // that check. These reviewed values are the independent baseline, so the
 // scripts the workflow runs and the graph it installs are fixed at review time.
 const REVIEWED_PACKAGE_DIGESTS = Object.freeze({
-  'package.json': 'b1d079c7c16a08b89c074f5a5f9378be156428af2204e96902e2f358d9492e02',
+  'package.json': '0e515460fcf69219622c6d73739e4ea8b8da5fcfbce2d6e6b4c26f3e31de8ad0',
   'package-lock.json': '876b3018e35745243c74482e4c58d2652a19bd21be51be425de5ee36240d1c70',
 });
 
 const REVIEWED_SCRIPTS = Object.freeze({
-  'lint:md': 'cd ../.. && markdownlint-cli2 "**/*.md" "**/*.mdc" "#node_modules" "#.github/workflows/node_modules" --config .github/workflows/.markdownlint.jsonc',
+  'lint:md': 'cd ../.. && node .github/workflows/lint-nested-markdown.js && markdownlint-cli2 "**/*.md" "**/*.mdc" "#node_modules" "#.github/workflows/node_modules" --config .github/workflows/.markdownlint.jsonc',
   'lint:md:nested': 'node lint-nested-markdown.js',
   prepare: 'cd ../.. && husky',
 });
@@ -236,8 +236,8 @@ const NETWORK_CLIENT =/\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|ir
 // Both orders were tried here and each one's fix was the other one's defect.
 // Separate jobs are separate runners with separate filesystems, which removes
 // the choice rather than making it.
-const REVIEWED_POLICY_STEP_DIGEST = 'd9a8b23d11e116fb5be4d77c3fbeb93e9d3334093d07ab47ad75f8659c514723';
-const REVIEWED_LINT_STEP_DIGEST = '2626ad0d659e06d0942124712d7629ab72dc8ed6c46c49b5246817d292874ad5';
+const REVIEWED_POLICY_STEP_DIGEST = '8f1c7daf894d897283d5a9c83896756143a0b3c8761834317bdad4fcc5bbc87f';
+const REVIEWED_LINT_STEP_DIGEST = 'e2d0076a811aeba1d285e1a9b108c85ea6456c361ffc59794c5a4d348e38f481';
 
 // Both governed steps have to establish the same supply position before they
 // diverge: the pinned toolchain, the reviewed package metadata, and npm's
@@ -3341,7 +3341,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-MARKDOWN-008', 'nested lint removed', 'markdown', (source) => replaceOnce(source, 'run lint:md:nested', 'run lint:other:nested')],
   ['T1-MARKDOWN-009', 'policy validator removed', 'markdown', (source) => replaceOnce(source, './Validate-WorkflowPolicy.mjs', './other-validator.mjs')],
   ['T1-MARKDOWN-010', 'failure continuation', 'markdown', (source) => replaceOnce(source, '        shell: pwsh\n        working-directory:', '        shell: pwsh\n        continue-on-error: true\n        working-directory:')],
-  ['T1-MARKDOWN-011', 'reviewed package hash removed', 'markdown', (source) => replaceOnce(source, "'B1D079C7C16A08B89C074F5A5F9378BE156428AF2204E96902E2F358D9492E02'", "'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'")],
+  ['T1-MARKDOWN-011', 'reviewed package hash removed', 'markdown', (source) => replaceOnce(source, "'0E515460FCF69219622C6D73739E4EA8B8DA5FCFBCE2D6E6B4C26F3E31DE8AD0'", "'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'")],
   ['T1-MARKDOWN-012', 'reviewed lock hash altered', 'markdown', (source) => replaceOnce(source, "'876B3018E35745243C74482E4C58D2652A19BD21BE51BE425DE5EE36240D1C70'", "'976B3018E35745243C74482E4C58D2652A19BD21BE51BE425DE5EE36240D1C70'")],
   ['T1-MARKDOWN-013', 'pre-install supply gate neutralized', 'markdown', (source) => replaceOnce(source, 'if ($strPackageBefore -cne $strReviewedPackageHash -or', 'if ($false -and $strPackageBefore -cne $strReviewedPackageHash -or')],
   ['T1-BUILD-042', 'workflow token referenced outside the approved push step', 'build', (source) => replaceOnce(source, "          $ErrorActionPreference = 'Stop'\n          $arrArtifacts", "          $ErrorActionPreference = 'Stop'\n          $strToken = '${{ github.token }}'\n          $arrArtifacts")],
@@ -4104,7 +4104,7 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-008": "markdown-policy: markdown.markdownlint.lint is missing a required phase: run lint:md:nested",
   "T1-MARKDOWN-009": "markdown-policy: markdown.policy.validate is missing a required phase: ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml",
   "T1-MARKDOWN-010": "schema: markdown.policy.validate has missing or extra keys",
-  "T1-MARKDOWN-011": "markdown-policy: markdown.policy.validate is missing a required phase: B1D079C7C16A08B89C074F5A5F9378BE156428AF2204E96902E2F358D9492E02",
+  "T1-MARKDOWN-011": "markdown-policy: markdown.policy.validate is missing a required phase: 0E515460FCF69219622C6D73739E4EA8B8DA5FCFBCE2D6E6B4C26F3E31DE8AD0",
   "T1-MARKDOWN-012": "markdown-policy: markdown.policy.validate is missing a required phase: 876B3018E35745243C74482E4C58D2652A19BD21BE51BE425DE5EE36240D1C70",
   "T1-MARKDOWN-013": "markdown-policy: markdown.policy.validate is missing a required phase: if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash)",
   "T1-BUILD-042": "credential-policy: verify.generate-and-verify expands an unapproved credential",

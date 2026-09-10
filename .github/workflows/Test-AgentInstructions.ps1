@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260910.1
+# Version: 1.2.20260910.2
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -98,9 +98,9 @@ $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
 $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/copilot-setup-steps.yml' =
-        '06139397124e9838f33e28f5b6de8fa7f7584ffb589e9553dbbd6fde561746e2'
+        '7837d8636123f59d442e4d6af9860a6ea19ec73792c86090ae002fbf970431f1'
     '.github/workflows/package.json' =
-        'b1d079c7c16a08b89c074f5a5f9378be156428af2204e96902e2f358d9492e02'
+        '0e515460fcf69219622c6d73739e4ea8b8da5fcfbce2d6e6b4c26f3e31de8ad0'
     '.github/workflows/package-lock.json' =
         '876b3018e35745243c74482e4c58d2652a19bd21be51be425de5ee36240d1c70'
     '.husky/pre-commit' =
@@ -1384,7 +1384,7 @@ function Get-HuskySetupContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.9.20260910.0
+    # Version: 1.10.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -1433,6 +1433,17 @@ function Get-HuskySetupContractFailure {
     $strExpectedRootNestedLint = 'npm --prefix .github/workflows run lint:md:nested'
     if ([string]$objRootPackage.scripts.'lint:md:nested' -cne $strExpectedRootNestedLint) {
         Write-Output 'Root lint:md:nested must delegate to the workflow-local lint:md:nested script.'
+    }
+    $strExpectedWorkflowOuterLint =
+        'cd ../.. && node .github/workflows/lint-nested-markdown.js && ' +
+        'markdownlint-cli2 "**/*.md" "**/*.mdc" "#node_modules" ' +
+        '"#.github/workflows/node_modules" --config ' +
+        '.github/workflows/.markdownlint.jsonc'
+    if ([string]$objWorkflowPackage.scripts.'lint:md' -cne
+        $strExpectedWorkflowOuterLint) {
+        Write-Output (
+            'Workflow lint:md must validate Markdown input boundaries before outer lint.'
+        )
     }
     $strExpectedRootAgentTest =
         'pwsh -NoLogo -NoProfile -NonInteractive -File ' +
@@ -1562,6 +1573,27 @@ function Get-HuskySetupContractFailure {
                 'Copilot setup must contain the reviewed action line exactly ' +
                 "$($objExpectedActionLineCount.Value) time(s): " +
                 $objExpectedActionLineCount.Key
+            )
+        }
+    }
+
+    $hashtableExpectedRootInputDigestLine = @{
+        'package.json' =
+            '            ["${root_manifest}"]=' +
+            "'ca77a11a7bd4ae55842ef0f1b8c4b9c0d32e3d6b8fa202455a12e354bf2d696b'"
+        'package-lock.json' =
+            '            ["${root_lock}"]=' +
+            "'e07939c3791be364486aedc928da532870f6d9f29ec2a6a4733be2cc143f5009'"
+    }
+    foreach ($objRootInputDigestLine in
+        $hashtableExpectedRootInputDigestLine.GetEnumerator()) {
+        if ([regex]::Matches(
+                $CopilotSetupContent,
+                '(?m)^' + [regex]::Escape($objRootInputDigestLine.Value) + '\r?$'
+            ).Count -ne 1) {
+            Write-Output (
+                'Copilot setup must authenticate root npm input before installation: ' +
+                $objRootInputDigestLine.Key
             )
         }
     }
@@ -6550,7 +6582,7 @@ $arrTrackedGovernedInstructionPaths = @(
             $arrGovernedRootPaths -ccontains $strTrackedPath -or
             $strTrackedPath -cmatch '(?:^|/)AGENTS\.md$' -or
             $strTrackedPath -cmatch `
-                '^\.github/instructions/[^/]+\.instructions\.md$' -or
+                '^\.github/instructions/(?:[^/]+/)*[^/]+\.instructions\.md$' -or
             $strTrackedPath -cmatch '^\.cursor/rules/(?:[^/]+/)*[^/]+\.mdc$'
         }
 )
@@ -7033,6 +7065,14 @@ if ($SelfTest) {
         'node .github/workflows/lint-nested-markdown.js'
     $strRootNestedLintMutation = $objRootNestedLintMutation | ConvertTo-Json -Depth 10
 
+    $objWorkflowOuterLintMutation = $strWorkflowPackageContent | ConvertFrom-Json
+    $objWorkflowOuterLintMutation.scripts.'lint:md' =
+        'cd ../.. && markdownlint-cli2 "**/*.md" "**/*.mdc" ' +
+        '"#node_modules" "#.github/workflows/node_modules" --config ' +
+        '.github/workflows/.markdownlint.jsonc'
+    $strWorkflowOuterLintMutation =
+        $objWorkflowOuterLintMutation | ConvertTo-Json -Depth 10
+
     $objRootAgentTestMutation = $strRootPackageContent | ConvertFrom-Json
     $objRootAgentTestMutation.scripts.'test:agent-instructions' = 'true'
     $strRootAgentTestMutation = $objRootAgentTestMutation | ConvertTo-Json -Depth 10
@@ -7065,6 +7105,13 @@ if ($SelfTest) {
             $strWorkflowPackageContent
             $strHuskyHookContent
             'Root lint:md:nested must delegate'
+        )
+        ,@(
+            'workflow outer lint omits the safe-input preflight'
+            $strRootPackageContent
+            $strWorkflowOuterLintMutation
+            $strHuskyHookContent
+            'Workflow lint:md must validate Markdown input boundaries'
         )
         ,@(
             'root agent test becomes a no-op'
@@ -7264,6 +7311,14 @@ if ($SelfTest) {
     }
 
     $arrCopilotSetupMutations = @(
+        [pscustomobject]@{
+            Name = 'reviewed root lock digest drifts'
+            Content = $strCopilotSetupContent.Replace(
+                'e07939c3791be364486aedc928da532870f6d9f29ec2a6a4733be2cc143f5009',
+                ('0' * 64)
+            )
+            Failure = 'authenticate root npm input before installation: package-lock.json'
+        },
         [pscustomobject]@{
             Name = 'history fetch depth drifts'
             Content = $strCopilotSetupContent.Replace(
@@ -7993,6 +8048,7 @@ if ($SelfTest) {
 
     foreach ($strFutureInstructionPath in @(
             '.github/instructions/future.instructions.md',
+            '.github/instructions/terraform/naming.instructions.md',
             'module/nested/AGENTS.md',
             '.cursor/rules/terraform/naming.mdc'
         )) {
@@ -11397,6 +11453,7 @@ if ($SelfTest) {
             Where-Object { $_.Path -cnotmatch '^docs/decisions/(?:[^/]+/)*[^/]+\.md$' } |
             ForEach-Object { $_.Path }
         '"docs/decisions/**/*.md"'
+        '".github/instructions/**/*.instructions.md"'
         '".cursor/rules/**/*.mdc"'
         '"**/AGENTS.md"'
     ) | Select-Object -Unique
@@ -11406,6 +11463,7 @@ if ($SelfTest) {
             Where-Object { $_.Path -cnotmatch '^docs/decisions/(?:[^/]+/)*[^/]+\.md$' } |
             ForEach-Object { $_.Path }
         '"docs/decisions/**/*.md"'
+        '".github/instructions/**/*.instructions.md"'
         '".cursor/rules/**/*.mdc"'
         '"**/AGENTS.md"'
     ) | Select-Object -Unique
