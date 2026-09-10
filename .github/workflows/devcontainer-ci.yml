@@ -38,7 +38,7 @@ jobs:
             local candidate_path
             local normalized_path
             local LC_ALL=C
-            while IFS= read -r candidate_path; do
+            while IFS= read -r -d '' candidate_path; do
               normalized_path="${candidate_path,,}"
               case "${normalized_path}" in
                 .devcontainer|.devcontainer/*|.devcontainer.json)
@@ -52,45 +52,59 @@ jobs:
             return 1
           }
 
-          has_devcontainer_entry <<< '.devcontainer' || {
+          has_devcontainer_entry < <(/usr/bin/printf '%s\0' '.devcontainer') || {
             printf '%s\n' 'Directory boundary fixture was not rejected.' >&2
             exit 1
           }
-          has_devcontainer_entry <<< '.devcontainer.json' || {
+          has_devcontainer_entry < <(/usr/bin/printf '%s\0' '.devcontainer.json') || {
             printf '%s\n' 'Root-file boundary fixture was not rejected.' >&2
             exit 1
           }
-          has_devcontainer_entry <<< '.DEVCONTAINER' || {
+          has_devcontainer_entry < <(/usr/bin/printf '%s\0' '.DEVCONTAINER') || {
             printf '%s\n' 'Case-folded directory boundary fixture was not rejected.' >&2
             exit 1
           }
-          has_devcontainer_entry <<< '.DEVCONTAINER.JSON' || {
+          has_devcontainer_entry < <(/usr/bin/printf '%s\0' '.DEVCONTAINER.JSON') || {
             printf '%s\n' 'Case-folded root-file boundary fixture was not rejected.' >&2
             exit 1
           }
           has_devcontainer_entry \
-            <<< 'module/.devcontainer/devcontainer.json' || {
+            < <(/usr/bin/printf '%s\0' 'module/.devcontainer/devcontainer.json') || {
             printf '%s\n' 'Nested directory boundary fixture was not rejected.' >&2
             exit 1
           }
-          has_devcontainer_entry <<< 'module/.devcontainer.json' || {
+          has_devcontainer_entry \
+            < <(/usr/bin/printf '%s\0' 'module/.devcontainer.json') || {
             printf '%s\n' 'Nested file boundary fixture was not rejected.' >&2
             exit 1
           }
-          has_devcontainer_entry <<< 'MODULE/.DEVCONTAINER/DEVCONTAINER.JSON' || {
+          has_devcontainer_entry \
+            < <(/usr/bin/printf '%s\0' 'MODULE/.DEVCONTAINER/DEVCONTAINER.JSON') || {
             printf '%s\n' 'Case-folded nested boundary fixture was not rejected.' >&2
             exit 1
           }
-          if has_devcontainer_entry <<< '.env'; then
+          has_devcontainer_entry \
+            < <(/usr/bin/printf '%b\0' 'm\xc3\xb3dulo/.devcontainer.json') || {
+            printf '%s\n' 'UTF-8 nested-file boundary fixture was not rejected.' >&2
+            exit 1
+          }
+          has_devcontainer_entry \
+            < <(/usr/bin/printf '%b\0' 'module\nname/.devcontainer.json') || {
+            printf '%s\n' 'Newline nested-file boundary fixture was not rejected.' >&2
+            exit 1
+          }
+          if has_devcontainer_entry < <(/usr/bin/printf '%s\0' '.env'); then
             printf '%s\n' 'Unrelated dot-file boundary fixture was rejected.' >&2
             exit 1
           fi
           if has_devcontainer_entry \
-            <<< 'module/.devcontainer-example/devcontainer.json'; then
+            < <(/usr/bin/printf '%s\0' \
+              'module/.devcontainer-example/devcontainer.json'); then
             printf '%s\n' 'Similar nested directory fixture was rejected.' >&2
             exit 1
           fi
-          if has_devcontainer_entry <<< 'module/.devcontainer.json.bak'; then
+          if has_devcontainer_entry \
+            < <(/usr/bin/printf '%s\0' 'module/.devcontainer.json.bak'); then
             printf '%s\n' 'Similar nested file fixture was rejected.' >&2
             exit 1
           fi
@@ -118,12 +132,10 @@ jobs:
               '^(credential\.|http\..*\.extraheader)' || true
           )"
 
-          devcontainer_entries="$(
-            /usr/bin/git -C "${checkout_root}" ls-tree -r --name-only \
-              "${fetched_revision}"
-          )"
-          readonly devcontainer_entries
-          if has_devcontainer_entry <<< "${devcontainer_entries}"; then
+          readonly devcontainer_inventory="${checkout_root}/tracked-paths.zlist"
+          /usr/bin/git -C "${checkout_root}" ls-tree -r --name-only -z \
+            "${fetched_revision}" > "${devcontainer_inventory}"
+          if has_devcontainer_entry < "${devcontainer_inventory}"; then
             printf '%s\n' \
               'TerraformStyleGuide has no authorized devcontainer contract.' >&2
             exit 1
