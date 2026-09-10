@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260910.3
+# Version: 1.2.20260910.4
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -3867,6 +3867,80 @@ function Get-DocumentMetadataClassificationContext {
     }
 }
 
+function Get-DocumentMetadataClassificationExpansionFailure {
+    # .SYNOPSIS
+    # Rejects candidate-only Markdown metadata exemptions.
+    #
+    # .DESCRIPTION
+    # Compares the parsed candidate exemption set with an authenticated baseline.
+    # A baseline omission is permitted only for the one-time manifest bootstrap.
+    # Removals are permitted because they strengthen metadata validation.
+    #
+    # .PARAMETER HasTrustedBaselineManifest
+    # Indicates that the authenticated baseline contains the manifest.
+    #
+    # .PARAMETER TrustedBaselineExemptPath
+    # Parsed exact exemptions in the authenticated baseline.
+    #
+    # .PARAMETER CandidateExemptPath
+    # Parsed exact exemptions in the candidate revision.
+    #
+    # .EXAMPLE
+    # Get-DocumentMetadataClassificationExpansionFailure `
+    #     -HasTrustedBaselineManifest $true `
+    #     -TrustedBaselineExemptPath @('README.md') `
+    #     -CandidateExemptPath @('README.md', 'docs/RUNBOOK.md')
+    #
+    # # Reports docs/RUNBOOK.md as an unauthenticated exemption addition.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [string] One failure for each candidate-only exemption path.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the
+    # public API surface. Parameters, return shape, and positional
+    # contract may change without notice.
+    #
+    # This function does not support positional parameters.
+    # Version: 1.0.20260910.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [bool] $HasTrustedBaselineManifest,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]] $TrustedBaselineExemptPath,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]] $CandidateExemptPath
+    )
+
+    if (-not $HasTrustedBaselineManifest) {
+        return
+    }
+    $setTrustedBaselineExemptPaths =
+        [System.Collections.Generic.HashSet[string]]::new(
+            $TrustedBaselineExemptPath,
+            [System.StringComparer]::Ordinal
+        )
+    foreach ($strCandidateExemptPath in
+        ($CandidateExemptPath | Sort-Object -CaseSensitive -Unique)) {
+        if ($setTrustedBaselineExemptPaths.Contains($strCandidateExemptPath)) {
+            continue
+        }
+        Write-Output (
+            'The document classification adds an unauthenticated metadata ' +
+            "exemption: $strCandidateExemptPath"
+        )
+    }
+}
+
 function Get-DiscoveredGovernedMarkdownDocumentPath {
     # .SYNOPSIS
     # Selects tracked Markdown that is not already classified.
@@ -4858,8 +4932,9 @@ function Get-TrustRootRangeMutationFailure {
     # Finds proposed changes to trusted validation files.
     #
     # .DESCRIPTION
-    # Compares exact paths in two Git trees without reading proposed file bytes.
-    # Changed paths, invalid revisions, and indeterminate results fail closed.
+    # Compares exact paths from the one authenticated merge base to the proposed
+    # head without reading proposed file bytes. Topic-branch changes, invalid
+    # revisions, ambiguous ancestry, and indeterminate results fail closed.
     #
     # .PARAMETER RepositoryRootPath
     # The absolute repository root used for Git comparisons.
@@ -4892,7 +4967,7 @@ function Get-TrustRootRangeMutationFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.0.20260820.0
+    # Version: 1.1.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -4923,9 +4998,27 @@ function Get-TrustRootRangeMutationFailure {
         }
     }
 
+    $arrMergeBaseRevisions = @(
+        & git -C $RepositoryRootPath merge-base --all `
+            $BaseRevision $HeadRevision 2>$null
+    )
+    if ($LASTEXITCODE -ne 0 -or $arrMergeBaseRevisions.Count -ne 1) {
+        throw 'The trusted validation range must have exactly one merge base.'
+    }
+    $strMergeBaseRevision = [string]$arrMergeBaseRevisions[0]
+    $strMergeBaseRevision = $strMergeBaseRevision.Trim()
+    if ($strMergeBaseRevision -notmatch $strObjectIdPattern) {
+        throw 'The trusted validation range merge base is invalid.'
+    }
+    & git -C $RepositoryRootPath cat-file -e `
+        "$strMergeBaseRevision`^{commit}" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'The trusted validation range merge base is unavailable.'
+    }
+
     $arrChangedPaths = @(
         & git -C $RepositoryRootPath diff --name-only --no-renames `
-            --no-ext-diff --no-textconv $BaseRevision $HeadRevision -- `
+            --no-ext-diff --no-textconv $strMergeBaseRevision $HeadRevision -- `
             $RepositoryRelativePath
     )
     if ($LASTEXITCODE -ne 0) {
@@ -7060,6 +7153,83 @@ $objDocumentClassificationContext = Get-DocumentMetadataClassificationContext `
 if ($null -ne $objDocumentClassificationContext.Failure) {
     throw $objDocumentClassificationContext.Failure
 }
+$strDocumentClassificationBaselineRevision = if (
+    -not [string]::IsNullOrEmpty($strLocalPublishedBaselineRevision)
+) {
+    $strLocalPublishedBaselineRevision
+}
+else {
+    $RangeBaseRevision
+}
+$boolHasTrustedBaselineClassificationManifest = $false
+$arrTrustedBaselineClassificationExemptPaths = @()
+if (-not [string]::IsNullOrEmpty($strDocumentClassificationBaselineRevision) -and
+    $strDocumentClassificationBaselineRevision -notmatch '^(?:0{40}|0{64})$') {
+    if ($strDocumentClassificationBaselineRevision -notmatch
+        '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$') {
+        throw 'The document classification baseline revision is invalid.'
+    }
+    & git -C $strRepositoryRootPath cat-file -e `
+        "$strDocumentClassificationBaselineRevision`^{commit}" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'The document classification baseline commit is unavailable.'
+    }
+    $arrBaselineClassificationEntries = @(
+        & git -C $strRepositoryRootPath ls-tree `
+            $strDocumentClassificationBaselineRevision -- `
+            '.github/document-metadata-classification.json'
+    )
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not inspect the document classification baseline.'
+    }
+    if ($arrBaselineClassificationEntries.Count -gt 0) {
+        $arrBaselineTrackedRepositoryPaths = @(
+            Invoke-GitNulRecordQuery `
+                -RepositoryRootPath $strRepositoryRootPath `
+                -Argument @(
+                    'ls-tree', '-r', '--name-only', '-z',
+                    $strDocumentClassificationBaselineRevision
+                ) `
+                -DisplayName 'document classification baseline paths'
+        )
+        $strBaselineDocumentClassificationContent = Read-GitRevisionText `
+            -RepositoryRootPath $strRepositoryRootPath `
+            -Revision $strDocumentClassificationBaselineRevision `
+            -RepositoryRelativePath '.github/document-metadata-classification.json' `
+            -MaximumBytes $intDocumentClassificationMaximumInputBytes `
+            -RequireRegularFile
+        $objBaselineDocumentClassificationContext =
+            Get-DocumentMetadataClassificationContext `
+                -Content $strBaselineDocumentClassificationContent `
+                -TrackedPath $arrBaselineTrackedRepositoryPaths
+        if ($null -ne $objBaselineDocumentClassificationContext.Failure) {
+            throw (
+                'The trusted baseline document classification is invalid: ' +
+                $objBaselineDocumentClassificationContext.Failure
+            )
+        }
+        $boolHasTrustedBaselineClassificationManifest = $true
+        $arrTrustedBaselineClassificationExemptPaths = @(
+            $objBaselineDocumentClassificationContext.ExemptPaths
+        )
+    }
+}
+$arrDocumentClassificationExpansionFailures = @(
+    Get-DocumentMetadataClassificationExpansionFailure `
+        -HasTrustedBaselineManifest `
+            $boolHasTrustedBaselineClassificationManifest `
+        -TrustedBaselineExemptPath `
+            $arrTrustedBaselineClassificationExemptPaths `
+        -CandidateExemptPath $objDocumentClassificationContext.ExemptPaths
+)
+if ($arrDocumentClassificationExpansionFailures.Count -gt 0) {
+    throw (
+        'Document classification expansion failed:' +
+        [Environment]::NewLine + '- ' +
+        ($arrDocumentClassificationExpansionFailures -join
+            ([Environment]::NewLine + '- '))
+    )
+}
 $arrMetadataExemptMarkdownDocuments = @(
     $objDocumentClassificationContext.ExemptPaths
 )
@@ -8949,6 +9119,50 @@ if ($SelfTest) {
             )
         }
     }
+    $arrClassificationExpansionBaseline = @('README.md', 'templates/README.md')
+    $arrUnchangedClassificationExpansionFailures = @(
+        Get-DocumentMetadataClassificationExpansionFailure `
+            -HasTrustedBaselineManifest $true `
+            -TrustedBaselineExemptPath $arrClassificationExpansionBaseline `
+            -CandidateExemptPath $arrClassificationExpansionBaseline
+    )
+    if ($arrUnchangedClassificationExpansionFailures.Count -ne 0) {
+        throw 'An unchanged document classification was treated as an expansion.'
+    }
+    $arrClassificationRemovalFailures = @(
+        Get-DocumentMetadataClassificationExpansionFailure `
+            -HasTrustedBaselineManifest $true `
+            -TrustedBaselineExemptPath $arrClassificationExpansionBaseline `
+            -CandidateExemptPath @('README.md')
+    )
+    if ($arrClassificationRemovalFailures.Count -ne 0) {
+        throw 'A document classification exemption removal was rejected.'
+    }
+    $arrClassificationAdditionFailures = @(
+        Get-DocumentMetadataClassificationExpansionFailure `
+            -HasTrustedBaselineManifest $true `
+            -TrustedBaselineExemptPath $arrClassificationExpansionBaseline `
+            -CandidateExemptPath @(
+                'README.md',
+                'docs/RELEASE-RUNBOOK.md',
+                'templates/README.md'
+            )
+    )
+    if ($arrClassificationAdditionFailures.Count -ne 1 -or
+        $arrClassificationAdditionFailures[0] -cne
+            ('The document classification adds an unauthenticated metadata ' +
+             'exemption: docs/RELEASE-RUNBOOK.md')) {
+        throw 'A document classification exemption addition did not fail closed.'
+    }
+    $arrClassificationBootstrapFailures = @(
+        Get-DocumentMetadataClassificationExpansionFailure `
+            -HasTrustedBaselineManifest $false `
+            -TrustedBaselineExemptPath @() `
+            -CandidateExemptPath @('README.md', 'docs/RELEASE-RUNBOOK.md')
+    )
+    if ($arrClassificationBootstrapFailures.Count -ne 0) {
+        throw 'The one-time document classification bootstrap was rejected.'
+    }
     foreach ($objUnsafeMarkdownInventoryFixture in @(
             [pscustomobject]@{
                 Name = 'newline path'
@@ -10708,6 +10922,98 @@ if ($SelfTest) {
             -Parents @() `
             -Timestamp ($strMergeHistoricalDate + 'T08:00:00Z') `
             -Message 'merge fixture base'
+
+        & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
+        $strTrustRangeOrdinaryPath = [System.IO.Path]::Combine(
+            $strMergeFixtureRoot,
+            'ordinary.txt'
+        )
+        [System.IO.File]::WriteAllText(
+            $strTrustRangeOrdinaryPath,
+            'topic-only ordinary change',
+            $objUtf8WithoutBom
+        )
+        & git -C $strMergeFixtureRoot add -- 'ordinary.txt'
+        $strTrustRangeTopicTree =
+            ([string] (& git -C $strMergeFixtureRoot write-tree)).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not create the trust-range topic tree.'
+        }
+        $strTrustRangeTopicCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strTrustRangeTopicTree `
+            -Parents @($strMergeBaseCommit) `
+            -Timestamp ($strMergeHistoricalDate + 'T08:01:00Z') `
+            -Message 'trust range topic change'
+
+        & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
+        [System.IO.File]::WriteAllText(
+            $strMergePolicyPath,
+            'base-only trust-root update',
+            $objUtf8WithoutBom
+        )
+        & git -C $strMergeFixtureRoot add -- `
+            '.github/workflows/Test-AgentInstructions.ps1'
+        $strTrustRangeUpdatedBaseTree =
+            ([string] (& git -C $strMergeFixtureRoot write-tree)).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not create the trust-range updated-base tree.'
+        }
+        $strTrustRangeUpdatedBaseCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strTrustRangeUpdatedBaseTree `
+            -Parents @($strMergeBaseCommit) `
+            -Timestamp ($strMergeHistoricalDate + 'T08:02:00Z') `
+            -Message 'trust range base-only update'
+        $arrBaseOnlyTrustRangeFailures = @(Get-TrustRootRangeMutationFailure `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -BaseRevision $strTrustRangeUpdatedBaseCommit `
+                -HeadRevision $strTrustRangeTopicCommit `
+                -RepositoryRelativePath @(
+                    '.github/workflows/Test-AgentInstructions.ps1'
+                ))
+        if ($arrBaseOnlyTrustRangeFailures.Count -ne 0) {
+            throw 'A base-only trust-root update was attributed to the topic branch.'
+        }
+
+        & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
+        [System.IO.File]::WriteAllText(
+            $strMergePolicyPath,
+            'topic trust-root update',
+            $objUtf8WithoutBom
+        )
+        & git -C $strMergeFixtureRoot add -- `
+            '.github/workflows/Test-AgentInstructions.ps1'
+        $strTrustRangeMutatedTopicTree =
+            ([string] (& git -C $strMergeFixtureRoot write-tree)).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not create the trust-range mutated-topic tree.'
+        }
+        $strTrustRangeMutatedTopicCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strTrustRangeMutatedTopicTree `
+            -Parents @($strMergeBaseCommit) `
+            -Timestamp ($strMergeHistoricalDate + 'T08:03:00Z') `
+            -Message 'trust range topic trust-root update'
+        $arrTopicTrustRangeFailures = @(Get-TrustRootRangeMutationFailure `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -BaseRevision $strTrustRangeUpdatedBaseCommit `
+                -HeadRevision $strTrustRangeMutatedTopicCommit `
+                -RepositoryRelativePath @(
+                    '.github/workflows/Test-AgentInstructions.ps1'
+                ))
+        if ($arrTopicTrustRangeFailures.Count -ne 1 -or
+            -not ($arrTopicTrustRangeFailures -match
+                'changes trusted validation path')) {
+            throw 'A topic trust-root update did not fail from the merge base.'
+        }
+        & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
+        [System.IO.File]::WriteAllText(
+            $strMergePolicyPath,
+            $strMetadataRangePolicyMarker,
+            $objUtf8WithoutBom
+        )
+        if ([System.IO.File]::Exists($strTrustRangeOrdinaryPath)) {
+            Remove-Item -LiteralPath $strTrustRangeOrdinaryPath -Force
+        }
+
         $strUnicodeDirectoryName = 'm' + [char] 0x00F3 + 'dulo'
         $strUnicodeDecisionFileName = 'revisi' + [char] 0x00F3 + 'n.md'
         $strUnicodeInstructionRepositoryPath =
@@ -12187,16 +12493,18 @@ if ($SelfTest) {
         $strFinalizationResolverPath
     )
     $arrFinalizationResolverLiterals = @(
-        "  if (eventName !== 'workflow_dispatch') {",
-        "    url.searchParams.set('branch', refName);",
-        "    url.searchParams.set('event', 'push');",
-        "    url.searchParams.set('status', 'success');",
-        "    url.searchParams.set('head_sha', trustedRevision);",
+        "      !['push', 'pull_request_target', 'workflow_dispatch'].includes(eventName) ||",
+        "  if (eventName === 'push') {",
+        "    url.searchParams.set('branch', expected.refName);",
+        "    url.searchParams.set('event', expected.eventName);",
+        "      url.searchParams.set('status', 'success');",
+        "    url.searchParams.set('head_sha', expected.trustedRevision);",
         '      run?.workflow_id !== expected.workflowId ||',
-        '      run?.event !== ''push'' || run?.status !== ''completed'' ||',
-        '      run?.conclusion !== ''success'' ||',
+        '       (run?.status !== ''completed'' || run?.conclusion !== ''success'')) ||',
+        '  const pushCandidates = await readHistoricalRuns({',
+        '  const pullRequestCandidates = await readHistoricalRuns({',
         '  candidates.sort((left, right) => left.createdTime - right.createdTime);',
-        '  return candidates[0].createdAt;',
+        '    return pushCandidates[0].createdAt;',
         '  const timestamp = await resolveFinalizationTimestamp({',
         '  appendFileSync(output, `timestamp=${timestamp}\n`, ''utf8'');'
     )
@@ -12213,7 +12521,8 @@ if ($SelfTest) {
     }
     foreach ($strSharedRunIdentityLiteral in @(
             '      run?.head_repository?.full_name !== expected.repository ||',
-            '      run?.head_branch !== expected.refName ||'
+            '      run?.head_branch !== expected.refName ||',
+            '      run?.event !== expected.eventName ||'
         )) {
         if ([regex]::Matches(
                 $strFinalizationResolverContent,
@@ -12233,7 +12542,7 @@ if ($SelfTest) {
     if ($intFinalizationResolverSelfTestExit -ne 0 -or
         $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
         [string]$arrFinalizationResolverSelfTestOutput[0] -cne
-        'Finalization resolver self-tests passed: 17 fixtures.') {
+        'Finalization resolver self-tests passed: 20 fixtures.') {
         throw (
             'The finalization-time resolver self-test failed: ' +
             ($arrFinalizationResolverSelfTestOutput -join '; ')
