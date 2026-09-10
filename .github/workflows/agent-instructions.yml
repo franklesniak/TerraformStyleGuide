@@ -29,29 +29,6 @@ on:
       - package.json
       - requirements-dev.txt
   pull_request_target:
-    paths:
-      - .gitattributes
-      - .github/.gitattributes
-      - .github/document-metadata-classification.json
-      - .github/workflows/.gitattributes
-      - .github/workflows/package-lock.json
-      - .github/workflows/package.json
-      - .codex/config.toml
-      - .github/workflows/agent-instructions.yml
-      - .github/workflows/copilot-setup-steps.yml
-      - .github/workflows/lint-staged-markdown.mjs
-      - .github/workflows/Resolve-AgentInstructionFinalizationTime.mjs
-      - .github/workflows/Test-AgentInstructionParserManifest.mjs
-      - .github/workflows/Test-AgentInstructions.ps1
-      - .husky/pre-commit
-      - .npmrc
-      - .pre-commit-config.yaml
-      - "**/*.md"
-      - "**/*.mdc"
-      - npm-shrinkwrap.json
-      - package-lock.json
-      - package.json
-      - requirements-dev.txt
 
 permissions:
   actions: read

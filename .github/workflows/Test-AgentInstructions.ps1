@@ -99,7 +99,7 @@ $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
 $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/copilot-setup-steps.yml' =
-        '2e32db0887f9adf7956a7e49104e92773148c2fc602be68b977cb1c37f455a0d'
+        '9a40aed7450605390c3028dbbc6841db7fb45d84ac5f1d64efe756ffae34a980'
     '.github/workflows/package.json' =
         '3f9a89e9f0abc17c81a7268c15d8c82eef5f766ecaf1b9b82e7b2cc7bd6c7c19'
     '.github/workflows/package-lock.json' =
@@ -109,7 +109,7 @@ $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/lint-staged-markdown.mjs' =
         'bdfa40197cb7a4c8720e3d402b426a741c03c30748a82c3a02d1d89765be54c9'
     '.pre-commit-config.yaml' =
-        '00670005418da9cb372b7490f00da8f3afd5f697144f374b40e080b5566b7672'
+        'e43a1ed2ad92bdb9407f9140ae40f7d46962181999e072f9a3724cf5cef2e946'
 }
 $script:strWorkflowPolicyCommandPrefix =
     'node .github/workflows/Validate-WorkflowPolicy.mjs'
@@ -1500,7 +1500,7 @@ function Get-HuskySetupContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.11.20260910.0
+    # Version: 1.12.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -1612,6 +1612,41 @@ function Get-HuskySetupContractFailure {
                 '(?m)^' + [regex]::Escape($strExpectedYamlSelector) + '\r?$'
             ).Count -ne 1) {
             Write-Output "The $strYamlHookId hook must select all repository YAML files."
+        }
+    }
+    $hashtableExpectedPreCommitRevision = [ordered]@{
+        'https://github.com/pre-commit/pre-commit-hooks' =
+            '3e8a8703264a2f4a69428a0aa4dcb512790b2c8c'
+        'https://github.com/adrienverge/yamllint' =
+            'cba56bcde1fdd01c1deb3f945e69764c291a6530'
+        'https://github.com/rhysd/actionlint' =
+            '011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7'
+        'https://github.com/python-jsonschema/check-jsonschema' =
+            '6b63472e72e1a91ed8a2f6d483790dfb644fa1d3'
+    }
+    $arrRemoteRepositoryBlocks = @([regex]::Matches(
+            $PreCommitConfigContent,
+            '(?ms)^  - repo: (?<Repository>https://[^\r\n]+)\r?\n' +
+            '(?<Body>.*?)(?=^  - repo:|\z)'
+        ))
+    if ($arrRemoteRepositoryBlocks.Count -ne
+        $hashtableExpectedPreCommitRevision.Count) {
+        Write-Output 'Pre-commit must declare only the four reviewed remote hook repositories.'
+    }
+    foreach ($objExpectedRevision in $hashtableExpectedPreCommitRevision.GetEnumerator()) {
+        $arrMatchingRepositoryBlocks = @($arrRemoteRepositoryBlocks | Where-Object {
+                $_.Groups['Repository'].Value -ceq $objExpectedRevision.Key
+            })
+        if ($arrMatchingRepositoryBlocks.Count -ne 1 -or
+            [regex]::Matches(
+                $arrMatchingRepositoryBlocks[0].Groups['Body'].Value,
+                '(?m)^    rev: "' + [regex]::Escape($objExpectedRevision.Value) +
+                '"(?: # [^\r\n]+)?\r?$'
+            ).Count -ne 1) {
+            Write-Output (
+                "Pre-commit hook repository $($objExpectedRevision.Key) must use " +
+                "reviewed full commit $($objExpectedRevision.Value)."
+            )
         }
     }
     $arrRequiredLintCommands = @(
@@ -1773,7 +1808,7 @@ function Get-HuskySetupContractFailure {
         }
     }
     $strExpectedPythonInstallSequence = @'
-          reviewed_requirements_sha256='2ef47e05168e86c3cdc43a54646949e9487d8dd02af3d493fe055967a31a9b73'
+          reviewed_requirements_sha256='6f02e9a6b589db021bb4a48de4d9b8f28f30470386f06d702acb2987127decda'
           test "$(sha256sum requirements-dev.txt | cut -d ' ' -f 1)" \
             = "${reviewed_requirements_sha256}"
           python -m pip install --requirement requirements-dev.txt
@@ -1873,9 +1908,10 @@ function Get-PreCommitBootstrapContractFailure {
     # Finds failures in the documented pre-commit runner bootstrap contract.
     #
     # .DESCRIPTION
-    # Requires one exact pre-commit version pin, an exact PowerShell 7 preflight,
-    # and exact interpreter-qualified Windows and POSIX install and run commands
-    # in both agent entry points and the workflow script index.
+    # Requires one complete, hash-checked binary-only Python tool lock, an exact
+    # PowerShell 7 preflight, and exact interpreter-qualified Windows and POSIX
+    # install and run commands in both agent entry points and the workflow script
+    # index.
     #
     # .PARAMETER AgentsContent
     # The AGENTS.md text that documents the shared validation workflow.
@@ -1887,7 +1923,7 @@ function Get-PreCommitBootstrapContractFailure {
     # The workflow script-index text that documents local setup.
     #
     # .PARAMETER RequirementsContent
-    # The requirements-dev.txt text that pins the pre-commit runner.
+    # The requirements-dev.txt text that locks the pre-commit runner closure.
     #
     # .EXAMPLE
     # Get-PreCommitBootstrapContractFailure -AgentsContent $strAgents `
@@ -1908,7 +1944,7 @@ function Get-PreCommitBootstrapContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.1.20260910.0
+    # Version: 1.2.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -1925,13 +1961,69 @@ function Get-PreCommitBootstrapContractFailure {
         [string] $RequirementsContent
     )
 
-    $strExpectedRequirement = "pre-commit==4.6.2`n"
     $strNormalizedRequirements = $RequirementsContent.Replace("`r`n", "`n").Replace(
         "`r",
         "`n"
     )
-    if ($strNormalizedRequirements -cne $strExpectedRequirement) {
-        Write-Output 'requirements-dev.txt must contain only the exact pre-commit 4.6.2 pin.'
+    $hashtableExpectedPythonPackage = [ordered]@{
+        cfgv = [pscustomobject]@{ Version = '3.5.0'; HashCount = 1 }
+        distlib = [pscustomobject]@{ Version = '0.4.3'; HashCount = 1 }
+        filelock = [pscustomobject]@{ Version = '3.32.6'; HashCount = 1 }
+        identify = [pscustomobject]@{ Version = '2.6.19'; HashCount = 1 }
+        nodeenv = [pscustomobject]@{ Version = '1.10.0'; HashCount = 1 }
+        platformdirs = [pscustomobject]@{ Version = '4.11.8'; HashCount = 1 }
+        'pre-commit' = [pscustomobject]@{ Version = '4.6.2'; HashCount = 1 }
+        'python-discovery' = [pscustomobject]@{ Version = '1.6.0'; HashCount = 1 }
+        pyyaml = [pscustomobject]@{ Version = '6.0.3'; HashCount = 10 }
+        virtualenv = [pscustomobject]@{ Version = '21.7.9'; HashCount = 1 }
+    }
+    $strLockPreamble = "--only-binary=:all:`n--require-hashes`n`n"
+    $boolRequirementsLockValid = $strNormalizedRequirements.StartsWith(
+        $strLockPreamble,
+        [System.StringComparison]::Ordinal
+    )
+    $strRequirementBody = if ($boolRequirementsLockValid) {
+        $strNormalizedRequirements.Substring($strLockPreamble.Length)
+    }
+    else {
+        $strNormalizedRequirements
+    }
+    $arrRequirementMatches = @([regex]::Matches(
+            $strRequirementBody,
+            '(?ms)^(?<Name>[a-z][a-z0-9-]*)==(?<Version>[^\s\\]+) \\\n' +
+            '(?<Hashes>    --hash=sha256:[0-9a-f]{64}' +
+            '(?: \\\n    --hash=sha256:[0-9a-f]{64})*)\n'
+        ))
+    $strUnparsedRequirementBody = $strRequirementBody
+    foreach ($objRequirementMatch in $arrRequirementMatches) {
+        $strUnparsedRequirementBody = $strUnparsedRequirementBody.Replace(
+            $objRequirementMatch.Value,
+            ''
+        )
+    }
+    if ($strUnparsedRequirementBody.Length -ne 0 -or
+        $arrRequirementMatches.Count -ne $hashtableExpectedPythonPackage.Count) {
+        $boolRequirementsLockValid = $false
+    }
+    foreach ($objExpectedPackage in $hashtableExpectedPythonPackage.GetEnumerator()) {
+        $arrMatchingPackages = @($arrRequirementMatches | Where-Object {
+                $_.Groups['Name'].Value -ceq $objExpectedPackage.Key
+            })
+        if ($arrMatchingPackages.Count -ne 1 -or
+            $arrMatchingPackages[0].Groups['Version'].Value -cne
+                $objExpectedPackage.Value.Version -or
+            [regex]::Matches(
+                $arrMatchingPackages[0].Groups['Hashes'].Value,
+                '--hash=sha256:[0-9a-f]{64}'
+            ).Count -ne $objExpectedPackage.Value.HashCount) {
+            $boolRequirementsLockValid = $false
+        }
+    }
+    if (-not $boolRequirementsLockValid) {
+        Write-Output (
+            'requirements-dev.txt must contain the complete reviewed binary-only ' +
+            'Python 3.12 tool closure with SHA-256 hashes.'
+        )
     }
 
     $arrRequiredCommands = @(
@@ -7486,6 +7578,33 @@ if ($SelfTest) {
             ($arrPreCommitBootstrapControlFailures -join '; ')
         )
     }
+    $hashtableMutablePreCommitRevision = [ordered]@{
+        '3e8a8703264a2f4a69428a0aa4dcb512790b2c8c' = 'v6.0.0'
+        'cba56bcde1fdd01c1deb3f945e69764c291a6530' = 'v1.38.0'
+        '011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7' = 'v1.7.12'
+        '6b63472e72e1a91ed8a2f6d483790dfb644fa1d3' = '0.37.4'
+    }
+    foreach ($objMutableRevision in $hashtableMutablePreCommitRevision.GetEnumerator()) {
+        $strMutableRevisionConfig = $strPreCommitConfigContent.Replace(
+            'rev: "' + $objMutableRevision.Key + '"',
+            'rev: "' + $objMutableRevision.Value + '"'
+        )
+        if ($strMutableRevisionConfig -ceq $strPreCommitConfigContent) {
+            throw "Could not create the $($objMutableRevision.Value) revision mutation."
+        }
+        $arrMutableRevisionFailures = @(Get-HuskySetupContractFailure `
+                -RootPackageContent $strRootPackageContent `
+                -WorkflowPackageContent $strWorkflowPackageContent `
+                -WorkflowPackageLockContent $strWorkflowPackageLockContent `
+                -HookContent $strHuskyHookContent `
+                -CopilotSetupContent $strCopilotSetupContent `
+                -PreCommitConfigContent $strMutableRevisionConfig `
+                -StagedMarkdownHelperContent $strStagedMarkdownHelperContent)
+        if (-not ($arrMutableRevisionFailures -match
+                'must use reviewed full commit')) {
+            throw "Mutable pre-commit revision $($objMutableRevision.Value) did not fail closed."
+        }
+    }
     foreach ($strYamlHookId in @('check-yaml', 'yamllint')) {
         $objYamlSelectorPattern = [regex]::new(
             "(?ms)(^      - id: $([regex]::Escape($strYamlHookId))\r?\n" +
@@ -7526,7 +7645,46 @@ if ($SelfTest) {
             Claude = $strClaudeContent
             ScriptIndex = $strScriptIndexContent
             Requirements = $strRequirementsContent.Replace('4.6.2', '4.6.1')
-            Failure = 'exact pre-commit 4.6.2 pin'
+            Failure = 'complete reviewed binary-only Python 3.12 tool closure'
+        },
+        [pscustomobject]@{
+            Name = 'hash enforcement removed'
+            Agents = $strAgentsContent
+            Claude = $strClaudeContent
+            ScriptIndex = $strScriptIndexContent
+            Requirements = $strRequirementsContent.Replace("--require-hashes`n", '')
+            Failure = 'complete reviewed binary-only Python 3.12 tool closure'
+        },
+        [pscustomobject]@{
+            Name = 'binary-only enforcement removed'
+            Agents = $strAgentsContent
+            Claude = $strClaudeContent
+            ScriptIndex = $strScriptIndexContent
+            Requirements = $strRequirementsContent.Replace("--only-binary=:all:`n", '')
+            Failure = 'complete reviewed binary-only Python 3.12 tool closure'
+        },
+        [pscustomobject]@{
+            Name = 'locked artifact hash removed'
+            Agents = $strAgentsContent
+            Claude = $strClaudeContent
+            ScriptIndex = $strScriptIndexContent
+            Requirements = $strRequirementsContent.Replace(
+                '    --hash=sha256:a8dc6b26ad22ff227d2634a65cb388215ce6cc96bbcc5cfde7641ae87e8dacc0' +
+                "`n",
+                ''
+            )
+            Failure = 'complete reviewed binary-only Python 3.12 tool closure'
+        },
+        [pscustomobject]@{
+            Name = 'unreviewed package added'
+            Agents = $strAgentsContent
+            Claude = $strClaudeContent
+            ScriptIndex = $strScriptIndexContent
+            Requirements = $strRequirementsContent +
+                "pip==26.0.1 \\`n" +
+                '    --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000' +
+                "`n"
+            Failure = 'complete reviewed binary-only Python 3.12 tool closure'
         },
         [pscustomobject]@{
             Name = 'AGENTS PowerShell preflight weakened'
@@ -8003,7 +8161,7 @@ if ($SelfTest) {
         [pscustomobject]@{
             Name = 'reviewed Python requirements digest drifts'
             Content = $strCopilotSetupContent.Replace(
-                '2ef47e05168e86c3cdc43a54646949e9487d8dd02af3d493fe055967a31a9b73',
+                '6f02e9a6b589db021bb4a48de4d9b8f28f30470386f06d702acb2987127decda',
                 ('0' * 64)
             )
             Failure = 'authenticate requirements before pip installs them'
@@ -12517,6 +12675,25 @@ if ($SelfTest) {
             }
         }
     }
+    $scriptBlockGetPullRequestTargetFailures = {
+        param([string] $WorkflowContent)
+
+        $objTriggerMatch = [regex]::Match(
+            $WorkflowContent,
+            '(?ms)^  pull_request_target:\r?\n(?<Body>.*?)(?=^(?:\S| {2}\S)|\z)'
+        )
+        if (-not $objTriggerMatch.Success) {
+            Write-Output 'Could not parse the pull_request_target agent-validation trigger.'
+            return
+        }
+        if ($objTriggerMatch.Groups['Body'].Value -cmatch
+            '(?m)^    paths(?:-ignore)?:') {
+            Write-Output (
+                'The pull_request_target agent-validation trigger must be unconditional ' +
+                'and must not use a path filter.'
+            )
+        }
+    }
 
     $arrRequiredTriggerPaths = @(
         $script:arrCheckoutAttributePaths
@@ -12539,33 +12716,34 @@ if ($SelfTest) {
         '"**/*.md"'
         '"**/*.mdc"'
     ) | Select-Object -Unique
-    foreach ($strTrigger in @('push', 'pull_request_target')) {
-        $arrTriggerPathFailures = @(& $scriptBlockGetTriggerPathFailures `
-                -WorkflowContent $strAgentWorkflowContent `
-                -Trigger $strTrigger `
-                -RequiredPath $arrRequiredTriggerPaths)
-        if ($arrTriggerPathFailures.Count -gt 0) {
-            throw $arrTriggerPathFailures[0]
-        }
-        if ($strTrigger -ceq 'push') {
-            $objPushTriggerMatch = [regex]::Match(
-                $strAgentWorkflowContent,
-                '(?ms)^  push:\r?\n(?<Body>.*?)(?=^(?:\S| {2}\S)|\z)'
-            )
-            $objBranchFilterMatch = [regex]::Match(
-                $objPushTriggerMatch.Groups['Body'].Value,
-                '(?ms)^    branches:\r?\n(?<Branches>(?:      - [^\r\n]+\r?\n)+)'
-            )
-            if (-not $objBranchFilterMatch.Success -or
-                $objBranchFilterMatch.Groups['Branches'].Value -cnotmatch
-                    '^      - "\*\*"\r?\n$') {
-                throw 'The push agent-validation trigger must cover all branches and exclude tags.'
-            }
-        }
-        foreach ($strAttributePath in $script:arrCheckoutAttributePaths) {
-            if ($script:arrTrustRootPaths -cnotcontains $strAttributePath) {
-                throw "The trust-root gate omits checkout attribute path $strAttributePath."
-            }
+    $arrTriggerPathFailures = @(& $scriptBlockGetTriggerPathFailures `
+            -WorkflowContent $strAgentWorkflowContent `
+            -Trigger 'push' `
+            -RequiredPath $arrRequiredTriggerPaths)
+    if ($arrTriggerPathFailures.Count -gt 0) {
+        throw $arrTriggerPathFailures[0]
+    }
+    $objPushTriggerMatch = [regex]::Match(
+        $strAgentWorkflowContent,
+        '(?ms)^  push:\r?\n(?<Body>.*?)(?=^(?:\S| {2}\S)|\z)'
+    )
+    $objBranchFilterMatch = [regex]::Match(
+        $objPushTriggerMatch.Groups['Body'].Value,
+        '(?ms)^    branches:\r?\n(?<Branches>(?:      - [^\r\n]+\r?\n)+)'
+    )
+    if (-not $objBranchFilterMatch.Success -or
+        $objBranchFilterMatch.Groups['Branches'].Value -cnotmatch
+            '^      - "\*\*"\r?\n$') {
+        throw 'The push agent-validation trigger must cover all branches and exclude tags.'
+    }
+    $arrPullRequestTargetFailures = @(& $scriptBlockGetPullRequestTargetFailures `
+            -WorkflowContent $strAgentWorkflowContent)
+    if ($arrPullRequestTargetFailures.Count -gt 0) {
+        throw $arrPullRequestTargetFailures[0]
+    }
+    foreach ($strAttributePath in $script:arrCheckoutAttributePaths) {
+        if ($script:arrTrustRootPaths -cnotcontains $strAttributePath) {
+            throw "The trust-root gate omits checkout attribute path $strAttributePath."
         }
     }
 
@@ -12618,7 +12796,7 @@ if ($SelfTest) {
             }
         }
     }
-    foreach ($strTrigger in @('push', 'pull_request_target')) {
+    foreach ($strTrigger in @('push')) {
         $objTriggerMatch = [regex]::Match(
             $strAgentWorkflowContent,
             "(?ms)^  $strTrigger`:\r?\n(?<Body>.*?)(?=^(?:\S| {2}\S)|\z)"
@@ -12651,6 +12829,21 @@ if ($SelfTest) {
                 )
             }
         }
+    }
+    $strFilteredPullRequestTargetWorkflow = $strAgentWorkflowContent.Replace(
+        "  pull_request_target:`n",
+        "  pull_request_target:`n    paths:`n      - AGENTS.md`n"
+    )
+    if ($strFilteredPullRequestTargetWorkflow -ceq $strAgentWorkflowContent) {
+        throw 'Could not create the pull_request_target path-filter mutation.'
+    }
+    $arrFilteredPullRequestTargetFailures = @(
+        & $scriptBlockGetPullRequestTargetFailures `
+            -WorkflowContent $strFilteredPullRequestTargetWorkflow
+    )
+    if (-not ($arrFilteredPullRequestTargetFailures -match
+            'must be unconditional and must not use a path filter')) {
+        throw 'The pull_request_target path-filter mutation did not fail closed.'
     }
 
     $arrUnchangedFailures = @(Get-TrustRootRangeMutationFailure `
