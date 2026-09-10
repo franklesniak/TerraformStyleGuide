@@ -41,8 +41,8 @@ function validateCurrentRun(run, expected) {
   if (String(run?.id) !== expected.runId ||
       run?.repository?.full_name !== expected.repository ||
       run?.head_repository?.full_name !== expected.repository ||
-      run?.head_sha !== expected.trustedRevision ||
-      run?.head_branch !== expected.refName ||
+      run?.head_sha !== expected.runHeadRevision ||
+      run?.head_branch !== expected.runHeadRefName ||
       run?.event !== expected.eventName ||
       String(run?.run_attempt) !== expected.runAttempt ||
       !Number.isSafeInteger(run?.workflow_id) || run.workflow_id <= 0 ||
@@ -57,8 +57,8 @@ function validateHistoricalRun(run, expected, currentCreatedTime) {
       run?.head_repository?.full_name !== expected.repository ||
       run?.workflow_id !== expected.workflowId ||
       run?.path !== expected.workflowPath ||
-      run?.head_sha !== expected.trustedRevision ||
-      run?.head_branch !== expected.refName ||
+      run?.head_sha !== expected.runHeadRevision ||
+      run?.head_branch !== expected.runHeadRefName ||
       run?.event !== expected.eventName ||
       (expected.requireSuccess &&
        (run?.status !== 'completed' || run?.conclusion !== 'success')) ||
@@ -87,12 +87,12 @@ async function readHistoricalRuns({
     const url = new URL(
       `${root}/repos/${repository}/actions/workflows/${expected.workflowId}/runs`,
     );
-    url.searchParams.set('branch', expected.refName);
+    url.searchParams.set('branch', expected.runHeadRefName);
     url.searchParams.set('event', expected.eventName);
     if (expected.requireSuccess) {
       url.searchParams.set('status', 'success');
     }
-    url.searchParams.set('head_sha', expected.trustedRevision);
+    url.searchParams.set('head_sha', expected.runHeadRevision);
     url.searchParams.set('per_page', String(recordsPerPage));
     url.searchParams.set('page', String(page));
     const pageResponse = await readJson(
@@ -148,8 +148,8 @@ export async function resolveFinalizationTimestamp({
   runId,
   runAttempt,
   eventName,
-  trustedRevision,
-  refName,
+  runHeadRevision,
+  runHeadRefName,
   token,
   now = Date.now(),
   fetchImplementation = globalThis.fetch,
@@ -158,8 +158,8 @@ export async function resolveFinalizationTimestamp({
       !positiveIntegerPattern.test(runId ?? '') ||
       !positiveIntegerPattern.test(runAttempt ?? '') ||
       !['push', 'pull_request_target', 'workflow_dispatch'].includes(eventName) ||
-      !objectIdPattern.test(trustedRevision ?? '') || !refName ||
-      /[\u0000\r\n]/u.test(refName) || !token ||
+      !objectIdPattern.test(runHeadRevision ?? '') || !runHeadRefName ||
+      /[\u0000\r\n]/u.test(runHeadRefName) || !token ||
       !Number.isFinite(now) || typeof fetchImplementation !== 'function') {
     throw new Error('Trusted workflow-run inputs are unavailable or invalid.');
   }
@@ -176,8 +176,8 @@ export async function resolveFinalizationTimestamp({
     runId,
     runAttempt,
     repository,
-    trustedRevision,
-    refName,
+    runHeadRevision,
+    runHeadRefName,
     eventName,
   };
   validateCurrentRun(currentRun, expectedCurrent);
@@ -192,8 +192,8 @@ export async function resolveFinalizationTimestamp({
 
   const expectedPush = {
     repository,
-    trustedRevision,
-    refName,
+    runHeadRevision,
+    runHeadRefName,
     workflowId: currentRun.workflow_id,
     workflowPath: currentRun.path,
     eventName: 'push',
@@ -325,8 +325,8 @@ export async function runSelfTest() {
     runId: '1',
     runAttempt: '1',
     eventName: 'workflow_dispatch',
-    trustedRevision: 'a'.repeat(40),
-    refName: 'topic/branch',
+    runHeadRevision: 'a'.repeat(40),
+    runHeadRefName: 'topic/branch',
     token: 'fixture-token',
     now: Date.parse('2026-09-10T12:01:00Z'),
   };
@@ -443,6 +443,26 @@ export async function runSelfTest() {
     }),
     /identity does not match/u,
   );
+  await reject(
+    'current proposed head mismatch',
+    () => resolveFinalizationTimestamp({
+      ...base,
+      fetchImplementation: makeFixtureFetch({
+        current: makeRun({ head_sha: 'b'.repeat(40) }),
+      }),
+    }),
+    /identity does not match/u,
+  );
+  await reject(
+    'current proposed ref mismatch',
+    () => resolveFinalizationTimestamp({
+      ...base,
+      fetchImplementation: makeFixtureFetch({
+        current: makeRun({ head_branch: 'other/branch' }),
+      }),
+    }),
+    /identity does not match/u,
+  );
 
   const identityMutations = [
     ['workflow', { workflow_id: 100 }],
@@ -550,8 +570,8 @@ async function main() {
     runId: process.env.RUN_ID,
     runAttempt: process.env.RUN_ATTEMPT,
     eventName: process.env.EVENT_NAME,
-    trustedRevision: process.env.TRUSTED_REVISION,
-    refName: process.env.REF_NAME,
+    runHeadRevision: process.env.RUN_HEAD_REVISION,
+    runHeadRefName: process.env.RUN_HEAD_REF_NAME,
     token: process.env.GITHUB_TOKEN,
   });
   appendFileSync(output, `timestamp=${timestamp}\n`, 'utf8');

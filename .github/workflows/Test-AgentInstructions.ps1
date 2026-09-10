@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260910.4
+# Version: 1.2.20260910.5
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -6659,7 +6659,7 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.2.20260910.0
+    # Version: 1.3.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -6672,7 +6672,8 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
         '  pull-requests: read',
         '      - name: Resolve trusted workflow-run finalization time',
         '        id: resolve_run_time',
-        '          REF_NAME: ${{ github.ref_name }}',
+        "          RUN_HEAD_REVISION: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}",
+        "          RUN_HEAD_REF_NAME: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.ref || github.ref_name }}",
         '        run: node .github/workflows/Resolve-AgentInstructionFinalizationTime.mjs',
         '      - name: Resolve authenticated one-parent merge source',
         '          if (( ${#head_and_parents[@]} != 2 )); then',
@@ -12495,10 +12496,10 @@ if ($SelfTest) {
     $arrFinalizationResolverLiterals = @(
         "      !['push', 'pull_request_target', 'workflow_dispatch'].includes(eventName) ||",
         "  if (eventName === 'push') {",
-        "    url.searchParams.set('branch', expected.refName);",
+        "    url.searchParams.set('branch', expected.runHeadRefName);",
         "    url.searchParams.set('event', expected.eventName);",
         "      url.searchParams.set('status', 'success');",
-        "    url.searchParams.set('head_sha', expected.trustedRevision);",
+        "    url.searchParams.set('head_sha', expected.runHeadRevision);",
         '      run?.workflow_id !== expected.workflowId ||',
         '       (run?.status !== ''completed'' || run?.conclusion !== ''success'')) ||',
         '  const pushCandidates = await readHistoricalRuns({',
@@ -12521,7 +12522,7 @@ if ($SelfTest) {
     }
     foreach ($strSharedRunIdentityLiteral in @(
             '      run?.head_repository?.full_name !== expected.repository ||',
-            '      run?.head_branch !== expected.refName ||',
+            '      run?.head_branch !== expected.runHeadRefName ||',
             '      run?.event !== expected.eventName ||'
         )) {
         if ([regex]::Matches(
@@ -12542,7 +12543,7 @@ if ($SelfTest) {
     if ($intFinalizationResolverSelfTestExit -ne 0 -or
         $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
         [string]$arrFinalizationResolverSelfTestOutput[0] -cne
-        'Finalization resolver self-tests passed: 20 fixtures.') {
+        'Finalization resolver self-tests passed: 22 fixtures.') {
         throw (
             'The finalization-time resolver self-test failed: ' +
             ($arrFinalizationResolverSelfTestOutput -join '; ')
@@ -12605,9 +12606,14 @@ if ($SelfTest) {
             To = '  actions: none'
         },
         [pscustomobject]@{
-            Name = 'workflow-run ref identity removed'
-            From = '          REF_NAME: ${{ github.ref_name }}'
-            To = '          REF_NAME: untrusted'
+            Name = 'PR head revision identity removed'
+            From = "          RUN_HEAD_REVISION: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}"
+            To = '          RUN_HEAD_REVISION: ${{ github.sha }}'
+        },
+        [pscustomobject]@{
+            Name = 'PR head ref identity removed'
+            From = "          RUN_HEAD_REF_NAME: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.ref || github.ref_name }}"
+            To = '          RUN_HEAD_REF_NAME: ${{ github.ref_name }}'
         },
         [pscustomobject]@{
             Name = 'finalization resolver bypassed'
