@@ -82,7 +82,7 @@ repos:
         entry: node .github/workflows/lint-staged-markdown.mjs
         language: system
         pass_filenames: false
-        files: \.(md|mdc)$
+        files: ^(\.github/workflows/lint-staged-markdown\.mjs|.*\.(md|mdc))$
       - id: workflow-policy-contract
         name: workflow policy contract
         entry: >-

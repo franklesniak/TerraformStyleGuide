@@ -20,6 +20,7 @@ on:
       - .github/workflows/MARKDOWN-LINTING-IMPLEMENTATION.md
       - .github/workflows/agent-instructions.yml
       - .github/workflows/copilot-setup-steps.yml
+      - .github/workflows/lint-staged-markdown.mjs
       - .github/workflows/scripts-README.md
       - .github/workflows/Test-AgentInstructionParserManifest.mjs
       - .github/workflows/Test-AgentInstructions.ps1
@@ -35,9 +36,7 @@ on:
       - STYLE_GUIDE_RATIONALE.md
       - docs/ISSUE_EVALUATION_PROMPT.md
       - docs/T1-SUPPLY-FREEZE-v1.md
-      - docs/decisions/0001-accept-generated-artifact-lint-lag.md
-      - docs/decisions/0002-accept-repository-code-in-the-write-enabled-job.md
-      - docs/decisions/0003-accept-required-check-workflow-edit-residual.md
+      - "docs/decisions/*.md"
       - npm-shrinkwrap.json
       - package-lock.json
       - package.json
@@ -58,6 +57,7 @@ on:
       - .github/workflows/MARKDOWN-LINTING-IMPLEMENTATION.md
       - .github/workflows/agent-instructions.yml
       - .github/workflows/copilot-setup-steps.yml
+      - .github/workflows/lint-staged-markdown.mjs
       - .github/workflows/scripts-README.md
       - .github/workflows/Test-AgentInstructionParserManifest.mjs
       - .github/workflows/Test-AgentInstructions.ps1
@@ -73,9 +73,7 @@ on:
       - STYLE_GUIDE_RATIONALE.md
       - docs/ISSUE_EVALUATION_PROMPT.md
       - docs/T1-SUPPLY-FREEZE-v1.md
-      - docs/decisions/0001-accept-generated-artifact-lint-lag.md
-      - docs/decisions/0002-accept-repository-code-in-the-write-enabled-job.md
-      - docs/decisions/0003-accept-required-check-workflow-edit-residual.md
+      - "docs/decisions/*.md"
       - npm-shrinkwrap.json
       - package-lock.json
       - package.json

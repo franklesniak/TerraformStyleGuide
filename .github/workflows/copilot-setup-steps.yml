@@ -8,6 +8,7 @@ on:
     paths:
       - .github/workflows/.npmrc
       - .github/workflows/copilot-setup-steps.yml
+      - .github/workflows/lint-staged-markdown.mjs
       - .github/workflows/npm-shrinkwrap.json
       - .github/workflows/package.json
       - .github/workflows/package-lock.json
@@ -21,6 +22,7 @@ on:
     paths:
       - .github/workflows/.npmrc
       - .github/workflows/copilot-setup-steps.yml
+      - .github/workflows/lint-staged-markdown.mjs
       - .github/workflows/npm-shrinkwrap.json
       - .github/workflows/package.json
       - .github/workflows/package-lock.json
@@ -94,11 +96,13 @@ jobs:
           workflow_manifest='.github/workflows/package.json'
           workflow_lock='.github/workflows/package-lock.json'
           pre_commit_config='.pre-commit-config.yaml'
+          staged_markdown_helper='.github/workflows/lint-staged-markdown.mjs'
 
           for required_file in \
             "${workflow_manifest}" \
             "${workflow_lock}" \
-            "${pre_commit_config}"; do
+            "${pre_commit_config}" \
+            "${staged_markdown_helper}"; do
             if [[ ! -f "${required_file}" || -L "${required_file}" ]]; then
               echo "::error file=${required_file}::Required locked npm input" \
                 'is missing or is not a regular file.'
@@ -109,7 +113,8 @@ jobs:
           declare -Ar reviewed_sha256=(
             ["${workflow_manifest}"]='b1d079c7c16a08b89c074f5a5f9378be156428af2204e96902e2f358d9492e02'
             ["${workflow_lock}"]='876b3018e35745243c74482e4c58d2652a19bd21be51be425de5ee36240d1c70'
-            ["${pre_commit_config}"]='26e8e61502d1003ca8e7f15afdb3d2c539c57721fadb2c89cda782ff8e8576ce'
+            ["${pre_commit_config}"]='b1b925382918e0172216dc3d4cf3c0b654275fd4edc3d6c4099dd1ad731b4f90'
+            ["${staged_markdown_helper}"]='bdfa40197cb7a4c8720e3d402b426a741c03c30748a82c3a02d1d89765be54c9'
           )
           for reviewed_input in "${!reviewed_sha256[@]}"; do
             actual_sha256="$(sha256sum -- "${reviewed_input}" | cut -d ' ' -f 1)"
@@ -238,12 +243,14 @@ jobs:
               package-lock.json
               .github/workflows/package.json
               .github/workflows/package-lock.json
+              .github/workflows/lint-staged-markdown.mjs
               requirements-dev.txt
             )
           elif [[ "${TOOLCHAIN_LAYOUT}" == legacy ]]; then
             immutable_inputs=(
               .github/workflows/package.json
               .github/workflows/package-lock.json
+              .github/workflows/lint-staged-markdown.mjs
               requirements-dev.txt
             )
           else

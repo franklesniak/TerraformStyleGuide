@@ -98,15 +98,17 @@ $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
 $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/copilot-setup-steps.yml' =
-        '61186c93adce037f627e35b296250887d60564866abd26436cc37b692e8765c4'
+        '4c6eb1d57823fe280fd0fc0f6df3dabc8f4bc5538af1620a12ab4e62d336b669'
     '.github/workflows/package.json' =
         'b1d079c7c16a08b89c074f5a5f9378be156428af2204e96902e2f358d9492e02'
     '.github/workflows/package-lock.json' =
         '876b3018e35745243c74482e4c58d2652a19bd21be51be425de5ee36240d1c70'
     '.husky/pre-commit' =
         '8989ab5075c077599a6dea88e656ac2837af4800e0bb5daef364514f00255467'
+    '.github/workflows/lint-staged-markdown.mjs' =
+        'bdfa40197cb7a4c8720e3d402b426a741c03c30748a82c3a02d1d89765be54c9'
     '.pre-commit-config.yaml' =
-        '26e8e61502d1003ca8e7f15afdb3d2c539c57721fadb2c89cda782ff8e8576ce'
+        'b1b925382918e0172216dc3d4cf3c0b654275fd4edc3d6c4099dd1ad731b4f90'
 }
 $script:strWorkflowPolicyCommandPrefix =
     'node .github/workflows/Validate-WorkflowPolicy.mjs'
@@ -1354,12 +1356,16 @@ function Get-HuskySetupContractFailure {
     # .PARAMETER PreCommitConfigContent
     # The pre-commit configuration text executed by the setup workflow.
     #
+    # .PARAMETER StagedMarkdownHelperContent
+    # The staged-Markdown helper text executed by the retained hook.
+    #
     # .EXAMPLE
     # Get-HuskySetupContractFailure -RootPackageContent $strRootPackage `
     #     -WorkflowPackageContent $strWorkflowPackage `
     #     -WorkflowPackageLockContent $strWorkflowLock -HookContent $strHook `
     #     -CopilotSetupContent $strCopilotSetup `
-    #     -PreCommitConfigContent $strPreCommitConfig
+    #     -PreCommitConfigContent $strPreCommitConfig `
+    #     -StagedMarkdownHelperContent $strStagedMarkdownHelper
     #
     # # Writes one string for each Husky setup-contract failure.
     #
@@ -1375,7 +1381,7 @@ function Get-HuskySetupContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.7.20260909.0
+    # Version: 1.8.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -1395,7 +1401,10 @@ function Get-HuskySetupContractFailure {
         [string] $CopilotSetupContent,
 
         [Parameter(Mandatory)]
-        [string] $PreCommitConfigContent
+        [string] $PreCommitConfigContent,
+
+        [Parameter(Mandatory)]
+        [string] $StagedMarkdownHelperContent
     )
 
     try {
@@ -1443,6 +1452,14 @@ function Get-HuskySetupContractFailure {
         ).Count -ne 1) {
         Write-Output 'Husky guard must cover ACMR .md and .mdc once.'
     }
+    $strExpectedStagedMarkdownSelector =
+        '        files: ^(\.github/workflows/lint-staged-markdown\.mjs|.*\.(md|mdc))$'
+    if ([regex]::Matches(
+            $PreCommitConfigContent,
+            '(?m)^' + [regex]::Escape($strExpectedStagedMarkdownSelector) + '\r?$'
+        ).Count -ne 1) {
+        Write-Output 'The staged-Markdown hook must select Markdown and helper-only changes.'
+    }
     $arrRequiredLintCommands = @(
         'if node .github/workflows/lint-staged-markdown.mjs; then',
         'if npm --prefix .github/workflows run lint:md; then',
@@ -1481,6 +1498,7 @@ function Get-HuskySetupContractFailure {
         '.github/workflows/package.json' = $WorkflowPackageContent
         '.github/workflows/package-lock.json' = $WorkflowPackageLockContent
         '.husky/pre-commit' = $HookContent
+        '.github/workflows/lint-staged-markdown.mjs' = $StagedMarkdownHelperContent
         '.pre-commit-config.yaml' = $PreCommitConfigContent
     }
     $objSha256 = [System.Security.Cryptography.SHA256]::Create()
@@ -3215,7 +3233,7 @@ function ConvertTo-MetadataComparisonText {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.2.20260908.0
+    # Version: 1.3.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -3248,7 +3266,7 @@ function ConvertTo-MetadataComparisonText {
 
     $listNormalizedLines = [System.Collections.Generic.List[string]]::new()
     foreach ($strLine in $arrNormalizedLines) {
-        if ($strLine -match ' {2,}$') {
+        if ($strLine -match ' {2,}$' -or $strLine -match '\\[ \t]*$') {
             $listNormalizedLines.Add($strLine)
         }
         else {
@@ -3350,6 +3368,55 @@ function Get-GovernedInstructionInventoryFailure {
             )
         }
     }
+}
+
+function Get-GovernedDecisionDocumentPath {
+    # .SYNOPSIS
+    # Selects direct Markdown decision records from candidate Git paths.
+    #
+    # .DESCRIPTION
+    # Returns a deterministic, duplicate-free inventory for the
+    # `docs/decisions/*.md` governed-document family. Nested and non-Markdown
+    # paths are excluded.
+    #
+    # .PARAMETER CandidatePath
+    # Repository-relative paths found in the candidate state or event range.
+    #
+    # .EXAMPLE
+    # Get-GovernedDecisionDocumentPath -CandidatePath @(
+    #     'docs/decisions/0004-example.md', 'docs/decisions/archive/0003-old.md'
+    # )
+    #
+    # # Returns only docs/decisions/0004-example.md.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [string] One repository-relative direct decision-record path.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the
+    # public API surface. Parameters, return shape, and positional
+    # contract may change without notice.
+    #
+    # This function does not support positional parameters.
+    # Version: 1.0.20260910.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]] $CandidatePath
+    )
+
+    return @(
+        $CandidatePath |
+            Where-Object {
+                [string]$_ -cmatch '^docs/decisions/[^/]+\.md$'
+            } |
+            Sort-Object -CaseSensitive -Unique
+    )
 }
 
 function Get-ProhibitedTrackedClaudeLocalFailure {
@@ -6207,6 +6274,10 @@ $arrAgentSetupInputSpecs = @(
         Path = '.github/workflows/copilot-setup-steps.yml'
         MaximumBytes = 32768
     }
+    [pscustomobject]@{
+        Path = '.github/workflows/lint-staged-markdown.mjs'
+        MaximumBytes = 32768
+    }
     [pscustomobject]@{ Path = '.husky/pre-commit'; MaximumBytes = 16384 }
     [pscustomobject]@{ Path = '.pre-commit-config.yaml'; MaximumBytes = 16384 }
     [pscustomobject]@{
@@ -6277,26 +6348,7 @@ $arrGovernedNonInstructionDocuments = @(
         Path = 'docs/T1-SUPPLY-FREEZE-v1.md'
         MaximumBytes = 131072
         RequiresMetadata = $true
-    },
-    [pscustomobject]@{
-        Path = 'docs/decisions/0001-accept-generated-artifact-lint-lag.md'
-        MaximumBytes = 32768
-        RequiresMetadata = $true
-    },
-    [pscustomobject]@{
-        Path = 'docs/decisions/0002-accept-repository-code-in-the-write-enabled-job.md'
-        MaximumBytes = 32768
-        RequiresMetadata = $true
-    },
-    [pscustomobject]@{
-        Path = 'docs/decisions/0003-accept-required-check-workflow-edit-residual.md'
-        MaximumBytes = 32768
-        RequiresMetadata = $true
     }
-)
-$arrGovernedMetadataDocuments = @(
-    $arrGovernedInstructionDocuments
-    $arrGovernedNonInstructionDocuments
 )
 $strValidatedInputRevision = ''
 
@@ -6375,6 +6427,81 @@ else {
 if ($LASTEXITCODE -ne 0) {
     throw 'Could not enumerate tracked files for the governed instruction inventory.'
 }
+$listGovernedDecisionCandidatePaths = [System.Collections.Generic.List[string]]::new()
+foreach ($strTrackedRepositoryPath in $arrTrackedRepositoryPaths) {
+    $listGovernedDecisionCandidatePaths.Add([string]$strTrackedRepositoryPath)
+}
+$strDecisionInventoryBaseRevision = if (
+    -not [string]::IsNullOrEmpty($strLocalPublishedBaselineRevision)
+) {
+    $strLocalPublishedBaselineRevision
+}
+else {
+    $RangeBaseRevision
+}
+$strDecisionInventoryHeadRevision = if (
+    -not [string]::IsNullOrEmpty($strLocalPublishedBaselineRevision)
+) {
+    $strCheckedOutRevision
+}
+else {
+    $RangeHeadRevision
+}
+if (-not [string]::IsNullOrEmpty($strDecisionInventoryBaseRevision) -and
+    -not [string]::IsNullOrEmpty($strDecisionInventoryHeadRevision)) {
+    $strDecisionObjectIdPattern = '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$'
+    $strDecisionZeroObjectIdPattern = '^(?:0{40}|0{64})$'
+    if ($strDecisionInventoryBaseRevision -notmatch $strDecisionObjectIdPattern -or
+        $strDecisionInventoryHeadRevision -notmatch $strDecisionObjectIdPattern -or
+        $strDecisionInventoryHeadRevision -match $strDecisionZeroObjectIdPattern) {
+        throw 'The decision-record inventory range contains an invalid object ID.'
+    }
+    $boolDecisionInventoryBaseIsZero =
+        $strDecisionInventoryBaseRevision -match $strDecisionZeroObjectIdPattern
+    if (-not $boolDecisionInventoryBaseIsZero) {
+        $arrBaselineDecisionPaths = @(
+            & git -C $strRepositoryRootPath ls-tree -r --name-only `
+                $strDecisionInventoryBaseRevision -- docs/decisions 2>&1
+        )
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not enumerate published-baseline decision records.'
+        }
+        foreach ($strBaselineDecisionPath in $arrBaselineDecisionPaths) {
+            $listGovernedDecisionCandidatePaths.Add([string]$strBaselineDecisionPath)
+        }
+    }
+    $strDecisionInventoryRange = if ($boolDecisionInventoryBaseIsZero) {
+        $strDecisionInventoryHeadRevision
+    }
+    else {
+        "$strDecisionInventoryBaseRevision..$strDecisionInventoryHeadRevision"
+    }
+    $arrRangeDecisionPaths = @(
+        & git -C $strRepositoryRootPath log --format= --name-only --no-renames `
+            $strDecisionInventoryRange -- ':(glob)docs/decisions/*.md' 2>&1
+    )
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not enumerate decision records in the validation range.'
+    }
+    foreach ($strRangeDecisionPath in $arrRangeDecisionPaths) {
+        $listGovernedDecisionCandidatePaths.Add([string]$strRangeDecisionPath)
+    }
+}
+$arrGovernedDecisionPaths = @(
+    Get-GovernedDecisionDocumentPath `
+        -CandidatePath $listGovernedDecisionCandidatePaths.ToArray()
+)
+foreach ($strGovernedDecisionPath in $arrGovernedDecisionPaths) {
+    $arrGovernedNonInstructionDocuments += [pscustomobject]@{
+        Path = $strGovernedDecisionPath
+        MaximumBytes = 32768
+        RequiresMetadata = $true
+    }
+}
+$arrGovernedMetadataDocuments = @(
+    $arrGovernedInstructionDocuments
+    $arrGovernedNonInstructionDocuments
+)
 $arrGovernedRootPaths = @(
     'AGENTS.md',
     'CLAUDE.md',
@@ -6640,7 +6767,9 @@ $arrRepositoryFailures += @(Get-HuskySetupContractFailure `
         -CopilotSetupContent `
             $hashtableAgentSetupInputContent['.github/workflows/copilot-setup-steps.yml'] `
         -PreCommitConfigContent `
-            $hashtableAgentSetupInputContent['.pre-commit-config.yaml'])
+            $hashtableAgentSetupInputContent['.pre-commit-config.yaml'] `
+        -StagedMarkdownHelperContent `
+            $hashtableAgentSetupInputContent['.github/workflows/lint-staged-markdown.mjs'])
 $arrRepositoryFailures += @(Get-PreCommitBootstrapContractFailure `
         -AgentsContent $strAgentsContent `
         -ClaudeContent $strClaudeContent `
@@ -6769,6 +6898,8 @@ if ($SelfTest) {
     $strHuskyHookContent = $hashtableAgentSetupInputContent['.husky/pre-commit']
     $strPreCommitConfigContent =
         $hashtableAgentSetupInputContent['.pre-commit-config.yaml']
+    $strStagedMarkdownHelperContent =
+        $hashtableAgentSetupInputContent['.github/workflows/lint-staged-markdown.mjs']
     $strScriptIndexContent =
         $hashtableAgentSetupInputContent['.github/workflows/scripts-README.md']
     $strRequirementsContent =
@@ -7007,7 +7138,8 @@ if ($SelfTest) {
                 -WorkflowPackageLockContent $strWorkflowPackageLockContent `
                 -HookContent $arrHuskyMutation[3] `
                 -CopilotSetupContent $strCopilotSetupContent `
-                -PreCommitConfigContent $strPreCommitConfigContent)
+                -PreCommitConfigContent $strPreCommitConfigContent `
+                -StagedMarkdownHelperContent $strStagedMarkdownHelperContent)
         if (-not ($arrHuskyMutationFailures -match [regex]::Escape(
                     $arrHuskyMutation[4]
                 ))) {
@@ -7045,7 +7177,8 @@ if ($SelfTest) {
                 -WorkflowPackageLockContent $objReviewedSetupInputMutation.WorkflowLock `
                 -HookContent $strHuskyHookContent `
                 -CopilotSetupContent $strCopilotSetupContent `
-                -PreCommitConfigContent $objReviewedSetupInputMutation.PreCommitConfig)
+                -PreCommitConfigContent $objReviewedSetupInputMutation.PreCommitConfig `
+                -StagedMarkdownHelperContent $strStagedMarkdownHelperContent)
         $strExpectedReviewedSetupInputFailure =
             "$($objReviewedSetupInputMutation.Path) text must match the reviewed SHA-256 digest."
         if (-not ($arrReviewedSetupInputFailures -ccontains
@@ -7055,6 +7188,34 @@ if ($SelfTest) {
                 'did not fail closed.'
             )
         }
+    }
+
+    $arrStagedMarkdownHelperMutationFailures = @(Get-HuskySetupContractFailure `
+            -RootPackageContent $strRootPackageContent `
+            -WorkflowPackageContent $strWorkflowPackageContent `
+            -WorkflowPackageLockContent $strWorkflowPackageLockContent `
+            -HookContent $strHuskyHookContent `
+            -CopilotSetupContent $strCopilotSetupContent `
+            -PreCommitConfigContent $strPreCommitConfigContent `
+            -StagedMarkdownHelperContent ($strStagedMarkdownHelperContent + "`n"))
+    if ($arrStagedMarkdownHelperMutationFailures -cnotcontains
+        '.github/workflows/lint-staged-markdown.mjs text must match the reviewed SHA-256 digest.') {
+        throw 'The staged-Markdown helper digest mutation did not fail closed.'
+    }
+    $arrStagedMarkdownSelectorMutationFailures = @(Get-HuskySetupContractFailure `
+            -RootPackageContent $strRootPackageContent `
+            -WorkflowPackageContent $strWorkflowPackageContent `
+            -WorkflowPackageLockContent $strWorkflowPackageLockContent `
+            -HookContent $strHuskyHookContent `
+            -CopilotSetupContent $strCopilotSetupContent `
+            -PreCommitConfigContent $strPreCommitConfigContent.Replace(
+                '^(\.github/workflows/lint-staged-markdown\.mjs|.*\.(md|mdc))$',
+                '\.(md|mdc)$'
+            ) `
+            -StagedMarkdownHelperContent $strStagedMarkdownHelperContent)
+    if ($arrStagedMarkdownSelectorMutationFailures -cnotcontains
+        'The staged-Markdown hook must select Markdown and helper-only changes.') {
+        throw 'The staged-Markdown helper selector mutation did not fail closed.'
     }
 
     $arrCopilotSetupMutations = @(
@@ -7211,7 +7372,8 @@ if ($SelfTest) {
                 -WorkflowPackageLockContent $strWorkflowPackageLockContent `
                 -HookContent $strHuskyHookContent `
                 -CopilotSetupContent $objCopilotSetupMutation.Content `
-                -PreCommitConfigContent $strPreCommitConfigContent)
+                -PreCommitConfigContent $strPreCommitConfigContent `
+                -StagedMarkdownHelperContent $strStagedMarkdownHelperContent)
         if (-not ($arrCopilotSetupFailures -match [regex]::Escape(
                     $objCopilotSetupMutation.Failure
                 ))) {
@@ -7730,11 +7892,9 @@ if ($SelfTest) {
         '.claude/commands/review-loop.md',
         'STYLE_GUIDE_RATIONALE.md',
         'docs/ISSUE_EVALUATION_PROMPT.md',
-        'docs/T1-SUPPLY-FREEZE-v1.md',
-        'docs/decisions/0001-accept-generated-artifact-lint-lag.md',
-        'docs/decisions/0002-accept-repository-code-in-the-write-enabled-job.md',
-        'docs/decisions/0003-accept-required-check-workflow-edit-residual.md'
+        'docs/T1-SUPPLY-FREEZE-v1.md'
     )
+    $arrNewlyCoveredUnversionedPaths += $arrGovernedDecisionPaths
     foreach ($strNewlyCoveredPath in $arrNewlyCoveredUnversionedPaths) {
         $objDocumentContext = $listGovernedDocumentContexts |
             Where-Object { $_.Path -ceq $strNewlyCoveredPath }
@@ -7794,6 +7954,19 @@ if ($SelfTest) {
                 $strFutureInstructionPath
             )
         }
+    }
+
+    $arrDecisionInventoryFixture = @(Get-GovernedDecisionDocumentPath `
+            -CandidatePath @(
+                'docs/decisions/0004-future-record.md',
+                'docs/decisions/archive/0003-old-record.md',
+                'docs/decisions/0005-not-markdown.txt',
+                'docs/decisions/0004-future-record.md'
+            ))
+    if ($arrDecisionInventoryFixture.Count -ne 1 -or
+        $arrDecisionInventoryFixture[0] -cne
+        'docs/decisions/0004-future-record.md') {
+        throw 'The dynamic decision-record inventory did not select the exact direct Markdown family.'
     }
 
     $arrAcceptedClaudeLocalInventoryFailures = @(
@@ -11092,12 +11265,18 @@ if ($SelfTest) {
     $arrRequiredTriggerPaths = @(
         $script:arrCheckoutAttributePaths
         $arrAgentSetupInputSpecs | ForEach-Object { $_.Path }
-        $arrGovernedNonInstructionDocuments | ForEach-Object { $_.Path }
+        $arrGovernedNonInstructionDocuments |
+            Where-Object { $_.Path -cnotmatch '^docs/decisions/[^/]+\.md$' } |
+            ForEach-Object { $_.Path }
+        '"docs/decisions/*.md"'
         '"**/AGENTS.md"'
     ) | Select-Object -Unique
     $arrConsumedTriggerPaths = @(
         $arrAgentSetupInputSpecs | ForEach-Object { $_.Path }
-        $arrGovernedNonInstructionDocuments | ForEach-Object { $_.Path }
+        $arrGovernedNonInstructionDocuments |
+            Where-Object { $_.Path -cnotmatch '^docs/decisions/[^/]+\.md$' } |
+            ForEach-Object { $_.Path }
+        '"docs/decisions/*.md"'
         '"**/AGENTS.md"'
     ) | Select-Object -Unique
     foreach ($strTrigger in @('push', 'pull_request_target')) {
@@ -11130,11 +11309,15 @@ if ($SelfTest) {
         }
     }
 
+    $arrCopilotConsumedTriggerPaths = @(
+        'requirements-dev.txt',
+        '.github/workflows/lint-staged-markdown.mjs'
+    )
     foreach ($strTrigger in @('push', 'pull_request')) {
         $arrCopilotTriggerFailures = @(& $scriptBlockGetTriggerPathFailures `
                 -WorkflowContent $strCopilotSetupContent `
                 -Trigger $strTrigger `
-                -RequiredPath @('requirements-dev.txt'))
+                -RequiredPath $arrCopilotConsumedTriggerPaths)
         if ($arrCopilotTriggerFailures.Count -gt 0) {
             throw $arrCopilotTriggerFailures[0]
         }
@@ -11142,31 +11325,35 @@ if ($SelfTest) {
             $strCopilotSetupContent,
             "(?ms)^  $strTrigger`:\r?\n(?<Body>.*?)(?=^(?:\S| {2}\S)|\z)"
         )
-        $objRequirementsPathMatch = [regex]::Match(
-            $objCopilotTriggerMatch.Groups['Body'].Value,
-            '(?m)^      - requirements-dev\.txt\r?\n'
-        )
-        if (-not $objRequirementsPathMatch.Success) {
-            throw "Could not create the $strTrigger requirements-trigger mutation."
-        }
-        $intRequirementsPathIndex =
-            $objCopilotTriggerMatch.Groups['Body'].Index +
-            $objRequirementsPathMatch.Index
-        $strMutatedCopilotSetupContent = $strCopilotSetupContent.Remove(
-            $intRequirementsPathIndex,
-            $objRequirementsPathMatch.Length
-        )
-        $arrMutatedCopilotTriggerFailures = @(
-            & $scriptBlockGetTriggerPathFailures `
-                -WorkflowContent $strMutatedCopilotSetupContent `
-                -Trigger $strTrigger `
-                -RequiredPath @('requirements-dev.txt')
-        )
-        if (-not ($arrMutatedCopilotTriggerFailures -match [regex]::Escape(
-                    "$strTrigger must cover consumed validation path " +
-                    'requirements-dev.txt once.'
-                ))) {
-            throw "$strTrigger requirements-trigger mutation was accepted."
+        foreach ($strCopilotConsumedTriggerPath in $arrCopilotConsumedTriggerPaths) {
+            $objCopilotPathMatch = [regex]::Match(
+                $objCopilotTriggerMatch.Groups['Body'].Value,
+                "(?m)^      - $([regex]::Escape($strCopilotConsumedTriggerPath))\r?\n"
+            )
+            if (-not $objCopilotPathMatch.Success) {
+                throw "Could not create the $strTrigger Copilot path-trigger mutation."
+            }
+            $intCopilotPathIndex =
+                $objCopilotTriggerMatch.Groups['Body'].Index + $objCopilotPathMatch.Index
+            $strMutatedCopilotSetupContent = $strCopilotSetupContent.Remove(
+                $intCopilotPathIndex,
+                $objCopilotPathMatch.Length
+            )
+            $arrMutatedCopilotTriggerFailures = @(
+                & $scriptBlockGetTriggerPathFailures `
+                    -WorkflowContent $strMutatedCopilotSetupContent `
+                    -Trigger $strTrigger `
+                    -RequiredPath $arrCopilotConsumedTriggerPaths
+            )
+            if (-not ($arrMutatedCopilotTriggerFailures -match [regex]::Escape(
+                        "$strTrigger must cover consumed validation path " +
+                        "$strCopilotConsumedTriggerPath once."
+                    ))) {
+                throw (
+                    "$strTrigger Copilot path-trigger mutation was accepted: " +
+                    $strCopilotConsumedTriggerPath
+                )
+            }
         }
     }
     foreach ($strTrigger in @('push', 'pull_request_target')) {
@@ -11280,6 +11467,21 @@ if ($SelfTest) {
         (ConvertTo-MetadataComparisonText -Content $strMetadataHardBreakMutation `
             -MetadataContext $objMetadataNormalizationContext)) {
         throw 'Metadata normalization incorrectly exempted a Markdown hard-line-break change.'
+    }
+    $strMetadataBackslashHardBreakBase =
+        $strMetadataNormalizationBase.Replace('Body', 'Body\')
+    foreach ($strMetadataBackslashHardBreakMutation in @(
+            $strMetadataBackslashHardBreakBase.Replace('Body\', 'Body\ '),
+            $strMetadataBackslashHardBreakBase.Replace('Body\', "Body\`t")
+        )) {
+        if ((ConvertTo-MetadataComparisonText `
+                -Content $strMetadataBackslashHardBreakBase `
+                -MetadataContext $objMetadataNormalizationContext) -ceq
+            (ConvertTo-MetadataComparisonText `
+                -Content $strMetadataBackslashHardBreakMutation `
+                -MetadataContext $objMetadataNormalizationContext)) {
+            throw 'Metadata normalization incorrectly exempted whitespace after a terminal backslash.'
+        }
     }
     $strMetadataExampleBase = @(
         $strMetadataNormalizationBase
