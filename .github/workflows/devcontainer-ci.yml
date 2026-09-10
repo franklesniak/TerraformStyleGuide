@@ -35,21 +35,25 @@ jobs:
           [[ "${EXPECTED_REVISION}" =~ ^[0-9a-f]{40}$ ]]
 
           has_devcontainer_entry() {
-            local candidate_path
+            local candidate_path=''
+            local match_status=1
             local normalized_path
             local LC_ALL=C
             while IFS= read -r -d '' candidate_path; do
               normalized_path="${candidate_path,,}"
               case "${normalized_path}" in
                 .devcontainer|.devcontainer/*|.devcontainer.json)
-                  return 0
+                  match_status=0
                   ;;
                 */.devcontainer|*/.devcontainer/*|*/.devcontainer.json)
-                  return 0
+                  match_status=0
                   ;;
               esac
             done
-            return 1
+            if [[ -n "${candidate_path}" ]]; then
+              return 2
+            fi
+            return "${match_status}"
           }
 
           has_devcontainer_entry < <(/usr/bin/printf '%s\0' '.devcontainer') || {
@@ -108,6 +112,17 @@ jobs:
             printf '%s\n' 'Similar nested file fixture was rejected.' >&2
             exit 1
           fi
+          if has_devcontainer_entry < <(/usr/bin/printf '%s' '.env'); then
+            printf '%s\n' 'Line-delimited boundary fixture was accepted.' >&2
+            exit 1
+          else
+            malformed_inventory_status="$?"
+            readonly malformed_inventory_status
+            if [[ "${malformed_inventory_status}" -ne 2 ]]; then
+              printf '%s\n' 'Malformed inventory did not fail closed.' >&2
+              exit 1
+            fi
+          fi
 
           readonly checkout_root="${RUNNER_TEMP}/terraformstyleguide-devcontainer-boundary"
           test ! -e "${checkout_root}"
@@ -139,6 +154,13 @@ jobs:
             printf '%s\n' \
               'TerraformStyleGuide has no authorized devcontainer contract.' >&2
             exit 1
+          else
+            inventory_status="$?"
+            readonly inventory_status
+            if [[ "${inventory_status}" -ne 1 ]]; then
+              printf '%s\n' 'The tracked-path inventory was malformed.' >&2
+              exit 1
+            fi
           fi
 
           printf '%s\n' \
