@@ -935,6 +935,120 @@ function Read-GitRevisionText {
     }
 }
 
+function Invoke-GitNulRecordQuery {
+    # .SYNOPSIS
+    # Reads one bounded list of NUL-delimited UTF-8 records from Git.
+    #
+    # .DESCRIPTION
+    # Invokes Git without a shell, bounds standard output, requires a trailing
+    # NUL terminator, and returns strict UTF-8 records without pathname quoting.
+    # The supplied Git arguments must select a NUL-delimited output mode.
+    #
+    # .PARAMETER RepositoryRootPath
+    # The absolute repository root path used by Git.
+    #
+    # .PARAMETER Argument
+    # The Git arguments after the repository-root selection.
+    #
+    # .PARAMETER DisplayName
+    # The operation name used in bounded-output and failure messages.
+    #
+    # .PARAMETER MaximumBytes
+    # The largest accepted standard-output byte count.
+    #
+    # .EXAMPLE
+    # Invoke-GitNulRecordQuery -RepositoryRootPath $strRoot `
+    #     -Argument @('ls-files', '--cached', '-z') -DisplayName 'tracked paths'
+    #
+    # # Returns each tracked path without Git pathname quoting.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [string[]] The decoded records, without NUL terminators.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the
+    # public API surface. Parameters, return shape, and positional
+    # contract may change without notice.
+    #
+    # This function does not support positional parameters.
+    # Version: 1.0.20260910.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $RepositoryRootPath,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string[]] $Argument,
+
+        [Parameter(Mandatory)]
+        [string] $DisplayName,
+
+        [Parameter()]
+        [ValidateRange(1, 2147483646)]
+        [int] $MaximumBytes = 16777216
+    )
+
+    $objStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $objStartInfo.FileName = 'git'
+    $objStartInfo.UseShellExecute = $false
+    $objStartInfo.CreateNoWindow = $true
+    $objStartInfo.RedirectStandardOutput = $true
+    $objStartInfo.RedirectStandardError = $true
+    foreach ($strArgument in @('-C', $RepositoryRootPath) + $Argument) {
+        $objStartInfo.ArgumentList.Add($strArgument)
+    }
+
+    $objGitProcess = [System.Diagnostics.Process]::new()
+    $objGitProcess.StartInfo = $objStartInfo
+    try {
+        if (-not $objGitProcess.Start()) {
+            throw "Could not start Git to enumerate $DisplayName."
+        }
+        $objStandardErrorTask = $objGitProcess.StandardError.ReadToEndAsync()
+        $arrOutputBytes = Read-BoundedStreamData `
+            -Stream $objGitProcess.StandardOutput.BaseStream `
+            -MaximumBytes $MaximumBytes `
+            -DisplayName $DisplayName
+        if (-not $objGitProcess.WaitForExit(10000)) {
+            $objGitProcess.Kill($true)
+            [void]$objGitProcess.WaitForExit(1000)
+            throw "Git timed out while enumerating $DisplayName."
+        }
+        [void]$objStandardErrorTask.GetAwaiter().GetResult()
+        if ($objGitProcess.ExitCode -ne 0) {
+            throw "Could not enumerate $DisplayName with Git."
+        }
+        if ($arrOutputBytes.Count -eq 0) {
+            return [string[]] @()
+        }
+        if ($arrOutputBytes[$arrOutputBytes.Count - 1] -ne 0) {
+            throw "Git returned a non-NUL-terminated $DisplayName stream."
+        }
+
+        $strOutput = ConvertFrom-StrictUtf8Data `
+            -Bytes $arrOutputBytes `
+            -DisplayName $DisplayName
+        $arrRecordsWithTerminator = @($strOutput.Split([char] 0))
+        if ($arrRecordsWithTerminator.Count -lt 2 -or
+            $arrRecordsWithTerminator[-1] -cne '') {
+            throw "Git returned a malformed $DisplayName stream."
+        }
+        $arrRecords = @($arrRecordsWithTerminator[0..($arrRecordsWithTerminator.Count - 2)])
+        if (@($arrRecords | Where-Object { [string]::IsNullOrEmpty([string] $_) }).Count -gt 0) {
+            throw "Git returned an empty record in the $DisplayName stream."
+        }
+        return [string[]] $arrRecords
+    }
+    finally {
+        $objGitProcess.Dispose()
+    }
+}
+
 function Test-GitRevisionFileContainsLiteral {
     # .SYNOPSIS
     # Tests whether a revision file contains an ordinal literal.
@@ -1757,9 +1871,9 @@ function Get-PreCommitBootstrapContractFailure {
     # Finds failures in the documented pre-commit runner bootstrap contract.
     #
     # .DESCRIPTION
-    # Requires one exact pre-commit version pin and exact interpreter-qualified
-    # Windows and POSIX install and run commands in both agent entry points and
-    # the workflow script index.
+    # Requires one exact pre-commit version pin, an exact PowerShell 7 preflight,
+    # and exact interpreter-qualified Windows and POSIX install and run commands
+    # in both agent entry points and the workflow script index.
     #
     # .PARAMETER AgentsContent
     # The AGENTS.md text that documents the shared validation workflow.
@@ -1792,7 +1906,7 @@ function Get-PreCommitBootstrapContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.0.20260908.0
+    # Version: 1.1.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -1819,6 +1933,7 @@ function Get-PreCommitBootstrapContractFailure {
     }
 
     $arrRequiredCommands = @(
+        "pwsh -NoProfile -Command 'if (`$PSVersionTable.PSVersion.Major -lt 7) { exit 1 }'",
         'py -3.12 -m pip install --requirement requirements-dev.txt',
         'python3.12 -m pip install --requirement requirements-dev.txt',
         'py -3.12 -m pre_commit run --all-files',
@@ -4138,6 +4253,17 @@ function Get-DocumentMetadataTransitionFailure {
         }
     }
 
+    if ($RequirePublishedRevisionConvention -and
+        $objCurrentMetadata.HasVersion -and
+        $objParentMetadata.HasVersion -and
+        -not $boolSameVersionIdentity -and
+        $intCurrentRevision -ne 0) {
+        Write-Output (
+            "$Name Version revision must be 0 when major, minor, or date changes; " +
+            "current revision is $intCurrentRevision."
+        )
+    }
+
     if (-not $boolRenderedContentChanged) {
         return
     }
@@ -4176,12 +4302,6 @@ function Get-DocumentMetadataTransitionFailure {
                 )
             }
         }
-    }
-    elseif ($intCurrentRevision -ne 0) {
-        Write-Output (
-            "$Name Version revision must be 0 when major, minor, or date changes; " +
-            "current revision is $intCurrentRevision."
-        )
     }
 }
 
@@ -4973,20 +5093,6 @@ function Get-GovernedDocumentRangeTransitionFailure {
         throw 'Could not enumerate the metadata event range.'
     }
 
-    $boolRangePathSeen = $false
-    if (-not [string]::IsNullOrEmpty($strEffectiveBaseRevision)) {
-        $arrEffectiveBasePathEntries = @(
-            & git -C $RepositoryRootPath ls-tree --full-tree `
-                $strEffectiveBaseRevision -- $RepositoryRelativePath 2>&1
-        )
-        if ($LASTEXITCODE -ne 0) {
-            throw (
-                "Could not inspect published baseline " +
-                "$strEffectiveBaseRevision`:$RepositoryRelativePath in Git."
-            )
-        }
-        $boolRangePathSeen = $arrEffectiveBasePathEntries.Count -gt 0
-    }
     $setValidatedRangeBlobIds = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::OrdinalIgnoreCase
     )
@@ -5024,52 +5130,6 @@ function Get-GovernedDocumentRangeTransitionFailure {
             throw "Git returned an unavailable metadata range commit: $strRangeCommit"
         }
 
-        $arrRangePathEntries = @(
-            & git -C $RepositoryRootPath ls-tree --full-tree `
-                $strRangeCommit -- $RepositoryRelativePath 2>&1
-        )
-        if ($LASTEXITCODE -ne 0) {
-            throw "Could not inspect $strRangeCommit`:$RepositoryRelativePath in Git."
-        }
-        if ($arrRangePathEntries.Count -eq 0) {
-            if ($boolRangePathSeen) {
-                throw (
-                    "Metadata range commit $strRangeCommit is missing governed path " +
-                    "$RepositoryRelativePath after that path first appeared."
-                )
-            }
-        }
-        else {
-            $strExpectedRangeEntryPattern =
-                '^100644 blob (?<ObjectId>(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64}))\t' +
-                [regex]::Escape($RepositoryRelativePath) + '$'
-            $objRangePathEntryMatch = if ($arrRangePathEntries.Count -eq 1) {
-                [regex]::Match(
-                    [string] $arrRangePathEntries[0],
-                    $strExpectedRangeEntryPattern
-                )
-            }
-            else {
-                [System.Text.RegularExpressions.Match]::Empty
-            }
-            if (-not $objRangePathEntryMatch.Success) {
-                throw (
-                    "Metadata range commit $strRangeCommit does not contain exactly one " +
-                    "regular 100644 blob at $RepositoryRelativePath."
-                )
-            }
-            $boolRangePathSeen = $true
-            $strRangeBlobId = $objRangePathEntryMatch.Groups['ObjectId'].Value
-            if ($setValidatedRangeBlobIds.Add($strRangeBlobId)) {
-                [void](Read-GitRevisionText `
-                        -RepositoryRootPath $RepositoryRootPath `
-                        -Revision $strRangeCommit `
-                        -RepositoryRelativePath $RepositoryRelativePath `
-                        -MaximumBytes $MaximumBytes `
-                        -RequireRegularFile)
-            }
-        }
-
         $strParentLine = [string] (
             & git -C $RepositoryRootPath rev-list --parents -n 1 $strRangeCommit
         )
@@ -5103,6 +5163,70 @@ function Get-GovernedDocumentRangeTransitionFailure {
                 if ($LASTEXITCODE -ne 0) {
                     throw "Git returned an unavailable parent for metadata range commit $strRangeCommit."
                 }
+            }
+        }
+
+        $arrRangePathEntries = @(
+            & git -C $RepositoryRootPath ls-tree --full-tree `
+                $strRangeCommit -- $RepositoryRelativePath 2>&1
+        )
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not inspect $strRangeCommit`:$RepositoryRelativePath in Git."
+        }
+        if ($arrRangePathEntries.Count -eq 0) {
+            $boolDirectParentContainsPath = $false
+            if ($intParentCount -gt 0) {
+                foreach ($strParentRevision in $arrCommitAndParents[1..$intParentCount]) {
+                    $arrParentPathEntries = @(
+                        & git -C $RepositoryRootPath ls-tree --full-tree `
+                            $strParentRevision -- $RepositoryRelativePath 2>&1
+                    )
+                    if ($LASTEXITCODE -ne 0) {
+                        throw (
+                            "Could not inspect $strParentRevision`:$RepositoryRelativePath " +
+                            'in Git.'
+                        )
+                    }
+                    if ($arrParentPathEntries.Count -gt 0) {
+                        $boolDirectParentContainsPath = $true
+                        break
+                    }
+                }
+            }
+            if ($boolDirectParentContainsPath) {
+                throw (
+                    "Metadata range commit $strRangeCommit is missing governed path " +
+                    "$RepositoryRelativePath that exists in a direct parent."
+                )
+            }
+        }
+        else {
+            $strExpectedRangeEntryPattern =
+                '^100644 blob (?<ObjectId>(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64}))\t' +
+                [regex]::Escape($RepositoryRelativePath) + '$'
+            $objRangePathEntryMatch = if ($arrRangePathEntries.Count -eq 1) {
+                [regex]::Match(
+                    [string] $arrRangePathEntries[0],
+                    $strExpectedRangeEntryPattern
+                )
+            }
+            else {
+                [System.Text.RegularExpressions.Match]::Empty
+            }
+            if (-not $objRangePathEntryMatch.Success) {
+                throw (
+                    "Metadata range commit $strRangeCommit does not contain exactly one " +
+                    "regular 100644 blob at $RepositoryRelativePath."
+                )
+            }
+            $strRangeBlobId = $objRangePathEntryMatch.Groups['ObjectId'].Value
+            if ($setValidatedRangeBlobIds.Add($strRangeBlobId)) {
+                [void](Read-GitRevisionText `
+                        -RepositoryRootPath $RepositoryRootPath `
+                        -Revision $strRangeCommit `
+                        -RepositoryRelativePath $RepositoryRelativePath `
+                        -MaximumBytes $MaximumBytes `
+                        -RequireRegularFile)
             }
         }
 
@@ -6497,17 +6621,22 @@ if ([string]::IsNullOrEmpty($strValidatedInputRevision) -and
 
 if ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
     $arrTrackedRepositoryPaths = @(
-        & git -C $strRepositoryRootPath ls-files --cached
+        Invoke-GitNulRecordQuery `
+            -RepositoryRootPath $strRepositoryRootPath `
+            -Argument @('ls-files', '--cached', '-z') `
+            -DisplayName 'tracked repository paths'
     )
 }
 else {
     $arrTrackedRepositoryPaths = @(
-        & git -C $strRepositoryRootPath ls-tree -r --name-only `
-            $strValidatedInputRevision
+        Invoke-GitNulRecordQuery `
+            -RepositoryRootPath $strRepositoryRootPath `
+            -Argument @(
+                'ls-tree', '-r', '--name-only', '-z',
+                $strValidatedInputRevision
+            ) `
+            -DisplayName 'revision repository paths'
     )
-}
-if ($LASTEXITCODE -ne 0) {
-    throw 'Could not enumerate tracked files for the governed instruction inventory.'
 }
 $listGovernedDecisionCandidatePaths = [System.Collections.Generic.List[string]]::new()
 foreach ($strTrackedRepositoryPath in $arrTrackedRepositoryPaths) {
@@ -6542,12 +6671,14 @@ if (-not [string]::IsNullOrEmpty($strDecisionInventoryBaseRevision) -and
         $strDecisionInventoryBaseRevision -match $strDecisionZeroObjectIdPattern
     if (-not $boolDecisionInventoryBaseIsZero) {
         $arrBaselineDecisionPaths = @(
-            & git -C $strRepositoryRootPath ls-tree -r --name-only `
-                $strDecisionInventoryBaseRevision 2>&1
+            Invoke-GitNulRecordQuery `
+                -RepositoryRootPath $strRepositoryRootPath `
+                -Argument @(
+                    'ls-tree', '-r', '--name-only', '-z',
+                    $strDecisionInventoryBaseRevision
+                ) `
+                -DisplayName 'published-baseline decision records'
         )
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Could not enumerate published-baseline decision records.'
-        }
         foreach ($strBaselineDecisionPath in $arrBaselineDecisionPaths) {
             $listGovernedDecisionCandidatePaths.Add([string]$strBaselineDecisionPath)
         }
@@ -6559,12 +6690,14 @@ if (-not [string]::IsNullOrEmpty($strDecisionInventoryBaseRevision) -and
         "$strDecisionInventoryBaseRevision..$strDecisionInventoryHeadRevision"
     }
     $arrRangeDecisionPaths = @(
-        & git -C $strRepositoryRootPath log --format= --name-only --no-renames `
-            $strDecisionInventoryRange -- ':(glob)**/decisions/**/*.md' 2>&1
+        Invoke-GitNulRecordQuery `
+            -RepositoryRootPath $strRepositoryRootPath `
+            -Argument @(
+                'log', '--format=', '--name-only', '-z', '--no-renames',
+                $strDecisionInventoryRange, '--', ':(glob)**/decisions/**/*.md'
+            ) `
+            -DisplayName 'decision records in the validation range'
     )
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Could not enumerate decision records in the validation range.'
-    }
     foreach ($strRangeDecisionPath in $arrRangeDecisionPaths) {
         $listGovernedDecisionCandidatePaths.Add([string]$strRangeDecisionPath)
     }
@@ -7026,6 +7159,13 @@ if ($SelfTest) {
             throw "$strYamlHookId selector mutation did not fail closed."
         }
     }
+    $strPowerShell7Preflight =
+        "pwsh -NoProfile -Command 'if (`$PSVersionTable." +
+        "PSVersion.Major -lt 7) { exit 1 }'"
+    $strWeakenedPowerShellPreflight = $strPowerShell7Preflight.Replace(
+        '-lt 7',
+        '-lt 6'
+    )
     $arrPreCommitBootstrapMutations = @(
         [pscustomobject]@{
             Name = 'runner pin changed'
@@ -7034,6 +7174,39 @@ if ($SelfTest) {
             ScriptIndex = $strScriptIndexContent
             Requirements = $strRequirementsContent.Replace('4.6.2', '4.6.1')
             Failure = 'exact pre-commit 4.6.2 pin'
+        },
+        [pscustomobject]@{
+            Name = 'AGENTS PowerShell preflight weakened'
+            Agents = $strAgentsContent.Replace(
+                $strPowerShell7Preflight,
+                $strWeakenedPowerShellPreflight
+            )
+            Claude = $strClaudeContent
+            ScriptIndex = $strScriptIndexContent
+            Requirements = $strRequirementsContent
+            Failure = 'AGENTS.md must contain this setup command exactly once'
+        },
+        [pscustomobject]@{
+            Name = 'CLAUDE PowerShell preflight weakened'
+            Agents = $strAgentsContent
+            Claude = $strClaudeContent.Replace(
+                $strPowerShell7Preflight,
+                $strWeakenedPowerShellPreflight
+            )
+            ScriptIndex = $strScriptIndexContent
+            Requirements = $strRequirementsContent
+            Failure = 'CLAUDE.md must contain this setup command exactly once'
+        },
+        [pscustomobject]@{
+            Name = 'script index PowerShell preflight weakened'
+            Agents = $strAgentsContent
+            Claude = $strClaudeContent
+            ScriptIndex = $strScriptIndexContent.Replace(
+                $strPowerShell7Preflight,
+                $strWeakenedPowerShellPreflight
+            )
+            Requirements = $strRequirementsContent
+            Failure = '.github/workflows/scripts-README.md must contain this setup command exactly once'
         },
         [pscustomobject]@{
             Name = 'AGENTS Windows install command changed'
@@ -9263,6 +9436,30 @@ if ($SelfTest) {
             -CodexConfigContent $strCodexConfigContent `
             -ParentAgentsContent $strAgentsContent `
             -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value
+        $strMetadataOnlyHigherVersionReset = $strAgentsContent.Replace(
+            $objAgentsVersionMatch.Value,
+            $strHigherVersionStem + '0'
+        )
+        Assert-FixtureAccepted `
+            -Name "metadata-only $($objHigherVersionFixture.Name) change resets revision" `
+            -AgentsContent $strMetadataOnlyHigherVersionReset `
+            -ClaudeContent $strClaudeContent `
+            -CodexConfigContent $strCodexConfigContent `
+            -ParentAgentsContent $strAgentsContent `
+            -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value
+        Assert-MutationRejected `
+            -Name "metadata-only $($objHigherVersionFixture.Name) change retains nonzero revision" `
+            -AgentsContent $strMetadataOnlyHigherVersionReset.Replace(
+                $strHigherVersionStem + '0',
+                $strHigherVersionStem + '1'
+            ) `
+            -ClaudeContent $strClaudeContent `
+            -CodexConfigContent $strCodexConfigContent `
+            -ParentAgentsContent $strAgentsContent `
+            -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
+            -ExpectedFailure (
+                'AGENTS.md Version revision must be 0 when major, minor, or date changes'
+            )
         Assert-MutationRejected `
             -Name "$($objHigherVersionFixture.Name) change retains nonzero revision" `
             -AgentsContent $strHigherVersionReset.Replace(
@@ -9294,6 +9491,30 @@ if ($SelfTest) {
         $objAgentsUpdatedMatch.Value,
         '- **Last Updated:** 2000-01-01'
     )
+    $strMetadataOnlyNewDayReset = $strAgentsContent.Replace(
+        $objAgentsVersionMatch.Value,
+        $strAgentsVersionStem + '0'
+    )
+    Assert-FixtureAccepted `
+        -Name 'metadata-only new-day zero revision' `
+        -AgentsContent $strMetadataOnlyNewDayReset `
+        -ClaudeContent $strClaudeContent `
+        -CodexConfigContent $strCodexConfigContent `
+        -ParentAgentsContent $strPreviousDateParent `
+        -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value
+    Assert-MutationRejected `
+        -Name 'metadata-only new-day nonzero revision' `
+        -AgentsContent $strMetadataOnlyNewDayReset.Replace(
+            $strAgentsVersionStem + '0',
+            $strAgentsVersionStem + '1'
+        ) `
+        -ClaudeContent $strClaudeContent `
+        -CodexConfigContent $strCodexConfigContent `
+        -ParentAgentsContent $strPreviousDateParent `
+        -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
+        -ExpectedFailure (
+            'AGENTS.md Version revision must be 0 when major, minor, or date changes'
+        )
     Assert-FixtureAccepted `
         -Name 'new-day zero revision' `
         -AgentsContent $strRenderedAgentsMutation `
@@ -9663,10 +9884,20 @@ if ($SelfTest) {
             'yyyy-MM-dd',
             [System.Globalization.CultureInfo]::InvariantCulture
         )
+        $objMergeFixtureHeaderMatch = [regex]::Match(
+            $strAgentsContent,
+            '(?ms)\A.*?^<!-- template-sync: end markdown-reference-only -->\r?$'
+        )
+        if (-not $objMergeFixtureHeaderMatch.Success) {
+            throw 'Could not isolate the governed metadata header for merge fixtures.'
+        }
+        $strMergeFixtureSourceContent = $objMergeFixtureHeaderMatch.Value +
+            [Environment]::NewLine + [Environment]::NewLine +
+            'Merge-transition fixture content.' + [Environment]::NewLine
         $strMergeBaseVersion = '**Version:** ' +
             $objAgentsVersionMatch.Groups['Prefix'].Value +
             $strMergeHistoricalDate.Replace('-', '') + '.0'
-        $strMergeBaseContent = $strAgentsContent.Replace(
+        $strMergeBaseContent = $strMergeFixtureSourceContent.Replace(
             $objAgentsVersionMatch.Value,
             $strMergeBaseVersion
         ).Replace(
@@ -9737,6 +9968,154 @@ if ($SelfTest) {
             -Parents @() `
             -Timestamp ($strMergeHistoricalDate + 'T08:00:00Z') `
             -Message 'merge fixture base'
+        $strUnicodeDirectoryName = 'm' + [char] 0x00F3 + 'dulo'
+        $strUnicodeDecisionFileName = 'revisi' + [char] 0x00F3 + 'n.md'
+        $strUnicodeInstructionRepositoryPath =
+            "$strUnicodeDirectoryName/AGENTS.md"
+        $strUnicodeDecisionRepositoryPath =
+            "$strUnicodeDirectoryName/decisions/$strUnicodeDecisionFileName"
+        foreach ($strUnicodeRepositoryPath in @(
+                $strUnicodeInstructionRepositoryPath,
+                $strUnicodeDecisionRepositoryPath
+            )) {
+            $strUnicodeWorktreePath = [System.IO.Path]::Combine(
+                $strMergeFixtureRoot,
+                $strUnicodeRepositoryPath.Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+            )
+            [void][System.IO.Directory]::CreateDirectory(
+                [System.IO.Path]::GetDirectoryName($strUnicodeWorktreePath)
+            )
+            [System.IO.File]::WriteAllText(
+                $strUnicodeWorktreePath,
+                $strMergeBaseContent,
+                $objUtf8WithoutBom
+            )
+        }
+        & git -C $strMergeFixtureRoot add -- `
+            $strUnicodeInstructionRepositoryPath $strUnicodeDecisionRepositoryPath
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not stage the non-ASCII path-inventory fixtures.'
+        }
+        $arrUnicodeIndexPaths = @(
+            Invoke-GitNulRecordQuery `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -Argument @('ls-files', '--cached', '-z') `
+                -DisplayName 'non-ASCII index paths'
+        )
+        if ($arrUnicodeIndexPaths -cnotcontains $strUnicodeInstructionRepositoryPath -or
+            $arrUnicodeIndexPaths -cnotcontains $strUnicodeDecisionRepositoryPath) {
+            throw 'NUL-delimited index enumeration omitted a non-ASCII governed path.'
+        }
+        $strUnicodeTree = ([string] (& git -C $strMergeFixtureRoot write-tree)).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not create the non-ASCII path-inventory tree.'
+        }
+        $strUnicodeCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strUnicodeTree `
+            -Parents @($strMergeBaseCommit) `
+            -Timestamp ($strMergeHistoricalDate + 'T08:10:00Z') `
+            -Message 'non-ASCII path inventory fixture'
+        $arrQuotedUnicodeTreePaths = @(
+            & git -C $strMergeFixtureRoot -c core.quotePath=true `
+                ls-tree -r --name-only $strUnicodeCommit
+        )
+        if ($LASTEXITCODE -ne 0 -or
+            $arrQuotedUnicodeTreePaths -ccontains $strUnicodeInstructionRepositoryPath) {
+            throw 'The non-ASCII fixture did not exercise Git pathname quoting.'
+        }
+        $arrUnicodeTreePaths = @(
+            Invoke-GitNulRecordQuery `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -Argument @('ls-tree', '-r', '--name-only', '-z', $strUnicodeCommit) `
+                -DisplayName 'non-ASCII tree paths'
+        )
+        if ($arrUnicodeTreePaths -cnotcontains $strUnicodeInstructionRepositoryPath) {
+            throw 'NUL-delimited tree enumeration omitted a non-ASCII governed path.'
+        }
+        $arrUnicodeRangePaths = @(
+            Invoke-GitNulRecordQuery `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -Argument @(
+                    'log', '--format=', '--name-only', '-z', '--no-renames',
+                    "$strMergeBaseCommit..$strUnicodeCommit", '--',
+                    ':(glob)**/decisions/**/*.md'
+                ) `
+                -DisplayName 'non-ASCII range decision paths'
+        )
+        if ($arrUnicodeRangePaths -cnotcontains $strUnicodeDecisionRepositoryPath) {
+            throw 'NUL-delimited range enumeration omitted a non-ASCII decision record.'
+        }
+
+        & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not restore the base tree after non-ASCII path fixtures.'
+        }
+        $strSiblingInstructionRepositoryPath = 'nested/AGENTS.md'
+        $strSiblingInstructionWorktreePath = [System.IO.Path]::Combine(
+            $strMergeFixtureRoot,
+            'nested',
+            'AGENTS.md'
+        )
+        [void][System.IO.Directory]::CreateDirectory(
+            [System.IO.Path]::GetDirectoryName($strSiblingInstructionWorktreePath)
+        )
+        [System.IO.File]::WriteAllText(
+            $strSiblingInstructionWorktreePath,
+            $strMergeBaseContent,
+            $objUtf8WithoutBom
+        )
+        & git -C $strMergeFixtureRoot add -- $strSiblingInstructionRepositoryPath
+        $strSiblingAdditionTree = ([string] (& git -C $strMergeFixtureRoot write-tree)).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not create the sibling-path addition tree.'
+        }
+        $strSiblingAdditionCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strSiblingAdditionTree `
+            -Parents @($strMergeBaseCommit) `
+            -Timestamp ($strMergeHistoricalDate + 'T08:20:00Z') `
+            -Message 'add governed path on first sibling'
+        $strSiblingAbsentCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strMergeBaseTree `
+            -Parents @($strMergeBaseCommit) `
+            -Timestamp ($strMergeHistoricalDate + 'T08:30:00Z') `
+            -Message 'retain absence on second sibling'
+        $strSiblingMergeCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strSiblingAdditionTree `
+            -Parents @($strSiblingAdditionCommit, $strSiblingAbsentCommit) `
+            -Timestamp ($strMergeHistoricalDate + 'T08:40:00Z') `
+            -Message 'merge sibling governed-path histories'
+        $arrSiblingRangeCommits = @(
+            & git -C $strMergeFixtureRoot rev-list --reverse --topo-order `
+                "$strMergeBaseCommit..$strSiblingMergeCommit"
+        )
+        if ($LASTEXITCODE -ne 0 -or
+            [array]::IndexOf($arrSiblingRangeCommits, $strSiblingAdditionCommit) -gt
+            [array]::IndexOf($arrSiblingRangeCommits, $strSiblingAbsentCommit)) {
+            throw 'The sibling-history fixture did not reproduce the traversal-order hazard.'
+        }
+        $arrSiblingRangeFailures = @(Get-GovernedDocumentRangeTransitionFailure `
+                -Name $strSiblingInstructionRepositoryPath `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -RepositoryRelativePath $strSiblingInstructionRepositoryPath `
+                -MaximumBytes $intAgentsMaximumInputBytes `
+                -BaseRevision $strMergeBaseCommit `
+                -HeadRevision $strSiblingMergeCommit `
+                -InputRevision $strSiblingMergeCommit `
+                -IsNewRefRange $false `
+                -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
+                -PolicyMaximumBytes 1024 `
+                -PolicyMarker $strMetadataRangePolicyMarker)
+        if ($arrSiblingRangeFailures.Count -ne 0) {
+            throw (
+                'A valid sibling path history was treated as a deletion: ' +
+                ($arrSiblingRangeFailures -join '; ')
+            )
+        }
+
+        & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not restore the base tree after sibling-path fixtures.'
+        }
         $strMergeCopilotChangedContent =
             $strMergeCopilotBaseContent + "Changed instructions.`n"
         [System.IO.File]::WriteAllText(

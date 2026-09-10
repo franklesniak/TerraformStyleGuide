@@ -57,12 +57,13 @@ During downstream template adoption and stack selection, perform non-protected c
   - Respect allowlisted file access boundaries; reject path traversal and symlink escapes.
 
 - **Pre-commit and validation**
-  - Install Python 3.12 and the pinned runner. On Windows, run `py -3.12 -m pip install --requirement requirements-dev.txt`. Elsewhere, run `python3.12 -m pip install --requirement requirements-dev.txt`; substitute a verified Python 3.12 command if needed.
-  - Run `npm run bootstrap:agent-instructions` once after each fresh clone or lockfile change. This installs only the locked Node.js dependencies required by the system-language hook.
-  - Before every commit, run `py -3.12 -m pre_commit run --all-files` on Windows or `python3.12 -m pre_commit run --all-files` elsewhere; make the same substitution if needed.
-  - Retain the repository's existing Husky pre-commit checks for staged Markdown. They run `npm --prefix .github/workflows run lint:md` and `npm --prefix .github/workflows run lint:md:nested`.
-  - Include all auto-fixes in the same commit as the related change.
-  - Do not push code when pre-commit or required validation checks are failing; fix issues and re-run until the checks pass.
+  - First install PowerShell 7's `pwsh` on `PATH` ([guide](https://learn.microsoft.com/powershell/scripting/install/install-powershell)); verify: `pwsh -NoProfile -Command 'if ($PSVersionTable.PSVersion.Major -lt 7) { exit 1 }'`.
+  - Install Python 3.12 and the pinned runner: Windows, `py -3.12 -m pip install --requirement requirements-dev.txt`; elsewhere, `python3.12 -m pip install --requirement requirements-dev.txt`. A verified equivalent is allowed.
+  - On clone or lock changes, run `npm run bootstrap:agent-instructions` for locked Node dependencies.
+  - Pre-commit: Windows, `py -3.12 -m pre_commit run --all-files`; elsewhere, `python3.12 -m pre_commit run --all-files`. Use the same equivalent.
+  - Retain Husky's staged-Markdown checks: `npm --prefix .github/workflows run lint:md` and `npm --prefix .github/workflows run lint:md:nested`.
+  - Commit auto-fixes with the related change.
+  - Do not push until pre-commit and required validation pass.
   - Run the applicable repository commands:
     - `npm run lint:md`
     - `npm run lint:md:nested`
