@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260909.9
+# Version: 1.2.20260910.0
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -137,6 +137,9 @@ $script:hashtableLegacyMetadataParentSha256 = @{
 }
 $script:arrAllowedMetadataStatuses = @(
     'Draft', 'Proposed', 'Active', 'Accepted', 'Superseded', 'Deprecated'
+)
+$script:arrAllowedDecisionRecordStatuses = @(
+    'Proposed', 'Accepted', 'Superseded', 'Deprecated'
 )
 $script:arrCheckoutAttributePaths = @(
     '.gitattributes',
@@ -3495,7 +3498,7 @@ function Get-DocumentMetadataContext {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.5.20260909.0
+    # Version: 1.6.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
@@ -3747,6 +3750,7 @@ function Get-DocumentMetadataContext {
     return [pscustomobject]@{
         Failure = $null
         HasVersion = $boolHasVersion
+        Status = $hashtableFieldMatches['Status'].Groups['Value'].Value
         Major = if ($boolHasVersion) { $objVersionMatch.Groups['Major'].Value } else { $null }
         Minor = if ($boolHasVersion) { $objVersionMatch.Groups['Minor'].Value } else { $null }
         VersionDate = if ($boolHasVersion) { $objVersionMatch.Groups['Date'].Value } else { $null }
@@ -3872,7 +3876,7 @@ function Get-DocumentMetadataTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.6.20260909.0
+    # Version: 1.7.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -3903,6 +3907,16 @@ function Get-DocumentMetadataTransitionFailure {
     $objCurrentMetadata = Get-DocumentMetadataContext -Content $CurrentContent
     if ($null -ne $objCurrentMetadata.Failure) {
         Write-Output "$Name $($objCurrentMetadata.Failure)"
+        return
+    }
+    if (@(Get-GovernedDecisionDocumentPath -CandidatePath @($Name)).Count -eq 1 -and
+        -not ($script:arrAllowedDecisionRecordStatuses -ccontains
+            $objCurrentMetadata.Status)) {
+        Write-Output (
+            "$Name Status must be one of " +
+            ($script:arrAllowedDecisionRecordStatuses -join ', ') +
+            ' for a governed decision record.'
+        )
         return
     }
 
@@ -3993,6 +4007,18 @@ function Get-DocumentMetadataTransitionFailure {
         Write-Output (
             "The parent of $Name Last Updated $strParentUpdatedDate must not be later than " +
             "trusted UTC date $script:strMaximumMetadataUtcDate."
+        )
+        return
+    }
+    if ((-not $objCurrentMetadata.HasVersion -or
+            -not $objParentMetadata.HasVersion) -and
+        [string]::CompareOrdinal(
+            $strCurrentUpdatedDate,
+            $strParentUpdatedDate
+        ) -lt 0) {
+        Write-Output (
+            "$Name Last Updated must not move backward from " +
+            "$strParentUpdatedDate to $strCurrentUpdatedDate."
         )
         return
     }
@@ -7916,10 +7942,24 @@ if ($SelfTest) {
             'yyyy-MM-dd',
             [System.Globalization.CultureInfo]::InvariantCulture
         )
-        $strStaleMetadataMutation = $objDocumentContext.Content.Replace(
+        $strMetadataOnlyRollbackMutation = $objDocumentContext.Content.Replace(
             "- **Last Updated:** $($objMetadataContext.UpdatedDate)",
             "- **Last Updated:** $strStaleUpdatedDate"
-        ) + [Environment]::NewLine + [Environment]::NewLine +
+        )
+        $strExpectedRollbackFailure =
+            "$strNewlyCoveredPath Last Updated must not move backward from " +
+            "$($objMetadataContext.UpdatedDate) to $strStaleUpdatedDate."
+        $arrMetadataOnlyRollbackFailures = @(Get-DocumentMetadataTransitionFailure `
+                -Name $strNewlyCoveredPath `
+                -CurrentContent $strMetadataOnlyRollbackMutation `
+                -ParentContent $objDocumentContext.Content `
+                -ExpectedUtcDate $objMetadataContext.UpdatedDate `
+                -IsNewDocumentTransition $false)
+        if ($arrMetadataOnlyRollbackFailures -cnotcontains $strExpectedRollbackFailure) {
+            throw "$strNewlyCoveredPath metadata-only date rollback did not fail closed."
+        }
+        $strStaleMetadataMutation = $strMetadataOnlyRollbackMutation +
+            [Environment]::NewLine + [Environment]::NewLine +
             'Rendered governed-document metadata mutation.'
         $arrStaleMetadataFailures = @(Get-DocumentMetadataTransitionFailure `
                 -Name $strNewlyCoveredPath `
@@ -7927,10 +7967,7 @@ if ($SelfTest) {
                 -ParentContent $objDocumentContext.Content `
                 -ExpectedUtcDate $objMetadataContext.UpdatedDate `
                 -IsNewDocumentTransition $false)
-        $strExpectedFailure =
-            "$strNewlyCoveredPath Last Updated must be " +
-            "$($objMetadataContext.UpdatedDate) after a rendered-content change."
-        if ($arrStaleMetadataFailures -cnotcontains $strExpectedFailure) {
+        if ($arrStaleMetadataFailures -cnotcontains $strExpectedRollbackFailure) {
             throw "$strNewlyCoveredPath stale-metadata mutation did not fail closed."
         }
     }
@@ -7967,6 +8004,56 @@ if ($SelfTest) {
         $arrDecisionInventoryFixture[0] -cne
         'docs/decisions/0004-future-record.md') {
         throw 'The dynamic decision-record inventory did not select the exact direct Markdown family.'
+    }
+    $strRepresentativeDecisionPath = @($arrGovernedDecisionPaths)[0]
+    $objRepresentativeDecision = $listGovernedDocumentContexts |
+        Where-Object { $_.Path -ceq $strRepresentativeDecisionPath }
+    if ($null -eq $objRepresentativeDecision) {
+        throw 'Could not locate a representative governed decision record.'
+    }
+    $objRepresentativeDecisionMetadata = Get-DocumentMetadataContext `
+        -Content $objRepresentativeDecision.Content
+    if ($null -ne $objRepresentativeDecisionMetadata.Failure) {
+        throw 'Could not parse the representative governed decision record.'
+    }
+    $strRepresentativeDecisionStatusLine = [regex]::Match(
+        $objRepresentativeDecision.Content,
+        '(?m)^- \*\*Status:\*\* [^\r\n]+$'
+    ).Value
+    foreach ($strAllowedDecisionStatus in $script:arrAllowedDecisionRecordStatuses) {
+        $strAllowedDecisionContent = $objRepresentativeDecision.Content.Replace(
+            $strRepresentativeDecisionStatusLine,
+            "- **Status:** $strAllowedDecisionStatus"
+        )
+        $arrAllowedDecisionFailures = @(Get-DocumentMetadataTransitionFailure `
+                -Name $strRepresentativeDecisionPath `
+                -CurrentContent $strAllowedDecisionContent `
+                -ParentContent $objRepresentativeDecision.Content `
+                -ExpectedUtcDate $objRepresentativeDecisionMetadata.UpdatedDate `
+                -IsNewDocumentTransition $false)
+        if ($arrAllowedDecisionFailures.Count -ne 0) {
+            throw "Governed decision status failed: $strAllowedDecisionStatus"
+        }
+    }
+    foreach ($strRejectedDecisionStatus in @('Draft', 'Active')) {
+        $strRejectedDecisionContent = $objRepresentativeDecision.Content.Replace(
+            $strRepresentativeDecisionStatusLine,
+            "- **Status:** $strRejectedDecisionStatus"
+        )
+        $arrRejectedDecisionFailures = @(Get-DocumentMetadataTransitionFailure `
+                -Name $strRepresentativeDecisionPath `
+                -CurrentContent $strRejectedDecisionContent `
+                -ParentContent $objRepresentativeDecision.Content `
+                -ExpectedUtcDate $objRepresentativeDecisionMetadata.UpdatedDate `
+                -IsNewDocumentTransition $false)
+        $strExpectedDecisionStatusFailure =
+            "$strRepresentativeDecisionPath Status must be one of " +
+            ($script:arrAllowedDecisionRecordStatuses -join ', ') +
+            ' for a governed decision record.'
+        if ($arrRejectedDecisionFailures -cnotcontains
+            $strExpectedDecisionStatusFailure) {
+            throw "Governed decision status passed: $strRejectedDecisionStatus"
+        }
     }
 
     $arrAcceptedClaudeLocalInventoryFailures = @(
