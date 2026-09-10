@@ -3,7 +3,7 @@
 
 - **Status:** Active
 - **Owner:** TerraformStyleGuide Repository Maintainers
-- **Last Updated:** 2026-09-09
+- **Last Updated:** 2026-09-10
 - **Scope:** Explains the rationale, design philosophy, trade-offs, and historical context behind the normative Terraform rules in `STYLE_GUIDE.md`.
 - **Related:** [Terraform style guide](STYLE_GUIDE.md)
 

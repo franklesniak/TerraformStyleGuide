@@ -5,7 +5,7 @@
 
 - **Status:** Active
 - **Owner:** TerraformStyleGuide Repository Maintainers
-- **Last Updated:** 2026-09-09
+- **Last Updated:** 2026-09-10
 - **Scope:** Defines the reproducible supply-input freeze for the T1 merge and the exact evidence that later work must compare.
 - **Related:** [Decision records](decisions/)
 

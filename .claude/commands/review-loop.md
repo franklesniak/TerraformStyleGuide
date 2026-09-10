@@ -10,7 +10,7 @@ argument-hint: <pull-request-url>
 
 - **Status:** Active
 - **Owner:** TerraformStyleGuide Repository Maintainers
-- **Last Updated:** 2026-09-09
+- **Last Updated:** 2026-09-10
 - **Scope:** Defines the repository-local Claude command that runs the Copilot and Codex pull-request review loop.
 - **Related:** [Claude agent instructions](../../CLAUDE.md)
 

@@ -6,7 +6,7 @@
 
 - **Status:** Active
 - **Owner:** TerraformStyleGuide Repository Maintainers
-- **Last Updated:** 2026-09-09
+- **Last Updated:** 2026-09-10
 - **Scope:** Provides the prompt template and output contract for evaluating proposed TerraformStyleGuide issues.
 - **Related:** [Terraform style guide](../STYLE_GUIDE.md) and [rationale](../STYLE_GUIDE_RATIONALE.md)
 
