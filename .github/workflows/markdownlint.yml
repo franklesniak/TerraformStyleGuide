@@ -179,8 +179,8 @@ jobs:
           # only that npm ci left these files alone; it cannot detect metadata
           # that was already altered at review time. This gate runs before
           # installation so unreviewed scripts are never installed and never run.
-          $strReviewedPackageHash = '0E515460FCF69219622C6D73739E4EA8B8DA5FCFBCE2D6E6B4C26F3E31DE8AD0'
-          $strReviewedLockHash = '876B3018E35745243C74482E4C58D2652A19BD21BE51BE425DE5EE36240D1C70'
+          $strReviewedPackageHash = '3F9A89E9F0ABC17C81A7268C15D8C82EEF5F766ECAF1B9B82E7B2CC7BD6C7C19'
+          $strReviewedLockHash = '84CBE61E33E4C66B653EFD2BFBE3F80B0061368A64AD80EF0DE4898DA28D887D'
           $strPackageBefore = (Get-FileHash -LiteralPath package.json -Algorithm SHA256).Hash
           $strLockBefore = (Get-FileHash -LiteralPath package-lock.json -Algorithm SHA256).Hash
           if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash) {
@@ -433,8 +433,8 @@ jobs:
           # only that npm ci left these files alone; it cannot detect metadata
           # that was already altered at review time. This gate runs before
           # installation so unreviewed scripts are never installed and never run.
-          $strReviewedPackageHash = '0E515460FCF69219622C6D73739E4EA8B8DA5FCFBCE2D6E6B4C26F3E31DE8AD0'
-          $strReviewedLockHash = '876B3018E35745243C74482E4C58D2652A19BD21BE51BE425DE5EE36240D1C70'
+          $strReviewedPackageHash = '3F9A89E9F0ABC17C81A7268C15D8C82EEF5F766ECAF1B9B82E7B2CC7BD6C7C19'
+          $strReviewedLockHash = '84CBE61E33E4C66B653EFD2BFBE3F80B0061368A64AD80EF0DE4898DA28D887D'
           $strPackageBefore = (Get-FileHash -LiteralPath package.json -Algorithm SHA256).Hash
           $strLockBefore = (Get-FileHash -LiteralPath package-lock.json -Algorithm SHA256).Hash
           if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash) {

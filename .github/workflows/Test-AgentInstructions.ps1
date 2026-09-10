@@ -100,9 +100,9 @@ $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/copilot-setup-steps.yml' =
         'ed9d8fee4ed50aa9407bac5211c3737d47daa548b3b135680c041110deff2e09'
     '.github/workflows/package.json' =
-        '0e515460fcf69219622c6d73739e4ea8b8da5fcfbce2d6e6b4c26f3e31de8ad0'
+        '3f9a89e9f0abc17c81a7268c15d8c82eef5f766ecaf1b9b82e7b2cc7bd6c7c19'
     '.github/workflows/package-lock.json' =
-        '876b3018e35745243c74482e4c58d2652a19bd21be51be425de5ee36240d1c70'
+        '84cbe61e33e4c66b653efd2bfbe3f80b0061368a64ad80ef0de4898da28d887d'
     '.husky/pre-commit' =
         '8989ab5075c077599a6dea88e656ac2837af4800e0bb5daef364514f00255467'
     '.github/workflows/lint-staged-markdown.mjs' =
