@@ -2,8 +2,8 @@
 # Verifies Codex capacity and shared Claude/Codex instruction capabilities.
 #
 # .DESCRIPTION
-# Confirms that AGENTS.md fits the ordinary Codex limit, that trusted project
-# configuration adds reserve and enables the preferred GitHub plugin, that both
+# Confirms that AGENTS.md fits the configured Codex read limit with reserve,
+# that trusted project configuration enables the preferred GitHub plugin, that both
 # entry points retain portable review, placement, and deferral contracts, and
 # that platform safety markers remain present. Optional self-tests prove that
 # representative mutations fail closed.
@@ -83,12 +83,13 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$intAgentsMaximumInputBytes = 32768
+$intAgentsMaximumInputBytes = 65536
 $intClaudeMaximumInputBytes = 131072
 $intCodexConfigMaximumInputBytes = 65536
+$intDocumentClassificationMaximumInputBytes = 32768
 $intDocsInstructionsMaximumInputBytes = 131072
 $intInstructionDocumentMaximumInputBytes = 131072
-$intValidatorMaximumInputBytes = 589824
+$intValidatorMaximumInputBytes = 655360
 $intMetadataMaximumParents = 64
 $strMetadataRangePolicyMarker = 'metadata-range-transition-policy-v1'
 $script:objValidationUtcNow = [DateTimeOffset]::UtcNow
@@ -148,6 +149,7 @@ $script:arrCheckoutAttributePaths = @(
 )
 $script:arrTrustRootPaths = @(
     $script:arrCheckoutAttributePaths
+    '.github/workflows/Resolve-AgentInstructionFinalizationTime.mjs',
     '.github/workflows/Test-AgentInstructions.ps1',
     '.github/workflows/Test-AgentInstructionParserManifest.mjs',
     '.github/workflows/agent-instructions.yml'
@@ -633,7 +635,7 @@ function Read-BoundedStreamData {
     #
     # .EXAMPLE
     # $arrBytes = @(Read-BoundedStreamData -Stream $objStream `
-    #     -MaximumBytes 32768 -DisplayName 'AGENTS.md')
+    #     -MaximumBytes 65536 -DisplayName 'AGENTS.md')
     #
     # # Collects the streamed bytes when the limit is not exceeded.
     #
@@ -718,7 +720,7 @@ function Read-RepositoryInputData {
     # .EXAMPLE
     # $arrBytes = @(Read-RepositoryInputData -Path $strPath `
     #     -RepositoryRootPath $strRoot -RepositoryRelativePath 'AGENTS.md' `
-    #     -DisplayName 'AGENTS.md' -MaximumBytes 32768)
+    #     -DisplayName 'AGENTS.md' -MaximumBytes 65536)
     #
     # # Collects bytes from a safe regular repository file.
     #
@@ -835,7 +837,7 @@ function Read-GitRevisionText {
     #
     # .EXAMPLE
     # Read-GitRevisionText -RepositoryRootPath $strRoot -Revision 'HEAD^' `
-    #     -RepositoryRelativePath 'AGENTS.md' -MaximumBytes 32768
+    #     -RepositoryRelativePath 'AGENTS.md' -MaximumBytes 65536
     #
     # # Returns the decoded file text from the selected revision.
     #
@@ -1075,7 +1077,7 @@ function Test-GitRevisionFileContainsLiteral {
     # .EXAMPLE
     # Test-GitRevisionFileContainsLiteral -RepositoryRootPath $strRoot `
     #     -Revision 'HEAD' -RepositoryRelativePath 'AGENTS.md' `
-    #     -MaximumBytes 32768 -Literal 'metadata-range-transition-policy-v1'
+    #     -MaximumBytes 65536 -Literal 'metadata-range-transition-policy-v1'
     #
     # # Returns true only when the revision file contains the literal.
     #
@@ -1220,7 +1222,7 @@ function Get-GovernedDocumentParentContext {
     #
     # .EXAMPLE
     # Get-GovernedDocumentParentContext -RepositoryRootPath $strRoot `
-    #     -RepositoryRelativePath 'AGENTS.md' -MaximumBytes 32768
+    #     -RepositoryRelativePath 'AGENTS.md' -MaximumBytes 65536
     #
     # # Returns parent content, revision, and expected UTC date.
     #
@@ -3593,6 +3595,312 @@ function Get-GovernedDecisionDocumentPath {
     )
 }
 
+function Get-DocumentMetadataClassificationContext {
+    # .SYNOPSIS
+    # Parses the inert Markdown classification manifest.
+    #
+    # .DESCRIPTION
+    # Requires a strict, bounded JSON object with one schema version and sorted
+    # exact-path arrays for Tier 2 and generated documents. Every exemption must
+    # be a safe tracked Markdown path, and categories must not overlap.
+    #
+    # .PARAMETER Content
+    # The strict JSON manifest text.
+    #
+    # .PARAMETER TrackedPath
+    # The complete tracked repository path inventory at the validation revision.
+    #
+    # .EXAMPLE
+    # Get-DocumentMetadataClassificationContext `
+    #     -Content '{"schemaVersion":1,"tier2Paths":[],"generatedPaths":[]}' `
+    #     -TrackedPath @()
+    #
+    # # Returns an empty, valid exemption set.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [pscustomobject] The failure, if any, and exact metadata-exempt paths.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the
+    # public API surface. Parameters, return shape, and positional
+    # contract may change without notice.
+    #
+    # This function does not support positional parameters.
+    # Version: 1.0.20260910.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Content,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]] $TrackedPath
+    )
+
+    $scriptBlockFailure = {
+        param([string] $Message)
+
+        return [pscustomobject]@{
+            Failure = $Message
+            ExemptPaths = [string[]]@()
+        }
+    }
+    $objJsonOptions = [System.Text.Json.JsonDocumentOptions]@{
+        AllowTrailingCommas = $false
+        CommentHandling = [System.Text.Json.JsonCommentHandling]::Disallow
+        MaxDepth = 8
+    }
+    $objJsonDocument = $null
+    try {
+        $objJsonDocument = [System.Text.Json.JsonDocument]::Parse(
+            $Content,
+            $objJsonOptions
+        )
+        $objRoot = $objJsonDocument.RootElement
+        if ($objRoot.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+            return & $scriptBlockFailure `
+                -Message 'The document classification manifest root must be an object.'
+        }
+
+        $dictionaryProperties =
+            [System.Collections.Generic.Dictionary[
+                string,
+                System.Text.Json.JsonElement
+            ]]::new([System.StringComparer]::Ordinal)
+        $arrAllowedProperties = @('schemaVersion', 'tier2Paths', 'generatedPaths')
+        foreach ($objProperty in $objRoot.EnumerateObject()) {
+            if ($arrAllowedProperties -cnotcontains $objProperty.Name) {
+                return & $scriptBlockFailure -Message (
+                    'The document classification manifest contains an unknown property: ' +
+                    $objProperty.Name
+                )
+            }
+            if ($dictionaryProperties.ContainsKey($objProperty.Name)) {
+                return & $scriptBlockFailure -Message (
+                    'The document classification manifest contains a duplicate property: ' +
+                    $objProperty.Name
+                )
+            }
+            $dictionaryProperties.Add($objProperty.Name, $objProperty.Value.Clone())
+        }
+        foreach ($strRequiredProperty in $arrAllowedProperties) {
+            if (-not $dictionaryProperties.ContainsKey($strRequiredProperty)) {
+                return & $scriptBlockFailure -Message (
+                    'The document classification manifest is missing property: ' +
+                    $strRequiredProperty
+                )
+            }
+        }
+
+        $intSchemaVersion = 0
+        if (-not $dictionaryProperties['schemaVersion'].TryGetInt32(
+                [ref]$intSchemaVersion
+            ) -or $intSchemaVersion -ne 1) {
+            return & $scriptBlockFailure `
+                -Message 'The document classification schemaVersion must be integer 1.'
+        }
+
+        $setTrackedPaths = [System.Collections.Generic.HashSet[string]]::new(
+            $TrackedPath,
+            [System.StringComparer]::Ordinal
+        )
+        $setExemptPaths = [System.Collections.Generic.HashSet[string]]::new(
+            [System.StringComparer]::Ordinal
+        )
+        $listExemptPaths = [System.Collections.Generic.List[string]]::new()
+        foreach ($strArrayProperty in @('tier2Paths', 'generatedPaths')) {
+            $objArray = $dictionaryProperties[$strArrayProperty]
+            if ($objArray.ValueKind -ne [System.Text.Json.JsonValueKind]::Array) {
+                return & $scriptBlockFailure -Message (
+                    "The document classification $strArrayProperty value must be an array."
+                )
+            }
+            $strPreviousPath = $null
+            foreach ($objPathValue in $objArray.EnumerateArray()) {
+                if ($objPathValue.ValueKind -ne [System.Text.Json.JsonValueKind]::String) {
+                    return & $scriptBlockFailure -Message (
+                        "The document classification $strArrayProperty entries must be strings."
+                    )
+                }
+                $strPath = $objPathValue.GetString()
+                if ([string]::IsNullOrWhiteSpace($strPath) -or
+                    [System.IO.Path]::IsPathRooted($strPath) -or
+                    $strPath.Contains('\', [System.StringComparison]::Ordinal) -or
+                    $strPath -match '(?:^|/)\.\.(?:/|$)' -or
+                    $strPath -match '[\x00-\x1f\x7f]' -or
+                    $strPath -cnotmatch '\.(?:md|mdc)$') {
+                    return & $scriptBlockFailure -Message (
+                        "The document classification contains an unsafe path: $strPath"
+                    )
+                }
+                if ($null -ne $strPreviousPath -and
+                    [string]::CompareOrdinal($strPreviousPath, $strPath) -ge 0) {
+                    return & $scriptBlockFailure -Message (
+                        "The document classification $strArrayProperty array must be " +
+                        'strictly ordinal-sorted and duplicate-free.'
+                    )
+                }
+                if (-not $setExemptPaths.Add($strPath)) {
+                    return & $scriptBlockFailure -Message (
+                        "The document classification repeats a path: $strPath"
+                    )
+                }
+                if (-not $setTrackedPaths.Contains($strPath)) {
+                    return & $scriptBlockFailure -Message (
+                        "The document classification path is not tracked: $strPath"
+                    )
+                }
+                $listExemptPaths.Add($strPath)
+                $strPreviousPath = $strPath
+            }
+        }
+
+        return [pscustomobject]@{
+            Failure = $null
+            ExemptPaths = [string[]]$listExemptPaths.ToArray()
+        }
+    }
+    catch [System.Text.Json.JsonException] {
+        return & $scriptBlockFailure `
+            -Message 'The document classification manifest is not strict JSON.'
+    }
+    finally {
+        if ($null -ne $objJsonDocument) {
+            $objJsonDocument.Dispose()
+        }
+    }
+}
+
+function Get-DiscoveredGovernedMarkdownDocumentPath {
+    # .SYNOPSIS
+    # Selects tracked Markdown that is not already classified.
+    #
+    # .DESCRIPTION
+    # Partitions every tracked Markdown or Cursor Markdown path between the
+    # reviewed governed catalog, a bounded Tier 2/generated exception list, and
+    # a fail-closed Tier 1 default. Rejects ambiguous or unsafe path inventories.
+    #
+    # .PARAMETER CandidatePath
+    # The complete tracked repository path inventory at the validation revision.
+    #
+    # .PARAMETER KnownGovernedPath
+    # Paths already present in the reviewed governed-document catalog.
+    #
+    # .PARAMETER ExemptPath
+    # Exact reviewed Tier 2 or generated-document paths that do not require
+    # document-level metadata validation.
+    #
+    # .EXAMPLE
+    # Get-DiscoveredGovernedMarkdownDocumentPath `
+    #     -CandidatePath @('README.md', 'docs/RELEASE-RUNBOOK.md') `
+    #     -KnownGovernedPath @() -ExemptPath @('README.md')
+    #
+    # # Returns docs/RELEASE-RUNBOOK.md for Tier 1 metadata validation.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [string] One newly discovered governed Markdown path.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the
+    # public API surface. Parameters, return shape, and positional
+    # contract may change without notice.
+    #
+    # This function does not support positional parameters.
+    # Version: 1.0.20260910.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]] $CandidatePath,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]] $KnownGovernedPath,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]] $ExemptPath
+    )
+
+    $scriptBlockAssertSafeMarkdownPath = {
+        param(
+            [string] $Path,
+            [string] $InventoryName
+        )
+
+        if ([string]::IsNullOrWhiteSpace($Path) -or
+            [System.IO.Path]::IsPathRooted($Path) -or
+            $Path.Contains('\', [System.StringComparison]::Ordinal) -or
+            $Path -match '(?:^|/)\.\.(?:/|$)' -or
+            $Path -match '[\x00-\x1f\x7f]' -or
+            $Path -cnotmatch '\.(?:md|mdc)$') {
+            throw "$InventoryName contains an unsafe Markdown path: $Path"
+        }
+    }
+
+    $setCandidates = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal
+    )
+    foreach ($strCandidatePath in $CandidatePath) {
+        if ($strCandidatePath -cnotmatch '\.(?:md|mdc)$') {
+            continue
+        }
+        & $scriptBlockAssertSafeMarkdownPath `
+            -Path $strCandidatePath `
+            -InventoryName 'The tracked document inventory'
+        if (-not $setCandidates.Add($strCandidatePath)) {
+            throw "The tracked document inventory contains a duplicate path: $strCandidatePath"
+        }
+    }
+
+    $setKnownGoverned = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal
+    )
+    foreach ($strKnownGovernedPath in $KnownGovernedPath) {
+        & $scriptBlockAssertSafeMarkdownPath `
+            -Path $strKnownGovernedPath `
+            -InventoryName 'The governed document catalog'
+        if (-not $setKnownGoverned.Add($strKnownGovernedPath)) {
+            throw "The governed document catalog contains a duplicate path: $strKnownGovernedPath"
+        }
+    }
+
+    $setExempt = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal
+    )
+    foreach ($strExemptPath in $ExemptPath) {
+        & $scriptBlockAssertSafeMarkdownPath `
+            -Path $strExemptPath `
+            -InventoryName 'The Tier 2/generated exception catalog'
+        if (-not $setExempt.Add($strExemptPath)) {
+            throw "The Tier 2/generated exception catalog contains a duplicate path: $strExemptPath"
+        }
+        if ($setKnownGoverned.Contains($strExemptPath)) {
+            throw "A Markdown path is both governed and exempt: $strExemptPath"
+        }
+        if (-not $setCandidates.Contains($strExemptPath)) {
+            throw "A Tier 2/generated exception is not tracked: $strExemptPath"
+        }
+    }
+
+    return @(
+        $setCandidates |
+            Where-Object {
+                -not $setKnownGoverned.Contains($_) -and
+                -not $setExempt.Contains($_)
+            } |
+            Sort-Object -CaseSensitive
+    )
+}
+
 function Get-ProhibitedTrackedClaudeLocalFailure {
     # .SYNOPSIS
     # Finds tracked personal Claude project-memory files.
@@ -4575,7 +4883,7 @@ function Get-GovernedDocumentCommitTransitionFailure {
     # .EXAMPLE
     # Get-GovernedDocumentCommitTransitionFailure -Name 'AGENTS.md' `
     #     -RepositoryRootPath $strRoot -RepositoryRelativePath 'AGENTS.md' `
-    #     -MaximumBytes 32768 -CommitRevision $strCommit
+    #     -MaximumBytes 65536 -CommitRevision $strCommit
     #
     # # Writes one string for each direct-transition failure.
     #
@@ -4804,7 +5112,7 @@ function Get-GovernedDocumentRangeTransitionFailure {
     # .EXAMPLE
     # Get-GovernedDocumentRangeTransitionFailure -Name 'AGENTS.md' `
     #     -RepositoryRootPath $strRoot -RepositoryRelativePath 'AGENTS.md' `
-    #     -MaximumBytes 32768 -BaseRevision $strBase -HeadRevision $strHead `
+    #     -MaximumBytes 65536 -BaseRevision $strBase -HeadRevision $strHead `
     #     -IsNewRefRange $false `
     #     -PolicyRepositoryRelativePath $strPolicyPath `
     #     -PolicyMaximumBytes 262144 -PolicyMarker $strMarker
@@ -5694,9 +6002,6 @@ function Get-AgentInstructionFailure {
     }
 
     $intAgentsBytes = [System.Text.Encoding]::UTF8.GetByteCount($AgentsContent)
-    if ($intAgentsBytes -gt 32768) {
-        Write-Output 'AGENTS.md must not exceed the ordinary 32768-byte Codex limit.'
-    }
     if (($intConfiguredMaximumBytes - $intAgentsBytes) -lt 16384) {
         Write-Output 'Configured AGENTS.md capacity must retain at least 16384 bytes of reserve.'
     }
@@ -6145,9 +6450,9 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
     # Validates trusted run-time and one-parent merge-source workflow contracts.
     #
     # .DESCRIPTION
-    # Requires authenticated run-created time, exact default-branch push scoping,
-    # associated-PR lookup, merge identity filters, non-force PR-head acquisition,
-    # SHA readback, and validator handoff.
+    # Requires the tested finalization-time resolver, exact default-branch push
+    # scoping, associated-PR lookup, merge identity filters, non-force PR-head
+    # acquisition, SHA readback, and validator handoff.
     #
     # .PARAMETER WorkflowContent
     # The complete agent-instruction workflow YAML text to inspect.
@@ -6169,7 +6474,7 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.1.20260909.0
+    # Version: 1.2.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -6182,12 +6487,8 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
         '  pull-requests: read',
         '      - name: Resolve trusted workflow-run finalization time',
         '        id: resolve_run_time',
-        '            `${root}/repos/${repository}/actions/runs/${runId}`',
-        '              run?.repository?.full_name !== repository ||',
-        '              run?.head_sha !== trustedRevision || run?.event !== eventName ||',
-        '              String(run?.run_attempt) !== runAttempt)',
-        '          const createdAt = run?.created_at;',
-        '          appendFileSync(output, `timestamp=${createdAt}\n`, ''utf8'');',
+        '          REF_NAME: ${{ github.ref_name }}',
+        '        run: node .github/workflows/Resolve-AgentInstructionFinalizationTime.mjs',
         '      - name: Resolve authenticated one-parent merge source',
         '          if (( ${#head_and_parents[@]} != 2 )); then',
         '              `/repos/${repository}/commits/${head}/pulls?per_page=100&page=${page}`',
@@ -6466,6 +6767,9 @@ $strRepositoryRootPath = [System.IO.Path]::GetDirectoryName($strGitHubDirectoryP
 $strAgentsPath = Join-Path -Path $strRepositoryRootPath -ChildPath 'AGENTS.md'
 $strClaudePath = Join-Path -Path $strRepositoryRootPath -ChildPath 'CLAUDE.md'
 $strCodexConfigPath = Join-Path -Path $strRepositoryRootPath -ChildPath '.codex/config.toml'
+$strDocumentClassificationPath = Join-Path `
+    -Path $strRepositoryRootPath `
+    -ChildPath '.github/document-metadata-classification.json'
 $strDocsInstructionsPath = Join-Path `
     -Path $strRepositoryRootPath `
     -ChildPath '.github/instructions/docs.instructions.md'
@@ -6638,6 +6942,35 @@ else {
             -DisplayName 'revision repository paths'
     )
 }
+$strDocumentClassificationContent = if (
+    [string]::IsNullOrEmpty($strValidatedInputRevision)
+) {
+    ConvertFrom-StrictUtf8Data `
+        -Bytes (Read-RepositoryInputData `
+            -Path $strDocumentClassificationPath `
+            -RepositoryRootPath $strRepositoryRootPath `
+            -RepositoryRelativePath '.github/document-metadata-classification.json' `
+            -DisplayName '.github/document-metadata-classification.json' `
+            -MaximumBytes $intDocumentClassificationMaximumInputBytes) `
+        -DisplayName '.github/document-metadata-classification.json'
+}
+else {
+    Read-GitRevisionText `
+        -RepositoryRootPath $strRepositoryRootPath `
+        -Revision $strValidatedInputRevision `
+        -RepositoryRelativePath '.github/document-metadata-classification.json' `
+        -MaximumBytes $intDocumentClassificationMaximumInputBytes `
+        -RequireRegularFile
+}
+$objDocumentClassificationContext = Get-DocumentMetadataClassificationContext `
+    -Content $strDocumentClassificationContent `
+    -TrackedPath $arrTrackedRepositoryPaths
+if ($null -ne $objDocumentClassificationContext.Failure) {
+    throw $objDocumentClassificationContext.Failure
+}
+$arrMetadataExemptMarkdownDocuments = @(
+    $objDocumentClassificationContext.ExemptPaths
+)
 $listGovernedDecisionCandidatePaths = [System.Collections.Generic.List[string]]::new()
 foreach ($strTrackedRepositoryPath in $arrTrackedRepositoryPaths) {
     $listGovernedDecisionCandidatePaths.Add([string]$strTrackedRepositoryPath)
@@ -6713,6 +7046,23 @@ foreach ($strGovernedDecisionPath in $arrGovernedDecisionPaths) {
         RequiresMetadata = $true
     }
 }
+$arrDiscoveredGovernedMarkdownPaths = @(
+    Get-DiscoveredGovernedMarkdownDocumentPath `
+        -CandidatePath $arrTrackedRepositoryPaths `
+        -KnownGovernedPath @(
+            @($arrGovernedInstructionDocuments.Path) +
+            @($arrGovernedNonInstructionDocuments.Path)
+        ) `
+        -ExemptPath $arrMetadataExemptMarkdownDocuments
+)
+foreach ($strDiscoveredGovernedMarkdownPath in
+    $arrDiscoveredGovernedMarkdownPaths) {
+    $arrGovernedNonInstructionDocuments += [pscustomobject]@{
+        Path = $strDiscoveredGovernedMarkdownPath
+        MaximumBytes = $intInstructionDocumentMaximumInputBytes
+        RequiresMetadata = $true
+    }
+}
 $arrGovernedMetadataDocuments = @(
     $arrGovernedInstructionDocuments
     $arrGovernedNonInstructionDocuments
@@ -6748,7 +7098,10 @@ if ($arrGovernedInstructionInventoryFailures.Count -gt 0) {
 }
 
 if ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
-    $arrRequiredPaths = @($strCodexConfigPath)
+    $arrRequiredPaths = @(
+        $strCodexConfigPath,
+        $strDocumentClassificationPath
+    )
     $arrRequiredPaths += @(
         $arrGovernedMetadataDocuments |
             ForEach-Object {
@@ -8303,6 +8656,235 @@ if ($SelfTest) {
         $arrDecisionInventoryFixture[3] -cne
         'docs/decisions/archive/0003-old-record.md') {
         throw 'The decision inventory did not select every recursive decisions directory.'
+    }
+
+    $arrDiscoveredMarkdownFixture = @(
+        Get-DiscoveredGovernedMarkdownDocumentPath `
+            -CandidatePath @(
+                'README.md',
+                'AGENTS.md',
+                '.hidden/policy.mdc',
+                'docs/RELEASE-RUNBOOK.md',
+                'src/module.ps1'
+            ) `
+            -KnownGovernedPath @('AGENTS.md') `
+            -ExemptPath @('README.md')
+    )
+    if ($arrDiscoveredMarkdownFixture.Count -ne 2 -or
+        $arrDiscoveredMarkdownFixture[0] -cne '.hidden/policy.mdc' -or
+        $arrDiscoveredMarkdownFixture[1] -cne 'docs/RELEASE-RUNBOOK.md') {
+        throw 'The Markdown inventory did not discover nested Tier 1 candidates.'
+    }
+    $objClassificationFixture = Get-DocumentMetadataClassificationContext `
+        -Content $strDocumentClassificationContent `
+        -TrackedPath $arrTrackedRepositoryPaths
+    if ($null -ne $objClassificationFixture.Failure -or
+        $objClassificationFixture.ExemptPaths.Count -ne 9) {
+        throw 'The repository document classification manifest is not canonical.'
+    }
+    $strClassificationNewLine = if ($strDocumentClassificationContent.Contains(
+            "`r`n",
+            [System.StringComparison]::Ordinal
+        )) {
+        "`r`n"
+    }
+    else {
+        "`n"
+    }
+    $arrClassificationMutations = @(
+        [pscustomobject]@{
+            Name = 'wrong schema version'
+            Content = $strDocumentClassificationContent.Replace(
+                '"schemaVersion": 1',
+                '"schemaVersion": 2'
+            )
+            Expected = 'schemaVersion must be integer 1'
+        },
+        [pscustomobject]@{
+            Name = 'unknown property'
+            Content = $strDocumentClassificationContent.Replace(
+                '"schemaVersion": 1,',
+                '"unknown": true, "schemaVersion": 1,'
+            )
+            Expected = 'unknown property'
+        },
+        [pscustomobject]@{
+            Name = 'duplicate property'
+            Content = $strDocumentClassificationContent.Replace(
+                '"schemaVersion": 1,',
+                '"schemaVersion": 1, "schemaVersion": 1,'
+            )
+            Expected = 'duplicate property'
+        },
+        [pscustomobject]@{
+            Name = 'non-string path'
+            Content = $strDocumentClassificationContent.Replace(
+                '"ACKNOWLEDGMENTS.md"',
+                '1'
+            )
+            Expected = 'entries must be strings'
+        },
+        [pscustomobject]@{
+            Name = 'unsafe path'
+            Content = $strDocumentClassificationContent.Replace(
+                '"ACKNOWLEDGMENTS.md"',
+                '"../unsafe.md"'
+            )
+            Expected = 'unsafe path'
+        },
+        [pscustomobject]@{
+            Name = 'untracked path'
+            Content = $strDocumentClassificationContent.Replace(
+                '"ACKNOWLEDGMENTS.md"',
+                '"AAA-UNTRACKED.md"'
+            )
+            Expected = 'path is not tracked'
+        },
+        [pscustomobject]@{
+            Name = 'unsorted paths'
+            Content = $strDocumentClassificationContent.Replace(
+                '"ACKNOWLEDGMENTS.md",' + $strClassificationNewLine +
+                    '    "CONTRIBUTING.md"',
+                '"CONTRIBUTING.md",' + $strClassificationNewLine +
+                    '    "ACKNOWLEDGMENTS.md"'
+            )
+            Expected = 'strictly ordinal-sorted'
+        },
+        [pscustomobject]@{
+            Name = 'cross-category duplicate'
+            Content = $strDocumentClassificationContent.Replace(
+                '"generatedPaths": [',
+                '"generatedPaths": [' + $strClassificationNewLine +
+                    '    "README.md",'
+            )
+            Expected = 'repeats a path'
+        },
+        [pscustomobject]@{
+            Name = 'trailing comma'
+            Content = $strDocumentClassificationContent.Replace(
+                '"terraform.instructions.md"',
+                '"terraform.instructions.md",'
+            )
+            Expected = 'not strict JSON'
+        }
+    )
+    foreach ($objClassificationMutation in $arrClassificationMutations) {
+        if ($objClassificationMutation.Content -ceq
+            $strDocumentClassificationContent) {
+            throw (
+                'The document classification mutation fixture is unavailable: ' +
+                $objClassificationMutation.Name
+            )
+        }
+        $objMutatedClassificationContext =
+            Get-DocumentMetadataClassificationContext `
+                -Content $objClassificationMutation.Content `
+                -TrackedPath $arrTrackedRepositoryPaths
+        if ($null -eq $objMutatedClassificationContext.Failure -or
+            -not $objMutatedClassificationContext.Failure.Contains(
+                $objClassificationMutation.Expected,
+                [System.StringComparison]::Ordinal
+            )) {
+            throw (
+                'The document classification mutation did not fail closed: ' +
+                $objClassificationMutation.Name
+            )
+        }
+    }
+    foreach ($objUnsafeMarkdownInventoryFixture in @(
+            [pscustomobject]@{
+                Name = 'newline path'
+                Candidate = @("docs/unsafe`nname.md")
+                Known = @()
+                Exempt = @()
+                Expected = 'unsafe Markdown path'
+            },
+            [pscustomobject]@{
+                Name = 'duplicate candidate'
+                Candidate = @('docs/repeated.md', 'docs/repeated.md')
+                Known = @()
+                Exempt = @()
+                Expected = 'duplicate path'
+            },
+            [pscustomobject]@{
+                Name = 'stale exemption'
+                Candidate = @('docs/active.md')
+                Known = @()
+                Exempt = @('README.md')
+                Expected = 'exception is not tracked'
+            },
+            [pscustomobject]@{
+                Name = 'overlapping classification'
+                Candidate = @('README.md')
+                Known = @('README.md')
+                Exempt = @('README.md')
+                Expected = 'both governed and exempt'
+            }
+        )) {
+        $boolInventoryFixtureRejected = $false
+        try {
+            Get-DiscoveredGovernedMarkdownDocumentPath `
+                -CandidatePath $objUnsafeMarkdownInventoryFixture.Candidate `
+                -KnownGovernedPath $objUnsafeMarkdownInventoryFixture.Known `
+                -ExemptPath $objUnsafeMarkdownInventoryFixture.Exempt
+        }
+        catch {
+            $boolInventoryFixtureRejected = $_.Exception.Message.Contains(
+                $objUnsafeMarkdownInventoryFixture.Expected,
+                [System.StringComparison]::Ordinal
+            )
+        }
+        if (-not $boolInventoryFixtureRejected) {
+            throw (
+                'The Markdown inventory mutation did not fail closed: ' +
+                $objUnsafeMarkdownInventoryFixture.Name
+            )
+        }
+    }
+
+    $strValidDiscoveredMetadata = @'
+# Release Runbook
+
+## Metadata
+
+- **Status:** Active
+- **Owner:** Repository Maintainers
+- **Last Updated:** 2026-09-10
+- **Scope:** Covers release operations.
+'@
+    if ($null -ne (
+            Get-DocumentMetadataContext -Content $strValidDiscoveredMetadata
+        ).Failure) {
+        throw 'A discovered Tier 1 document with valid metadata was rejected.'
+    }
+    foreach ($objInvalidDiscoveredMetadataFixture in @(
+            [pscustomobject]@{
+                Name = 'missing metadata'
+                Content = "# Release Runbook`n`nRelease steps."
+            },
+            [pscustomobject]@{
+                Name = 'fenced fake metadata'
+                Content = @'
+# Release Runbook
+
+```markdown
+- **Status:** Active
+- **Owner:** Repository Maintainers
+- **Last Updated:** 2026-09-10
+- **Scope:** Covers release operations.
+```
+'@
+            }
+        )) {
+        if ($null -eq (
+                Get-DocumentMetadataContext `
+                    -Content $objInvalidDiscoveredMetadataFixture.Content
+            ).Failure) {
+            throw (
+                'The discovered Tier 1 metadata fixture was accepted: ' +
+                $objInvalidDiscoveredMetadataFixture.Name
+            )
+        }
     }
     $strRepresentativeDecisionPath = @($arrGovernedDecisionPaths)[0]
     $objRepresentativeDecision = $listGovernedDocumentContexts |
@@ -11436,6 +12018,69 @@ if ($SelfTest) {
     $strAgentWorkflowContent = [System.IO.File]::ReadAllText(
         [System.IO.Path]::Combine($PSScriptRoot, 'agent-instructions.yml')
     )
+    $strFinalizationResolverPath = [System.IO.Path]::Combine(
+        $PSScriptRoot,
+        'Resolve-AgentInstructionFinalizationTime.mjs'
+    )
+    if (-not [System.IO.File]::Exists($strFinalizationResolverPath)) {
+        throw 'The trusted finalization-time resolver is missing.'
+    }
+    $strFinalizationResolverContent = [System.IO.File]::ReadAllText(
+        $strFinalizationResolverPath
+    )
+    $arrFinalizationResolverLiterals = @(
+        "  if (eventName !== 'workflow_dispatch') {",
+        "    url.searchParams.set('branch', refName);",
+        "    url.searchParams.set('event', 'push');",
+        "    url.searchParams.set('status', 'success');",
+        "    url.searchParams.set('head_sha', trustedRevision);",
+        '      run?.workflow_id !== expected.workflowId ||',
+        '      run?.event !== ''push'' || run?.status !== ''completed'' ||',
+        '      run?.conclusion !== ''success'' ||',
+        '  candidates.sort((left, right) => left.createdTime - right.createdTime);',
+        '  return candidates[0].createdAt;',
+        '  const timestamp = await resolveFinalizationTimestamp({',
+        '  appendFileSync(output, `timestamp=${timestamp}\n`, ''utf8'');'
+    )
+    foreach ($strFinalizationResolverLiteral in $arrFinalizationResolverLiterals) {
+        if ([regex]::Matches(
+                $strFinalizationResolverContent,
+                [regex]::Escape($strFinalizationResolverLiteral)
+            ).Count -ne 1) {
+            throw (
+                'The finalization-time resolver must contain exactly once: ' +
+                $strFinalizationResolverLiteral
+            )
+        }
+    }
+    foreach ($strSharedRunIdentityLiteral in @(
+            '      run?.head_repository?.full_name !== expected.repository ||',
+            '      run?.head_branch !== expected.refName ||'
+        )) {
+        if ([regex]::Matches(
+                $strFinalizationResolverContent,
+                [regex]::Escape($strSharedRunIdentityLiteral)
+            ).Count -ne 2) {
+            throw (
+                'The finalization-time resolver must contain exactly twice: ' +
+                $strSharedRunIdentityLiteral
+            )
+        }
+    }
+    $arrFinalizationResolverSelfTestOutput = @(
+        & node $strFinalizationResolverPath --self-test 2>&1
+    )
+    $intFinalizationResolverSelfTestExit = $LASTEXITCODE
+    $global:LASTEXITCODE = 0
+    if ($intFinalizationResolverSelfTestExit -ne 0 -or
+        $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
+        [string]$arrFinalizationResolverSelfTestOutput[0] -cne
+        'Finalization resolver self-tests passed: 17 fixtures.') {
+        throw (
+            'The finalization-time resolver self-test failed: ' +
+            ($arrFinalizationResolverSelfTestOutput -join '; ')
+        )
+    }
     $arrAutomatedMergeWorkflowFailures = @(
         Get-AutomatedMergeSourceWorkflowContractFailure `
             -WorkflowContent $strAgentWorkflowContent
@@ -11493,14 +12138,14 @@ if ($SelfTest) {
             To = '  actions: none'
         },
         [pscustomobject]@{
-            Name = 'workflow-run repository identity removed'
-            From = '              run?.repository?.full_name !== repository ||'
-            To = '              false ||'
+            Name = 'workflow-run ref identity removed'
+            From = '          REF_NAME: ${{ github.ref_name }}'
+            To = '          REF_NAME: untrusted'
         },
         [pscustomobject]@{
-            Name = 'contributor timestamp substituted for trusted time'
-            From = '          const createdAt = run?.created_at;'
-            To = '          const createdAt = run?.head_commit?.timestamp;'
+            Name = 'finalization resolver bypassed'
+            From = '        run: node .github/workflows/Resolve-AgentInstructionFinalizationTime.mjs'
+            To = '        run: printf ''timestamp=%s\n'' "${GITHUB_EVENT_CREATED_AT}"'
         },
         [pscustomobject]@{
             Name = 'trusted finalization handoff removed'
@@ -11875,30 +12520,24 @@ if ($SelfTest) {
 
     $arrRequiredTriggerPaths = @(
         $script:arrCheckoutAttributePaths
-        $arrAgentSetupInputSpecs | ForEach-Object { $_.Path }
-        $arrGovernedNonInstructionDocuments |
-            Where-Object {
-                $_.Path -cnotmatch `
-                    '^(?:[^/]+/)*decisions/(?:[^/]+/)*[^/]+\.md$'
-            } |
+        $script:arrTrustRootPaths
+        $arrAgentSetupInputSpecs |
+            Where-Object { $_.Path -cnotmatch '\.(?:md|mdc)$' } |
             ForEach-Object { $_.Path }
-        '"**/decisions/**/*.md"'
-        '".github/instructions/**/*.instructions.md"'
-        '".cursor/rules/**/*.mdc"'
-        '"**/AGENTS.md"'
+        '.codex/config.toml'
+        '.github/document-metadata-classification.json'
+        '"**/*.md"'
+        '"**/*.mdc"'
     ) | Select-Object -Unique
     $arrConsumedTriggerPaths = @(
-        $arrAgentSetupInputSpecs | ForEach-Object { $_.Path }
-        $arrGovernedNonInstructionDocuments |
-            Where-Object {
-                $_.Path -cnotmatch `
-                    '^(?:[^/]+/)*decisions/(?:[^/]+/)*[^/]+\.md$'
-            } |
+        $script:arrTrustRootPaths
+        $arrAgentSetupInputSpecs |
+            Where-Object { $_.Path -cnotmatch '\.(?:md|mdc)$' } |
             ForEach-Object { $_.Path }
-        '"**/decisions/**/*.md"'
-        '".github/instructions/**/*.instructions.md"'
-        '".cursor/rules/**/*.mdc"'
-        '"**/AGENTS.md"'
+        '.codex/config.toml'
+        '.github/document-metadata-classification.json'
+        '"**/*.md"'
+        '"**/*.mdc"'
     ) | Select-Object -Unique
     foreach ($strTrigger in @('push', 'pull_request_target')) {
         $arrTriggerPathFailures = @(& $scriptBlockGetTriggerPathFailures `
@@ -13580,22 +14219,65 @@ if ($SelfTest) {
         -ExpectedFailure 'The github@openai-curated plugin table must declare enabled = true exactly once.'
 
     $intCurrentBytes = [System.Text.Encoding]::UTF8.GetByteCount($strAgentsContent)
-    $intDefaultFillerLength = [Math]::Max(1, 32768 - $intCurrentBytes + 1)
-    Assert-MutationRejected `
-        -Name 'ordinary Codex limit exceeded' `
-        -AgentsContent ($strAgentsContent + ('x' * $intDefaultFillerLength)) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md must not exceed the ordinary 32768-byte Codex limit.'
-
     $intMaximumBytes = [int64]$objMaximumBytesGroup.Value
-    $intFillerLength = [Math]::Max(1, $intMaximumBytes - $intCurrentBytes - 16384 + 1)
+    $intReserveBoundaryBytes = $intMaximumBytes - 16384
+    $intAcceptedFillerLength = $intReserveBoundaryBytes - $intCurrentBytes
+    if ($intAcceptedFillerLength -lt 0) {
+        throw 'The current AGENTS.md already exceeds the configured reserve boundary.'
+    }
+    Assert-FixtureAccepted `
+        -Name 'exact configured capacity reserve boundary' `
+        -AgentsContent ($strAgentsContent + ('x' * $intAcceptedFillerLength)) `
+        -ClaudeContent $strClaudeContent `
+        -CodexConfigContent $strCodexConfigContent
+
     Assert-MutationRejected `
-        -Name 'consumed capacity reserve' `
-        -AgentsContent ($strAgentsContent + ('x' * $intFillerLength)) `
+        -Name 'configured capacity reserve exceeded by one byte' `
+        -AgentsContent ($strAgentsContent + ('x' * ($intAcceptedFillerLength + 1))) `
         -ClaudeContent $strClaudeContent `
         -CodexConfigContent $strCodexConfigContent `
         -ExpectedFailure 'Configured AGENTS.md capacity must retain at least 16384 bytes of reserve.'
+
+    $objAgentsBoundaryStream = [System.IO.MemoryStream]::new(
+        [byte[]]::new($intAgentsMaximumInputBytes),
+        $false
+    )
+    try {
+        $arrAgentsBoundaryBytes = @(Read-BoundedStreamData `
+                -Stream $objAgentsBoundaryStream `
+                -MaximumBytes $intAgentsMaximumInputBytes `
+                -DisplayName 'AGENTS.md boundary fixture')
+        if ($arrAgentsBoundaryBytes.Count -ne $intAgentsMaximumInputBytes) {
+            throw 'The exact AGENTS.md read boundary did not preserve every byte.'
+        }
+    }
+    finally {
+        $objAgentsBoundaryStream.Dispose()
+    }
+    $objAgentsOversizedStream = [System.IO.MemoryStream]::new(
+        [byte[]]::new($intAgentsMaximumInputBytes + 1),
+        $false
+    )
+    try {
+        [void](Read-BoundedStreamData `
+                -Stream $objAgentsOversizedStream `
+                -MaximumBytes $intAgentsMaximumInputBytes `
+                -DisplayName 'AGENTS.md oversized fixture')
+        throw 'The one-byte-oversized AGENTS.md read fixture was accepted.'
+    }
+    catch [System.IO.InvalidDataException] {
+        $strExpectedAgentsOversizedFailure =
+            "AGENTS.md oversized fixture must not exceed $intAgentsMaximumInputBytes bytes."
+        if ($_.Exception.Message -cne $strExpectedAgentsOversizedFailure) {
+            throw (
+                'The one-byte-oversized AGENTS.md read fixture returned an ' +
+                "unexpected failure: $($_.Exception.Message)"
+            )
+        }
+    }
+    finally {
+        $objAgentsOversizedStream.Dispose()
+    }
 
     foreach ($objSafetyLimitContract in $script:arrSafetyLimitContracts) {
         $strSafetyDocumentContent = if ($objSafetyLimitContract.DocumentName -ceq 'AGENTS.md') {
