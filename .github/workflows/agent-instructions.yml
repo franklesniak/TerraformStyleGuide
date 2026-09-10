@@ -13,7 +13,7 @@ on:
       - .github/workflows/package.json
       - .codex/config.toml
       - .claude/commands/review-loop.md
-      - .cursor/rules/*.mdc
+      - ".cursor/rules/**/*.mdc"
       - .github/copilot-instructions.md
       - .github/instructions/*.instructions.md
       - .github/instructions/docs.instructions.md
@@ -36,7 +36,7 @@ on:
       - STYLE_GUIDE_RATIONALE.md
       - docs/ISSUE_EVALUATION_PROMPT.md
       - docs/T1-SUPPLY-FREEZE-v1.md
-      - "docs/decisions/*.md"
+      - "docs/decisions/**/*.md"
       - npm-shrinkwrap.json
       - package-lock.json
       - package.json
@@ -50,7 +50,7 @@ on:
       - .github/workflows/package.json
       - .codex/config.toml
       - .claude/commands/review-loop.md
-      - .cursor/rules/*.mdc
+      - ".cursor/rules/**/*.mdc"
       - .github/copilot-instructions.md
       - .github/instructions/*.instructions.md
       - .github/instructions/docs.instructions.md
@@ -73,7 +73,7 @@ on:
       - STYLE_GUIDE_RATIONALE.md
       - docs/ISSUE_EVALUATION_PROMPT.md
       - docs/T1-SUPPLY-FREEZE-v1.md
-      - "docs/decisions/*.md"
+      - "docs/decisions/**/*.md"
       - npm-shrinkwrap.json
       - package-lock.json
       - package.json

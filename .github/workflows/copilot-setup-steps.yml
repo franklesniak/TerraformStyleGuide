@@ -88,17 +88,20 @@ jobs:
             fi
           done
 
-      - name: Detect locked validation-tool layout
-        id: toolchain
+      - name: Verify locked validation-tool inputs
         shell: bash
         run: |
           set -euo pipefail
+          root_manifest='package.json'
+          root_lock='package-lock.json'
           workflow_manifest='.github/workflows/package.json'
           workflow_lock='.github/workflows/package-lock.json'
           pre_commit_config='.pre-commit-config.yaml'
           staged_markdown_helper='.github/workflows/lint-staged-markdown.mjs'
 
           for required_file in \
+            "${root_manifest}" \
+            "${root_lock}" \
             "${workflow_manifest}" \
             "${workflow_lock}" \
             "${pre_commit_config}" \
@@ -120,35 +123,6 @@ jobs:
             actual_sha256="$(sha256sum -- "${reviewed_input}" | cut -d ' ' -f 1)"
             test "${actual_sha256}" = "${reviewed_sha256[${reviewed_input}]}"
           done
-
-          classify_npm_input() {
-            if [[ -L "$1" ]]; then
-              printf 'symlink'
-            elif [[ -f "$1" ]]; then
-              printf 'regular-file'
-            elif [[ -e "$1" ]]; then
-              printf 'non-regular'
-            else
-              printf 'absent'
-            fi
-          }
-
-          root_manifest_state="$(classify_npm_input package.json)"
-          root_lock_state="$(classify_npm_input package-lock.json)"
-
-          if [[ "${root_manifest_state}" == regular-file && \
-            "${root_lock_state}" == regular-file ]]; then
-            echo 'layout=modern' >> "${GITHUB_OUTPUT}"
-          elif [[ "${root_manifest_state}" == absent && \
-            "${root_lock_state}" == absent ]]; then
-            echo 'layout=legacy' >> "${GITHUB_OUTPUT}"
-          else
-            echo '::error::The root npm validation tuple requires both inputs as' \
-              'regular files or both inputs absent;' \
-              "package.json=${root_manifest_state};" \
-              "package-lock.json=${root_lock_state}."
-            exit 1
-          fi
 
       # See: https://github.com/actions/setup-python/releases/latest
       - name: Set up Python 3.12
@@ -177,8 +151,7 @@ jobs:
           test "$(python -m pre_commit --version)" = 'pre-commit 4.6.2'
           python -m pip check
 
-      - name: Set up Node.js for the modern layout
-        if: steps.toolchain.outputs.layout == 'modern'
+      - name: Set up locked Node.js runtime
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: package.json
@@ -187,77 +160,39 @@ jobs:
             package-lock.json
             .github/workflows/package-lock.json
 
-      - name: Set up Node.js for the legacy layout
-        if: steps.toolchain.outputs.layout == 'legacy'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "20"
-          cache: npm
-          cache-dependency-path: .github/workflows/package-lock.json
-
       - name: Verify selected Node.js runtime
         shell: bash
-        env:
-          TOOLCHAIN_LAYOUT: ${{ steps.toolchain.outputs.layout }}
         run: |
           set -euo pipefail
-          if [[ "${TOOLCHAIN_LAYOUT}" == modern ]]; then
-            expected_node="$(node -p \
-              'require("./package.json").engines.node')"
-            expected_npm="$(node -p \
-              'require("./package.json").engines.npm')"
-            test "$(node --version)" = "v${expected_node}"
-            test "$(npm --version)" = "${expected_npm}"
-          elif [[ "${TOOLCHAIN_LAYOUT}" == legacy ]]; then
-            test "$(node -p 'process.versions.node.split(".")[0]')" = '20'
-          else
-            echo '::error::The validation-tool layout is unsupported.'
-            exit 1
-          fi
+          expected_node="$(node -p \
+            'require("./package.json").engines.node')"
+          expected_npm="$(node -p \
+            'require("./package.json").engines.npm')"
+          test "$(node --version)" = "v${expected_node}"
+          test "$(npm --version)" = "${expected_npm}"
 
       - name: Install locked Node.js validation tools
         shell: bash
-        env:
-          TOOLCHAIN_LAYOUT: ${{ steps.toolchain.outputs.layout }}
         run: |
           set -euo pipefail
-          if [[ "${TOOLCHAIN_LAYOUT}" == modern ]]; then
-            npm ci --ignore-scripts --no-audit --fund=false --include=dev
-          elif [[ "${TOOLCHAIN_LAYOUT}" != legacy ]]; then
-            echo '::error::The validation-tool layout is unsupported.'
-            exit 1
-          fi
+          npm ci --ignore-scripts --no-audit --fund=false --include=dev
           npm ci --ignore-scripts --no-audit --fund=false --include=dev \
             --prefix .github/workflows
 
       - name: Verify locked dependency trees and immutable manifests
         shell: bash
-        env:
-          TOOLCHAIN_LAYOUT: ${{ steps.toolchain.outputs.layout }}
         run: |
           set -euo pipefail
-          if [[ "${TOOLCHAIN_LAYOUT}" == modern ]]; then
-            npm ls --all
-            immutable_inputs=(
-              package.json
-              package-lock.json
-              .github/workflows/package.json
-              .github/workflows/package-lock.json
-              .github/workflows/lint-staged-markdown.mjs
-              requirements-dev.txt
-            )
-          elif [[ "${TOOLCHAIN_LAYOUT}" == legacy ]]; then
-            immutable_inputs=(
-              .github/workflows/package.json
-              .github/workflows/package-lock.json
-              .github/workflows/lint-staged-markdown.mjs
-              requirements-dev.txt
-            )
-          else
-            echo '::error::The validation-tool layout is unsupported.'
-            exit 1
-          fi
+          npm ls --all
           npm --prefix .github/workflows ls --all
+          immutable_inputs=(
+            package.json
+            package-lock.json
+            .github/workflows/package.json
+            .github/workflows/package-lock.json
+            .github/workflows/lint-staged-markdown.mjs
+            requirements-dev.txt
+          )
           git diff --exit-code -- "${immutable_inputs[@]}"
 
       - name: Activate retained pre-commit hook

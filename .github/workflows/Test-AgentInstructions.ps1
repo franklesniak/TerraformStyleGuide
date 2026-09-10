@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260910.0
+# Version: 1.2.20260910.1
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -98,7 +98,7 @@ $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
 $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/copilot-setup-steps.yml' =
-        '4c6eb1d57823fe280fd0fc0f6df3dabc8f4bc5538af1620a12ab4e62d336b669'
+        '06139397124e9838f33e28f5b6de8fa7f7584ffb589e9553dbbd6fde561746e2'
     '.github/workflows/package.json' =
         'b1d079c7c16a08b89c074f5a5f9378be156428af2204e96902e2f358d9492e02'
     '.github/workflows/package-lock.json' =
@@ -1384,7 +1384,7 @@ function Get-HuskySetupContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.8.20260910.0
+    # Version: 1.9.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -1433,6 +1433,15 @@ function Get-HuskySetupContractFailure {
     $strExpectedRootNestedLint = 'npm --prefix .github/workflows run lint:md:nested'
     if ([string]$objRootPackage.scripts.'lint:md:nested' -cne $strExpectedRootNestedLint) {
         Write-Output 'Root lint:md:nested must delegate to the workflow-local lint:md:nested script.'
+    }
+    $strExpectedRootAgentTest =
+        'pwsh -NoLogo -NoProfile -NonInteractive -File ' +
+        '.github/workflows/Test-AgentInstructions.ps1 -SelfTest'
+    if ([string]$objRootPackage.scripts.'test:agent-instructions' -cne
+        $strExpectedRootAgentTest) {
+        Write-Output (
+            'Root test:agent-instructions must invoke the reviewed agent validator.'
+        )
     }
     foreach ($strForbiddenRootLintDependency in @('markdownlint', 'markdownlint-cli2')) {
         if ($null -ne $objRootPackage.devDependencies.PSObject.Properties[
@@ -1534,14 +1543,14 @@ function Get-HuskySetupContractFailure {
     $hashtableExpectedActionLineCount = @{
         '        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1' = 1
         '        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0' = 1
-        '        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0' = 2
+        '        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0' = 1
     }
     $arrActionLines = @([regex]::Matches(
             $CopilotSetupContent,
             '(?m)^\s+uses:\s+[^\r\n]+\r?$'
         ))
-    if ($arrActionLines.Count -ne 4) {
-        Write-Output 'Copilot setup must contain exactly four reviewed action executions.'
+    if ($arrActionLines.Count -ne 3) {
+        Write-Output 'Copilot setup must contain exactly three reviewed action executions.'
     }
     foreach ($objExpectedActionLineCount in
         $hashtableExpectedActionLineCount.GetEnumerator()) {
@@ -1614,11 +1623,10 @@ function Get-HuskySetupContractFailure {
     }
     if ([regex]::Matches(
             $CopilotSetupContent,
-            '(?m)^              requirements-dev\.txt\r?$'
-        ).Count -ne 2) {
+            '(?m)^            requirements-dev\.txt\r?$'
+        ).Count -ne 1) {
         Write-Output (
-            'Copilot setup must protect requirements-dev.txt in both immutable-input ' +
-            'layouts.'
+            'Copilot setup must protect requirements-dev.txt in the immutable-input list.'
         )
     }
 
@@ -3375,12 +3383,12 @@ function Get-GovernedInstructionInventoryFailure {
 
 function Get-GovernedDecisionDocumentPath {
     # .SYNOPSIS
-    # Selects direct Markdown decision records from candidate Git paths.
+    # Selects Markdown decision records from candidate Git paths.
     #
     # .DESCRIPTION
     # Returns a deterministic, duplicate-free inventory for the
-    # `docs/decisions/*.md` governed-document family. Nested and non-Markdown
-    # paths are excluded.
+    # `docs/decisions/**/*.md` governed-document family. Non-Markdown paths are
+    # excluded.
     #
     # .PARAMETER CandidatePath
     # Repository-relative paths found in the candidate state or event range.
@@ -3390,13 +3398,13 @@ function Get-GovernedDecisionDocumentPath {
     #     'docs/decisions/0004-example.md', 'docs/decisions/archive/0003-old.md'
     # )
     #
-    # # Returns only docs/decisions/0004-example.md.
+    # # Returns both Markdown paths.
     #
     # .INPUTS
     # None. You can't pipe objects to this function.
     #
     # .OUTPUTS
-    # [string] One repository-relative direct decision-record path.
+    # [string] One repository-relative decision-record path.
     #
     # .NOTES
     # PRIVATE/INTERNAL HELPER - This function is not part of the
@@ -3404,7 +3412,7 @@ function Get-GovernedDecisionDocumentPath {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.0.20260910.0
+    # Version: 1.1.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -3416,7 +3424,7 @@ function Get-GovernedDecisionDocumentPath {
     return @(
         $CandidatePath |
             Where-Object {
-                [string]$_ -cmatch '^docs/decisions/[^/]+\.md$'
+                [string]$_ -cmatch '^docs/decisions/(?:[^/]+/)*[^/]+\.md$'
             } |
             Sort-Object -CaseSensitive -Unique
     )
@@ -6504,7 +6512,7 @@ if (-not [string]::IsNullOrEmpty($strDecisionInventoryBaseRevision) -and
     }
     $arrRangeDecisionPaths = @(
         & git -C $strRepositoryRootPath log --format= --name-only --no-renames `
-            $strDecisionInventoryRange -- ':(glob)docs/decisions/*.md' 2>&1
+            $strDecisionInventoryRange -- ':(glob)docs/decisions/**/*.md' 2>&1
     )
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not enumerate decision records in the validation range.'
@@ -6543,7 +6551,7 @@ $arrTrackedGovernedInstructionPaths = @(
             $strTrackedPath -cmatch '(?:^|/)AGENTS\.md$' -or
             $strTrackedPath -cmatch `
                 '^\.github/instructions/[^/]+\.instructions\.md$' -or
-            $strTrackedPath -cmatch '^\.cursor/rules/[^/]+\.mdc$'
+            $strTrackedPath -cmatch '^\.cursor/rules/(?:[^/]+/)*[^/]+\.mdc$'
         }
 )
 $arrGovernedInstructionInventoryFailures = @(
@@ -7025,6 +7033,10 @@ if ($SelfTest) {
         'node .github/workflows/lint-nested-markdown.js'
     $strRootNestedLintMutation = $objRootNestedLintMutation | ConvertTo-Json -Depth 10
 
+    $objRootAgentTestMutation = $strRootPackageContent | ConvertFrom-Json
+    $objRootAgentTestMutation.scripts.'test:agent-instructions' = 'true'
+    $strRootAgentTestMutation = $objRootAgentTestMutation | ConvertTo-Json -Depth 10
+
     $objRootMarkdownlintDependencyMutation = $strRootPackageContent | ConvertFrom-Json
     $objRootMarkdownlintDependencyMutation.devDependencies | Add-Member `
         -NotePropertyName 'markdownlint' `
@@ -7053,6 +7065,13 @@ if ($SelfTest) {
             $strWorkflowPackageContent
             $strHuskyHookContent
             'Root lint:md:nested must delegate'
+        )
+        ,@(
+            'root agent test becomes a no-op'
+            $strRootAgentTestMutation
+            $strWorkflowPackageContent
+            $strHuskyHookContent
+            'Root test:agent-instructions must invoke'
         )
         ,@(
             'root adds direct markdownlint dependency'
@@ -7385,10 +7404,10 @@ if ($SelfTest) {
         [pscustomobject]@{
             Name = 'requirements file is removed from immutable inputs'
             Content = $strCopilotSetupContent.Replace(
-                '              requirements-dev.txt' + "`n",
+                '            requirements-dev.txt' + "`n",
                 ''
             )
-            Failure = 'protect requirements-dev.txt in both immutable-input layouts'
+            Failure = 'protect requirements-dev.txt in the immutable-input list'
         }
     )
     foreach ($objCopilotSetupMutation in $arrCopilotSetupMutations) {
@@ -7974,7 +7993,8 @@ if ($SelfTest) {
 
     foreach ($strFutureInstructionPath in @(
             '.github/instructions/future.instructions.md',
-            'module/nested/AGENTS.md'
+            'module/nested/AGENTS.md',
+            '.cursor/rules/terraform/naming.mdc'
         )) {
         $arrInventoryMutationFailures = @(
             Get-GovernedInstructionInventoryFailure `
@@ -8000,10 +8020,12 @@ if ($SelfTest) {
                 'docs/decisions/0005-not-markdown.txt',
                 'docs/decisions/0004-future-record.md'
             ))
-    if ($arrDecisionInventoryFixture.Count -ne 1 -or
+    if ($arrDecisionInventoryFixture.Count -ne 2 -or
         $arrDecisionInventoryFixture[0] -cne
-        'docs/decisions/0004-future-record.md') {
-        throw 'The dynamic decision-record inventory did not select the exact direct Markdown family.'
+        'docs/decisions/0004-future-record.md' -or
+        $arrDecisionInventoryFixture[1] -cne
+        'docs/decisions/archive/0003-old-record.md') {
+        throw 'The dynamic decision-record inventory did not select the recursive Markdown family.'
     }
     $strRepresentativeDecisionPath = @($arrGovernedDecisionPaths)[0]
     $objRepresentativeDecision = $listGovernedDocumentContexts |
@@ -8054,6 +8076,25 @@ if ($SelfTest) {
             $strExpectedDecisionStatusFailure) {
             throw "Governed decision status passed: $strRejectedDecisionStatus"
         }
+    }
+    $strNestedDecisionPath = 'docs/decisions/archive/0003-old-record.md'
+    $strNestedDecisionDraftContent = $objRepresentativeDecision.Content.Replace(
+        $strRepresentativeDecisionStatusLine,
+        '- **Status:** Draft'
+    )
+    $arrNestedDecisionDraftFailures = @(Get-DocumentMetadataTransitionFailure `
+            -Name $strNestedDecisionPath `
+            -CurrentContent $strNestedDecisionDraftContent `
+            -ParentContent $objRepresentativeDecision.Content `
+            -ExpectedUtcDate $objRepresentativeDecisionMetadata.UpdatedDate `
+            -IsNewDocumentTransition $false)
+    $strExpectedNestedDecisionStatusFailure =
+        "$strNestedDecisionPath Status must be one of " +
+        ($script:arrAllowedDecisionRecordStatuses -join ', ') +
+        ' for a governed decision record.'
+    if ($arrNestedDecisionDraftFailures -cnotcontains
+        $strExpectedNestedDecisionStatusFailure) {
+        throw 'A nested governed decision record accepted a non-decision status.'
     }
 
     $arrAcceptedClaudeLocalInventoryFailures = @(
@@ -11353,17 +11394,19 @@ if ($SelfTest) {
         $script:arrCheckoutAttributePaths
         $arrAgentSetupInputSpecs | ForEach-Object { $_.Path }
         $arrGovernedNonInstructionDocuments |
-            Where-Object { $_.Path -cnotmatch '^docs/decisions/[^/]+\.md$' } |
+            Where-Object { $_.Path -cnotmatch '^docs/decisions/(?:[^/]+/)*[^/]+\.md$' } |
             ForEach-Object { $_.Path }
-        '"docs/decisions/*.md"'
+        '"docs/decisions/**/*.md"'
+        '".cursor/rules/**/*.mdc"'
         '"**/AGENTS.md"'
     ) | Select-Object -Unique
     $arrConsumedTriggerPaths = @(
         $arrAgentSetupInputSpecs | ForEach-Object { $_.Path }
         $arrGovernedNonInstructionDocuments |
-            Where-Object { $_.Path -cnotmatch '^docs/decisions/[^/]+\.md$' } |
+            Where-Object { $_.Path -cnotmatch '^docs/decisions/(?:[^/]+/)*[^/]+\.md$' } |
             ForEach-Object { $_.Path }
-        '"docs/decisions/*.md"'
+        '"docs/decisions/**/*.md"'
+        '".cursor/rules/**/*.mdc"'
         '"**/AGENTS.md"'
     ) | Select-Object -Unique
     foreach ($strTrigger in @('push', 'pull_request_target')) {
