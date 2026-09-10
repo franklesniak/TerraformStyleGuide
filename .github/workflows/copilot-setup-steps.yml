@@ -6,6 +6,8 @@ on:
     branches:
       - "**"
     paths:
+      - "**/*.yaml"
+      - "**/*.yml"
       - .github/workflows/.npmrc
       - .github/workflows/copilot-setup-steps.yml
       - .github/workflows/lint-staged-markdown.mjs
@@ -20,6 +22,8 @@ on:
       - requirements-dev.txt
   pull_request:
     paths:
+      - "**/*.yaml"
+      - "**/*.yml"
       - .github/workflows/.npmrc
       - .github/workflows/copilot-setup-steps.yml
       - .github/workflows/lint-staged-markdown.mjs
@@ -118,7 +122,7 @@ jobs:
             ["${root_lock}"]='e07939c3791be364486aedc928da532870f6d9f29ec2a6a4733be2cc143f5009'
             ["${workflow_manifest}"]='0e515460fcf69219622c6d73739e4ea8b8da5fcfbce2d6e6b4c26f3e31de8ad0'
             ["${workflow_lock}"]='876b3018e35745243c74482e4c58d2652a19bd21be51be425de5ee36240d1c70'
-            ["${pre_commit_config}"]='b1b925382918e0172216dc3d4cf3c0b654275fd4edc3d6c4099dd1ad731b4f90'
+            ["${pre_commit_config}"]='00670005418da9cb372b7490f00da8f3afd5f697144f374b40e080b5566b7672'
             ["${staged_markdown_helper}"]='bdfa40197cb7a4c8720e3d402b426a741c03c30748a82c3a02d1d89765be54c9'
           )
           for reviewed_input in "${!reviewed_sha256[@]}"; do

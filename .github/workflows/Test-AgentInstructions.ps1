@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260910.2
+# Version: 1.2.20260910.3
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -98,7 +98,7 @@ $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
 $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/copilot-setup-steps.yml' =
-        '7837d8636123f59d442e4d6af9860a6ea19ec73792c86090ae002fbf970431f1'
+        'ed9d8fee4ed50aa9407bac5211c3737d47daa548b3b135680c041110deff2e09'
     '.github/workflows/package.json' =
         '0e515460fcf69219622c6d73739e4ea8b8da5fcfbce2d6e6b4c26f3e31de8ad0'
     '.github/workflows/package-lock.json' =
@@ -108,7 +108,7 @@ $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/lint-staged-markdown.mjs' =
         'bdfa40197cb7a4c8720e3d402b426a741c03c30748a82c3a02d1d89765be54c9'
     '.pre-commit-config.yaml' =
-        'b1b925382918e0172216dc3d4cf3c0b654275fd4edc3d6c4099dd1ad731b4f90'
+        '00670005418da9cb372b7490f00da8f3afd5f697144f374b40e080b5566b7672'
 }
 $script:strWorkflowPolicyCommandPrefix =
     'node .github/workflows/Validate-WorkflowPolicy.mjs'
@@ -1384,7 +1384,7 @@ function Get-HuskySetupContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.10.20260910.0
+    # Version: 1.11.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -1482,6 +1482,21 @@ function Get-HuskySetupContractFailure {
             '(?m)^' + [regex]::Escape($strExpectedStagedMarkdownSelector) + '\r?$'
         ).Count -ne 1) {
         Write-Output 'The staged-Markdown hook must select Markdown and helper-only changes.'
+    }
+    $strExpectedYamlSelector = '        files: ^.*\.ya?ml$'
+    foreach ($strYamlHookId in @('check-yaml', 'yamllint')) {
+        $objYamlHook = [regex]::Match(
+            $PreCommitConfigContent,
+            "(?ms)^      - id: $([regex]::Escape($strYamlHookId))\r?\n" +
+            '(?<Body>.*?)(?=^      - id:|^  - repo:|\z)'
+        )
+        if (-not $objYamlHook.Success -or
+            [regex]::Matches(
+                $objYamlHook.Groups['Body'].Value,
+                '(?m)^' + [regex]::Escape($strExpectedYamlSelector) + '\r?$'
+            ).Count -ne 1) {
+            Write-Output "The $strYamlHookId hook must select all repository YAML files."
+        }
     }
     $arrRequiredLintCommands = @(
         'if node .github/workflows/lint-staged-markdown.mjs; then',
@@ -3418,16 +3433,16 @@ function Get-GovernedDecisionDocumentPath {
     # Selects Markdown decision records from candidate Git paths.
     #
     # .DESCRIPTION
-    # Returns a deterministic, duplicate-free inventory for the
-    # `docs/decisions/**/*.md` governed-document family. Non-Markdown paths are
-    # excluded.
+    # Returns a deterministic, duplicate-free inventory for Markdown below any
+    # repository directory whose exact path segment is `decisions`.
     #
     # .PARAMETER CandidatePath
     # Repository-relative paths found in the candidate state or event range.
     #
     # .EXAMPLE
     # Get-GovernedDecisionDocumentPath -CandidatePath @(
-    #     'docs/decisions/0004-example.md', 'docs/decisions/archive/0003-old.md'
+    #     '.github/decisions/0004-example.md',
+    #     'docs/decisions/archive/0003-old.md'
     # )
     #
     # # Returns both Markdown paths.
@@ -3444,7 +3459,7 @@ function Get-GovernedDecisionDocumentPath {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.1.20260910.0
+    # Version: 1.2.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -3456,7 +3471,8 @@ function Get-GovernedDecisionDocumentPath {
     return @(
         $CandidatePath |
             Where-Object {
-                [string]$_ -cmatch '^docs/decisions/(?:[^/]+/)*[^/]+\.md$'
+                [string]$_ -cmatch `
+                    '^(?:[^/]+/)*decisions/(?:[^/]+/)*[^/]+\.md$'
             } |
             Sort-Object -CaseSensitive -Unique
     )
@@ -6527,7 +6543,7 @@ if (-not [string]::IsNullOrEmpty($strDecisionInventoryBaseRevision) -and
     if (-not $boolDecisionInventoryBaseIsZero) {
         $arrBaselineDecisionPaths = @(
             & git -C $strRepositoryRootPath ls-tree -r --name-only `
-                $strDecisionInventoryBaseRevision -- docs/decisions 2>&1
+                $strDecisionInventoryBaseRevision 2>&1
         )
         if ($LASTEXITCODE -ne 0) {
             throw 'Could not enumerate published-baseline decision records.'
@@ -6544,7 +6560,7 @@ if (-not [string]::IsNullOrEmpty($strDecisionInventoryBaseRevision) -and
     }
     $arrRangeDecisionPaths = @(
         & git -C $strRepositoryRootPath log --format= --name-only --no-renames `
-            $strDecisionInventoryRange -- ':(glob)docs/decisions/**/*.md' 2>&1
+            $strDecisionInventoryRange -- ':(glob)**/decisions/**/*.md' 2>&1
     )
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not enumerate decision records in the validation range.'
@@ -6983,6 +6999,32 @@ if ($SelfTest) {
             'The pre-commit bootstrap control fixture failed: ' +
             ($arrPreCommitBootstrapControlFailures -join '; ')
         )
+    }
+    foreach ($strYamlHookId in @('check-yaml', 'yamllint')) {
+        $objYamlSelectorPattern = [regex]::new(
+            "(?ms)(^      - id: $([regex]::Escape($strYamlHookId))\r?\n" +
+            '.*?^        files: )\^\.\*\\\.ya\?ml\$$'
+        )
+        $strYamlSelectorMutation = $objYamlSelectorPattern.Replace(
+            $strPreCommitConfigContent,
+            '${1}^\.github/.*\.ya?ml$',
+            1
+        )
+        if ($strYamlSelectorMutation -ceq $strPreCommitConfigContent) {
+            throw "Could not create the $strYamlHookId selector mutation."
+        }
+        $arrYamlSelectorFailures = @(Get-HuskySetupContractFailure `
+                -RootPackageContent $strRootPackageContent `
+                -WorkflowPackageContent $strWorkflowPackageContent `
+                -WorkflowPackageLockContent $strWorkflowPackageLockContent `
+                -HookContent $strHuskyHookContent `
+                -CopilotSetupContent $strCopilotSetupContent `
+                -PreCommitConfigContent $strYamlSelectorMutation `
+                -StagedMarkdownHelperContent $strStagedMarkdownHelperContent)
+        if ($arrYamlSelectorFailures -cnotcontains
+            "The $strYamlHookId hook must select all repository YAML files.") {
+            throw "$strYamlHookId selector mutation did not fail closed."
+        }
     }
     $arrPreCommitBootstrapMutations = @(
         [pscustomobject]@{
@@ -8071,17 +8113,23 @@ if ($SelfTest) {
 
     $arrDecisionInventoryFixture = @(Get-GovernedDecisionDocumentPath `
             -CandidatePath @(
+                '.github/decisions/0006-workflow.md',
+                'architecture/decisions/0005-design.md',
                 'docs/decisions/0004-future-record.md',
                 'docs/decisions/archive/0003-old-record.md',
                 'docs/decisions/0005-not-markdown.txt',
                 'docs/decisions/0004-future-record.md'
             ))
-    if ($arrDecisionInventoryFixture.Count -ne 2 -or
+    if ($arrDecisionInventoryFixture.Count -ne 4 -or
         $arrDecisionInventoryFixture[0] -cne
-        'docs/decisions/0004-future-record.md' -or
+        '.github/decisions/0006-workflow.md' -or
         $arrDecisionInventoryFixture[1] -cne
+        'architecture/decisions/0005-design.md' -or
+        $arrDecisionInventoryFixture[2] -cne
+        'docs/decisions/0004-future-record.md' -or
+        $arrDecisionInventoryFixture[3] -cne
         'docs/decisions/archive/0003-old-record.md') {
-        throw 'The dynamic decision-record inventory did not select the recursive Markdown family.'
+        throw 'The decision inventory did not select every recursive decisions directory.'
     }
     $strRepresentativeDecisionPath = @($arrGovernedDecisionPaths)[0]
     $objRepresentativeDecision = $listGovernedDocumentContexts |
@@ -11450,9 +11498,12 @@ if ($SelfTest) {
         $script:arrCheckoutAttributePaths
         $arrAgentSetupInputSpecs | ForEach-Object { $_.Path }
         $arrGovernedNonInstructionDocuments |
-            Where-Object { $_.Path -cnotmatch '^docs/decisions/(?:[^/]+/)*[^/]+\.md$' } |
+            Where-Object {
+                $_.Path -cnotmatch `
+                    '^(?:[^/]+/)*decisions/(?:[^/]+/)*[^/]+\.md$'
+            } |
             ForEach-Object { $_.Path }
-        '"docs/decisions/**/*.md"'
+        '"**/decisions/**/*.md"'
         '".github/instructions/**/*.instructions.md"'
         '".cursor/rules/**/*.mdc"'
         '"**/AGENTS.md"'
@@ -11460,9 +11511,12 @@ if ($SelfTest) {
     $arrConsumedTriggerPaths = @(
         $arrAgentSetupInputSpecs | ForEach-Object { $_.Path }
         $arrGovernedNonInstructionDocuments |
-            Where-Object { $_.Path -cnotmatch '^docs/decisions/(?:[^/]+/)*[^/]+\.md$' } |
+            Where-Object {
+                $_.Path -cnotmatch `
+                    '^(?:[^/]+/)*decisions/(?:[^/]+/)*[^/]+\.md$'
+            } |
             ForEach-Object { $_.Path }
-        '"docs/decisions/**/*.md"'
+        '"**/decisions/**/*.md"'
         '".github/instructions/**/*.instructions.md"'
         '".cursor/rules/**/*.mdc"'
         '"**/AGENTS.md"'
@@ -11498,6 +11552,8 @@ if ($SelfTest) {
     }
 
     $arrCopilotConsumedTriggerPaths = @(
+        '"**/*.yaml"',
+        '"**/*.yml"',
         'requirements-dev.txt',
         '.github/workflows/lint-staged-markdown.mjs'
     )

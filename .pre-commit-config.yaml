@@ -15,12 +15,7 @@ repos:
             \.github/workflows/package(-lock)?\.json
           )$
       - id: check-yaml
-        files: >-
-          (?x)^(
-            \.pre-commit-config\.yaml|
-            \.github/(actionlint\.yaml|dependabot\.yml)|
-            \.github/workflows/.*\.ya?ml
-          )$
+        files: ^.*\.ya?ml$
       - id: end-of-file-fixer
         files: >-
           (?x)^(
@@ -57,8 +52,7 @@ repos:
                 level: warning
               truthy:
                 check-keys: false
-        files: >-
-          ^(\.pre-commit-config\.yaml|\.github/(actionlint\.yaml|dependabot\.yml)|\.github/workflows/.*\.ya?ml)$
+        files: ^.*\.ya?ml$
 
   - repo: https://github.com/rhysd/actionlint
     # This exact upstream commit fixes the v1.7.12 ShellCheck stdin deadlock.

@@ -36,7 +36,7 @@ on:
       - STYLE_GUIDE_RATIONALE.md
       - docs/ISSUE_EVALUATION_PROMPT.md
       - docs/T1-SUPPLY-FREEZE-v1.md
-      - "docs/decisions/**/*.md"
+      - "**/decisions/**/*.md"
       - npm-shrinkwrap.json
       - package-lock.json
       - package.json
@@ -73,7 +73,7 @@ on:
       - STYLE_GUIDE_RATIONALE.md
       - docs/ISSUE_EVALUATION_PROMPT.md
       - docs/T1-SUPPLY-FREEZE-v1.md
-      - "docs/decisions/**/*.md"
+      - "**/decisions/**/*.md"
       - npm-shrinkwrap.json
       - package-lock.json
       - package.json
