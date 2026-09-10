@@ -10,7 +10,7 @@
 - **Scope:** Records the accepted ruleset limitation for pull requests that edit required-check workflows and the related implementation constraint.
 - **Related:** [T1 supply-freeze record](../T1-SUPPLY-FREEZE-v1.md)
 
-## 1. Context, concern, and current effect
+## 1. Context
 
 Accepted on 2026-08-10 by Frank Lesniak, TerraformStyleGuide repository owner.
 
@@ -91,7 +91,7 @@ No substitute was added:
 The current workflows do not push to `main`, so the empty bypass list does not break the
 current workflow graph.
 
-## 4. Options considered after the live finding
+## 4. Alternatives Considered
 
 | Option | Decision |
 | --- | --- |

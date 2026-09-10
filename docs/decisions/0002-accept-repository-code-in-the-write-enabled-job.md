@@ -10,7 +10,7 @@
 - **Scope:** Records the accepted risk of repository-controlled code in the former write-enabled job and the later removal of that job.
 - **Related:** [T1 supply-freeze record](../T1-SUPPLY-FREEZE-v1.md)
 
-## 1. Context, concern, and current effect
+## 1. Context
 
 **Superseded on 2026-08-02.** The `temporary-writer` job was deleted in T1 itself — the
 change this record accompanies, issue #20 — and not in a later slate issue. No job in this
@@ -79,7 +79,7 @@ is real. It invalidates the premise behind a series of containment measures adde
 in that review — pinning the Git executable, clearing the child environment, authoring
 `.git/config`, and restricting transports all assume the step's own process starts clean.
 
-## 2. What an attacker actually gains, and what they do not
+## 2. Consequences
 
 | Capability | Available? |
 | --- | --- |
@@ -159,7 +159,7 @@ Two classes remain open, and they are the substance of what is accepted here:
   That example is nameable; the class is not reliably enumerable, which is the reason this
   record exists rather than a fourth targeted check.
 
-## 3. Options considered
+## 3. Alternatives Considered
 
 - **A. Accept and document only.** Record the residual; change nothing further.
 - **B. Accept, document, and require issue #22 to close it** by an explicit acceptance
