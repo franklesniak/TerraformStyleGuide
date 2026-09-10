@@ -1,68 +1,29 @@
-# Scripts Directory
+<!-- markdownlint-disable MD013 -->
 
-This directory contains utility scripts for the repository.
+# Workflow Script Index
 
-## lint-nested-markdown.js
+## Metadata
 
-This script extracts Markdown code blocks from Markdown files and validates them using markdownlint. It's used by the GitHub Actions workflow to ensure that nested Markdown content (inside code fences with language identifier `markdown` or `md`) follows the same linting rules as the outer Markdown files.
+- **Status:** Active
+- **Owner:** Repository maintainer (@franklesniak)
+- **Last Updated:** 2026-09-10
+- **Scope:** Repository-owned scripts in `.github/workflows` and their supported local entry points.
+- **Related:** [Markdown lint implementation](MARKDOWN-LINTING-IMPLEMENTATION.md)
 
-**This script supports recursive nesting** - it will extract and lint markdown at any depth level (markdown inside markdown inside markdown, etc.).
+## Script inventory
 
-### Usage
+| Script | Purpose | Supported command |
+| --- | --- | --- |
+| `Generate-StyleGuideArtifacts.ps1` | Regenerates consumer style-guide artifacts from the normative and rationale sources. | `pwsh -NoLogo -NoProfile -File .github/workflows/Generate-StyleGuideArtifacts.ps1` |
+| `Get-SupplyFreezeDigest.mjs` | Computes the reviewed workflow supply-freeze digest. | `node .github/workflows/Get-SupplyFreezeDigest.mjs` |
+| `lint-nested-markdown.js` | Recursively lints `markdown` and `md` fenced content in repository `.md` and `.mdc` files. | `npm run lint:md:nested` |
+| `lint-staged-markdown.mjs` | Selects and lints outer and nested staged `.md` and `.mdc` content without replacing worktree files. | `node .github/workflows/lint-staged-markdown.mjs` |
+| `Test-AgentInstructionParserManifest.mjs` | Validates the root parser manifest and lock as inert data before dependency installation. | `node .github/workflows/Test-AgentInstructionParserManifest.mjs --repository-root . --trusted-revision $(git rev-parse HEAD) --input-revision $(git rev-parse HEAD) --self-test` |
+| `Test-AgentInstructions.ps1` | Validates governed instruction capacity, operative policy, metadata transitions, Git ranges, and mutation controls. | `npm run test:agent-instructions` |
+| `Validate-WorkflowPolicy.mjs` | Validates the repository's embedded workflow policy and negative fixtures. | `node .github/workflows/Validate-WorkflowPolicy.mjs .github/workflows/build.yml .github/workflows/markdownlint.yml` |
 
-```bash
-npm run lint:md:nested
-```
+## Setup and validation
 
-or
+Use the exact Node and npm versions in the root `package.json`. After a fresh clone or lock change, run `npm run bootstrap:agent-instructions`. Install the pinned Python tools after a fresh clone or `requirements-dev.txt` change. On Windows, run `py -3.12 -m pip install --requirement requirements-dev.txt`; on other platforms, run `python3.12 -m pip install --requirement requirements-dev.txt`, with a verified Python 3.12 command substituted when necessary. Before a commit, run `py -3.12 -m pre_commit run --all-files` on Windows or `python3.12 -m pre_commit run --all-files` on other platforms, with the same substitution when necessary. The existing Husky hook remains active for staged Markdown.
 
-```bash
-node .github/workflows/lint-nested-markdown.js
-```
-
-### How It Works
-
-1. Scans all `.md` files in the repository (excluding `node_modules`)
-2. Parses each file using `markdown-it` to extract the AST
-3. **Recursively** identifies code fences with language identifier `markdown` or `md` at all nesting depths
-4. Runs markdownlint on each extracted block
-5. Reports any violations with context (source file, line number, nesting depth, parent path)
-6. Exits with error code 1 if any violations are found
-
-### Configuration
-
-The script uses the `.markdownlint.jsonc` (or `.markdownlint.json`) configuration file in the `.github/workflows` directory, with one modification:
-
-- **MD041** (first-line-heading) is disabled for nested markdown blocks, since code snippets may not start with a top-level heading
-
-### Output Example
-
-When issues are found in nested markdown:
-
-```text
-Nested Markdown Linting Issues:
-
-File: CopilotAgentPrompts.md
-  Code fence at line 9 (markdown block #1) (line 9):
-    21:1 MD032/blanks-around-lists Lists should be surrounded by blank lines
-    26:1 MD032/blanks-around-lists Lists should be surrounded by blank lines
-
-File: samples/example.md
-  Code fence at line 42 [depth 1] (markdown block #2) (line 15 > block at line 42):
-    45:1 (nested line 3) MD022/blanks-around-headings Headings should be surrounded by blank lines
-```
-
-The output shows:
-
-- **File**: Original source file
-- **Line**: Actual line number in the outer file where the error occurs
-- **Nested line indicator**: For nested blocks (depth > 0), shows the line within the nested content in parentheses
-- **Depth**: Nesting level (0 = top-level, 1 = nested once, 2 = nested twice, etc.)
-- **Path**: Full nesting path showing parent block locations
-
-When no issues are found:
-
-```text
-✓ No issues found in nested Markdown code fences
-✓ Nested Markdown linting passed
-```
+The nested Markdown linter uses `.github/workflows/.markdownlint.jsonc`. It reports the outer file, source line, nesting depth, and parent path. It exits 0 only when all extracted blocks pass.

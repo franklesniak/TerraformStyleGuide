@@ -179,8 +179,8 @@ jobs:
           # only that npm ci left these files alone; it cannot detect metadata
           # that was already altered at review time. This gate runs before
           # installation so unreviewed scripts are never installed and never run.
-          $strReviewedPackageHash = 'E206CDB3562F0397E8EED7FB2C2586269A1F5335CDFF2906DA8D5E070426321E'
-          $strReviewedLockHash = '277F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062'
+          $strReviewedPackageHash = 'B1D079C7C16A08B89C074F5A5F9378BE156428AF2204E96902E2F358D9492E02'
+          $strReviewedLockHash = '876B3018E35745243C74482E4C58D2652A19BD21BE51BE425DE5EE36240D1C70'
           $strPackageBefore = (Get-FileHash -LiteralPath package.json -Algorithm SHA256).Hash
           $strLockBefore = (Get-FileHash -LiteralPath package-lock.json -Algorithm SHA256).Hash
           if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash) {
@@ -433,8 +433,8 @@ jobs:
           # only that npm ci left these files alone; it cannot detect metadata
           # that was already altered at review time. This gate runs before
           # installation so unreviewed scripts are never installed and never run.
-          $strReviewedPackageHash = 'E206CDB3562F0397E8EED7FB2C2586269A1F5335CDFF2906DA8D5E070426321E'
-          $strReviewedLockHash = '277F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062'
+          $strReviewedPackageHash = 'B1D079C7C16A08B89C074F5A5F9378BE156428AF2204E96902E2F358D9492E02'
+          $strReviewedLockHash = '876B3018E35745243C74482E4C58D2652A19BD21BE51BE425DE5EE36240D1C70'
           $strPackageBefore = (Get-FileHash -LiteralPath package.json -Algorithm SHA256).Hash
           $strLockBefore = (Get-FileHash -LiteralPath package-lock.json -Algorithm SHA256).Hash
           if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash) {
@@ -510,7 +510,7 @@ jobs:
           # captured status, and every digest intact while both phases report
           # zero errors over nothing.
           $strReviewedLintConfigHash = '5EB07BF7F30829E0091E82F235A96FDBA21BE1EF1160CA1E22CDBE8D82DA5300'
-          $strReviewedLintHelperHash = '4EEFEC7AFBA1C79809D916365B2EB3E2EA17AA482593338492A10D6DDA5E2031'
+          $strReviewedLintHelperHash = '3BCC8CF2DFBC92DA28F8A9018708F20E350C2D9B9ED71DF405581CA777B4DB26'
           $strLintConfigHash = (Get-FileHash -LiteralPath .markdownlint.jsonc -Algorithm SHA256).Hash
           $strLintHelperHash = (Get-FileHash -LiteralPath lint-nested-markdown.js -Algorithm SHA256).Hash
           if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {

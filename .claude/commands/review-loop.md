@@ -3,7 +3,16 @@ description: Run the automated dual-reviewer PR review loop (Copilot + Codex) to
 argument-hint: <pull-request-url>
 ---
 
+<!-- markdownlint-disable MD013 -->
 # PR review loop
+
+## Metadata
+
+- **Status:** Active
+- **Owner:** TerraformStyleGuide Repository Maintainers
+- **Last Updated:** 2026-09-10
+- **Scope:** Defines the repository-local Claude command that runs the Copilot and Codex pull-request review loop.
+- **Related:** [Claude agent instructions](../../CLAUDE.md)
 
 Target pull request: **$ARGUMENTS**
 
@@ -32,8 +41,8 @@ Neither reviewer is advisory.
 ## Processing review comments
 
 For every review comment from either reviewer, follow the decision protocol in `CLAUDE.md` at the
-repository root — all six steps, with the three gates (options, rubric, scoring table) satisfied
-in your posted reply before you continue.
+repository root — the complete numbered workflow, with the three gates (options, rubric, scoring
+table) satisfied in your posted reply before you continue.
 
 That protocol is not optional here and it is not a summary of what to do; it is the process. A
 reply that validates a finding and then argues a conclusion in prose has **not** followed it, no
@@ -69,7 +78,7 @@ is unfinished, and should be finished.
 
 Continue until **either**:
 
-* both reviewers return a clean review in the same round, **or**
-* 80 rounds have been completed.
+- both reviewers return a clean review in the same round, **or**
+- 80 rounds have been completed.
 
 Report which condition ended the loop.

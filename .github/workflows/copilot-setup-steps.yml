@@ -1,0 +1,275 @@
+name: Copilot setup steps
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "**"
+    paths:
+      - .github/workflows/.npmrc
+      - .github/workflows/copilot-setup-steps.yml
+      - .github/workflows/lint-staged-markdown.mjs
+      - .github/workflows/npm-shrinkwrap.json
+      - .github/workflows/package.json
+      - .github/workflows/package-lock.json
+      - .npmrc
+      - .pre-commit-config.yaml
+      - npm-shrinkwrap.json
+      - package.json
+      - package-lock.json
+      - requirements-dev.txt
+  pull_request:
+    paths:
+      - .github/workflows/.npmrc
+      - .github/workflows/copilot-setup-steps.yml
+      - .github/workflows/lint-staged-markdown.mjs
+      - .github/workflows/npm-shrinkwrap.json
+      - .github/workflows/package.json
+      - .github/workflows/package-lock.json
+      - .npmrc
+      - .pre-commit-config.yaml
+      - npm-shrinkwrap.json
+      - package.json
+      - package-lock.json
+      - requirements-dev.txt
+
+permissions:
+  contents: read
+
+jobs:
+  copilot-setup-steps:
+    name: Install locked repository validation tools
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          token: ${{ github.token }}
+          persist-credentials: false
+          clean: true
+          fetch-depth: 0
+          fetch-tags: false
+          show-progress: true
+          lfs: false
+          submodules: false
+          set-safe-directory: true
+          allow-unsafe-pr-checkout: false
+
+      - name: Establish published baseline reference
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote set-head origin --auto
+          published_ref="$(git symbolic-ref --quiet refs/remotes/origin/HEAD)"
+          case "${published_ref}" in
+            refs/remotes/origin/*) ;;
+            *) exit 1 ;;
+          esac
+          git rev-parse --verify "${published_ref}^{commit}"
+
+      - name: Reject alternate npm install inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          declare -ar alternate_inputs=(
+            .npmrc
+            npm-shrinkwrap.json
+            .github/workflows/.npmrc
+            .github/workflows/npm-shrinkwrap.json
+          )
+          for alternate_input in "${alternate_inputs[@]}"; do
+            if [[ -e "${alternate_input}" || -L "${alternate_input}" ]]; then
+              echo "::error file=${alternate_input}::Unsupported npm" \
+                'install input.'
+              exit 1
+            fi
+          done
+
+      - name: Detect locked validation-tool layout
+        id: toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow_manifest='.github/workflows/package.json'
+          workflow_lock='.github/workflows/package-lock.json'
+          pre_commit_config='.pre-commit-config.yaml'
+          staged_markdown_helper='.github/workflows/lint-staged-markdown.mjs'
+
+          for required_file in \
+            "${workflow_manifest}" \
+            "${workflow_lock}" \
+            "${pre_commit_config}" \
+            "${staged_markdown_helper}"; do
+            if [[ ! -f "${required_file}" || -L "${required_file}" ]]; then
+              echo "::error file=${required_file}::Required locked npm input" \
+                'is missing or is not a regular file.'
+              exit 1
+            fi
+          done
+
+          declare -Ar reviewed_sha256=(
+            ["${workflow_manifest}"]='b1d079c7c16a08b89c074f5a5f9378be156428af2204e96902e2f358d9492e02'
+            ["${workflow_lock}"]='876b3018e35745243c74482e4c58d2652a19bd21be51be425de5ee36240d1c70'
+            ["${pre_commit_config}"]='b1b925382918e0172216dc3d4cf3c0b654275fd4edc3d6c4099dd1ad731b4f90'
+            ["${staged_markdown_helper}"]='bdfa40197cb7a4c8720e3d402b426a741c03c30748a82c3a02d1d89765be54c9'
+          )
+          for reviewed_input in "${!reviewed_sha256[@]}"; do
+            actual_sha256="$(sha256sum -- "${reviewed_input}" | cut -d ' ' -f 1)"
+            test "${actual_sha256}" = "${reviewed_sha256[${reviewed_input}]}"
+          done
+
+          classify_npm_input() {
+            if [[ -L "$1" ]]; then
+              printf 'symlink'
+            elif [[ -f "$1" ]]; then
+              printf 'regular-file'
+            elif [[ -e "$1" ]]; then
+              printf 'non-regular'
+            else
+              printf 'absent'
+            fi
+          }
+
+          root_manifest_state="$(classify_npm_input package.json)"
+          root_lock_state="$(classify_npm_input package-lock.json)"
+
+          if [[ "${root_manifest_state}" == regular-file && \
+            "${root_lock_state}" == regular-file ]]; then
+            echo 'layout=modern' >> "${GITHUB_OUTPUT}"
+          elif [[ "${root_manifest_state}" == absent && \
+            "${root_lock_state}" == absent ]]; then
+            echo 'layout=legacy' >> "${GITHUB_OUTPUT}"
+          else
+            echo '::error::The root npm validation tuple requires both inputs as' \
+              'regular files or both inputs absent;' \
+              "package.json=${root_manifest_state};" \
+              "package-lock.json=${root_lock_state}."
+            exit 1
+          fi
+
+      # See: https://github.com/actions/setup-python/releases/latest
+      - name: Set up Python 3.12
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install locked Python validation tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -f requirements-dev.txt || -L requirements-dev.txt ]]; then
+            echo '::error file=requirements-dev.txt::The locked Python' \
+              'requirements input is missing or is not a regular file.'
+            exit 1
+          fi
+          test "$(python -c \
+            'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" \
+            = '3.12'
+          reviewed_requirements_sha256='2ef47e05168e86c3cdc43a54646949e9487d8dd02af3d493fe055967a31a9b73'
+          test "$(sha256sum requirements-dev.txt | cut -d ' ' -f 1)" \
+            = "${reviewed_requirements_sha256}"
+          python -m pip install --requirement requirements-dev.txt
+          test "$(python -m pre_commit --version)" = 'pre-commit 4.6.2'
+          python -m pip check
+
+      - name: Set up Node.js for the modern layout
+        if: steps.toolchain.outputs.layout == 'modern'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: package.json
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            .github/workflows/package-lock.json
+
+      - name: Set up Node.js for the legacy layout
+        if: steps.toolchain.outputs.layout == 'legacy'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: .github/workflows/package-lock.json
+
+      - name: Verify selected Node.js runtime
+        shell: bash
+        env:
+          TOOLCHAIN_LAYOUT: ${{ steps.toolchain.outputs.layout }}
+        run: |
+          set -euo pipefail
+          if [[ "${TOOLCHAIN_LAYOUT}" == modern ]]; then
+            expected_node="$(node -p \
+              'require("./package.json").engines.node')"
+            expected_npm="$(node -p \
+              'require("./package.json").engines.npm')"
+            test "$(node --version)" = "v${expected_node}"
+            test "$(npm --version)" = "${expected_npm}"
+          elif [[ "${TOOLCHAIN_LAYOUT}" == legacy ]]; then
+            test "$(node -p 'process.versions.node.split(".")[0]')" = '20'
+          else
+            echo '::error::The validation-tool layout is unsupported.'
+            exit 1
+          fi
+
+      - name: Install locked Node.js validation tools
+        shell: bash
+        env:
+          TOOLCHAIN_LAYOUT: ${{ steps.toolchain.outputs.layout }}
+        run: |
+          set -euo pipefail
+          if [[ "${TOOLCHAIN_LAYOUT}" == modern ]]; then
+            npm ci --ignore-scripts --no-audit --fund=false --include=dev
+          elif [[ "${TOOLCHAIN_LAYOUT}" != legacy ]]; then
+            echo '::error::The validation-tool layout is unsupported.'
+            exit 1
+          fi
+          npm ci --ignore-scripts --no-audit --fund=false --include=dev \
+            --prefix .github/workflows
+
+      - name: Verify locked dependency trees and immutable manifests
+        shell: bash
+        env:
+          TOOLCHAIN_LAYOUT: ${{ steps.toolchain.outputs.layout }}
+        run: |
+          set -euo pipefail
+          if [[ "${TOOLCHAIN_LAYOUT}" == modern ]]; then
+            npm ls --all
+            immutable_inputs=(
+              package.json
+              package-lock.json
+              .github/workflows/package.json
+              .github/workflows/package-lock.json
+              .github/workflows/lint-staged-markdown.mjs
+              requirements-dev.txt
+            )
+          elif [[ "${TOOLCHAIN_LAYOUT}" == legacy ]]; then
+            immutable_inputs=(
+              .github/workflows/package.json
+              .github/workflows/package-lock.json
+              .github/workflows/lint-staged-markdown.mjs
+              requirements-dev.txt
+            )
+          else
+            echo '::error::The validation-tool layout is unsupported.'
+            exit 1
+          fi
+          npm --prefix .github/workflows ls --all
+          git diff --exit-code -- "${immutable_inputs[@]}"
+
+      - name: Activate retained pre-commit hook
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm --prefix .github/workflows run prepare
+          test "$(git config --get core.hooksPath)" = '.husky/_'
+          test -x .husky/_/pre-commit
+
+      - name: Run complete repository validation hook set
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pre_commit run --all-files

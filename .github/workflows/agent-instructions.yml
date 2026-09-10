@@ -1,0 +1,451 @@
+name: Agent instruction validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "**"
+    paths:
+      - .gitattributes
+      - .github/.gitattributes
+      - .github/workflows/.gitattributes
+      - .github/workflows/package-lock.json
+      - .github/workflows/package.json
+      - .codex/config.toml
+      - .claude/commands/review-loop.md
+      - .cursor/rules/*.mdc
+      - .github/copilot-instructions.md
+      - .github/instructions/*.instructions.md
+      - .github/instructions/docs.instructions.md
+      - .github/workflows/MARKDOWN-LINTING-IMPLEMENTATION.md
+      - .github/workflows/agent-instructions.yml
+      - .github/workflows/copilot-setup-steps.yml
+      - .github/workflows/lint-staged-markdown.mjs
+      - .github/workflows/scripts-README.md
+      - .github/workflows/Test-AgentInstructionParserManifest.mjs
+      - .github/workflows/Test-AgentInstructions.ps1
+      - .hermes.md
+      - .husky/pre-commit
+      - .npmrc
+      - .pre-commit-config.yaml
+      - AGENTS.md
+      - "**/AGENTS.md"
+      - CLAUDE.md
+      - GEMINI.md
+      - STYLE_GUIDE.md
+      - STYLE_GUIDE_RATIONALE.md
+      - docs/ISSUE_EVALUATION_PROMPT.md
+      - docs/T1-SUPPLY-FREEZE-v1.md
+      - "docs/decisions/*.md"
+      - npm-shrinkwrap.json
+      - package-lock.json
+      - package.json
+      - requirements-dev.txt
+  pull_request_target:
+    paths:
+      - .gitattributes
+      - .github/.gitattributes
+      - .github/workflows/.gitattributes
+      - .github/workflows/package-lock.json
+      - .github/workflows/package.json
+      - .codex/config.toml
+      - .claude/commands/review-loop.md
+      - .cursor/rules/*.mdc
+      - .github/copilot-instructions.md
+      - .github/instructions/*.instructions.md
+      - .github/instructions/docs.instructions.md
+      - .github/workflows/MARKDOWN-LINTING-IMPLEMENTATION.md
+      - .github/workflows/agent-instructions.yml
+      - .github/workflows/copilot-setup-steps.yml
+      - .github/workflows/lint-staged-markdown.mjs
+      - .github/workflows/scripts-README.md
+      - .github/workflows/Test-AgentInstructionParserManifest.mjs
+      - .github/workflows/Test-AgentInstructions.ps1
+      - .hermes.md
+      - .husky/pre-commit
+      - .npmrc
+      - .pre-commit-config.yaml
+      - AGENTS.md
+      - "**/AGENTS.md"
+      - CLAUDE.md
+      - GEMINI.md
+      - STYLE_GUIDE.md
+      - STYLE_GUIDE_RATIONALE.md
+      - docs/ISSUE_EVALUATION_PROMPT.md
+      - docs/T1-SUPPLY-FREEZE-v1.md
+      - "docs/decisions/*.md"
+      - npm-shrinkwrap.json
+      - package-lock.json
+      - package.json
+      - requirements-dev.txt
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: read
+
+jobs:
+  validate-agent-instructions:
+    name: Validate agent instructions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out trusted validation revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          token: ${{ github.token }}
+          persist-credentials: false
+          clean: true
+          fetch-depth: 0
+          fetch-tags: false
+          show-progress: true
+          lfs: false
+          submodules: false
+          set-safe-directory: true
+          allow-unsafe-pr-checkout: false
+
+      - name: Set up locked Node.js runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: package.json
+          package-manager-cache: false
+
+      - name: Verify locked Node.js runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_node="$(node -p 'require("./package.json").engines.node')"
+          expected_npm="$(node -p 'require("./package.json").engines.npm')"
+          test "$(node --version)" = "v${expected_node}"
+          test "$(npm --version)" = "${expected_npm}"
+
+      - name: Resolve trusted workflow-run finalization time
+        id: resolve_run_time
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          API_URL: ${{ github.api_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          EVENT_NAME: ${{ github.event_name }}
+          TRUSTED_REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+
+          const objectId = /^[0-9a-f]{40}$/u;
+          const positiveInteger = /^[1-9][0-9]*$/u;
+          const rfc3339Utc = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/u;
+          const apiUrl = process.env.API_URL;
+          const repository = process.env.REPOSITORY;
+          const runId = process.env.RUN_ID;
+          const runAttempt = process.env.RUN_ATTEMPT;
+          const eventName = process.env.EVENT_NAME;
+          const trustedRevision = process.env.TRUSTED_REVISION;
+          const token = process.env.GITHUB_TOKEN;
+          const output = process.env.GITHUB_OUTPUT;
+          if (!apiUrl || !repository || !positiveInteger.test(runId ?? '') ||
+              !positiveInteger.test(runAttempt ?? '') || !eventName ||
+              !objectId.test(trustedRevision ?? '') || !token || !output) {
+            throw new Error('Trusted workflow-run inputs are unavailable or invalid.');
+          }
+
+          const root = apiUrl.replace(/\/+$/u, '');
+          const response = await fetch(
+            `${root}/repos/${repository}/actions/runs/${runId}`,
+            {
+              headers: {
+                Accept: 'application/vnd.github+json',
+                Authorization: `Bearer ${token}`,
+                'X-GitHub-Api-Version': '2022-11-28',
+              },
+            },
+          );
+          if (!response.ok) {
+            throw new Error(`Workflow-run lookup failed: ${response.status}.`);
+          }
+          const run = await response.json();
+          if (String(run?.id) !== runId ||
+              run?.repository?.full_name !== repository ||
+              run?.head_sha !== trustedRevision || run?.event !== eventName ||
+              String(run?.run_attempt) !== runAttempt) {
+            throw new Error('The workflow-run response identity does not match this run.');
+          }
+          const createdAt = run?.created_at;
+          const createdTime = Date.parse(createdAt ?? '');
+          if (!rfc3339Utc.test(createdAt ?? '') || !Number.isFinite(createdTime) ||
+              createdTime > Date.now() + 300_000) {
+            throw new Error('The workflow-run creation time is unavailable or invalid.');
+          }
+          appendFileSync(output, `timestamp=${createdAt}\n`, 'utf8');
+          NODE
+
+      - name: Fetch pull request head as data
+        if: github.event_name == 'pull_request_target'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          [[ "${PR_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
+          authorization="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 -w 0)"
+          # An unexpected non-fast-forward local ref must fail closed.
+          GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \
+            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \
+            git fetch --no-tags --no-recurse-submodules origin \
+              "refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"
+          unset authorization
+          fetched_head="$(git rev-parse --verify \
+            "refs/remotes/pull/${PR_NUMBER}/head^{commit}")"
+          test "${fetched_head}" = "${PR_HEAD_SHA}"
+          git diff --quiet --no-ext-diff
+          git diff --cached --quiet --no-ext-diff
+
+      - name: Fetch existing push range base as data
+        if: >-
+          github.event_name == 'push' &&
+          github.ref_name == github.event.repository.default_branch &&
+          !github.event.created &&
+          !github.event.deleted
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RANGE_BASE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          [[ "${RANGE_BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          test "${RANGE_BASE_SHA}" != "0000000000000000000000000000000000000000"
+          authorization="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 -w 0)"
+          GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \
+            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \
+            git fetch --no-tags --no-recurse-submodules origin "${RANGE_BASE_SHA}"
+          unset authorization
+          fetched_base="$(git rev-parse --verify "${RANGE_BASE_SHA}^{commit}")"
+          test "${fetched_base}" = "${RANGE_BASE_SHA}"
+          git diff --quiet --no-ext-diff
+          git diff --cached --quiet --no-ext-diff
+
+      - name: Resolve authenticated one-parent merge source
+        id: resolve_automated_merge_source
+        if: >-
+          github.event_name == 'push' &&
+          github.ref_name == github.event.repository.default_branch &&
+          !github.event.created &&
+          !github.event.deleted
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          API_URL: ${{ github.api_url }}
+          REPOSITORY: ${{ github.repository }}
+          RANGE_HEAD_SHA: ${{ github.sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          [[ "${RANGE_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          IFS=' ' read -r -a head_and_parents <<< "$(
+            git rev-list --parents -n 1 "${RANGE_HEAD_SHA}"
+          )"
+          test "${head_and_parents[0]}" = "${RANGE_HEAD_SHA}"
+          if (( ${#head_and_parents[@]} != 2 )); then
+            printf 'source_revision=\npull_number=\n' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+
+          const objectId = /^[0-9a-f]{40}$/u;
+          const positiveInteger = /^[1-9][0-9]*$/u;
+          const apiUrl = process.env.API_URL;
+          const repository = process.env.REPOSITORY;
+          const head = process.env.RANGE_HEAD_SHA;
+          const defaultBranch = process.env.DEFAULT_BRANCH;
+          const token = process.env.GITHUB_TOKEN;
+          const output = process.env.GITHUB_OUTPUT;
+          if (!apiUrl || !repository || !objectId.test(head ?? '') ||
+              !defaultBranch || !token || !output) {
+            throw new Error('Automated merge-source inputs are unavailable or invalid.');
+          }
+
+          const records = [];
+          for (let page = 1; page <= 20; page += 1) {
+            const url = new URL(
+              `/repos/${repository}/commits/${head}/pulls?per_page=100&page=${page}`,
+              apiUrl,
+            );
+            const response = await fetch(url, {
+              headers: {
+                Accept: 'application/vnd.github+json',
+                Authorization: `Bearer ${token}`,
+                'X-GitHub-Api-Version': '2022-11-28',
+              },
+            });
+            if (!response.ok) {
+              throw new Error(`Associated pull-request lookup failed: ${response.status}.`);
+            }
+            const pageRecords = await response.json();
+            if (!Array.isArray(pageRecords)) {
+              throw new Error('Associated pull-request response is not an array.');
+            }
+            records.push(...pageRecords);
+            const link = response.headers.get('link') ?? '';
+            if (!link.includes('rel="next"')) {
+              break;
+            }
+            if (page === 20) {
+              throw new Error('Associated pull-request pagination exceeded 20 pages.');
+            }
+          }
+
+          const matches = records.filter((pull) =>
+            pull?.merged_at &&
+            pull?.state === 'closed' &&
+            pull?.base?.repo?.full_name === repository &&
+            pull?.base?.ref === defaultBranch &&
+            pull?.merge_commit_sha === head &&
+            Number.isSafeInteger(pull?.number) &&
+            pull.number > 0 &&
+            objectId.test(pull?.head?.sha ?? '') &&
+            pull.head.sha !== head,
+          );
+          if (matches.length > 1) {
+            throw new Error('More than one exact automated merge source matched the pushed head.');
+          }
+          if (matches.length === 0) {
+            appendFileSync(output, 'source_revision=\npull_number=\n', 'utf8');
+          } else {
+            const match = matches[0];
+            if (!positiveInteger.test(String(match.number))) {
+              throw new Error('The automated merge pull-request number is invalid.');
+            }
+            appendFileSync(
+              output,
+              `source_revision=${match.head.sha}\npull_number=${match.number}\n`,
+              'utf8',
+            );
+          }
+          NODE
+
+      - name: Fetch authenticated one-parent merge source as data
+        if: steps.resolve_automated_merge_source.outputs.source_revision != ''
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SOURCE_REVISION: >-
+            ${{ steps.resolve_automated_merge_source.outputs.source_revision }}
+          PR_NUMBER: ${{ steps.resolve_automated_merge_source.outputs.pull_number }}
+        run: |
+          set -euo pipefail
+          [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
+          source_ref="refs/remotes/automated-merge/${PR_NUMBER}/head"
+          git check-ref-format "${source_ref}"
+          authorization="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 -w 0)"
+          GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \
+            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \
+            git fetch --no-tags --no-recurse-submodules origin \
+              "refs/pull/${PR_NUMBER}/head:${source_ref}"
+          unset authorization
+          fetched_source="$(git rev-parse --verify "${source_ref}^{commit}")"
+          test "${fetched_source}" = "${SOURCE_REVISION}"
+          git diff --quiet --no-ext-diff
+          git diff --cached --quiet --no-ext-diff
+
+      - name: Fetch default-branch published baseline as data
+        id: fetch_default_baseline
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          (github.event_name == 'push' &&
+          github.ref_name != github.event.repository.default_branch)
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          default_ref="refs/heads/${DEFAULT_BRANCH}"
+          remote_ref="refs/remotes/origin/${DEFAULT_BRANCH}"
+          git check-ref-format "${default_ref}"
+          git check-ref-format "${remote_ref}"
+          authorization="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 -w 0)"
+          GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \
+            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \
+            git fetch --no-tags --no-recurse-submodules origin \
+              "${default_ref}:${remote_ref}"
+          unset authorization
+          fetched_baseline="$(git rev-parse --verify "${remote_ref}^{commit}")"
+          [[ "${fetched_baseline}" =~ ^[0-9a-f]{40}$ ]]
+          printf 'revision=%s\n' "${fetched_baseline}" >> "${GITHUB_OUTPUT}"
+          git diff --quiet --no-ext-diff
+          git diff --cached --quiet --no-ext-diff
+
+      - name: Validate parser manifests as inert data
+        shell: bash
+        env:
+          TRUSTED_REVISION: ${{ github.sha }}
+          INPUT_REVISION: >-
+            ${{ github.event_name == 'pull_request_target' &&
+              github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          node .github/workflows/Test-AgentInstructionParserManifest.mjs
+          --repository-root .
+          --trusted-revision "${TRUSTED_REVISION}"
+          --input-revision "${INPUT_REVISION}"
+          --self-test
+
+      - name: Install locked Markdown parser
+        run: >-
+          npm ci --ignore-scripts --no-audit --fund=false
+          --include=dev --package-lock=true
+
+      - name: Validate instruction capacity and capabilities
+        shell: pwsh
+        env:
+          AGENT_INSTRUCTION_INPUT_REVISION: >-
+            ${{ github.event_name == 'pull_request_target' &&
+              github.event.pull_request.head.sha ||
+              github.event_name == 'push' && github.sha ||
+              github.event_name == 'workflow_dispatch' && github.sha || '' }}
+          AGENT_INSTRUCTION_RANGE_BASE: >-
+            ${{ github.event_name == 'pull_request_target' &&
+              github.event.pull_request.base.sha ||
+              github.event_name == 'push' &&
+              github.ref_name == github.event.repository.default_branch &&
+              github.event.before ||
+              (github.event_name == 'push' &&
+              github.ref_name != github.event.repository.default_branch ||
+              github.event_name == 'workflow_dispatch') &&
+              steps.fetch_default_baseline.outputs.revision || '' }}
+          AGENT_INSTRUCTION_RANGE_HEAD: >-
+            ${{ github.event_name == 'pull_request_target' &&
+              github.event.pull_request.head.sha ||
+              github.event_name == 'push' && github.sha ||
+              github.event_name == 'workflow_dispatch' && github.sha || '' }}
+          AGENT_INSTRUCTION_RANGE_IS_NEW_REF: >-
+            ${{ github.event_name == 'push' &&
+              github.ref_name == github.event.repository.default_branch &&
+              github.event.created || false }}
+          AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE: >-
+            ${{ steps.resolve_automated_merge_source.outputs.source_revision || '' }}
+          AGENT_INSTRUCTION_TRUSTED_FINALIZATION_TIMESTAMP: >-
+            ${{ steps.resolve_run_time.outputs.timestamp }}
+        run: >-
+          ./.github/workflows/Test-AgentInstructions.ps1 -SelfTest
+          -InputRevision $env:AGENT_INSTRUCTION_INPUT_REVISION
+          -RangeBaseRevision $env:AGENT_INSTRUCTION_RANGE_BASE
+          -RangeHeadRevision $env:AGENT_INSTRUCTION_RANGE_HEAD
+          -RangeIsNewRef:([bool]::Parse($env:AGENT_INSTRUCTION_RANGE_IS_NEW_REF))
+          -AutomatedMergeSourceRevision
+          $env:AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE
+          -TrustedFinalizationTimestamp
+          $env:AGENT_INSTRUCTION_TRUSTED_FINALIZATION_TIMESTAMP

@@ -1,4 +1,11 @@
+<!-- markdownlint-disable MD013 -->
 # Terraform Writing Style — Rationale and Design Philosophy
+
+- **Status:** Active
+- **Owner:** TerraformStyleGuide Repository Maintainers
+- **Last Updated:** 2026-09-10
+- **Scope:** Explains the rationale, design philosophy, trade-offs, and historical context behind the normative Terraform rules in `STYLE_GUIDE.md`.
+- **Related:** [Terraform style guide](STYLE_GUIDE.md)
 
 This companion document preserves the extended rationale, design philosophy, and historical context behind the rules in [STYLE_GUIDE.md](STYLE_GUIDE.md). The main guide contains all actionable rules, normative guidance, examples, and reference material. This document explains *why* those rules exist.
 

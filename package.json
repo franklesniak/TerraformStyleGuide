@@ -1,0 +1,27 @@
+{
+  "name": "terraformstyleguide-agent-governance",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Locked agent-governance validation for TerraformStyleGuide.",
+  "license": "MIT",
+  "engines": {
+    "node": "24.18.1",
+    "npm": "11.16.0"
+  },
+  "packageManager": "npm@11.16.0",
+  "scripts": {
+    "bootstrap:agent-instructions": "npm ci --ignore-scripts --no-audit --fund=false --include=dev --package-lock=true && npm --prefix .github/workflows ci --ignore-scripts --no-audit --fund=false --include=dev --package-lock=true && npm --prefix .github/workflows run prepare",
+    "lint:md": "npm --prefix .github/workflows run lint:md",
+    "lint:md:nested": "npm --prefix .github/workflows run lint:md:nested",
+    "test:agent-instructions": "pwsh -NoLogo -NoProfile -NonInteractive -File .github/workflows/Test-AgentInstructions.ps1 -SelfTest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/franklesniak/TerraformStyleGuide.git"
+  },
+  "devDependencies": {
+    "js-yaml": "5.2.2",
+    "jsonc-parser": "3.3.1",
+    "markdown-it": "14.2.0"
+  }
+}

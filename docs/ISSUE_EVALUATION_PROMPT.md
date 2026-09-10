@@ -2,6 +2,14 @@
 
 # Issue Evaluation Prompt
 
+## Metadata
+
+- **Status:** Active
+- **Owner:** TerraformStyleGuide Repository Maintainers
+- **Last Updated:** 2026-09-10
+- **Scope:** Provides the prompt template and output contract for evaluating proposed TerraformStyleGuide issues.
+- **Related:** [Terraform style guide](../STYLE_GUIDE.md) and [rationale](../STYLE_GUIDE_RATIONALE.md)
+
 This document contains a prompt template used to evaluate proposed GitHub Issues for the style guide. The typical workflow is:
 
 1. A coding agent (e.g., Claude) identifies a potential style guide improvement during a code review loop and suggests a GitHub Issue description.

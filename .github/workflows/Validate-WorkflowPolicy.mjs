@@ -124,22 +124,22 @@ const EXPECTED_TRIGGER = Object.freeze({
 // that check. These reviewed values are the independent baseline, so the
 // scripts the workflow runs and the graph it installs are fixed at review time.
 const REVIEWED_PACKAGE_DIGESTS = Object.freeze({
-  'package.json': 'e206cdb3562f0397e8eed7fb2c2586269a1f5335cdff2906da8d5e070426321e',
-  'package-lock.json': '277f7168ab3a4f1f7a2565de13191d64b1572e7cb92b67b0972b3242bd4de062',
+  'package.json': 'b1d079c7c16a08b89c074f5a5f9378be156428af2204e96902e2f358d9492e02',
+  'package-lock.json': '876b3018e35745243c74482e4c58d2652a19bd21be51be425de5ee36240d1c70',
 });
 
 const REVIEWED_SCRIPTS = Object.freeze({
-  'lint:md': 'cd ../.. && markdownlint-cli2 "**/*.md" "#node_modules" "#.github/workflows/node_modules" --config .github/workflows/.markdownlint.jsonc',
+  'lint:md': 'cd ../.. && markdownlint-cli2 "**/*.md" "**/*.mdc" "#node_modules" "#.github/workflows/node_modules" --config .github/workflows/.markdownlint.jsonc',
   'lint:md:nested': 'node lint-nested-markdown.js',
-  prepare: 'cd ../.. && husky || true',
+  prepare: 'cd ../.. && husky',
 });
 
 const REVIEWED_DEV_DEPENDENCIES = Object.freeze({
   glob: '^10.3.10',
   husky: '^9.1.7',
-  'markdown-it': '^14.0.0',
-  markdownlint: '^0.40.0',
-  'markdownlint-cli2': '^0.20.0',
+  'markdown-it': '14.3.0',
+  markdownlint: '0.41.1',
+  'markdownlint-cli2': '0.23.2',
   yaml: '2.9.0',
 });
 
@@ -236,8 +236,8 @@ const NETWORK_CLIENT =/\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|ir
 // Both orders were tried here and each one's fix was the other one's defect.
 // Separate jobs are separate runners with separate filesystems, which removes
 // the choice rather than making it.
-const REVIEWED_POLICY_STEP_DIGEST = '0014b712b89fd6ae059238ee0fcdb6a5bd2f528b6659da9bafd36ea07f6119d0';
-const REVIEWED_LINT_STEP_DIGEST = 'acde5c2450673e744a8acc058eeb214d9fcf1de7c9677c4639880a9f76ab9f72';
+const REVIEWED_POLICY_STEP_DIGEST = 'd9a8b23d11e116fb5be4d77c3fbeb93e9d3334093d07ab47ad75f8659c514723';
+const REVIEWED_LINT_STEP_DIGEST = '2626ad0d659e06d0942124712d7629ab72dc8ed6c46c49b5246817d292874ad5';
 
 // Both governed steps have to establish the same supply position before they
 // diverge: the pinned toolchain, the reviewed package metadata, and npm's
@@ -988,7 +988,7 @@ const REVIEWED_GENERATOR_DIGEST = '4ab4f6a9759671b545f5bc5df05f982df5f25b46095bd
 // so what the lint does is pinned alongside what it runs.
 const REVIEWED_LINT_DIGESTS = Object.freeze({
   '.markdownlint.jsonc': '5eb07bf7f30829e0091e82f235a96fdba21be1ef1160ca1e22cdbe8d82da5300',
-  'lint-nested-markdown.js': '4eefec7afba1c79809d916365b2eb3e2ea17aa482593338492a10d6dda5e2031',
+  'lint-nested-markdown.js': '3bcc8cf2dfbc92da28f8a9018708f20e350c2d9b9ed71df405581ca777b4db26',
 });
 
 // Round 45, finding C. The invocation allowlist below records only lines whose
@@ -3161,6 +3161,43 @@ export function validatePackagePolicy(packageSource, lockSource) {
   }
 }
 
+export function validateNodeVersionAlignment(rootPackageSource, markdownSource, supplyFreezeSource) {
+  let rootPackage;
+  try {
+    rootPackage = JSON.parse(rootPackageSource);
+  } catch {
+    reject('toolchain-policy', 'root package.json is not parseable JSON');
+  }
+
+  const rootNode = rootPackage?.engines?.node;
+  if (typeof rootNode !== 'string' || !/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$/u.test(rootNode)) {
+    reject('toolchain-policy', 'root package.json engines.node is not one exact stable SemVer');
+  }
+
+  const workflowVersions = [...markdownSource.matchAll(
+    /^\s*\$strNodeUrl = 'https:\/\/nodejs\.org\/dist\/v([0-9]+\.[0-9]+\.[0-9]+)\/node-v\1-linux-x64\.tar\.xz'\s*$/gmu,
+  )].map((match) => match[1]);
+  if (workflowVersions.length === 0 || new Set(workflowVersions).size !== 1) {
+    reject('toolchain-policy', 'Markdown workflow does not use one reviewed Node version');
+  }
+
+  const supplyMatches = [...supplyFreezeSource.matchAll(
+    /^const REVIEWED_NODE = 'v([0-9]+\.[0-9]+\.[0-9]+)';$/gmu,
+  )];
+  if (supplyMatches.length !== 1) {
+    reject('toolchain-policy', 'supply-freeze helper does not declare one reviewed Node version');
+  }
+
+  const workflowNode = workflowVersions[0];
+  const supplyNode = supplyMatches[0][1];
+  if (rootNode !== workflowNode || rootNode !== supplyNode) {
+    reject(
+      'toolchain-policy',
+      `Node versions differ: root=${rootNode}; Markdown=${workflowNode}; supply-freeze=${supplyNode}`,
+    );
+  }
+}
+
 export function parseGeneratorVersion(source, expectedVersion = undefined) {
   const firstFunction = source.search(/^function\s+/mu);
   if (firstFunction < 0) reject('invalid-version', 'generator has no first function boundary');
@@ -3304,8 +3341,8 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-MARKDOWN-008', 'nested lint removed', 'markdown', (source) => replaceOnce(source, 'run lint:md:nested', 'run lint:other:nested')],
   ['T1-MARKDOWN-009', 'policy validator removed', 'markdown', (source) => replaceOnce(source, './Validate-WorkflowPolicy.mjs', './other-validator.mjs')],
   ['T1-MARKDOWN-010', 'failure continuation', 'markdown', (source) => replaceOnce(source, '        shell: pwsh\n        working-directory:', '        shell: pwsh\n        continue-on-error: true\n        working-directory:')],
-  ['T1-MARKDOWN-011', 'reviewed package hash removed', 'markdown', (source) => replaceOnce(source, "'E206CDB3562F0397E8EED7FB2C2586269A1F5335CDFF2906DA8D5E070426321E'", "'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'")],
-  ['T1-MARKDOWN-012', 'reviewed lock hash altered', 'markdown', (source) => replaceOnce(source, "'277F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062'", "'377F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062'")],
+  ['T1-MARKDOWN-011', 'reviewed package hash removed', 'markdown', (source) => replaceOnce(source, "'B1D079C7C16A08B89C074F5A5F9378BE156428AF2204E96902E2F358D9492E02'", "'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'")],
+  ['T1-MARKDOWN-012', 'reviewed lock hash altered', 'markdown', (source) => replaceOnce(source, "'876B3018E35745243C74482E4C58D2652A19BD21BE51BE425DE5EE36240D1C70'", "'976B3018E35745243C74482E4C58D2652A19BD21BE51BE425DE5EE36240D1C70'")],
   ['T1-MARKDOWN-013', 'pre-install supply gate neutralized', 'markdown', (source) => replaceOnce(source, 'if ($strPackageBefore -cne $strReviewedPackageHash -or', 'if ($false -and $strPackageBefore -cne $strReviewedPackageHash -or')],
   ['T1-BUILD-042', 'workflow token referenced outside the approved push step', 'build', (source) => replaceOnce(source, "          $ErrorActionPreference = 'Stop'\n          $arrArtifacts", "          $ErrorActionPreference = 'Stop'\n          $strToken = '${{ github.token }}'\n          $arrArtifacts")],
   ['T1-MARKDOWN-015', 'early exit before the remaining required phases', 'markdown', (source) => replaceOnce(source, '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n', '          & $strNodePath ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml\n          exit 0\n')],
@@ -3948,6 +3985,30 @@ const FIXTURE_INVENTORY = Object.freeze([
     parsed.packages[''].devDependencies.yaml = '^2.9.0';
     return [pkg, JSON.stringify(parsed, null, 2)];
   }],
+  ['T1-TOOLCHAIN-001', 'root Node selector differs from reviewed tooling', 'node-alignment', (rootPackage, markdown, supplyFreeze) => {
+    const parsed = JSON.parse(rootPackage);
+    parsed.engines.node = '24.18.0';
+    return [JSON.stringify(parsed, null, 2), markdown, supplyFreeze];
+  }],
+  ['T1-TOOLCHAIN-002', 'root Node selector is not exact', 'node-alignment', (rootPackage, markdown, supplyFreeze) => {
+    const parsed = JSON.parse(rootPackage);
+    parsed.engines.node = '24.x';
+    return [JSON.stringify(parsed, null, 2), markdown, supplyFreeze];
+  }],
+  ['T1-TOOLCHAIN-003', 'Markdown workflow Node selector differs from root', 'node-alignment', (rootPackage, markdown, supplyFreeze) => [
+    rootPackage,
+    replaceOnce(
+      markdown,
+      "$strNodeUrl = 'https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz'",
+      "$strNodeUrl = 'https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz'",
+    ),
+    supplyFreeze,
+  ]],
+  ['T1-TOOLCHAIN-004', 'supply-freeze Node selector differs from root', 'node-alignment', (rootPackage, markdown, supplyFreeze) => [
+    rootPackage,
+    markdown,
+    replaceOnce(supplyFreeze, "const REVIEWED_NODE = 'v24.18.1';", "const REVIEWED_NODE = 'v24.18.0';"),
+  ]],
   // Cycle 1 GF-HOSTS/GF-GIT repair. These cases are append-only after the 286
   // pre-repair fixtures and bind the authoring contract independently of a
   // reviewed digest re-baseline.
@@ -4043,8 +4104,8 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-008": "markdown-policy: markdown.markdownlint.lint is missing a required phase: run lint:md:nested",
   "T1-MARKDOWN-009": "markdown-policy: markdown.policy.validate is missing a required phase: ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml",
   "T1-MARKDOWN-010": "schema: markdown.policy.validate has missing or extra keys",
-  "T1-MARKDOWN-011": "markdown-policy: markdown.policy.validate is missing a required phase: E206CDB3562F0397E8EED7FB2C2586269A1F5335CDFF2906DA8D5E070426321E",
-  "T1-MARKDOWN-012": "markdown-policy: markdown.policy.validate is missing a required phase: 277F7168AB3A4F1F7A2565DE13191D64B1572E7CB92B67B0972B3242BD4DE062",
+  "T1-MARKDOWN-011": "markdown-policy: markdown.policy.validate is missing a required phase: B1D079C7C16A08B89C074F5A5F9378BE156428AF2204E96902E2F358D9492E02",
+  "T1-MARKDOWN-012": "markdown-policy: markdown.policy.validate is missing a required phase: 876B3018E35745243C74482E4C58D2652A19BD21BE51BE425DE5EE36240D1C70",
   "T1-MARKDOWN-013": "markdown-policy: markdown.policy.validate is missing a required phase: if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash)",
   "T1-BUILD-042": "credential-policy: verify.generate-and-verify expands an unapproved credential",
   "T1-MARKDOWN-015": "markdown-policy: markdown.policy.validate adds control flow that can bypass a required phase",
@@ -4265,6 +4326,10 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-036": "markdown-policy: markdown.markdownlint.lint is missing a required phase: supply: lint configuration or helper changed during installation",
   "T1-PACKAGE-005": "supply-policy: resolved yaml parser integrity is not the reviewed value",
   "T1-PACKAGE-006": "policy: lockfile root devDependencies differs from the locked policy",
+  "T1-TOOLCHAIN-001": "toolchain-policy: Node versions differ: root=24.18.0; Markdown=24.18.1; supply-freeze=24.18.1",
+  "T1-TOOLCHAIN-002": "toolchain-policy: root package.json engines.node is not one exact stable SemVer",
+  "T1-TOOLCHAIN-003": "toolchain-policy: Markdown workflow does not use one reviewed Node version",
+  "T1-TOOLCHAIN-004": "toolchain-policy: Node versions differ: root=24.18.1; Markdown=24.18.1; supply-freeze=24.18.0",
   "T1-GENERATOR-004": "supply-policy: the generator resolves a command through a shadowable lookup",
   "T1-MARKDOWN-056": "markdown-policy: markdown.markdownlint.lint adds a network client",
   "T1-MARKDOWN-057": "acquire-policy: markdown.policy.acquire adds a network client",
@@ -4327,7 +4392,15 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T2-GENERATOR-FILE-016": "side-effect-policy: build.verify no longer performs a reviewed drift guard: if ($listGeneratorContractViolations.Count -ne 0) {",
 });
 
-function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource, generatorSource) {
+function runNegativeFixtures(
+  buildSource,
+  markdownSource,
+  packageSource,
+  lockSource,
+  generatorSource,
+  rootPackageSource,
+  supplyFreezeSource,
+) {
   const ids = new Set();
   const consumed = new Set();
   for (const [id, description, kind, fixture] of FIXTURE_INVENTORY) {
@@ -4354,12 +4427,18 @@ function runNegativeFixtures(buildSource, markdownSource, packageSource, lockSou
         decodeStrictText(fixture, id);
       } else if (kind === 'package') {
         validatePackagePolicy(...fixture(packageSource, lockSource));
+      } else if (kind === 'node-alignment') {
+        validateNodeVersionAlignment(...fixture(rootPackageSource, markdownSource, supplyFreezeSource));
       } else if (kind === 'generator') {
         validateGeneratorPolicy(fixture(generatorSource));
       } else if (kind === 'lint-asset') {
         validateLintAssetPolicy(fixture);
       } else if (kind === 'npm-config') {
-        assertNoNpmConfiguration('/repo', '/repo', (directory) => fixture[directory] ?? []);
+        assertNoNpmConfiguration(
+          '/repo',
+          '/repo',
+          (directory) => fixture[directory.split(sep).join('/')] ?? [],
+        );
       } else if (kind === 'parser-tree') {
         assertReviewedParserTree(
           '/yaml',
@@ -4460,7 +4539,8 @@ export function assertNoNpmConfiguration(directory, repositoryRoot, readDirector
     if (entry.isDirectory()) {
       assertNoNpmConfiguration(path, repositoryRoot, readDirectory);
     } else if (entry.name === '.npmrc') {
-      reject('supply-policy', `repository-controlled npm configuration is present: ${path.slice(repositoryRoot.length + 1)}`);
+      const relativePath = path.slice(repositoryRoot.length + 1).split(sep).join('/');
+      reject('supply-policy', `repository-controlled npm configuration is present: ${relativePath}`);
     }
   }
 }
@@ -4671,7 +4751,11 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
   const workflowFiles = readdirSync(workflowDirectory)
     .filter((name) => /\.ya?ml$/u.test(name))
     .sort();
-  assertEqual(workflowFiles, ['build.yml', 'markdownlint.yml'], 'tracked workflow file set');
+  assertEqual(
+    workflowFiles,
+    ['agent-instructions.yml', 'build.yml', 'copilot-setup-steps.yml', 'devcontainer-ci.yml', 'markdownlint.yml'],
+    'tracked workflow file set',
+  );
 
   const buildSource = readOrdinaryText(resolve(buildPath), 'build.yml');
   const markdownSource = readOrdinaryText(resolve(markdownPath), 'markdownlint.yml');
@@ -4705,6 +4789,12 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
   const packageSource = readOrdinaryText(join(workflowDirectory, 'package.json'), 'package.json');
   const lockSource = readOrdinaryText(join(workflowDirectory, 'package-lock.json'), 'package-lock.json');
   validatePackagePolicy(packageSource, lockSource);
+  const rootPackageSource = readOrdinaryText(join(repositoryRoot, 'package.json'), 'root package.json');
+  const supplyFreezeSource = readOrdinaryText(
+    join(workflowDirectory, 'Get-SupplyFreezeDigest.mjs'),
+    'Get-SupplyFreezeDigest.mjs',
+  );
+  validateNodeVersionAlignment(rootPackageSource, markdownSource, supplyFreezeSource);
   assertNoNpmConfiguration(repositoryRoot, repositoryRoot);
   // The digest covered every governed input but not the implementation defining
   // what those inputs were checked against, so removing an assertion here left
@@ -4716,7 +4806,15 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
   validateLintAssetPolicy(lintAssets);
   const validatorSource = readOrdinaryText(join(workflowDirectory, 'Validate-WorkflowPolicy.mjs'), 'validator');
 
-  const fixtureCount = runNegativeFixtures(buildSource, markdownSource, packageSource, lockSource, generatorSource);
+  const fixtureCount = runNegativeFixtures(
+    buildSource,
+    markdownSource,
+    packageSource,
+    lockSource,
+    generatorSource,
+    rootPackageSource,
+    supplyFreezeSource,
+  );
   return Object.freeze({
     fixtureCount,
     generatorVersion: EXPECTED_VERSION,
@@ -4735,6 +4833,8 @@ export function validateRepositoryPolicy(buildPath, markdownPath) {
         ['generator', generatorSource],
         ['package.json', packageSource],
         ['package-lock.json', lockSource],
+        ['root package.json', rootPackageSource],
+        ['Get-SupplyFreezeDigest.mjs', supplyFreezeSource],
         ...Object.entries(lintAssets),
         ['validator', validatorSource],
       ]) {
@@ -4754,6 +4854,14 @@ export function validatePreflightPolicy() {
   const workflowDirectory = dirname(validatorPath);
   const githubDirectory = dirname(workflowDirectory);
   const repositoryRoot = dirname(githubDirectory);
+
+  const markdownSource = readOrdinaryText(join(workflowDirectory, 'markdownlint.yml'), 'markdownlint.yml');
+  const rootPackageSource = readOrdinaryText(join(repositoryRoot, 'package.json'), 'root package.json');
+  const supplyFreezeSource = readOrdinaryText(
+    join(workflowDirectory, 'Get-SupplyFreezeDigest.mjs'),
+    'Get-SupplyFreezeDigest.mjs',
+  );
+  validateNodeVersionAlignment(rootPackageSource, markdownSource, supplyFreezeSource);
 
   const packageSource = readOrdinaryText(join(workflowDirectory, 'package.json'), 'package.json');
   const lockSource = readOrdinaryText(join(workflowDirectory, 'package-lock.json'), 'package-lock.json');

@@ -1,6 +1,16 @@
+<!-- markdownlint-disable MD013 -->
 # Decision 0001: Accept that regenerated artifacts are linted one cycle late
 
-## Status
+## Metadata
+
+- **Status:** Superseded
+- **Owner:** TerraformStyleGuide Repository Maintainers
+- **Date:** 2026-08-01
+- **Last Updated:** 2026-09-10
+- **Scope:** Records the accepted generated-artifact lint lag, its limits, and the later change that removed the affected writer job.
+- **Related:** [T1 supply-freeze record](../T1-SUPPLY-FREEZE-v1.md)
+
+## 1. Context, concern, and current effect
 
 **Superseded on 2026-08-02.** The `temporary-writer` job was deleted in T1 itself — the
 change this record accompanies, issue #20 — and not in a later slate issue, so nothing
@@ -53,8 +63,6 @@ The decision is unchanged; the reasoning that supports it is not. See section 10
 This records a deliberate, dated acceptance of a known integrity limitation. It is not a
 statement that the limitation does not exist, and it is not a to-do item. If any of the
 review triggers in section 8 fire, this decision must be reopened.
-
-## 1. The concern, and whether it is real
 
 Issue #20 introduces an explicitly temporary pre-promotion writer in
 `.github/workflows/build.yml`. After a push to `main`, the `temporary-writer` job

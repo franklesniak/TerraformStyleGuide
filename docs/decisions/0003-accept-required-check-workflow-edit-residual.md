@@ -1,6 +1,16 @@
+<!-- markdownlint-disable MD013 -->
 # Decision 0003: Accept that workflow edits can satisfy required checks by skipping them
 
-## Status
+## Metadata
+
+- **Status:** Accepted
+- **Owner:** Frank Lesniak, TerraformStyleGuide Repository Owner
+- **Date:** 2026-08-10
+- **Last Updated:** 2026-09-10
+- **Scope:** Records the accepted ruleset limitation for pull requests that edit required-check workflows and the related implementation constraint.
+- **Related:** [T1 supply-freeze record](../T1-SUPPLY-FREEZE-v1.md)
+
+## 1. Context, concern, and current effect
 
 Accepted on 2026-08-10 by Frank Lesniak, TerraformStyleGuide repository owner.
 
@@ -8,8 +18,6 @@ This record accepts one limitation in the repository's main-branch ruleset and r
 second, related implementation constraint. It does not claim either limitation is closed.
 Issue #28 contains the options analysis, scoring, administrator procedure, and retained
 execution evidence for this decision.
-
-## 1. The concern, and whether it is real
 
 The ruleset requires the GitHub Actions check contexts `policy`, `markdownlint`, and
 `verify`. Those checks provide useful prevention when a job fails or when a required job
