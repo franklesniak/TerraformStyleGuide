@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260911.5
+# Version: 1.2.20260911.6
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -13564,7 +13564,8 @@ if ($SelfTest) {
         "  if (!['push', 'force_push', 'branch_creation'].includes(activity.activity_type)) {",
         "    'No exact head publication activity matches this revision and ref.',",
         '        `Repository-activity pagination exceeded ${maximumPageCount} pages.`,',
-        '  const pullRequestCandidates = await readHistoricalRuns({',
+        "  if (eventName === 'workflow_dispatch' ||",
+        "      eventName === 'pull_request_target') {",
         '  candidates.sort((left, right) => left.createdTime - right.createdTime);',
         '    return pushCandidates[0].createdAt;',
         '  const timestamp = await resolveFinalizationTimestamp({',
@@ -13605,7 +13606,7 @@ if ($SelfTest) {
     if ($intFinalizationResolverSelfTestExit -ne 0 -or
         $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
         [string]$arrFinalizationResolverSelfTestOutput[0] -cne
-        'Finalization resolver self-tests passed: 37 fixtures.') {
+        'Finalization resolver self-tests passed: 39 fixtures.') {
         throw (
             'The finalization-time resolver self-test failed: ' +
             ($arrFinalizationResolverSelfTestOutput -join '; ')

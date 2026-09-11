@@ -402,7 +402,8 @@ export async function resolveFinalizationTimestamp({
   if (pushCandidates.length > 0) {
     return pushCandidates[0].createdAt;
   }
-  if (eventName === 'workflow_dispatch') {
+  if (eventName === 'workflow_dispatch' ||
+      eventName === 'pull_request_target') {
     return readHeadPublication({
       root,
       headRepository: repository,
@@ -413,26 +414,6 @@ export async function resolveFinalizationTimestamp({
       currentCreatedTime,
     });
   }
-
-  const pullRequestCandidates = await readHistoricalRuns({
-    root,
-    repository,
-    token,
-    fetchImplementation,
-    expected: {
-      ...expectedPush,
-      headRepository: runHeadRepository,
-      eventName: 'pull_request_target',
-      requireSuccess: false,
-    },
-    currentCreatedTime,
-  });
-  pullRequestCandidates.push({
-    createdAt: currentRun.created_at,
-    createdTime: currentCreatedTime,
-  });
-  pullRequestCandidates.sort((left, right) => left.createdTime - right.createdTime);
-  return pullRequestCandidates[0].createdAt;
 }
 
 function makeResponse(value, { link = '', ok = true, status = 200 } = {}) {
@@ -629,6 +610,36 @@ export async function runSelfTest() {
     'pull request prefers exact successful push',
     pullRequestPushTimestamp,
     '2026-09-10T10:00:00Z',
+  );
+
+  const pullRequestFailedPushPublicationTimestamp = await resolveFinalizationTimestamp({
+    ...base,
+    eventName: 'pull_request_target',
+    now: Date.parse('2026-09-11T00:01:00Z'),
+    fetchImplementation: makeFixtureFetch({
+      current: makeRun({
+        event: 'pull_request_target',
+        created_at: '2026-09-11T00:00:05Z',
+      }),
+      repositoryActivities: [makeActivity({ timestamp: '2026-09-10T23:59:55Z' })],
+    }),
+  });
+  assertEqual(
+    'same-repository pull request uses publication when no successful push exists',
+    pullRequestFailedPushPublicationTimestamp,
+    '2026-09-10T23:59:55Z',
+  );
+
+  await reject(
+    'same-repository pull request without publication evidence',
+    () => resolveFinalizationTimestamp({
+      ...base,
+      eventName: 'pull_request_target',
+      fetchImplementation: makeFixtureFetch({
+        current: makeRun({ event: 'pull_request_target' }),
+      }),
+    }),
+    /No exact head publication activity/u,
   );
 
   const initialPullRequestTimestamp = await resolveFinalizationTimestamp({
