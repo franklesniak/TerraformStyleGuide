@@ -120,7 +120,7 @@ jobs:
           declare -Ar reviewed_sha256=(
             ["${root_manifest}"]='ca77a11a7bd4ae55842ef0f1b8c4b9c0d32e3d6b8fa202455a12e354bf2d696b'
             ["${root_lock}"]='e07939c3791be364486aedc928da532870f6d9f29ec2a6a4733be2cc143f5009'
-            ["${workflow_manifest}"]='3f9a89e9f0abc17c81a7268c15d8c82eef5f766ecaf1b9b82e7b2cc7bd6c7c19'
+            ["${workflow_manifest}"]='494edc3ed1917effd870cb7f797a861778dd288bfdbb1ab07dd07d77d8bb6109'
             ["${workflow_lock}"]='84cbe61e33e4c66b653efd2bfbe3f80b0061368a64ad80ef0de4898da28d887d'
             ["${pre_commit_config}"]='e43a1ed2ad92bdb9407f9140ae40f7d46962181999e072f9a3724cf5cef2e946'
             ["${staged_markdown_helper}"]='6e8ac89afb17dd36f1edcf9b59ddfb066706fc6686be22e007c540ae20c810c2'

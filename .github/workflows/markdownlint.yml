@@ -179,7 +179,7 @@ jobs:
           # only that npm ci left these files alone; it cannot detect metadata
           # that was already altered at review time. This gate runs before
           # installation so unreviewed scripts are never installed and never run.
-          $strReviewedPackageHash = '3F9A89E9F0ABC17C81A7268C15D8C82EEF5F766ECAF1B9B82E7B2CC7BD6C7C19'
+          $strReviewedPackageHash = '494EDC3ED1917EFFD870CB7F797A861778DD288BFDBB1AB07DD07D77D8BB6109'
           $strReviewedLockHash = '84CBE61E33E4C66B653EFD2BFBE3F80B0061368A64AD80EF0DE4898DA28D887D'
           $strPackageBefore = (Get-FileHash -LiteralPath package.json -Algorithm SHA256).Hash
           $strLockBefore = (Get-FileHash -LiteralPath package-lock.json -Algorithm SHA256).Hash
@@ -433,7 +433,7 @@ jobs:
           # only that npm ci left these files alone; it cannot detect metadata
           # that was already altered at review time. This gate runs before
           # installation so unreviewed scripts are never installed and never run.
-          $strReviewedPackageHash = '3F9A89E9F0ABC17C81A7268C15D8C82EEF5F766ECAF1B9B82E7B2CC7BD6C7C19'
+          $strReviewedPackageHash = '494EDC3ED1917EFFD870CB7F797A861778DD288BFDBB1AB07DD07D77D8BB6109'
           $strReviewedLockHash = '84CBE61E33E4C66B653EFD2BFBE3F80B0061368A64AD80EF0DE4898DA28D887D'
           $strPackageBefore = (Get-FileHash -LiteralPath package.json -Algorithm SHA256).Hash
           $strLockBefore = (Get-FileHash -LiteralPath package-lock.json -Algorithm SHA256).Hash

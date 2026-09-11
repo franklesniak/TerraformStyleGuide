@@ -99,9 +99,9 @@ $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
 $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/copilot-setup-steps.yml' =
-        '86ad7afdf584156f6f6a47497e45344d7fdf8044bbeb1db503d86ce2ae6b173f'
+        'b4808bffdf23bbab4fb496a13b22d2c5b667e2e5f07e36bd8f349f3e89e6e78a'
     '.github/workflows/package.json' =
-        '3f9a89e9f0abc17c81a7268c15d8c82eef5f766ecaf1b9b82e7b2cc7bd6c7c19'
+        '494edc3ed1917effd870cb7f797a861778dd288bfdbb1ab07dd07d77d8bb6109'
     '.github/workflows/package-lock.json' =
         '84cbe61e33e4c66b653efd2bfbe3f80b0061368a64ad80ef0de4898da28d887d'
     '.husky/pre-commit' =
@@ -1723,14 +1723,13 @@ function Get-HuskySetupContractFailure {
         Write-Output 'Root lint:md:nested must delegate to the workflow-local lint:md:nested script.'
     }
     $strExpectedWorkflowOuterLint =
-        'cd ../.. && node .github/workflows/lint-nested-markdown.js && ' +
-        'markdownlint-cli2 "**/*.md" "**/*.mdc" "#node_modules" ' +
+        'cd ../.. && markdownlint-cli2 "**/*.md" "**/*.mdc" "#node_modules" ' +
         '"#.github/workflows/node_modules" --config ' +
         '.github/workflows/.markdownlint.jsonc'
     if ([string]$objWorkflowPackage.scripts.'lint:md' -cne
         $strExpectedWorkflowOuterLint) {
         Write-Output (
-            'Workflow lint:md must validate Markdown input boundaries before outer lint.'
+            'Workflow lint:md must run only the reviewed outer Markdown lint phase.'
         )
     }
     $strExpectedRootAgentTest =
@@ -8386,8 +8385,7 @@ if ($SelfTest) {
     $objWorkflowOuterLintMutation = $strWorkflowPackageContent | ConvertFrom-Json
     $objWorkflowOuterLintMutation.scripts.'lint:md' =
         'cd ../.. && markdownlint-cli2 "**/*.md" "**/*.mdc" ' +
-        '"#node_modules" "#.github/workflows/node_modules" --config ' +
-        '.github/workflows/.markdownlint.jsonc'
+        '"#node_modules"'
     $strWorkflowOuterLintMutation =
         $objWorkflowOuterLintMutation | ConvertTo-Json -Depth 10
 
@@ -8425,11 +8423,11 @@ if ($SelfTest) {
             'Root lint:md:nested must delegate'
         )
         ,@(
-            'workflow outer lint omits the safe-input preflight'
+            'workflow outer lint drifts from the reviewed command'
             $strRootPackageContent
             $strWorkflowOuterLintMutation
             $strHuskyHookContent
-            'Workflow lint:md must validate Markdown input boundaries'
+            'Workflow lint:md must run only the reviewed outer Markdown lint phase'
         )
         ,@(
             'root agent test becomes a no-op'
@@ -13365,6 +13363,7 @@ if ($SelfTest) {
     )
     $arrFinalizationResolverLiterals = @(
         "      !['push', 'pull_request_target', 'workflow_dispatch'].includes(eventName) ||",
+        'function readNextActivityUrl(link, initialUrl) {',
         "  if (eventName === 'push') {",
         "    url.searchParams.set('branch', expected.runHeadRefName);",
         "    url.searchParams.set('event', expected.eventName);",
@@ -13374,10 +13373,11 @@ if ($SelfTest) {
         '       (run?.status !== ''completed'' || run?.conclusion !== ''success'')) ||',
         '  const pushCandidates = await readHistoricalRuns({',
         'async function readHeadPublication({',
-        '  url.searchParams.set(''ref'', `refs/heads/${headRefName}`);',
+        '  initialUrl.searchParams.set(''ref'', `refs/heads/${headRefName}`);',
         '      token: null,',
         "  if (!['push', 'force_push', 'branch_creation'].includes(activity.activity_type)) {",
-        "      'No exact head publication activity matches this revision and ref.',",
+        "    'No exact head publication activity matches this revision and ref.',",
+        '        `Repository-activity pagination exceeded ${maximumPageCount} pages.`,',
         '  const pullRequestCandidates = await readHistoricalRuns({',
         '  candidates.sort((left, right) => left.createdTime - right.createdTime);',
         '    return pushCandidates[0].createdAt;',
@@ -13418,7 +13418,7 @@ if ($SelfTest) {
     if ($intFinalizationResolverSelfTestExit -ne 0 -or
         $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
         [string]$arrFinalizationResolverSelfTestOutput[0] -cne
-        'Finalization resolver self-tests passed: 30 fixtures.') {
+        'Finalization resolver self-tests passed: 34 fixtures.') {
         throw (
             'The finalization-time resolver self-test failed: ' +
             ($arrFinalizationResolverSelfTestOutput -join '; ')

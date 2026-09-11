@@ -40,6 +40,67 @@ async function readJson(url, token, fetchImplementation, displayName) {
   };
 }
 
+function readNextActivityUrl(link, initialUrl) {
+  if (!link) {
+    return null;
+  }
+  const nextMatches = [...link.matchAll(/<([^<>]+)>\s*;\s*rel="next"/gu)];
+  if (nextMatches.length === 0) {
+    if (/rel\s*=\s*"next"/u.test(link)) {
+      throw new Error('The repository-activity pagination link is malformed.');
+    }
+    return null;
+  }
+  if (nextMatches.length !== 1) {
+    throw new Error('The repository-activity response has multiple next links.');
+  }
+
+  let candidate;
+  try {
+    candidate = new URL(nextMatches[0][1]);
+  } catch {
+    throw new Error('The repository-activity pagination link is invalid.');
+  }
+  if (candidate.origin !== initialUrl.origin ||
+      candidate.pathname !== initialUrl.pathname ||
+      candidate.username || candidate.password || candidate.hash) {
+    throw new Error('The repository-activity pagination link crosses its trust boundary.');
+  }
+
+  const expectedParameters = new Map([
+    ['direction', 'desc'],
+    ['per_page', String(recordsPerPage)],
+    ['ref', initialUrl.searchParams.get('ref')],
+  ]);
+  const allowedParameters = new Set([...expectedParameters.keys(), 'after', 'before']);
+  for (const key of candidate.searchParams.keys()) {
+    if (!allowedParameters.has(key)) {
+      throw new Error('The repository-activity pagination link has an unexpected parameter.');
+    }
+  }
+  for (const [key, value] of expectedParameters) {
+    const values = candidate.searchParams.getAll(key);
+    if (values.length !== 1 || values[0] !== value) {
+      throw new Error('The repository-activity pagination link changed the query identity.');
+    }
+  }
+  const cursorParameters = ['after', 'before'].filter(
+    (key) => candidate.searchParams.has(key),
+  );
+  if (cursorParameters.length !== 1) {
+    throw new Error('The repository-activity pagination link has an invalid cursor.');
+  }
+  const cursorName = cursorParameters[0];
+  const cursorValues = candidate.searchParams.getAll(cursorName);
+  if (cursorValues.length !== 1 || !cursorValues[0]) {
+    throw new Error('The repository-activity pagination link has an invalid cursor.');
+  }
+
+  const nextUrl = new URL(initialUrl);
+  nextUrl.searchParams.set(cursorName, cursorValues[0]);
+  return nextUrl;
+}
+
 function validateRepositoryActivity(activity, expected, currentCreatedTime) {
   const knownActivityTypes = [
     'push',
@@ -81,47 +142,63 @@ async function readHeadPublication({
   fetchImplementation,
   currentCreatedTime,
 }) {
-  const url = new URL(`${root}/repos/${headRepository}/activity`);
-  url.searchParams.set('direction', 'desc');
-  url.searchParams.set('per_page', String(recordsPerPage));
-  url.searchParams.set('ref', `refs/heads/${headRefName}`);
-  const response = await readJson(
-    url,
-    token,
-    fetchImplementation,
-    'Head repository-activity lookup',
-  );
-  if (!Array.isArray(response.value)) {
-    throw new Error('The head repository-activity response is malformed.');
-  }
-
+  const initialUrl = new URL(`${root}/repos/${headRepository}/activity`);
+  initialUrl.searchParams.set('direction', 'desc');
+  initialUrl.searchParams.set('per_page', String(recordsPerPage));
+  initialUrl.searchParams.set('ref', `refs/heads/${headRefName}`);
   const seenIds = new Set();
   const candidates = [];
   const expected = {
     ref: `refs/heads/${headRefName}`,
     revision: headRevision,
   };
-  for (const activity of response.value) {
-    if (seenIds.has(activity?.id)) {
-      throw new Error('The head repository-activity response contains a duplicate.');
-    }
-    seenIds.add(activity?.id);
-    const candidate = validateRepositoryActivity(
-      activity,
-      expected,
-      currentCreatedTime,
+  let url = initialUrl;
+  for (let page = 1; page <= maximumPageCount; page += 1) {
+    const response = await readJson(
+      url,
+      token,
+      fetchImplementation,
+      'Head repository-activity lookup',
     );
-    if (candidate) {
-      candidates.push(candidate);
+    if (!Array.isArray(response.value)) {
+      throw new Error('The head repository-activity response is malformed.');
     }
-  }
-  candidates.sort((left, right) => right.createdTime - left.createdTime);
-  if (candidates.length === 0) {
-    throw new Error(
-      'No exact head publication activity matches this revision and ref.',
+    for (const activity of response.value) {
+      if (seenIds.has(activity?.id)) {
+        throw new Error('The head repository-activity response contains a duplicate.');
+      }
+      seenIds.add(activity?.id);
+      const candidate = validateRepositoryActivity(
+        activity,
+        expected,
+        currentCreatedTime,
+      );
+      if (candidate) {
+        candidates.push(candidate);
+      }
+    }
+    candidates.sort((left, right) => right.createdTime - left.createdTime);
+    if (candidates.length > 0) {
+      return candidates[0].createdAt;
+    }
+
+    const nextUrl = readNextActivityUrl(
+      response.headers?.get?.('link') ?? '',
+      initialUrl,
     );
+    if (!nextUrl) {
+      break;
+    }
+    if (page === maximumPageCount) {
+      throw new Error(
+        `Repository-activity pagination exceeded ${maximumPageCount} pages.`,
+      );
+    }
+    url = nextUrl;
   }
-  return candidates[0].createdAt;
+  throw new Error(
+    'No exact head publication activity matches this revision and ref.',
+  );
 }
 
 function validateCurrentRun(run, expected) {
@@ -399,12 +476,23 @@ function makeActivity(overrides = {}) {
   };
 }
 
+function makeActivityNextLink(headRepository, cursor, origin = 'https://api.github.example') {
+  const url = new URL(`${origin}/api/v3/repos/${headRepository}/activity`);
+  url.searchParams.set('direction', 'desc');
+  url.searchParams.set('per_page', String(recordsPerPage));
+  url.searchParams.set('ref', 'refs/heads/topic/branch');
+  url.searchParams.set('after', cursor);
+  return `<${url}>; rel="next"`;
+}
+
 function makeFixtureFetch({
   current = makeRun(),
   pages = [],
   pullRequestPages = [],
   forkActivities = [],
   repositoryActivities = [],
+  forkActivityPages = null,
+  repositoryActivityPages = null,
 }) {
   return async (request, options) => {
     const url = new URL(String(request));
@@ -412,19 +500,31 @@ function makeFixtureFetch({
       if (options?.headers?.Authorization ||
           url.searchParams.get('direction') !== 'desc' ||
           url.searchParams.get('per_page') !== String(recordsPerPage) ||
-          url.searchParams.get('ref') !== 'refs/heads/topic/branch') {
+          url.searchParams.get('ref') !== 'refs/heads/topic/branch' ||
+          url.searchParams.has('time_period')) {
         throw new Error('The fork-head activity query is not exact or anonymous.');
       }
-      return makeResponse(forkActivities);
+      if (!forkActivityPages) {
+        return makeResponse(forkActivities);
+      }
+      const cursor = url.searchParams.get('after') ?? url.searchParams.get('before');
+      const page = cursor ? Number(cursor.replace(/^cursor-/u, '')) : 0;
+      return forkActivityPages[page] ?? makeResponse([]);
     }
     if (url.pathname === '/api/v3/repos/owner/repository/activity') {
       if (options?.headers?.Authorization !== 'Bearer fixture-token' ||
           url.searchParams.get('direction') !== 'desc' ||
           url.searchParams.get('per_page') !== String(recordsPerPage) ||
-          url.searchParams.get('ref') !== 'refs/heads/topic/branch') {
+          url.searchParams.get('ref') !== 'refs/heads/topic/branch' ||
+          url.searchParams.has('time_period')) {
         throw new Error('The repository activity query is not exact or authenticated.');
       }
-      return makeResponse(repositoryActivities);
+      if (!repositoryActivityPages) {
+        return makeResponse(repositoryActivities);
+      }
+      const cursor = url.searchParams.get('after') ?? url.searchParams.get('before');
+      const page = cursor ? Number(cursor.replace(/^cursor-/u, '')) : 0;
+      return repositoryActivityPages[page] ?? makeResponse([]);
     }
     if (!url.pathname.startsWith('/api/v3/repos/owner/repository/')) {
       throw new Error('The API base path was not preserved.');
@@ -574,6 +674,24 @@ export async function runSelfTest() {
     '2026-09-10T10:00:00Z',
   );
 
+  const delayedForkTimestamp = await resolveFinalizationTimestamp({
+    ...base,
+    eventName: 'pull_request_target',
+    runHeadRepository: 'fork-owner/repository',
+    fetchImplementation: makeFixtureFetch({
+      current: makeRun({
+        event: 'pull_request_target',
+        head_repository: { full_name: 'fork-owner/repository' },
+      }),
+      forkActivities: [makeActivity({ timestamp: '2025-09-10T10:00:00Z' })],
+    }),
+  });
+  assertEqual(
+    'fork accepts exact old publication without a client time window',
+    delayedForkTimestamp,
+    '2025-09-10T10:00:00Z',
+  );
+
   const latestForkPublicationTimestamp = await resolveFinalizationTimestamp({
     ...base,
     eventName: 'pull_request_target',
@@ -694,6 +812,60 @@ export async function runSelfTest() {
     'manual event falls back to exact authenticated repository activity',
     manualActivityTimestamp,
     '2026-09-10T09:59:59Z',
+  );
+
+  const paginatedActivityTimestamp = await resolveFinalizationTimestamp({
+    ...base,
+    fetchImplementation: makeFixtureFetch({
+      repositoryActivityPages: [
+        makeResponse(
+          [makeActivity({ after: 'c'.repeat(40) })],
+          { link: makeActivityNextLink('owner/repository', 'cursor-1') },
+        ),
+        makeResponse([makeActivity({ id: 11, timestamp: '2026-09-10T09:58:59Z' })]),
+      ],
+    }),
+  });
+  assertEqual(
+    'manual event follows a validated activity cursor',
+    paginatedActivityTimestamp,
+    '2026-09-10T09:58:59Z',
+  );
+
+  await reject(
+    'cross-origin activity pagination link',
+    () => resolveFinalizationTimestamp({
+      ...base,
+      fetchImplementation: makeFixtureFetch({
+        repositoryActivityPages: [makeResponse(
+          [makeActivity({ after: 'c'.repeat(40) })],
+          { link: makeActivityNextLink(
+            'owner/repository',
+            'cursor-1',
+            'https://attacker.example',
+          ) },
+        )],
+      }),
+    }),
+    /pagination link crosses its trust boundary/u,
+  );
+
+  const activityOverflowPages = Array.from(
+    { length: maximumPageCount },
+    (_, index) => makeResponse(
+      [makeActivity({ id: 100 + index, after: 'c'.repeat(40) })],
+      { link: makeActivityNextLink('owner/repository', `cursor-${index + 1}`) },
+    ),
+  );
+  await reject(
+    'activity pagination overflow',
+    () => resolveFinalizationTimestamp({
+      ...base,
+      fetchImplementation: makeFixtureFetch({
+        repositoryActivityPages: activityOverflowPages,
+      }),
+    }),
+    /pagination exceeded 20 pages/u,
   );
 
   await reject(
