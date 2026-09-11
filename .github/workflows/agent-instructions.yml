@@ -89,6 +89,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           RUN_HEAD_REVISION: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
           RUN_HEAD_REF_NAME: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.ref || github.ref_name }}
+          RUN_HEAD_REF: ${{ github.event_name == 'pull_request_target' && format('refs/heads/{0}', github.event.pull_request.head.ref) || github.ref }}
           RUN_HEAD_REPOSITORY: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}
         run: node .github/workflows/Resolve-AgentInstructionFinalizationTime.mjs
 

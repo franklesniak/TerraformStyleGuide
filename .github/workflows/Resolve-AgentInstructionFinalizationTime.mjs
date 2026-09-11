@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 const objectIdPattern = /^[0-9a-f]{40}$/u;
 const positiveIntegerPattern = /^[1-9][0-9]*$/u;
 const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
+const repositoryRefPattern = /^refs\/(?:heads|tags)\/(.+)$/u;
 const rfc3339UtcPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/u;
 const maximumPageCount = 20;
 const recordsPerPage = 100;
@@ -115,11 +116,6 @@ function validateRepositoryActivity(activity, expected, currentCreatedTime) {
       activity?.ref !== expected.ref) {
     throw new Error('A head repository activity has an unexpected identity.');
   }
-  const createdTime = parseTimestamp(
-    activity.timestamp,
-    currentCreatedTime,
-    'A head repository-activity timestamp',
-  );
   if (!['push', 'force_push', 'branch_creation'].includes(activity.activity_type)) {
     return null;
   }
@@ -130,13 +126,18 @@ function validateRepositoryActivity(activity, expected, currentCreatedTime) {
   if (activity.after !== expected.revision) {
     return null;
   }
+  const createdTime = parseTimestamp(
+    activity.timestamp,
+    currentCreatedTime,
+    'A head repository-activity timestamp',
+  );
   return { createdAt: activity.timestamp, createdTime };
 }
 
 async function readHeadPublication({
   root,
   headRepository,
-  headRefName,
+  headRef,
   headRevision,
   token,
   fetchImplementation,
@@ -145,11 +146,11 @@ async function readHeadPublication({
   const initialUrl = new URL(`${root}/repos/${headRepository}/activity`);
   initialUrl.searchParams.set('direction', 'desc');
   initialUrl.searchParams.set('per_page', String(recordsPerPage));
-  initialUrl.searchParams.set('ref', `refs/heads/${headRefName}`);
+  initialUrl.searchParams.set('ref', headRef);
   const seenIds = new Set();
   const candidates = [];
   const expected = {
-    ref: `refs/heads/${headRefName}`,
+    ref: headRef,
     revision: headRevision,
   };
   let url = initialUrl;
@@ -314,6 +315,7 @@ export async function resolveFinalizationTimestamp({
   eventName,
   runHeadRevision,
   runHeadRefName,
+  runHeadRef,
   runHeadRepository,
   token,
   now = Date.now(),
@@ -325,9 +327,14 @@ export async function resolveFinalizationTimestamp({
       !['push', 'pull_request_target', 'workflow_dispatch'].includes(eventName) ||
       !objectIdPattern.test(runHeadRevision ?? '') || !runHeadRefName ||
       !repositoryPattern.test(runHeadRepository ?? '') ||
-      /[\u0000\r\n]/u.test(runHeadRefName) || !token ||
+      /[\u0000\r\n]/u.test(runHeadRefName) ||
+      /[\u0000\r\n]/u.test(runHeadRef ?? '') || !token ||
       !Number.isFinite(now) || typeof fetchImplementation !== 'function') {
     throw new Error('Trusted workflow-run inputs are unavailable or invalid.');
+  }
+  const refMatch = repositoryRefPattern.exec(runHeadRef ?? '');
+  if (!refMatch || refMatch[1] !== runHeadRefName) {
+    throw new Error('The workflow-run full ref does not match its short name.');
   }
   if (eventName !== 'pull_request_target' && runHeadRepository !== repository) {
     throw new Error('The workflow-run head repository is invalid for this event.');
@@ -364,7 +371,7 @@ export async function resolveFinalizationTimestamp({
     return readHeadPublication({
       root,
       headRepository: runHeadRepository,
-      headRefName: runHeadRefName,
+      headRef: runHeadRef,
       headRevision: runHeadRevision,
       token: null,
       fetchImplementation,
@@ -382,14 +389,16 @@ export async function resolveFinalizationTimestamp({
     eventName: 'push',
     requireSuccess: true,
   };
-  const pushCandidates = await readHistoricalRuns({
-    root,
-    repository,
-    token,
-    fetchImplementation,
-    expected: expectedPush,
-    currentCreatedTime,
-  });
+  const pushCandidates = runHeadRef.startsWith('refs/tags/')
+    ? []
+    : await readHistoricalRuns({
+        root,
+        repository,
+        token,
+        fetchImplementation,
+        expected: expectedPush,
+        currentCreatedTime,
+      });
   if (pushCandidates.length > 0) {
     return pushCandidates[0].createdAt;
   }
@@ -397,7 +406,7 @@ export async function resolveFinalizationTimestamp({
     return readHeadPublication({
       root,
       headRepository: repository,
-      headRefName: runHeadRefName,
+      headRef: runHeadRef,
       headRevision: runHeadRevision,
       token,
       fetchImplementation,
@@ -476,11 +485,16 @@ function makeActivity(overrides = {}) {
   };
 }
 
-function makeActivityNextLink(headRepository, cursor, origin = 'https://api.github.example') {
+function makeActivityNextLink(
+  headRepository,
+  cursor,
+  origin = 'https://api.github.example',
+  activityRef = 'refs/heads/topic/branch',
+) {
   const url = new URL(`${origin}/api/v3/repos/${headRepository}/activity`);
   url.searchParams.set('direction', 'desc');
   url.searchParams.set('per_page', String(recordsPerPage));
-  url.searchParams.set('ref', 'refs/heads/topic/branch');
+  url.searchParams.set('ref', activityRef);
   url.searchParams.set('after', cursor);
   return `<${url}>; rel="next"`;
 }
@@ -493,6 +507,7 @@ function makeFixtureFetch({
   repositoryActivities = [],
   forkActivityPages = null,
   repositoryActivityPages = null,
+  activityRef = 'refs/heads/topic/branch',
 }) {
   return async (request, options) => {
     const url = new URL(String(request));
@@ -500,7 +515,7 @@ function makeFixtureFetch({
       if (options?.headers?.Authorization ||
           url.searchParams.get('direction') !== 'desc' ||
           url.searchParams.get('per_page') !== String(recordsPerPage) ||
-          url.searchParams.get('ref') !== 'refs/heads/topic/branch' ||
+          url.searchParams.get('ref') !== activityRef ||
           url.searchParams.has('time_period')) {
         throw new Error('The fork-head activity query is not exact or anonymous.');
       }
@@ -515,7 +530,7 @@ function makeFixtureFetch({
       if (options?.headers?.Authorization !== 'Bearer fixture-token' ||
           url.searchParams.get('direction') !== 'desc' ||
           url.searchParams.get('per_page') !== String(recordsPerPage) ||
-          url.searchParams.get('ref') !== 'refs/heads/topic/branch' ||
+          url.searchParams.get('ref') !== activityRef ||
           url.searchParams.has('time_period')) {
         throw new Error('The repository activity query is not exact or authenticated.');
       }
@@ -575,6 +590,7 @@ export async function runSelfTest() {
     eventName: 'workflow_dispatch',
     runHeadRevision: 'a'.repeat(40),
     runHeadRefName: 'topic/branch',
+    runHeadRef: 'refs/heads/topic/branch',
     runHeadRepository: 'owner/repository',
     token: 'fixture-token',
     now: Date.parse('2026-09-10T12:01:00Z'),
@@ -814,6 +830,48 @@ export async function runSelfTest() {
     '2026-09-10T09:59:59Z',
   );
 
+  const manualTagActivityTimestamp = await resolveFinalizationTimestamp({
+    ...base,
+    runHeadRefName: 'release',
+    runHeadRef: 'refs/tags/release',
+    fetchImplementation: makeFixtureFetch({
+      current: makeRun({ head_branch: 'release' }),
+      pages: [makeResponse({
+        total_count: 1,
+        workflow_runs: [makeHistoricalRun({ head_branch: 'release' })],
+      })],
+      repositoryActivities: [makeActivity({
+        ref: 'refs/tags/release',
+        timestamp: '2026-09-10T09:58:58Z',
+      })],
+      activityRef: 'refs/tags/release',
+    }),
+  });
+  assertEqual(
+    'manual tag uses its exact full ref instead of same-name branch history',
+    manualTagActivityTimestamp,
+    '2026-09-10T09:58:58Z',
+  );
+
+  const concurrentManualActivityTimestamp = await resolveFinalizationTimestamp({
+    ...base,
+    fetchImplementation: makeFixtureFetch({
+      repositoryActivities: [
+        makeActivity({
+          id: 11,
+          after: 'b'.repeat(40),
+          timestamp: '2026-09-10T12:00:01Z',
+        }),
+        makeActivity({ id: 12, timestamp: '2026-09-10T09:58:57Z' }),
+      ],
+    }),
+  });
+  assertEqual(
+    'manual event ignores a newer timestamp on a different revision',
+    concurrentManualActivityTimestamp,
+    '2026-09-10T09:58:57Z',
+  );
+
   const paginatedActivityTimestamp = await resolveFinalizationTimestamp({
     ...base,
     fetchImplementation: makeFixtureFetch({
@@ -885,6 +943,15 @@ export async function runSelfTest() {
       }),
     }),
     /identity does not match/u,
+  );
+  await reject(
+    'full ref and short name mismatch',
+    () => resolveFinalizationTimestamp({
+      ...base,
+      runHeadRef: 'refs/tags/other',
+      fetchImplementation: makeFixtureFetch({}),
+    }),
+    /full ref does not match its short name/u,
   );
   await reject(
     'current proposed head mismatch',
@@ -1015,6 +1082,7 @@ async function main() {
     eventName: process.env.EVENT_NAME,
     runHeadRevision: process.env.RUN_HEAD_REVISION,
     runHeadRefName: process.env.RUN_HEAD_REF_NAME,
+    runHeadRef: process.env.RUN_HEAD_REF,
     runHeadRepository: process.env.RUN_HEAD_REPOSITORY,
     token: process.env.GITHUB_TOKEN,
   });

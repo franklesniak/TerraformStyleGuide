@@ -12,7 +12,8 @@ repos:
         files: >-
           (?x)^(
             package(-lock)?\.json|
-            \.github/workflows/package(-lock)?\.json
+            \.github/workflows/package(-lock)?\.json|
+            \.github/document-metadata-classification\.json
           )$
       - id: check-yaml
         files: ^.*\.ya?ml$
@@ -24,7 +25,8 @@ repos:
             package(-lock)?\.json|
             \.pre-commit-config\.yaml|
             \.github/actionlint\.yaml|
-            \.github/workflows/.*\.(js|mjs|ps1|ya?ml)
+            \.github/workflows/.*\.(js|mjs|ps1|ya?ml)|
+            \.github/document-metadata-classification\.json
           )$
       - id: trailing-whitespace
         args:
@@ -36,7 +38,8 @@ repos:
             package(-lock)?\.json|
             \.pre-commit-config\.yaml|
             \.github/actionlint\.yaml|
-            \.github/workflows/.*\.(js|mjs|ps1|ya?ml)
+            \.github/workflows/.*\.(js|mjs|ps1|ya?ml)|
+            \.github/document-metadata-classification\.json
           )$
 
   - repo: https://github.com/adrienverge/yamllint

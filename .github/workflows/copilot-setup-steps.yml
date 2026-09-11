@@ -122,7 +122,7 @@ jobs:
             ["${root_lock}"]='e07939c3791be364486aedc928da532870f6d9f29ec2a6a4733be2cc143f5009'
             ["${workflow_manifest}"]='494edc3ed1917effd870cb7f797a861778dd288bfdbb1ab07dd07d77d8bb6109'
             ["${workflow_lock}"]='84cbe61e33e4c66b653efd2bfbe3f80b0061368a64ad80ef0de4898da28d887d'
-            ["${pre_commit_config}"]='e43a1ed2ad92bdb9407f9140ae40f7d46962181999e072f9a3724cf5cef2e946'
+            ["${pre_commit_config}"]='bd66d055a6b0ab683b1962ccefe51a942de6db7238ea7dd9e2f662ef0c7e826e'
             ["${staged_markdown_helper}"]='6e8ac89afb17dd36f1edcf9b59ddfb066706fc6686be22e007c540ae20c810c2'
           )
           for reviewed_input in "${!reviewed_sha256[@]}"; do

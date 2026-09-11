@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260911.3
+# Version: 1.2.20260911.4
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -99,7 +99,7 @@ $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
 $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/copilot-setup-steps.yml' =
-        'b4808bffdf23bbab4fb496a13b22d2c5b667e2e5f07e36bd8f349f3e89e6e78a'
+        '130dbdabb4ef6471b2282fca98ebd0d057fda7d31ac7e06d78ceb2a88ae5a53e'
     '.github/workflows/package.json' =
         '494edc3ed1917effd870cb7f797a861778dd288bfdbb1ab07dd07d77d8bb6109'
     '.github/workflows/package-lock.json' =
@@ -109,7 +109,7 @@ $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/lint-staged-markdown.mjs' =
         '6e8ac89afb17dd36f1edcf9b59ddfb066706fc6686be22e007c540ae20c810c2'
     '.pre-commit-config.yaml' =
-        'e43a1ed2ad92bdb9407f9140ae40f7d46962181999e072f9a3724cf5cef2e946'
+        'bd66d055a6b0ab683b1962ccefe51a942de6db7238ea7dd9e2f662ef0c7e826e'
 }
 $script:strWorkflowPolicyCommandPrefix =
     'node .github/workflows/Validate-WorkflowPolicy.mjs'
@@ -1672,7 +1672,7 @@ function Get-HuskySetupContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.13.20260910.0
+    # Version: 1.14.20260911.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -1783,6 +1783,29 @@ function Get-HuskySetupContractFailure {
                 '(?m)^' + [regex]::Escape($strExpectedYamlSelector) + '\r?$'
             ).Count -ne 1) {
             Write-Output "The $strYamlHookId hook must select all repository YAML files."
+        }
+    }
+    $strClassificationSelector =
+        '            \.github/document-metadata-classification\.json'
+    foreach ($strClassificationHookId in @(
+            'check-json',
+            'end-of-file-fixer',
+            'trailing-whitespace'
+        )) {
+        $objClassificationHook = [regex]::Match(
+            $PreCommitConfigContent,
+            "(?ms)^      - id: $([regex]::Escape($strClassificationHookId))\r?\n" +
+            '(?<Body>.*?)(?=^      - id:|^  - repo:|\z)'
+        )
+        if (-not $objClassificationHook.Success -or
+            [regex]::Matches(
+                $objClassificationHook.Groups['Body'].Value,
+                '(?m)^' + [regex]::Escape($strClassificationSelector) + '\r?$'
+            ).Count -ne 1) {
+            Write-Output (
+                "The $strClassificationHookId hook must select " +
+                '.github/document-metadata-classification.json.'
+            )
         }
     }
     $hashtableExpectedPreCommitRevision = [ordered]@{
@@ -7085,6 +7108,7 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
         '        id: resolve_run_time',
         "          RUN_HEAD_REVISION: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}",
         "          RUN_HEAD_REF_NAME: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.ref || github.ref_name }}",
+        "          RUN_HEAD_REF: `${{ github.event_name == 'pull_request_target' && format('refs/heads/{0}', github.event.pull_request.head.ref) || github.ref }}",
         "          RUN_HEAD_REPOSITORY: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}",
         '        run: node .github/workflows/Resolve-AgentInstructionFinalizationTime.mjs',
         '      - name: Resolve authenticated one-parent merge source',
@@ -8220,6 +8244,47 @@ if ($SelfTest) {
         if ($arrYamlSelectorFailures -cnotcontains
             "The $strYamlHookId hook must select all repository YAML files.") {
             throw "$strYamlHookId selector mutation did not fail closed."
+        }
+    }
+    foreach ($strClassificationHookId in @(
+            'check-json',
+            'end-of-file-fixer',
+            'trailing-whitespace'
+        )) {
+        $objClassificationSelectorPattern = [regex]::new(
+            "(?ms)(^      - id: $([regex]::Escape($strClassificationHookId))\r?\n" +
+            '.*?)(^            \\.github/document-metadata-classification' +
+            '\\.json\r?\n)'
+        )
+        $strClassificationSelectorMutation =
+            $objClassificationSelectorPattern.Replace(
+                $strPreCommitConfigContent,
+                '${1}',
+                1
+            )
+        if ($strClassificationSelectorMutation -ceq $strPreCommitConfigContent) {
+            throw (
+                "Could not create the $strClassificationHookId document " +
+                'classification selector mutation.'
+            )
+        }
+        $arrClassificationSelectorFailures = @(Get-HuskySetupContractFailure `
+                -RootPackageContent $strRootPackageContent `
+                -WorkflowPackageContent $strWorkflowPackageContent `
+                -WorkflowPackageLockContent $strWorkflowPackageLockContent `
+                -HookContent $strHuskyHookContent `
+                -CopilotSetupContent $strCopilotSetupContent `
+                -PreCommitConfigContent $strClassificationSelectorMutation `
+                -StagedMarkdownHelperContent $strStagedMarkdownHelperContent)
+        $strExpectedClassificationFailure =
+            "The $strClassificationHookId hook must select " +
+            '.github/document-metadata-classification.json.'
+        if ($arrClassificationSelectorFailures -cnotcontains
+            $strExpectedClassificationFailure) {
+            throw (
+                "$strClassificationHookId document classification selector " +
+                'mutation did not fail closed.'
+            )
         }
     }
     $strPowerShell7Preflight =
@@ -13371,9 +13436,9 @@ if ($SelfTest) {
         "    url.searchParams.set('head_sha', expected.runHeadRevision);",
         '      run?.workflow_id !== expected.workflowId ||',
         '       (run?.status !== ''completed'' || run?.conclusion !== ''success'')) ||',
-        '  const pushCandidates = await readHistoricalRuns({',
+        "  const pushCandidates = runHeadRef.startsWith('refs/tags/')",
         'async function readHeadPublication({',
-        '  initialUrl.searchParams.set(''ref'', `refs/heads/${headRefName}`);',
+        '  initialUrl.searchParams.set(''ref'', headRef);',
         '      token: null,',
         "  if (!['push', 'force_push', 'branch_creation'].includes(activity.activity_type)) {",
         "    'No exact head publication activity matches this revision and ref.',",
@@ -13382,6 +13447,7 @@ if ($SelfTest) {
         '  candidates.sort((left, right) => left.createdTime - right.createdTime);',
         '    return pushCandidates[0].createdAt;',
         '  const timestamp = await resolveFinalizationTimestamp({',
+        '    runHeadRef: process.env.RUN_HEAD_REF,',
         '  appendFileSync(output, `timestamp=${timestamp}\n`, ''utf8'');'
     )
     foreach ($strFinalizationResolverLiteral in $arrFinalizationResolverLiterals) {
@@ -13418,7 +13484,7 @@ if ($SelfTest) {
     if ($intFinalizationResolverSelfTestExit -ne 0 -or
         $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
         [string]$arrFinalizationResolverSelfTestOutput[0] -cne
-        'Finalization resolver self-tests passed: 34 fixtures.') {
+        'Finalization resolver self-tests passed: 37 fixtures.') {
         throw (
             'The finalization-time resolver self-test failed: ' +
             ($arrFinalizationResolverSelfTestOutput -join '; ')
@@ -13494,6 +13560,11 @@ if ($SelfTest) {
             Name = 'PR head ref identity removed'
             From = "          RUN_HEAD_REF_NAME: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.ref || github.ref_name }}"
             To = '          RUN_HEAD_REF_NAME: ${{ github.ref_name }}'
+        },
+        [pscustomobject]@{
+            Name = 'PR full head ref identity removed'
+            From = "          RUN_HEAD_REF: `${{ github.event_name == 'pull_request_target' && format('refs/heads/{0}', github.event.pull_request.head.ref) || github.ref }}"
+            To = '          RUN_HEAD_REF: ${{ github.ref }}'
         },
         [pscustomobject]@{
             Name = 'PR head repository identity removed'
