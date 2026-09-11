@@ -31,7 +31,7 @@
 # The empty default disables that narrowly proved transition mode.
 #
 # .PARAMETER TrustedFinalizationTimestamp
-# The authenticated workflow-run creation time for an event-range validation.
+# The authenticated publication or finalization time for event-range validation.
 #
 # .EXAMPLE
 # & ./.github/workflows/Test-AgentInstructions.ps1 -SelfTest
@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260911.6
+# Version: 1.2.20260911.7
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -7176,6 +7176,7 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
         '      - name: Resolve trusted workflow-run finalization time',
         '        id: resolve_run_time',
         "          RUN_HEAD_REVISION: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}",
+        "          RUN_BASE_REVISION: `${{ github.event_name == 'push' && github.event.before || '' }}",
         "          RUN_HEAD_REF_NAME: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.ref || github.ref_name }}",
         "          RUN_HEAD_REF: `${{ github.event_name == 'pull_request_target' && format('refs/heads/{0}', github.event.pull_request.head.ref) || github.ref }}",
         "          RUN_HEAD_REPOSITORY: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}",
@@ -13551,6 +13552,8 @@ if ($SelfTest) {
         "      !['push', 'pull_request_target', 'workflow_dispatch'].includes(eventName) ||",
         'function readNextActivityUrl(link, initialUrl) {',
         "  if (eventName === 'push') {",
+        'async function readPushPublicationWithRetry({',
+        '      await waitImplementation(pushPublicationRetryDelaysMilliseconds[attempt]);',
         "    url.searchParams.set('branch', expected.runHeadRefName);",
         "    url.searchParams.set('event', expected.eventName);",
         "      url.searchParams.set('status', 'success');",
@@ -13570,6 +13573,7 @@ if ($SelfTest) {
         '    return pushCandidates[0].createdAt;',
         '  const timestamp = await resolveFinalizationTimestamp({',
         '    runHeadRef: process.env.RUN_HEAD_REF,',
+        '    runBaseRevision: process.env.RUN_BASE_REVISION,',
         '  appendFileSync(output, `timestamp=${timestamp}\n`, ''utf8'');'
     )
     foreach ($strFinalizationResolverLiteral in $arrFinalizationResolverLiterals) {
@@ -13606,7 +13610,7 @@ if ($SelfTest) {
     if ($intFinalizationResolverSelfTestExit -ne 0 -or
         $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
         [string]$arrFinalizationResolverSelfTestOutput[0] -cne
-        'Finalization resolver self-tests passed: 39 fixtures.') {
+        'Finalization resolver self-tests passed: 42 fixtures.') {
         throw (
             'The finalization-time resolver self-test failed: ' +
             ($arrFinalizationResolverSelfTestOutput -join '; ')
@@ -13672,6 +13676,11 @@ if ($SelfTest) {
             Name = 'Actions read permission removed'
             From = '  actions: read'
             To = '  actions: none'
+        },
+        [pscustomobject]@{
+            Name = 'push base revision identity removed'
+            From = "          RUN_BASE_REVISION: `${{ github.event_name == 'push' && github.event.before || '' }}"
+            To = "          RUN_BASE_REVISION: ''"
         },
         [pscustomobject]@{
             Name = 'PR head revision identity removed'

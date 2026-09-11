@@ -1,6 +1,7 @@
 // Resolve an authenticated finalization timestamp for agent-document metadata.
 
 import { appendFileSync } from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
 const objectIdPattern = /^[0-9a-f]{40}$/u;
@@ -11,6 +12,9 @@ const rfc3339UtcPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/u;
 const maximumPageCount = 20;
 const recordsPerPage = 100;
 const maximumClockSkewMilliseconds = 300_000;
+const pushPublicationRetryDelaysMilliseconds = Object.freeze([250, 1_000, 2_000]);
+
+class NoExactHeadPublicationError extends Error {}
 
 function parseTimestamp(value, maximumTime, displayName) {
   const time = Date.parse(value ?? '');
@@ -126,6 +130,9 @@ function validateRepositoryActivity(activity, expected, currentCreatedTime) {
   if (activity.after !== expected.revision) {
     return null;
   }
+  if (expected.baseRevision && activity.before !== expected.baseRevision) {
+    throw new Error('The head publication activity has an unexpected prior revision.');
+  }
   const createdTime = parseTimestamp(
     activity.timestamp,
     currentCreatedTime,
@@ -139,6 +146,7 @@ async function readHeadPublication({
   headRepository,
   headRef,
   headRevision,
+  headBaseRevision = null,
   token,
   fetchImplementation,
   currentCreatedTime,
@@ -152,6 +160,7 @@ async function readHeadPublication({
   const expected = {
     ref: headRef,
     revision: headRevision,
+    baseRevision: headBaseRevision,
   };
   let url = initialUrl;
   for (let page = 1; page <= maximumPageCount; page += 1) {
@@ -197,9 +206,45 @@ async function readHeadPublication({
     }
     url = nextUrl;
   }
-  throw new Error(
+  throw new NoExactHeadPublicationError(
     'No exact head publication activity matches this revision and ref.',
   );
+}
+
+async function readPushPublicationWithRetry({
+  root,
+  repository,
+  headRef,
+  headRevision,
+  headBaseRevision,
+  token,
+  fetchImplementation,
+  waitImplementation,
+  currentCreatedTime,
+}) {
+  for (let attempt = 0;
+    attempt <= pushPublicationRetryDelaysMilliseconds.length;
+    attempt += 1) {
+    try {
+      return await readHeadPublication({
+        root,
+        headRepository: repository,
+        headRef,
+        headRevision,
+        headBaseRevision,
+        token,
+        fetchImplementation,
+        currentCreatedTime,
+      });
+    } catch (error) {
+      if (!(error instanceof NoExactHeadPublicationError) ||
+          attempt === pushPublicationRetryDelaysMilliseconds.length) {
+        throw error;
+      }
+      await waitImplementation(pushPublicationRetryDelaysMilliseconds[attempt]);
+    }
+  }
+  throw new Error('The bounded push-publication retry loop did not terminate.');
 }
 
 function validateCurrentRun(run, expected) {
@@ -313,6 +358,7 @@ export async function resolveFinalizationTimestamp({
   runId,
   runAttempt,
   eventName,
+  runBaseRevision,
   runHeadRevision,
   runHeadRefName,
   runHeadRef,
@@ -320,16 +366,19 @@ export async function resolveFinalizationTimestamp({
   token,
   now = Date.now(),
   fetchImplementation = globalThis.fetch,
+  waitImplementation = delay,
 }) {
   if (!apiUrl || !repositoryPattern.test(repository ?? '') ||
       !positiveIntegerPattern.test(runId ?? '') ||
       !positiveIntegerPattern.test(runAttempt ?? '') ||
       !['push', 'pull_request_target', 'workflow_dispatch'].includes(eventName) ||
+      (eventName === 'push' && !objectIdPattern.test(runBaseRevision ?? '')) ||
       !objectIdPattern.test(runHeadRevision ?? '') || !runHeadRefName ||
       !repositoryPattern.test(runHeadRepository ?? '') ||
       /[\u0000\r\n]/u.test(runHeadRefName) ||
       /[\u0000\r\n]/u.test(runHeadRef ?? '') || !token ||
-      !Number.isFinite(now) || typeof fetchImplementation !== 'function') {
+      !Number.isFinite(now) || typeof fetchImplementation !== 'function' ||
+      typeof waitImplementation !== 'function') {
     throw new Error('Trusted workflow-run inputs are unavailable or invalid.');
   }
   const refMatch = repositoryRefPattern.exec(runHeadRef ?? '');
@@ -364,7 +413,17 @@ export async function resolveFinalizationTimestamp({
     'The workflow-run creation time',
   );
   if (eventName === 'push') {
-    return currentRun.created_at;
+    return readPushPublicationWithRetry({
+      root,
+      repository,
+      headRef: runHeadRef,
+      headRevision: runHeadRevision,
+      headBaseRevision: runBaseRevision,
+      token,
+      fetchImplementation,
+      waitImplementation,
+      currentCreatedTime,
+    });
   }
 
   if (eventName === 'pull_request_target' && runHeadRepository !== repository) {
@@ -569,6 +628,7 @@ export async function runSelfTest() {
     runId: '1',
     runAttempt: '1',
     eventName: 'workflow_dispatch',
+    runBaseRevision: 'b'.repeat(40),
     runHeadRevision: 'a'.repeat(40),
     runHeadRefName: 'topic/branch',
     runHeadRef: 'refs/heads/topic/branch',
@@ -591,9 +651,97 @@ export async function runSelfTest() {
   const ordinaryTimestamp = await resolveFinalizationTimestamp({
     ...base,
     eventName: 'push',
-    fetchImplementation: makeFixtureFetch({ current: makeRun({ event: 'push' }) }),
+    now: Date.parse('2026-09-11T00:01:00Z'),
+    fetchImplementation: makeFixtureFetch({
+      current: makeRun({
+        event: 'push',
+        created_at: '2026-09-11T00:00:05Z',
+      }),
+      repositoryActivities: [makeActivity({ timestamp: '2026-09-10T23:59:55Z' })],
+    }),
   });
-  assertEqual('ordinary event uses current run', ordinaryTimestamp, '2026-09-10T12:00:00Z');
+  assertEqual(
+    'direct push preserves the preceding UTC publication date',
+    ordinaryTimestamp,
+    '2026-09-10T23:59:55Z',
+  );
+
+  let delayedActivityRequests = 0;
+  const delayedWaits = [];
+  const delayedBaseFetch = makeFixtureFetch({
+    current: makeRun({ event: 'push' }),
+  });
+  const delayedPushTimestamp = await resolveFinalizationTimestamp({
+    ...base,
+    eventName: 'push',
+    fetchImplementation: async (request, options) => {
+      const url = new URL(String(request));
+      if (url.pathname === '/api/v3/repos/owner/repository/activity') {
+        delayedActivityRequests += 1;
+        return makeResponse(
+          delayedActivityRequests === 1 ? [] : [makeActivity()],
+        );
+      }
+      return delayedBaseFetch(request, options);
+    },
+    waitImplementation: async (milliseconds) => {
+      delayedWaits.push(milliseconds);
+    },
+  });
+  assertEqual(
+    'direct push retries a briefly absent exact publication',
+    `${delayedPushTimestamp}|${delayedActivityRequests}|${delayedWaits.join(',')}`,
+    '2026-09-10T10:00:00Z|2|250',
+  );
+
+  let mismatchedPriorWaits = 0;
+  await reject(
+    'direct push rejects a mismatched prior revision',
+    () => resolveFinalizationTimestamp({
+      ...base,
+      eventName: 'push',
+      fetchImplementation: makeFixtureFetch({
+        current: makeRun({ event: 'push' }),
+        repositoryActivities: [makeActivity({ before: 'c'.repeat(40) })],
+      }),
+      waitImplementation: async () => {
+        mismatchedPriorWaits += 1;
+      },
+    }),
+    /unexpected prior revision/u,
+  );
+  if (mismatchedPriorWaits !== 0) {
+    throw new Error('The direct-push identity failure entered the retry path.');
+  }
+
+  let absentActivityRequests = 0;
+  const absentWaits = [];
+  const absentBaseFetch = makeFixtureFetch({
+    current: makeRun({ event: 'push' }),
+  });
+  await reject(
+    'direct push fails after bounded publication retries',
+    () => resolveFinalizationTimestamp({
+      ...base,
+      eventName: 'push',
+      fetchImplementation: async (request, options) => {
+        const url = new URL(String(request));
+        if (url.pathname === '/api/v3/repos/owner/repository/activity') {
+          absentActivityRequests += 1;
+          return makeResponse([]);
+        }
+        return absentBaseFetch(request, options);
+      },
+      waitImplementation: async (milliseconds) => {
+        absentWaits.push(milliseconds);
+      },
+    }),
+    /No exact head publication activity/u,
+  );
+  if (absentActivityRequests !== 4 ||
+      absentWaits.join(',') !== '250,1000,2000') {
+    throw new Error('The direct-push publication retry bound changed.');
+  }
 
   const pullRequestPushTimestamp = await resolveFinalizationTimestamp({
     ...base,
@@ -1091,6 +1239,7 @@ async function main() {
     runId: process.env.RUN_ID,
     runAttempt: process.env.RUN_ATTEMPT,
     eventName: process.env.EVENT_NAME,
+    runBaseRevision: process.env.RUN_BASE_REVISION,
     runHeadRevision: process.env.RUN_HEAD_REVISION,
     runHeadRefName: process.env.RUN_HEAD_REF_NAME,
     runHeadRef: process.env.RUN_HEAD_REF,
