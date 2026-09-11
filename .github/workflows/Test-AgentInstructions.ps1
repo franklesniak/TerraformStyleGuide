@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260910.8
+# Version: 1.2.20260911.0
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -965,16 +965,14 @@ function Read-GitRevisionText {
     )
 
     if ($RequireRegularFile) {
-        $arrTreeEntries = @(& git -C $RepositoryRootPath ls-tree `
-                $Revision -- $RepositoryRelativePath 2>&1)
-        if ($LASTEXITCODE -ne 0) {
-            throw "Could not inspect $Revision`:$RepositoryRelativePath in Git."
-        }
-        $strExpectedEntryPattern =
-            '^100644 blob (?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})\t' +
-            [regex]::Escape($RepositoryRelativePath) + '$'
-        if ($arrTreeEntries.Count -ne 1 -or
-            [string]$arrTreeEntries[0] -notmatch $strExpectedEntryPattern) {
+        $objTreeEntry = Get-GitRevisionTreeEntryContext `
+            -RepositoryRootPath $RepositoryRootPath `
+            -Revision $Revision `
+            -RepositoryRelativePath $RepositoryRelativePath
+        if ($null -eq $objTreeEntry -or
+            $objTreeEntry.Mode -cne '100644' -or
+            $objTreeEntry.Type -cne 'blob' -or
+            $objTreeEntry.Path -cne $RepositoryRelativePath) {
             throw "Git revision input is not one regular 100644 blob: $Revision`:$RepositoryRelativePath"
         }
     }
@@ -1115,7 +1113,7 @@ function Invoke-GitNulRecordQuery {
         if ($objGitProcess.ExitCode -ne 0) {
             throw "Could not enumerate $DisplayName with Git."
         }
-        if ($arrOutputBytes.Count -eq 0) {
+        if ($null -eq $arrOutputBytes -or $arrOutputBytes.Count -eq 0) {
             return [string[]] @()
         }
         if ($arrOutputBytes[$arrOutputBytes.Count - 1] -ne 0) {
@@ -1138,6 +1136,90 @@ function Invoke-GitNulRecordQuery {
     }
     finally {
         $objGitProcess.Dispose()
+    }
+}
+
+function Get-GitRevisionTreeEntryContext {
+    # .SYNOPSIS
+    # Gets one exact, unquoted Git tree entry.
+    #
+    # .DESCRIPTION
+    # Uses bounded NUL-delimited Git output so that pathnames retain their exact
+    # UTF-8 text. Returns null when the path is absent. Malformed or duplicate
+    # records fail closed.
+    #
+    # .PARAMETER RepositoryRootPath
+    # The absolute repository root path used by Git.
+    #
+    # .PARAMETER Revision
+    # The commit or tree revision to inspect.
+    #
+    # .PARAMETER RepositoryRelativePath
+    # The exact repository-relative path to inspect.
+    #
+    # .EXAMPLE
+    # Get-GitRevisionTreeEntryContext -RepositoryRootPath $strRoot `
+    #     -Revision 'HEAD' -RepositoryRelativePath 'module/AGENTS.md'
+    #
+    # # Returns the exact mode, type, object ID, and unquoted path.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [pscustomobject] The exact tree entry, or null when the path is absent.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the
+    # public API surface. Parameters, return shape, and positional
+    # contract may change without notice.
+    #
+    # This function does not support positional parameters.
+    # Version: 1.0.20260911.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $RepositoryRootPath,
+
+        [Parameter(Mandatory)]
+        [string] $Revision,
+
+        [Parameter(Mandatory)]
+        [string] $RepositoryRelativePath
+    )
+
+    $arrTreeRecords = @(
+        Invoke-GitNulRecordQuery `
+            -RepositoryRootPath $RepositoryRootPath `
+            -Argument @(
+                'ls-tree', '--full-tree', '-z',
+                $Revision, '--', $RepositoryRelativePath
+            ) `
+            -DisplayName "$Revision`:$RepositoryRelativePath tree entry"
+    )
+    if ($arrTreeRecords.Count -eq 0) {
+        return
+    }
+    if ($arrTreeRecords.Count -ne 1) {
+        throw "Git returned multiple tree entries for $Revision`:$RepositoryRelativePath."
+    }
+
+    $objTreeEntryMatch = [regex]::Match(
+        [string] $arrTreeRecords[0],
+        '\A(?<Mode>[0-9]{6}) (?<Type>[a-z]+) ' +
+            '(?<ObjectId>(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64}))\t' +
+            '(?<Path>(?s:.*))\z'
+    )
+    if (-not $objTreeEntryMatch.Success) {
+        throw "Git returned a malformed tree entry for $Revision`:$RepositoryRelativePath."
+    }
+
+    return [pscustomobject]@{
+        Mode = $objTreeEntryMatch.Groups['Mode'].Value
+        Type = $objTreeEntryMatch.Groups['Type'].Value
+        ObjectId = $objTreeEntryMatch.Groups['ObjectId'].Value
+        Path = $objTreeEntryMatch.Groups['Path'].Value
     }
 }
 
@@ -3799,6 +3881,139 @@ function Get-GovernedDecisionDocumentPath {
     )
 }
 
+function Get-DecisionRecordContractFailure {
+    # .SYNOPSIS
+    # Finds structural contract failures in one decision record.
+    #
+    # .DESCRIPTION
+    # Requires the canonical numbered leaf name, one real Date metadata item,
+    # and one operative level-two heading for each required decision section.
+    # Numeric heading prefixes are permitted.
+    #
+    # .PARAMETER Name
+    # The repository-relative decision-record path.
+    #
+    # .PARAMETER Content
+    # The validated decision-record Markdown text.
+    #
+    # .PARAMETER MetadataContext
+    # The validated document metadata context.
+    #
+    # .EXAMPLE
+    # Get-DecisionRecordContractFailure -Name 'docs/decisions/0001-example.md' `
+    #     -Content $strContent -MetadataContext $objMetadata
+    #
+    # # Returns one failure for each missing or malformed contract element.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [string] One record for each decision-record contract failure.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the
+    # public API surface. Parameters, return shape, and positional
+    # contract may change without notice.
+    #
+    # This function does not support positional parameters.
+    # Version: 1.0.20260911.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Name,
+
+        [Parameter(Mandatory)]
+        [string] $Content,
+
+        [Parameter(Mandatory)]
+        [pscustomobject] $MetadataContext
+    )
+
+    $strLeafName = ($Name -split '/')[-1]
+    if ($strLeafName -cnotmatch '^[0-9]{4}-[a-z0-9]+(?:-[a-z0-9]+)*\.md$') {
+        Write-Output "$Name must use the decision-record leaf name NNNN-short-title.md."
+    }
+    if (-not ($script:arrAllowedDecisionRecordStatuses -ccontains
+            $MetadataContext.Status)) {
+        Write-Output (
+            "$Name Status must be one of " +
+            ($script:arrAllowedDecisionRecordStatuses -join ', ') +
+            ' for a governed decision record.'
+        )
+    }
+
+    $objMarkdownContext = Get-OperativeMarkdownContext -Content $Content
+    foreach ($strRequiredHeading in @(
+            'Context',
+            'Decision',
+            'Consequences',
+            'Alternatives Considered'
+        )) {
+        $arrMatchingHeadings = @(
+            $objMarkdownContext.LevelTwoHeadings |
+                Where-Object {
+                    [regex]::Replace(
+                        [string]$_.Text,
+                        '^\d+\.\s+',
+                        ''
+                    ) -ceq $strRequiredHeading
+                }
+        )
+        if ($arrMatchingHeadings.Count -ne 1) {
+            Write-Output (
+                "$Name must contain one operative level-two " +
+                "$strRequiredHeading heading."
+            )
+        }
+    }
+
+    $arrContentLines = [regex]::Split($Content, '\r\n|\r|\n')
+    $objParseContext = Get-MarkdownParseContext `
+        -Content $Content `
+        -LineCount $arrContentLines.Count
+    $arrDateRecords = @(
+        $objParseContext.TopLevelListItems |
+            Where-Object {
+                $_.Text -is [string] -and
+                $_.Text.StartsWith(
+                    'Date:',
+                    [System.StringComparison]::Ordinal
+                ) -and
+                $_.Start -gt $MetadataContext.MetadataContentStart -and
+                $_.Start -lt $MetadataContext.MetadataContentEnd
+            }
+    )
+    $strDateFailure = "$Name must contain one exact Date: YYYY-MM-DD list item in Metadata."
+    $boolDateHasContinuation = $false
+    if ($arrDateRecords.Count -eq 1) {
+        for ($intLine = $arrDateRecords[0].Start + 1;
+            $intLine -lt $arrDateRecords[0].End;
+            $intLine++) {
+            if (-not [string]::IsNullOrWhiteSpace(
+                    $arrContentLines[$intLine]
+                )) {
+                $boolDateHasContinuation = $true
+                break
+            }
+        }
+    }
+    if ($arrDateRecords.Count -ne 1 -or $boolDateHasContinuation) {
+        Write-Output $strDateFailure
+        return
+    }
+    $objDateMatch = [regex]::Match(
+        $arrContentLines[$arrDateRecords[0].Start],
+        '^- \*\*Date:\*\* (?<Date>\d{4}-\d{2}-\d{2})$'
+    )
+    if (-not $objDateMatch.Success -or
+        -not (Test-MetadataCalendarDate `
+            -Date $objDateMatch.Groups['Date'].Value)) {
+        Write-Output $strDateFailure
+    }
+}
+
 function Get-DocumentMetadataClassificationContext {
     # .SYNOPSIS
     # Parses the inert Markdown classification manifest.
@@ -4520,6 +4735,8 @@ function Get-DocumentMetadataContext {
             -1
         }
         UpdatedLineIndex = $hashtableFieldLineIndices['Last Updated']
+        MetadataContentStart = $intMetadataContentStart
+        MetadataContentEnd = $intMetadataContentEnd
     }
 }
 
@@ -4666,15 +4883,17 @@ function Get-DocumentMetadataTransitionFailure {
         Write-Output "$Name $($objCurrentMetadata.Failure)"
         return
     }
-    if (@(Get-GovernedDecisionDocumentPath -CandidatePath @($Name)).Count -eq 1 -and
-        -not ($script:arrAllowedDecisionRecordStatuses -ccontains
-            $objCurrentMetadata.Status)) {
-        Write-Output (
-            "$Name Status must be one of " +
-            ($script:arrAllowedDecisionRecordStatuses -join ', ') +
-            ' for a governed decision record.'
+    if (@(Get-GovernedDecisionDocumentPath -CandidatePath @($Name)).Count -eq 1) {
+        $arrDecisionRecordFailures = @(
+            Get-DecisionRecordContractFailure `
+                -Name $Name `
+                -Content $CurrentContent `
+                -MetadataContext $objCurrentMetadata
         )
-        return
+        if ($arrDecisionRecordFailures.Count -gt 0) {
+            Write-Output $arrDecisionRecordFailures
+            return
+        }
     }
 
     $strCurrentUpdatedDate = $objCurrentMetadata.UpdatedDate
@@ -5771,28 +5990,19 @@ function Get-GovernedDocumentRangeTransitionFailure {
             }
         }
 
-        $arrRangePathEntries = @(
-            & git -C $RepositoryRootPath ls-tree --full-tree `
-                $strRangeCommit -- $RepositoryRelativePath 2>&1
-        )
-        if ($LASTEXITCODE -ne 0) {
-            throw "Could not inspect $strRangeCommit`:$RepositoryRelativePath in Git."
-        }
-        if ($arrRangePathEntries.Count -eq 0) {
+        $objRangePathEntry = Get-GitRevisionTreeEntryContext `
+            -RepositoryRootPath $RepositoryRootPath `
+            -Revision $strRangeCommit `
+            -RepositoryRelativePath $RepositoryRelativePath
+        if ($null -eq $objRangePathEntry) {
             $boolDirectParentContainsPath = $false
             if ($intParentCount -gt 0) {
                 foreach ($strParentRevision in $arrCommitAndParents[1..$intParentCount]) {
-                    $arrParentPathEntries = @(
-                        & git -C $RepositoryRootPath ls-tree --full-tree `
-                            $strParentRevision -- $RepositoryRelativePath 2>&1
-                    )
-                    if ($LASTEXITCODE -ne 0) {
-                        throw (
-                            "Could not inspect $strParentRevision`:$RepositoryRelativePath " +
-                            'in Git.'
-                        )
-                    }
-                    if ($arrParentPathEntries.Count -gt 0) {
+                    $objParentPathEntry = Get-GitRevisionTreeEntryContext `
+                        -RepositoryRootPath $RepositoryRootPath `
+                        -Revision $strParentRevision `
+                        -RepositoryRelativePath $RepositoryRelativePath
+                    if ($null -ne $objParentPathEntry) {
                         $boolDirectParentContainsPath = $true
                         break
                     }
@@ -5806,25 +6016,15 @@ function Get-GovernedDocumentRangeTransitionFailure {
             }
         }
         else {
-            $strExpectedRangeEntryPattern =
-                '^100644 blob (?<ObjectId>(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64}))\t' +
-                [regex]::Escape($RepositoryRelativePath) + '$'
-            $objRangePathEntryMatch = if ($arrRangePathEntries.Count -eq 1) {
-                [regex]::Match(
-                    [string] $arrRangePathEntries[0],
-                    $strExpectedRangeEntryPattern
-                )
-            }
-            else {
-                [System.Text.RegularExpressions.Match]::Empty
-            }
-            if (-not $objRangePathEntryMatch.Success) {
+            if ($objRangePathEntry.Mode -cne '100644' -or
+                $objRangePathEntry.Type -cne 'blob' -or
+                $objRangePathEntry.Path -cne $RepositoryRelativePath) {
                 throw (
                     "Metadata range commit $strRangeCommit does not contain exactly one " +
                     "regular 100644 blob at $RepositoryRelativePath."
                 )
             }
-            $strRangeBlobId = $objRangePathEntryMatch.Groups['ObjectId'].Value
+            $strRangeBlobId = $objRangePathEntry.ObjectId
             if ($setValidatedRangeBlobIds.Add($strRangeBlobId)) {
                 [void](Read-GitRevisionText `
                         -RepositoryRootPath $RepositoryRootPath `
@@ -9415,6 +9615,13 @@ if ($SelfTest) {
         $objRepresentativeDecision.Content,
         '(?m)^- \*\*Status:\*\* [^\r\n]+$'
     ).Value
+    $strRepresentativeDecisionDateLine = [regex]::Match(
+        $objRepresentativeDecision.Content,
+        '(?m)^- \*\*Date:\*\* [^\r\n]+$'
+    ).Value
+    if ([string]::IsNullOrEmpty($strRepresentativeDecisionDateLine)) {
+        throw 'The representative decision record has no Date fixture.'
+    }
     foreach ($strAllowedDecisionStatus in $script:arrAllowedDecisionRecordStatuses) {
         $strAllowedDecisionContent = $objRepresentativeDecision.Content.Replace(
             $strRepresentativeDecisionStatusLine,
@@ -9468,6 +9675,165 @@ if ($SelfTest) {
     if ($arrNestedDecisionDraftFailures -cnotcontains
         $strExpectedNestedDecisionStatusFailure) {
         throw 'A nested governed decision record accepted a non-decision status.'
+    }
+
+    $arrValidDecisionContractFailures = @(
+        Get-DecisionRecordContractFailure `
+            -Name $strRepresentativeDecisionPath `
+            -Content $objRepresentativeDecision.Content `
+            -MetadataContext $objRepresentativeDecisionMetadata
+    )
+    if ($arrValidDecisionContractFailures.Count -ne 0) {
+        throw 'A valid decision-record contract was rejected.'
+    }
+    $strBareDecisionMetadataContent = [regex]::Replace(
+        $objRepresentativeDecision.Content,
+        '(?m)^## Metadata\r?\n',
+        '',
+        1
+    )
+    $objBareDecisionMetadataContext = Get-DocumentMetadataContext `
+        -Content $strBareDecisionMetadataContent
+    if ($null -ne $objBareDecisionMetadataContext.Failure -or
+        @(Get-DecisionRecordContractFailure `
+                -Name $strRepresentativeDecisionPath `
+                -Content $strBareDecisionMetadataContent `
+                -MetadataContext $objBareDecisionMetadataContext).Count -ne 0) {
+        throw 'A valid bare-list decision metadata header was rejected.'
+    }
+    $arrInvalidDecisionContractFixtures = @(
+        [pscustomobject]@{
+            Name = 'invalid leaf name'
+            Path = 'docs/decisions/example.md'
+            Content = $objRepresentativeDecision.Content
+            Expected = 'must use the decision-record leaf name NNNN-short-title.md.'
+        },
+        [pscustomobject]@{
+            Name = 'missing Date'
+            Path = $strRepresentativeDecisionPath
+            Content = $objRepresentativeDecision.Content.Replace(
+                $strRepresentativeDecisionDateLine,
+                ''
+            )
+            Expected = 'must contain one exact Date: YYYY-MM-DD list item in Metadata.'
+        },
+        [pscustomobject]@{
+            Name = 'impossible Date'
+            Path = $strRepresentativeDecisionPath
+            Content = $objRepresentativeDecision.Content.Replace(
+                $strRepresentativeDecisionDateLine,
+                '- **Date:** 2026-02-30'
+            )
+            Expected = 'must contain one exact Date: YYYY-MM-DD list item in Metadata.'
+        },
+        [pscustomobject]@{
+            Name = 'fenced Date'
+            Path = $strRepresentativeDecisionPath
+            Content = $objRepresentativeDecision.Content.Replace(
+                $strRepresentativeDecisionDateLine,
+                (@(
+                        '```markdown'
+                        $strRepresentativeDecisionDateLine
+                        '```'
+                    ) -join [Environment]::NewLine)
+            )
+            Expected = 'must contain one exact Date: YYYY-MM-DD list item in Metadata.'
+        },
+        [pscustomobject]@{
+            Name = 'Date outside Metadata'
+            Path = $strRepresentativeDecisionPath
+            Content = $objRepresentativeDecision.Content.Replace(
+                $strRepresentativeDecisionDateLine,
+                ''
+            ) + [Environment]::NewLine + $strRepresentativeDecisionDateLine
+            Expected = 'must contain one exact Date: YYYY-MM-DD list item in Metadata.'
+        },
+        [pscustomobject]@{
+            Name = 'missing Context heading'
+            Path = $strRepresentativeDecisionPath
+            Content = [regex]::Replace(
+                $objRepresentativeDecision.Content,
+                '(?m)^## (?:(?:\d+)\. )?Context$',
+                '### Context',
+                1
+            )
+            Expected = 'must contain one operative level-two Context heading.'
+        },
+        [pscustomobject]@{
+            Name = 'duplicate Decision heading'
+            Path = $strRepresentativeDecisionPath
+            Content = $objRepresentativeDecision.Content +
+                [Environment]::NewLine + '## Decision' +
+                [Environment]::NewLine + [Environment]::NewLine +
+                'Duplicate decision fixture.'
+            Expected = 'must contain one operative level-two Decision heading.'
+        },
+        [pscustomobject]@{
+            Name = 'comment-hidden Consequences heading'
+            Path = $strRepresentativeDecisionPath
+            Content = [regex]::Replace(
+                $objRepresentativeDecision.Content,
+                '(?m)^## (?:(?:\d+)\. )?Consequences$',
+                '<!-- ## Consequences -->',
+                1
+            )
+            Expected = 'must contain one operative level-two Consequences heading.'
+        },
+        [pscustomobject]@{
+            Name = 'raw-HTML-hidden Decision heading'
+            Path = $strRepresentativeDecisionPath
+            Content = [regex]::Replace(
+                $objRepresentativeDecision.Content,
+                '(?m)^## (?:(?:\d+)\. )?Decision$',
+                (@(
+                        '<div>'
+                        '## Decision'
+                        '</div>'
+                    ) -join [Environment]::NewLine),
+                1
+            )
+            Expected = 'must contain one operative level-two Decision heading.'
+        },
+        [pscustomobject]@{
+            Name = 'fenced Alternatives heading'
+            Path = $strRepresentativeDecisionPath
+            Content = [regex]::Replace(
+                $objRepresentativeDecision.Content,
+                '(?m)^## (?:(?:\d+)\. )?Alternatives Considered$',
+                (@(
+                        '```markdown'
+                        '## Alternatives Considered'
+                        '```'
+                    ) -join [Environment]::NewLine),
+                1
+            )
+            Expected = 'must contain one operative level-two Alternatives Considered heading.'
+        }
+    )
+    foreach ($objInvalidDecisionContractFixture in
+        $arrInvalidDecisionContractFixtures) {
+        if ($objInvalidDecisionContractFixture.Content -ceq
+            $objRepresentativeDecision.Content -and
+            $objInvalidDecisionContractFixture.Path -ceq
+            $strRepresentativeDecisionPath) {
+            throw (
+                'A decision-record contract mutation fixture was unavailable: ' +
+                $objInvalidDecisionContractFixture.Name
+            )
+        }
+        $arrInvalidDecisionContractFailures = @(
+            Get-DecisionRecordContractFailure `
+                -Name $objInvalidDecisionContractFixture.Path `
+                -Content $objInvalidDecisionContractFixture.Content `
+                -MetadataContext $objRepresentativeDecisionMetadata
+        )
+        if (-not ($arrInvalidDecisionContractFailures -match
+                [regex]::Escape($objInvalidDecisionContractFixture.Expected))) {
+            throw (
+                'The decision-record contract mutation did not fail closed: ' +
+                $objInvalidDecisionContractFixture.Name
+            )
+        }
     }
 
     $arrAcceptedClaudeLocalInventoryFailures = @(
@@ -10892,6 +11258,7 @@ if ($SelfTest) {
         throw 'Regular revision input validation changed the accepted blob content.'
     }
     $boolMissingRevisionInputRejected = $false
+    $strMissingRevisionInputFailure = ''
     try {
         [void](Read-GitRevisionText `
                 -RepositoryRootPath $strRepositoryRootPath `
@@ -10901,13 +11268,17 @@ if ($SelfTest) {
                 -RequireRegularFile)
     }
     catch {
+        $strMissingRevisionInputFailure = $_.Exception.Message
         $boolMissingRevisionInputRejected = $_.Exception.Message.Contains(
             'not one regular 100644 blob',
             [System.StringComparison]::Ordinal
         )
     }
     if (-not $boolMissingRevisionInputRejected) {
-        throw 'A missing revision input did not fail the regular-blob check.'
+        throw (
+            'A missing revision input did not fail the regular-blob check. ' +
+            "Actual failure: $strMissingRevisionInputFailure"
+        )
     }
     $objRevisionParentFixture = Get-GovernedDocumentParentContext `
         -RepositoryRootPath $strRepositoryRootPath `
@@ -11322,6 +11693,35 @@ if ($SelfTest) {
         )
         if ($arrUnicodeTreePaths -cnotcontains $strUnicodeInstructionRepositoryPath) {
             throw 'NUL-delimited tree enumeration omitted a non-ASCII governed path.'
+        }
+        $strUnicodeRevisionContent = Read-GitRevisionText `
+            -RepositoryRootPath $strMergeFixtureRoot `
+            -Revision $strUnicodeCommit `
+            -RepositoryRelativePath $strUnicodeInstructionRepositoryPath `
+            -MaximumBytes $intAgentsMaximumInputBytes `
+            -RequireRegularFile
+        if ($strUnicodeRevisionContent -cne $strMergeBaseContent) {
+            throw 'The shared revision reader changed non-ASCII path content.'
+        }
+        $arrUnicodeMetadataRangeFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                -Name $strUnicodeInstructionRepositoryPath `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -RepositoryRelativePath $strUnicodeInstructionRepositoryPath `
+                -MaximumBytes $intAgentsMaximumInputBytes `
+                -BaseRevision $strMergeBaseCommit `
+                -HeadRevision $strUnicodeCommit `
+                -InputRevision $strUnicodeCommit `
+                -IsNewRefRange $false `
+                -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
+                -PolicyMaximumBytes 1024 `
+                -PolicyMarker $strMetadataRangePolicyMarker
+        )
+        if ($arrUnicodeMetadataRangeFailures.Count -ne 0) {
+            throw (
+                'A valid non-ASCII governed-path range failed: ' +
+                ($arrUnicodeMetadataRangeFailures -join '; ')
+            )
         }
         $arrUnicodeRangePaths = @(
             Invoke-GitNulRecordQuery `
