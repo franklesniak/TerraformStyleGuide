@@ -52,19 +52,19 @@ function validateRepositoryActivity(activity, expected, currentCreatedTime) {
   if (!Number.isSafeInteger(activity?.id) || activity.id <= 0 ||
       !knownActivityTypes.includes(activity?.activity_type) ||
       activity?.ref !== expected.ref) {
-    throw new Error('A fork-head repository activity has an unexpected identity.');
+    throw new Error('A head repository activity has an unexpected identity.');
   }
   const createdTime = parseTimestamp(
     activity.timestamp,
     currentCreatedTime,
-    'A fork-head repository-activity timestamp',
+    'A head repository-activity timestamp',
   );
   if (!['push', 'force_push', 'branch_creation'].includes(activity.activity_type)) {
     return null;
   }
   if (!objectIdPattern.test(activity?.before ?? '') ||
       !objectIdPattern.test(activity?.after ?? '')) {
-    throw new Error('A fork-head publication activity has a malformed revision.');
+    throw new Error('A head publication activity has a malformed revision.');
   }
   if (activity.after !== expected.revision) {
     return null;
@@ -72,11 +72,12 @@ function validateRepositoryActivity(activity, expected, currentCreatedTime) {
   return { createdAt: activity.timestamp, createdTime };
 }
 
-async function readForkHeadPublication({
+async function readHeadPublication({
   root,
   headRepository,
   headRefName,
   headRevision,
+  token,
   fetchImplementation,
   currentCreatedTime,
 }) {
@@ -86,12 +87,12 @@ async function readForkHeadPublication({
   url.searchParams.set('ref', `refs/heads/${headRefName}`);
   const response = await readJson(
     url,
-    null,
+    token,
     fetchImplementation,
-    'Fork-head repository-activity lookup',
+    'Head repository-activity lookup',
   );
   if (!Array.isArray(response.value)) {
-    throw new Error('The fork-head repository-activity response is malformed.');
+    throw new Error('The head repository-activity response is malformed.');
   }
 
   const seenIds = new Set();
@@ -102,7 +103,7 @@ async function readForkHeadPublication({
   };
   for (const activity of response.value) {
     if (seenIds.has(activity?.id)) {
-      throw new Error('The fork-head repository-activity response contains a duplicate.');
+      throw new Error('The head repository-activity response contains a duplicate.');
     }
     seenIds.add(activity?.id);
     const candidate = validateRepositoryActivity(
@@ -117,7 +118,7 @@ async function readForkHeadPublication({
   candidates.sort((left, right) => right.createdTime - left.createdTime);
   if (candidates.length === 0) {
     throw new Error(
-      'No exact fork-head publication activity matches this revision and ref.',
+      'No exact head publication activity matches this revision and ref.',
     );
   }
   return candidates[0].createdAt;
@@ -283,11 +284,12 @@ export async function resolveFinalizationTimestamp({
   }
 
   if (eventName === 'pull_request_target' && runHeadRepository !== repository) {
-    return readForkHeadPublication({
+    return readHeadPublication({
       root,
       headRepository: runHeadRepository,
       headRefName: runHeadRefName,
       headRevision: runHeadRevision,
+      token: null,
       fetchImplementation,
       currentCreatedTime,
     });
@@ -315,9 +317,15 @@ export async function resolveFinalizationTimestamp({
     return pushCandidates[0].createdAt;
   }
   if (eventName === 'workflow_dispatch') {
-    throw new Error(
-      'No successful non-manual workflow run matches this workflow, revision, and ref.',
-    );
+    return readHeadPublication({
+      root,
+      headRepository: repository,
+      headRefName: runHeadRefName,
+      headRevision: runHeadRevision,
+      token,
+      fetchImplementation,
+      currentCreatedTime,
+    });
   }
 
   const pullRequestCandidates = await readHistoricalRuns({
@@ -396,6 +404,7 @@ function makeFixtureFetch({
   pages = [],
   pullRequestPages = [],
   forkActivities = [],
+  repositoryActivities = [],
 }) {
   return async (request, options) => {
     const url = new URL(String(request));
@@ -407,6 +416,15 @@ function makeFixtureFetch({
         throw new Error('The fork-head activity query is not exact or anonymous.');
       }
       return makeResponse(forkActivities);
+    }
+    if (url.pathname === '/api/v3/repos/owner/repository/activity') {
+      if (options?.headers?.Authorization !== 'Bearer fixture-token' ||
+          url.searchParams.get('direction') !== 'desc' ||
+          url.searchParams.get('per_page') !== String(recordsPerPage) ||
+          url.searchParams.get('ref') !== 'refs/heads/topic/branch') {
+        throw new Error('The repository activity query is not exact or authenticated.');
+      }
+      return makeResponse(repositoryActivities);
     }
     if (!url.pathname.startsWith('/api/v3/repos/owner/repository/')) {
       throw new Error('The API base path was not preserved.');
@@ -595,7 +613,7 @@ export async function runSelfTest() {
         forkActivities: [makeActivity({ after: 'c'.repeat(40) })],
       }),
     }),
-    /No exact fork-head publication activity/u,
+    /No exact head publication activity/u,
   );
   await reject(
     'malformed fork publication revision',
@@ -666,13 +684,25 @@ export async function runSelfTest() {
     '2026-09-09T23:59:59Z',
   );
 
+  const manualActivityTimestamp = await resolveFinalizationTimestamp({
+    ...base,
+    fetchImplementation: makeFixtureFetch({
+      repositoryActivities: [makeActivity({ timestamp: '2026-09-10T09:59:59Z' })],
+    }),
+  });
+  assertEqual(
+    'manual event falls back to exact authenticated repository activity',
+    manualActivityTimestamp,
+    '2026-09-10T09:59:59Z',
+  );
+
   await reject(
-    'missing historical run',
+    'missing manual publication evidence',
     () => resolveFinalizationTimestamp({
       ...base,
       fetchImplementation: makeFixtureFetch({ pages: [] }),
     }),
-    /No successful non-manual workflow run/u,
+    /No exact head publication activity/u,
   );
   await reject(
     'different repository',

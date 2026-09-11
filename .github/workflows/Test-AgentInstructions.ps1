@@ -5720,7 +5720,7 @@ function Get-GovernedDocumentRangeTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.9.20260909.0
+    # Version: 1.10.20260911.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -5974,6 +5974,27 @@ function Get-GovernedDocumentRangeTransitionFailure {
             -BaseHasPolicyMarker $true
     }
 
+    $strPublishedComparisonRevision = ''
+    if (-not [string]::IsNullOrEmpty($strEffectiveBaseRevision)) {
+        $arrPublishedMergeBaseRevisions = @(
+            & git -C $RepositoryRootPath merge-base --all `
+                $strEffectiveBaseRevision $HeadRevision 2>$null
+        )
+        if ($LASTEXITCODE -ne 0 -or $arrPublishedMergeBaseRevisions.Count -ne 1) {
+            throw 'The published metadata range must have exactly one merge base.'
+        }
+        $strPublishedComparisonRevision =
+            ([string]$arrPublishedMergeBaseRevisions[0]).Trim()
+        if ($strPublishedComparisonRevision -notmatch $strObjectIdPattern) {
+            throw 'The published metadata range merge base is invalid.'
+        }
+        & git -C $RepositoryRootPath cat-file -e `
+            "$strPublishedComparisonRevision`^{commit}" 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            throw 'The published metadata range merge base is unavailable.'
+        }
+    }
+
     if ([string]::IsNullOrEmpty($strEffectiveBaseRevision)) {
         $arrRangeCommits = @(
             & git -C $RepositoryRootPath rev-list --reverse --topo-order `
@@ -6183,13 +6204,13 @@ function Get-GovernedDocumentRangeTransitionFailure {
 
     if (-not [string]::IsNullOrEmpty($strEffectiveBaseRevision)) {
         & git -C $RepositoryRootPath diff --quiet --no-ext-diff --no-textconv `
-            $strEffectiveBaseRevision $HeadRevision -- $RepositoryRelativePath
+            $strPublishedComparisonRevision $HeadRevision -- $RepositoryRelativePath
         $intPublishedDiffExitCode = $LASTEXITCODE
         if ($intPublishedDiffExitCode -eq 0) {
             return [string[]] @()
         }
         if ($intPublishedDiffExitCode -ne 1) {
-            throw "Could not compare the published metadata endpoints for $RepositoryRelativePath."
+            throw "Could not compare the proposed metadata change for $RepositoryRelativePath."
         }
     }
 
@@ -11737,6 +11758,57 @@ if ($SelfTest) {
         }
 
         & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
+        $strBaseOnlyGovernedVersion = '**Version:** ' +
+            $objAgentsVersionMatch.Groups['Prefix'].Value +
+            $strMergeCurrentDate.Replace('-', '') + '.0'
+        $strBaseOnlyGovernedContent = $strMergeBaseContent.Replace(
+            $strMergeBaseVersion,
+            $strBaseOnlyGovernedVersion
+        ).Replace(
+            "- **Last Updated:** $strMergeHistoricalDate",
+            "- **Last Updated:** $strMergeCurrentDate"
+        )
+        [System.IO.File]::WriteAllText(
+            [System.IO.Path]::Combine($strMergeFixtureRoot, 'AGENTS.md'),
+            $strBaseOnlyGovernedContent,
+            $objUtf8WithoutBom
+        )
+        & git -C $strMergeFixtureRoot add -- 'AGENTS.md'
+        $strBaseOnlyGovernedTree =
+            ([string] (& git -C $strMergeFixtureRoot write-tree)).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not create the base-only governed-document tree.'
+        }
+        $strBaseOnlyGovernedCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strBaseOnlyGovernedTree `
+            -Parents @($strMergeBaseCommit) `
+            -Timestamp ($strMergeCurrentDate + 'T08:02:30Z') `
+            -Message 'base-only governed-document update'
+        $arrBaseOnlyGovernedFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                -Name 'AGENTS.md' `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -RepositoryRelativePath 'AGENTS.md' `
+                -MaximumBytes $intAgentsMaximumInputBytes `
+                -BaseRevision $strBaseOnlyGovernedCommit `
+                -HeadRevision $strTrustRangeTopicCommit `
+                -InputRevision $strTrustRangeTopicCommit `
+                -IsNewRefRange $false `
+                -PolicyRepositoryRelativePath `
+                    '.github/workflows/Test-AgentInstructions.ps1' `
+                -PolicyMaximumBytes 1024 `
+                -PolicyMarker $strMetadataRangePolicyMarker `
+                -TrustedFinalizationTimestamp `
+                    ($strMergeHistoricalDate + 'T08:01:00Z')
+        )
+        if ($arrBaseOnlyGovernedFailures.Count -ne 0) {
+            throw (
+                'A base-only governed-document update was attributed to the topic branch: ' +
+                ($arrBaseOnlyGovernedFailures -join '; ')
+            )
+        }
+
+        & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
         [System.IO.File]::WriteAllText(
             $strMergePolicyPath,
             'topic trust-root update',
@@ -13301,11 +13373,11 @@ if ($SelfTest) {
         '      run?.workflow_id !== expected.workflowId ||',
         '       (run?.status !== ''completed'' || run?.conclusion !== ''success'')) ||',
         '  const pushCandidates = await readHistoricalRuns({',
-        '    return readForkHeadPublication({',
+        'async function readHeadPublication({',
         '  url.searchParams.set(''ref'', `refs/heads/${headRefName}`);',
-        '    null,',
+        '      token: null,',
         "  if (!['push', 'force_push', 'branch_creation'].includes(activity.activity_type)) {",
-        "      'No exact fork-head publication activity matches this revision and ref.',",
+        "      'No exact head publication activity matches this revision and ref.',",
         '  const pullRequestCandidates = await readHistoricalRuns({',
         '  candidates.sort((left, right) => left.createdTime - right.createdTime);',
         '    return pushCandidates[0].createdAt;',
@@ -13346,7 +13418,7 @@ if ($SelfTest) {
     if ($intFinalizationResolverSelfTestExit -ne 0 -or
         $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
         [string]$arrFinalizationResolverSelfTestOutput[0] -cne
-        'Finalization resolver self-tests passed: 29 fixtures.') {
+        'Finalization resolver self-tests passed: 30 fixtures.') {
         throw (
             'The finalization-time resolver self-test failed: ' +
             ($arrFinalizationResolverSelfTestOutput -join '; ')
