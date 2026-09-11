@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260911.7
+# Version: 1.2.20260911.8
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -8191,6 +8191,190 @@ Write-Output 'Agent-instruction contract passed.'
 if ($SelfTest) {
     #region Mutation self-tests
 
+    $strLockedPythonHookPath = Join-Path `
+        -Path $strRepositoryRootPath `
+        -ChildPath '.github/workflows/Invoke-LockedPythonHook.ps1'
+    $scriptblockInvokeLockedPythonHookFixture = {
+        param([string] $PathValue)
+
+        $objStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
+        $objStartInfo.FileName = [Environment]::ProcessPath
+        $objStartInfo.WorkingDirectory = $strRepositoryRootPath
+        $objStartInfo.UseShellExecute = $false
+        $objStartInfo.CreateNoWindow = $true
+        $objStartInfo.RedirectStandardOutput = $true
+        $objStartInfo.RedirectStandardError = $true
+        $objStartInfo.StandardOutputEncoding =
+            [System.Text.UTF8Encoding]::new($false)
+        $objStartInfo.StandardErrorEncoding =
+            [System.Text.UTF8Encoding]::new($false)
+        $objStartInfo.Environment['PATH'] = $PathValue
+        foreach ($strArgument in @(
+                '-NoLogo',
+                '-NoProfile',
+                '-NonInteractive',
+                '-File',
+                $strLockedPythonHookPath,
+                '-Module',
+                'pre_commit_hooks.check_json',
+                'package.json'
+            )) {
+            $objStartInfo.ArgumentList.Add($strArgument)
+        }
+
+        $objProcess = [System.Diagnostics.Process]::new()
+        $objProcess.StartInfo = $objStartInfo
+        try {
+            if (-not $objProcess.Start()) {
+                throw 'Could not start a locked Python hook fixture.'
+            }
+            $objStandardOutputTask = $objProcess.StandardOutput.ReadToEndAsync()
+            $objStandardErrorTask = $objProcess.StandardError.ReadToEndAsync()
+            $objProcess.WaitForExit()
+            return [pscustomobject]@{
+                ExitCode = $objProcess.ExitCode
+                StandardOutput = $objStandardOutputTask.GetAwaiter().GetResult()
+                StandardError = $objStandardErrorTask.GetAwaiter().GetResult()
+            }
+        }
+        finally {
+            $objProcess.Dispose()
+        }
+    }
+
+    $objMissingRuntimeResult = & $scriptblockInvokeLockedPythonHookFixture `
+        -PathValue ''
+    $strExpectedLockedPythonHookError =
+        'Python 3.12 is required to run the locked pre-commit hook.'
+    if ($objMissingRuntimeResult.ExitCode -ne 2 -or
+        -not [string]::IsNullOrEmpty($objMissingRuntimeResult.StandardOutput) -or
+        $objMissingRuntimeResult.StandardError.TrimEnd([char[]] "`r`n") -cne
+            $strExpectedLockedPythonHookError) {
+        throw (
+            'The locked Python hook missing-runtime fixture must exit 2, ' +
+            'write no stdout, and write only its required stderr diagnostic.'
+        )
+    }
+
+    $objPythonSelectionFixtureDirectory =
+        [System.IO.Directory]::CreateTempSubdirectory(
+            'terraform-style-guide-python-selection-'
+        )
+    try {
+        if ($IsWindows) {
+            [System.IO.File]::WriteAllText(
+                (Join-Path $objPythonSelectionFixtureDirectory.FullName 'py.cmd'),
+                (@(
+                        '@echo off'
+                        'if "%~1"=="-3.12" if "%~2"=="-I" if "%~3"=="-c" ('
+                        '  if "%~5"=="" ('
+                        '    echo 3.12'
+                        '    exit /b 0'
+                        '  )'
+                        '  exit /b 1'
+                        ')'
+                        'exit /b 97'
+                    ) -join "`r`n") + "`r`n",
+                [System.Text.UTF8Encoding]::new($false)
+            )
+            [System.IO.File]::WriteAllText(
+                (Join-Path `
+                        $objPythonSelectionFixtureDirectory.FullName `
+                        'python3.12.cmd'),
+                (@(
+                        '@echo off'
+                        'if "%~1"=="-I" if "%~2"=="-c" ('
+                        '  if "%~4"=="" echo 3.12'
+                        '  exit /b 0'
+                        ')'
+                        'if "%~1"=="-I" if "%~2"=="-m" ('
+                        '  echo selected-equivalent'
+                        '  exit /b 0'
+                        ')'
+                        'exit /b 98'
+                    ) -join "`r`n") + "`r`n",
+                [System.Text.UTF8Encoding]::new($false)
+            )
+        }
+        else {
+            $strMissingModuleApplicationPath = Join-Path `
+                $objPythonSelectionFixtureDirectory.FullName `
+                'python3.12'
+            $strValidEquivalentApplicationPath = Join-Path `
+                $objPythonSelectionFixtureDirectory.FullName `
+                'python3'
+            [System.IO.File]::WriteAllText(
+                $strMissingModuleApplicationPath,
+                (@(
+                        '#!/bin/sh'
+                        'if [ "$1" = "-I" ] && [ "$2" = "-c" ] && [ "$#" -eq 3 ]; then'
+                        '  printf "3.12\n"'
+                        '  exit 0'
+                        'fi'
+                        'if [ "$1" = "-I" ] && [ "$2" = "-c" ] && [ "$#" -eq 4 ]; then'
+                        '  exit 1'
+                        'fi'
+                        'exit 97'
+                    ) -join "`n") + "`n",
+                [System.Text.UTF8Encoding]::new($false)
+            )
+            [System.IO.File]::WriteAllText(
+                $strValidEquivalentApplicationPath,
+                (@(
+                        '#!/bin/sh'
+                        'if [ "$1" = "-I" ] && [ "$2" = "-c" ]; then'
+                        '  if [ "$#" -eq 3 ]; then printf "3.12\n"; fi'
+                        '  exit 0'
+                        'fi'
+                        'if [ "$1" = "-I" ] && [ "$2" = "-m" ]; then'
+                        '  printf "selected-equivalent\n"'
+                        '  exit 0'
+                        'fi'
+                        'exit 98'
+                    ) -join "`n") + "`n",
+                [System.Text.UTF8Encoding]::new($false)
+            )
+            $objExecutableMode =
+                [System.IO.UnixFileMode]::UserRead -bor
+                [System.IO.UnixFileMode]::UserWrite -bor
+                [System.IO.UnixFileMode]::UserExecute
+            [System.IO.File]::SetUnixFileMode(
+                $strMissingModuleApplicationPath,
+                $objExecutableMode
+            )
+            [System.IO.File]::SetUnixFileMode(
+                $strValidEquivalentApplicationPath,
+                $objExecutableMode
+            )
+        }
+
+        $objPythonSelectionResult = & $scriptblockInvokeLockedPythonHookFixture `
+            -PathValue $objPythonSelectionFixtureDirectory.FullName
+        if ($objPythonSelectionResult.ExitCode -ne 0 -or
+            $objPythonSelectionResult.StandardOutput.TrimEnd([char[]] "`r`n") -cne
+                'selected-equivalent' -or
+            -not [string]::IsNullOrEmpty($objPythonSelectionResult.StandardError)) {
+            throw (
+                'The locked Python hook must skip an exact Python 3.12 without ' +
+                'the requested module and run the valid equivalent interpreter.'
+            )
+        }
+    }
+    finally {
+        $strPythonSelectionFixturePath =
+            $objPythonSelectionFixtureDirectory.FullName
+        $strTemporaryDirectoryPath = [System.IO.Path]::GetFullPath(
+            [System.IO.Path]::GetTempPath()
+        )
+        if (-not $strPythonSelectionFixturePath.StartsWith(
+                $strTemporaryDirectoryPath,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )) {
+            throw 'The Python selection fixture cleanup path is outside the temporary directory.'
+        }
+        [System.IO.Directory]::Delete($strPythonSelectionFixturePath, $true)
+    }
+
     $objValidatorBoundaryStream = [System.IO.MemoryStream]::new(
         [byte[]]::new($intValidatorMaximumInputBytes),
         $false
@@ -13551,26 +13735,17 @@ if ($SelfTest) {
     $arrFinalizationResolverLiterals = @(
         "      !['push', 'pull_request_target', 'workflow_dispatch'].includes(eventName) ||",
         'function readNextActivityUrl(link, initialUrl) {',
-        "  if (eventName === 'push') {",
-        'async function readPushPublicationWithRetry({',
-        '      await waitImplementation(pushPublicationRetryDelaysMilliseconds[attempt]);',
-        "    url.searchParams.set('branch', expected.runHeadRefName);",
-        "    url.searchParams.set('event', expected.eventName);",
-        "      url.searchParams.set('status', 'success');",
-        "    url.searchParams.set('head_sha', expected.runHeadRevision);",
-        '      run?.workflow_id !== expected.workflowId ||',
-        '       (run?.status !== ''completed'' || run?.conclusion !== ''success'')) ||',
-        "  const pushCandidates = runHeadRef.startsWith('refs/tags/')",
+        'async function readHeadPublicationWithRetry({',
+        '      await waitImplementation(publicationRetryDelaysMilliseconds[attempt]);',
         'async function readHeadPublication({',
         '  initialUrl.searchParams.set(''ref'', headRef);',
-        '      token: null,',
         "  if (!['push', 'force_push', 'branch_creation'].includes(activity.activity_type)) {",
         "    'No exact head publication activity matches this revision and ref.',",
         '        `Repository-activity pagination exceeded ${maximumPageCount} pages.`,',
-        "  if (eventName === 'workflow_dispatch' ||",
-        "      eventName === 'pull_request_target') {",
-        '  candidates.sort((left, right) => left.createdTime - right.createdTime);',
-        '    return pushCandidates[0].createdAt;',
+        '  return readHeadPublicationWithRetry({',
+        "    headBaseRevision: eventName === 'push' ? runBaseRevision : null,",
+        '    token: runHeadRepository === repository ? token : null,',
+        '    return candidates[0].createdAt;',
         '  const timestamp = await resolveFinalizationTimestamp({',
         '    runHeadRef: process.env.RUN_HEAD_REF,',
         '    runBaseRevision: process.env.RUN_BASE_REVISION,',
@@ -13587,6 +13762,22 @@ if ($SelfTest) {
             )
         }
     }
+    foreach ($strProhibitedFinalizationResolverLiteral in @(
+            'readHistoricalRuns',
+            'pushCandidates',
+            '/actions/workflows/',
+            "url.searchParams.set('status', 'success')"
+        )) {
+        if ($strFinalizationResolverContent.Contains(
+                $strProhibitedFinalizationResolverLiteral,
+                [System.StringComparison]::Ordinal
+            )) {
+            throw (
+                'The finalization-time resolver retains a prohibited workflow-' +
+                'timing path: ' + $strProhibitedFinalizationResolverLiteral
+            )
+        }
+    }
     foreach ($strSharedRunIdentityLiteral in @(
             '      run?.head_repository?.full_name !== expected.headRepository ||',
             '      run?.head_branch !== expected.runHeadRefName ||',
@@ -13595,9 +13786,9 @@ if ($SelfTest) {
         if ([regex]::Matches(
                 $strFinalizationResolverContent,
                 [regex]::Escape($strSharedRunIdentityLiteral)
-            ).Count -ne 2) {
+            ).Count -ne 1) {
             throw (
-                'The finalization-time resolver must contain exactly twice: ' +
+                'The finalization-time resolver must contain exactly once: ' +
                 $strSharedRunIdentityLiteral
             )
         }
@@ -13610,7 +13801,7 @@ if ($SelfTest) {
     if ($intFinalizationResolverSelfTestExit -ne 0 -or
         $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
         [string]$arrFinalizationResolverSelfTestOutput[0] -cne
-        'Finalization resolver self-tests passed: 42 fixtures.') {
+        'Finalization resolver self-tests passed: 29 fixtures.') {
         throw (
             'The finalization-time resolver self-test failed: ' +
             ($arrFinalizationResolverSelfTestOutput -join '; ')

@@ -12,7 +12,7 @@ const rfc3339UtcPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/u;
 const maximumPageCount = 20;
 const recordsPerPage = 100;
 const maximumClockSkewMilliseconds = 300_000;
-const pushPublicationRetryDelaysMilliseconds = Object.freeze([250, 1_000, 2_000]);
+const publicationRetryDelaysMilliseconds = Object.freeze([250, 1_000, 2_000]);
 
 class NoExactHeadPublicationError extends Error {}
 
@@ -211,24 +211,24 @@ async function readHeadPublication({
   );
 }
 
-async function readPushPublicationWithRetry({
+async function readHeadPublicationWithRetry({
   root,
-  repository,
+  headRepository,
   headRef,
   headRevision,
-  headBaseRevision,
+  headBaseRevision = null,
   token,
   fetchImplementation,
   waitImplementation,
   currentCreatedTime,
 }) {
   for (let attempt = 0;
-    attempt <= pushPublicationRetryDelaysMilliseconds.length;
+    attempt <= publicationRetryDelaysMilliseconds.length;
     attempt += 1) {
     try {
       return await readHeadPublication({
         root,
-        headRepository: repository,
+        headRepository,
         headRef,
         headRevision,
         headBaseRevision,
@@ -238,13 +238,13 @@ async function readPushPublicationWithRetry({
       });
     } catch (error) {
       if (!(error instanceof NoExactHeadPublicationError) ||
-          attempt === pushPublicationRetryDelaysMilliseconds.length) {
+          attempt === publicationRetryDelaysMilliseconds.length) {
         throw error;
       }
-      await waitImplementation(pushPublicationRetryDelaysMilliseconds[attempt]);
+      await waitImplementation(publicationRetryDelaysMilliseconds[attempt]);
     }
   }
-  throw new Error('The bounded push-publication retry loop did not terminate.');
+  throw new Error('The bounded publication retry loop did not terminate.');
 }
 
 function validateCurrentRun(run, expected) {
@@ -259,97 +259,6 @@ function validateCurrentRun(run, expected) {
       typeof run?.path !== 'string' || run.path.length === 0) {
     throw new Error('The workflow-run response identity does not match this run.');
   }
-}
-
-function validateHistoricalRun(run, expected, currentCreatedTime) {
-  if (!Number.isSafeInteger(run?.id) || run.id <= 0 ||
-      run?.repository?.full_name !== expected.repository ||
-      run?.head_repository?.full_name !== expected.headRepository ||
-      run?.workflow_id !== expected.workflowId ||
-      run?.path !== expected.workflowPath ||
-      run?.head_sha !== expected.runHeadRevision ||
-      run?.head_branch !== expected.runHeadRefName ||
-      run?.event !== expected.eventName ||
-      (expected.requireSuccess &&
-       (run?.status !== 'completed' || run?.conclusion !== 'success')) ||
-      !Number.isSafeInteger(run?.run_attempt) || run.run_attempt <= 0) {
-    throw new Error('A historical workflow-run response has an unexpected identity.');
-  }
-  return parseTimestamp(
-    run.created_at,
-    currentCreatedTime,
-    'A historical workflow-run creation time',
-  );
-}
-
-async function readHistoricalRuns({
-  root,
-  repository,
-  token,
-  fetchImplementation,
-  expected,
-  currentCreatedTime,
-}) {
-  const seenIds = new Set();
-  const candidates = [];
-  let declaredTotal = null;
-  for (let page = 1; page <= maximumPageCount; page += 1) {
-    const url = new URL(
-      `${root}/repos/${repository}/actions/workflows/${expected.workflowId}/runs`,
-    );
-    url.searchParams.set('branch', expected.runHeadRefName);
-    url.searchParams.set('event', expected.eventName);
-    if (expected.requireSuccess) {
-      url.searchParams.set('status', 'success');
-    }
-    url.searchParams.set('head_sha', expected.runHeadRevision);
-    url.searchParams.set('per_page', String(recordsPerPage));
-    url.searchParams.set('page', String(page));
-    const pageResponse = await readJson(
-      url,
-      token,
-      fetchImplementation,
-      'Historical workflow-run lookup',
-    );
-    const payload = pageResponse.value;
-    if (!Number.isSafeInteger(payload?.total_count) || payload.total_count < 0 ||
-        !Array.isArray(payload?.workflow_runs)) {
-      throw new Error('The historical workflow-run response is malformed.');
-    }
-    if (declaredTotal === null) {
-      declaredTotal = payload.total_count;
-    } else if (declaredTotal !== payload.total_count) {
-      throw new Error('The historical workflow-run total changed during pagination.');
-    }
-    for (const historicalRun of payload.workflow_runs) {
-      const createdTime = validateHistoricalRun(
-        historicalRun,
-        expected,
-        currentCreatedTime,
-      );
-      if (seenIds.has(historicalRun.id)) {
-        throw new Error('The historical workflow-run response contains a duplicate run.');
-      }
-      seenIds.add(historicalRun.id);
-      candidates.push({ createdAt: historicalRun.created_at, createdTime });
-    }
-
-    const link = pageResponse.headers?.get?.('link') ?? '';
-    if (!link.includes('rel="next"')) {
-      break;
-    }
-    if (page === maximumPageCount) {
-      throw new Error(
-        `Historical workflow-run pagination exceeded ${maximumPageCount} pages.`,
-      );
-    }
-  }
-
-  if (declaredTotal !== seenIds.size) {
-    throw new Error('The historical workflow-run response count is incomplete.');
-  }
-  candidates.sort((left, right) => left.createdTime - right.createdTime);
-  return candidates;
 }
 
 export async function resolveFinalizationTimestamp({
@@ -412,67 +321,17 @@ export async function resolveFinalizationTimestamp({
     now + maximumClockSkewMilliseconds,
     'The workflow-run creation time',
   );
-  if (eventName === 'push') {
-    return readPushPublicationWithRetry({
-      root,
-      repository,
-      headRef: runHeadRef,
-      headRevision: runHeadRevision,
-      headBaseRevision: runBaseRevision,
-      token,
-      fetchImplementation,
-      waitImplementation,
-      currentCreatedTime,
-    });
-  }
-
-  if (eventName === 'pull_request_target' && runHeadRepository !== repository) {
-    return readHeadPublication({
-      root,
-      headRepository: runHeadRepository,
-      headRef: runHeadRef,
-      headRevision: runHeadRevision,
-      token: null,
-      fetchImplementation,
-      currentCreatedTime,
-    });
-  }
-
-  const expectedPush = {
-    repository,
-    headRepository: repository,
-    runHeadRevision,
-    runHeadRefName,
-    workflowId: currentRun.workflow_id,
-    workflowPath: currentRun.path,
-    eventName: 'push',
-    requireSuccess: true,
-  };
-  const pushCandidates = runHeadRef.startsWith('refs/tags/')
-    ? []
-    : await readHistoricalRuns({
-        root,
-        repository,
-        token,
-        fetchImplementation,
-        expected: expectedPush,
-        currentCreatedTime,
-      });
-  if (pushCandidates.length > 0) {
-    return pushCandidates[0].createdAt;
-  }
-  if (eventName === 'workflow_dispatch' ||
-      eventName === 'pull_request_target') {
-    return readHeadPublication({
-      root,
-      headRepository: repository,
-      headRef: runHeadRef,
-      headRevision: runHeadRevision,
-      token,
-      fetchImplementation,
-      currentCreatedTime,
-    });
-  }
+  return readHeadPublicationWithRetry({
+    root,
+    headRepository: runHeadRepository,
+    headRef: runHeadRef,
+    headRevision: runHeadRevision,
+    headBaseRevision: eventName === 'push' ? runBaseRevision : null,
+    token: runHeadRepository === repository ? token : null,
+    fetchImplementation,
+    waitImplementation,
+    currentCreatedTime,
+  });
 }
 
 function makeResponse(value, { link = '', ok = true, status = 200 } = {}) {
@@ -500,17 +359,6 @@ function makeRun(overrides = {}) {
     created_at: '2026-09-10T12:00:00Z',
     ...overrides,
   };
-}
-
-function makeHistoricalRun(overrides = {}) {
-  return makeRun({
-    id: 2,
-    event: 'push',
-    status: 'completed',
-    conclusion: 'success',
-    created_at: '2026-09-10T10:00:00Z',
-    ...overrides,
-  });
 }
 
 function makeActivity(overrides = {}) {
@@ -541,8 +389,6 @@ function makeActivityNextLink(
 
 function makeFixtureFetch({
   current = makeRun(),
-  pages = [],
-  pullRequestPages = [],
   forkActivities = [],
   repositoryActivities = [],
   forkActivityPages = null,
@@ -590,22 +436,7 @@ function makeFixtureFetch({
     if (url.pathname.endsWith('/actions/runs/1')) {
       return makeResponse(current);
     }
-    if (!url.pathname.endsWith('/actions/workflows/99/runs')) {
-      return makeResponse({}, { ok: false, status: 404 });
-    }
-    const event = url.searchParams.get('event');
-    if (url.searchParams.get('branch') !== 'topic/branch' ||
-        !['push', 'pull_request_target'].includes(event) ||
-        (event === 'push' && url.searchParams.get('status') !== 'success') ||
-        (event === 'pull_request_target' && url.searchParams.has('status')) ||
-        url.searchParams.get('head_sha') !== 'a'.repeat(40) ||
-        url.searchParams.get('per_page') !== String(recordsPerPage)) {
-      throw new Error('The historical workflow-run query is not exact.');
-    }
-    const page = Number(url.searchParams.get('page'));
-    const selectedPages = event === 'push' ? pages : pullRequestPages;
-    return selectedPages[page - 1] ??
-      makeResponse({ total_count: 0, workflow_runs: [] });
+    return makeResponse({}, { ok: false, status: 404 });
   };
 }
 
@@ -743,21 +574,22 @@ export async function runSelfTest() {
     throw new Error('The direct-push publication retry bound changed.');
   }
 
-  const pullRequestPushTimestamp = await resolveFinalizationTimestamp({
+  const pullRequestPublicationTimestamp = await resolveFinalizationTimestamp({
     ...base,
     eventName: 'pull_request_target',
+    now: Date.parse('2026-09-11T00:01:00Z'),
     fetchImplementation: makeFixtureFetch({
-      current: makeRun({ event: 'pull_request_target' }),
-      pages: [makeResponse({
-        total_count: 1,
-        workflow_runs: [makeHistoricalRun()],
-      })],
+      current: makeRun({
+        event: 'pull_request_target',
+        created_at: '2026-09-11T00:00:05Z',
+      }),
+      repositoryActivities: [makeActivity({ timestamp: '2026-09-10T23:59:55Z' })],
     }),
   });
   assertEqual(
-    'pull request prefers exact successful push',
-    pullRequestPushTimestamp,
-    '2026-09-10T10:00:00Z',
+    'pull request preserves the preceding UTC publication date',
+    pullRequestPublicationTimestamp,
+    '2026-09-10T23:59:55Z',
   );
 
   const pullRequestFailedPushPublicationTimestamp = await resolveFinalizationTimestamp({
@@ -773,7 +605,7 @@ export async function runSelfTest() {
     }),
   });
   assertEqual(
-    'same-repository pull request uses publication when no successful push exists',
+    'same-repository pull request uses exact publication activity',
     pullRequestFailedPushPublicationTimestamp,
     '2026-09-10T23:59:55Z',
   );
@@ -953,30 +785,6 @@ export async function runSelfTest() {
     /contains a duplicate/u,
   );
 
-  const paginatedTimestamp = await resolveFinalizationTimestamp({
-    ...base,
-    fetchImplementation: makeFixtureFetch({
-      pages: [
-        makeResponse(
-          { total_count: 2, workflow_runs: [makeHistoricalRun()] },
-          { link: '<https://api.github.example/page=2>; rel="next"' },
-        ),
-        makeResponse({
-          total_count: 2,
-          workflow_runs: [makeHistoricalRun({
-            id: 3,
-            created_at: '2026-09-09T23:59:59Z',
-          })],
-        }),
-      ],
-    }),
-  });
-  assertEqual(
-    'manual event selects earliest eligible run',
-    paginatedTimestamp,
-    '2026-09-09T23:59:59Z',
-  );
-
   const manualActivityTimestamp = await resolveFinalizationTimestamp({
     ...base,
     fetchImplementation: makeFixtureFetch({
@@ -984,7 +792,7 @@ export async function runSelfTest() {
     }),
   });
   assertEqual(
-    'manual event falls back to exact authenticated repository activity',
+    'manual event uses exact authenticated repository activity',
     manualActivityTimestamp,
     '2026-09-10T09:59:59Z',
   );
@@ -995,10 +803,6 @@ export async function runSelfTest() {
     runHeadRef: 'refs/tags/release',
     fetchImplementation: makeFixtureFetch({
       current: makeRun({ head_branch: 'release' }),
-      pages: [makeResponse({
-        total_count: 1,
-        workflow_runs: [makeHistoricalRun({ head_branch: 'release' })],
-      })],
       repositoryActivities: [makeActivity({
         ref: 'refs/tags/release',
         timestamp: '2026-09-10T09:58:58Z',
@@ -1089,7 +893,7 @@ export async function runSelfTest() {
     'missing manual publication evidence',
     () => resolveFinalizationTimestamp({
       ...base,
-      fetchImplementation: makeFixtureFetch({ pages: [] }),
+      fetchImplementation: makeFixtureFetch({}),
     }),
     /No exact head publication activity/u,
   );
@@ -1133,83 +937,6 @@ export async function runSelfTest() {
     /identity does not match/u,
   );
 
-  const identityMutations = [
-    ['workflow', { workflow_id: 100 }],
-    ['head', { head_sha: 'b'.repeat(40) }],
-    ['branch', { head_branch: 'other/branch' }],
-    ['repository', { repository: { full_name: 'other/repository' } }],
-    ['head repository', { head_repository: { full_name: 'other/repository' } }],
-    ['event', { event: 'pull_request_target' }],
-    ['status', { status: 'in_progress' }],
-    ['conclusion', { conclusion: 'failure' }],
-  ];
-  for (const [name, mutation] of identityMutations) {
-    await reject(
-      `historical ${name} mismatch`,
-      () => resolveFinalizationTimestamp({
-        ...base,
-        fetchImplementation: makeFixtureFetch({
-          pages: [makeResponse({
-            total_count: 1,
-            workflow_runs: [makeHistoricalRun(mutation)],
-          })],
-        }),
-      }),
-      /unexpected identity/u,
-    );
-  }
-  await reject(
-    'historical time after dispatch',
-    () => resolveFinalizationTimestamp({
-      ...base,
-      fetchImplementation: makeFixtureFetch({
-        pages: [makeResponse({
-          total_count: 1,
-          workflow_runs: [makeHistoricalRun({ created_at: '2026-09-10T12:00:01Z' })],
-        })],
-      }),
-    }),
-    /creation time.*invalid/u,
-  );
-  await reject(
-    'duplicate historical run',
-    () => resolveFinalizationTimestamp({
-      ...base,
-      fetchImplementation: makeFixtureFetch({
-        pages: [makeResponse({
-          total_count: 2,
-          workflow_runs: [makeHistoricalRun(), makeHistoricalRun()],
-        })],
-      }),
-    }),
-    /duplicate run/u,
-  );
-  await reject(
-    'incomplete historical count',
-    () => resolveFinalizationTimestamp({
-      ...base,
-      fetchImplementation: makeFixtureFetch({
-        pages: [makeResponse({ total_count: 2, workflow_runs: [makeHistoricalRun()] })],
-      }),
-    }),
-    /count is incomplete/u,
-  );
-  const overflowPages = Array.from({ length: maximumPageCount }, (_, index) =>
-    makeResponse(
-      {
-        total_count: maximumPageCount,
-        workflow_runs: [makeHistoricalRun({ id: index + 2 })],
-      },
-      { link: '<https://api.github.example/next>; rel="next"' },
-    ));
-  await reject(
-    'pagination overflow',
-    () => resolveFinalizationTimestamp({
-      ...base,
-      fetchImplementation: makeFixtureFetch({ pages: overflowPages }),
-    }),
-    /pagination exceeded 20 pages/u,
-  );
   await reject(
     'future current run',
     () => resolveFinalizationTimestamp({

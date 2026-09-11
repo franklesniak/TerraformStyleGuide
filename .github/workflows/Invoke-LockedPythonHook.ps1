@@ -28,7 +28,7 @@
 #
 # .NOTES
 # This script does not support positional parameters.
-# Version: 1.0.20260911.0
+# Version: 1.0.20260911.2
 
 [CmdletBinding(PositionalBinding = $false)]
 param(
@@ -52,16 +52,16 @@ $ErrorActionPreference = 'Stop'
 
 $arrPythonCandidate = if ($IsWindows) {
     @(
-        [pscustomobject]@{ Command = 'python'; PrefixArgument = @() }
         [pscustomobject]@{ Command = 'py'; PrefixArgument = @('-3.12') }
         [pscustomobject]@{ Command = 'python3.12'; PrefixArgument = @() }
+        [pscustomobject]@{ Command = 'python'; PrefixArgument = @() }
     )
 }
 else {
     @(
-        [pscustomobject]@{ Command = 'python'; PrefixArgument = @() }
         [pscustomobject]@{ Command = 'python3.12'; PrefixArgument = @() }
         [pscustomobject]@{ Command = 'python3'; PrefixArgument = @() }
+        [pscustomobject]@{ Command = 'python'; PrefixArgument = @() }
     )
 }
 
@@ -86,9 +86,18 @@ foreach ($objPythonCandidate in $arrPythonCandidate) {
         continue
     }
 
+    & $objPythonApplication.Source @arrPrefixArgument -I -c `
+        'import importlib.util, sys; sys.exit(0 if importlib.util.find_spec(sys.argv[1]) else 1)' `
+        $Module 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        continue
+    }
+
     & $objPythonApplication.Source @arrPrefixArgument -I -m $Module @Argument
     exit $LASTEXITCODE
 }
 
-Write-Error 'Python 3.12 is required to run the locked pre-commit hook.'
+[Console]::Error.WriteLine(
+    'Python 3.12 is required to run the locked pre-commit hook.'
+)
 exit 2
