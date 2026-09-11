@@ -10,6 +10,7 @@ on:
       - "**/*.yml"
       - .github/workflows/.npmrc
       - .github/workflows/copilot-setup-steps.yml
+      - .github/workflows/Invoke-LockedPythonHook.ps1
       - .github/workflows/lint-staged-markdown.mjs
       - .github/workflows/npm-shrinkwrap.json
       - .github/workflows/package.json
@@ -26,6 +27,7 @@ on:
       - "**/*.yml"
       - .github/workflows/.npmrc
       - .github/workflows/copilot-setup-steps.yml
+      - .github/workflows/Invoke-LockedPythonHook.ps1
       - .github/workflows/lint-staged-markdown.mjs
       - .github/workflows/npm-shrinkwrap.json
       - .github/workflows/package.json
@@ -101,6 +103,7 @@ jobs:
           workflow_manifest='.github/workflows/package.json'
           workflow_lock='.github/workflows/package-lock.json'
           pre_commit_config='.pre-commit-config.yaml'
+          python_hook_launcher='.github/workflows/Invoke-LockedPythonHook.ps1'
           staged_markdown_helper='.github/workflows/lint-staged-markdown.mjs'
 
           for required_file in \
@@ -109,6 +112,7 @@ jobs:
             "${workflow_manifest}" \
             "${workflow_lock}" \
             "${pre_commit_config}" \
+            "${python_hook_launcher}" \
             "${staged_markdown_helper}"; do
             if [[ ! -f "${required_file}" || -L "${required_file}" ]]; then
               echo "::error file=${required_file}::Required locked npm input" \
@@ -122,7 +126,8 @@ jobs:
             ["${root_lock}"]='e07939c3791be364486aedc928da532870f6d9f29ec2a6a4733be2cc143f5009'
             ["${workflow_manifest}"]='494edc3ed1917effd870cb7f797a861778dd288bfdbb1ab07dd07d77d8bb6109'
             ["${workflow_lock}"]='84cbe61e33e4c66b653efd2bfbe3f80b0061368a64ad80ef0de4898da28d887d'
-            ["${pre_commit_config}"]='bd66d055a6b0ab683b1962ccefe51a942de6db7238ea7dd9e2f662ef0c7e826e'
+            ["${pre_commit_config}"]='31127565a6b921001af7aa5f21f8f7b7e1edeff107eccc2006e511d4f7779424'
+            ["${python_hook_launcher}"]='22755ebc059f4ea9863ec38886d44c19345904f832fd1c3e74a0f466933e987a'
             ["${staged_markdown_helper}"]='6e8ac89afb17dd36f1edcf9b59ddfb066706fc6686be22e007c540ae20c810c2'
           )
           for reviewed_input in "${!reviewed_sha256[@]}"; do
@@ -150,7 +155,7 @@ jobs:
           test "$(python -c \
             'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" \
             = '3.12'
-          reviewed_requirements_sha256='6f02e9a6b589db021bb4a48de4d9b8f28f30470386f06d702acb2987127decda'
+          reviewed_requirements_sha256='f9aaac5456d8c076becff82222a49a3a16ef1267de93d347ebcac0fe3a3f5652'
           test "$(sha256sum requirements-dev.txt | cut -d ' ' -f 1)" \
             = "${reviewed_requirements_sha256}"
           python -m pip install --requirement requirements-dev.txt
@@ -196,6 +201,7 @@ jobs:
             package-lock.json
             .github/workflows/package.json
             .github/workflows/package-lock.json
+            .github/workflows/Invoke-LockedPythonHook.ps1
             .github/workflows/lint-staged-markdown.mjs
             requirements-dev.txt
           )

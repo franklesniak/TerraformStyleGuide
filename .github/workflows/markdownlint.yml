@@ -510,7 +510,7 @@ jobs:
           # captured status, and every digest intact while both phases report
           # zero errors over nothing.
           $strReviewedLintConfigHash = '5EB07BF7F30829E0091E82F235A96FDBA21BE1EF1160CA1E22CDBE8D82DA5300'
-          $strReviewedLintHelperHash = '3BCC8CF2DFBC92DA28F8A9018708F20E350C2D9B9ED71DF405581CA777B4DB26'
+          $strReviewedLintHelperHash = '39D1C5AA23557163A6C864A314F6524CC38EC49EBCACD48D5BD18A577FE92FEE'
           $strLintConfigHash = (Get-FileHash -LiteralPath .markdownlint.jsonc -Algorithm SHA256).Hash
           $strLintHelperHash = (Get-FileHash -LiteralPath lint-nested-markdown.js -Algorithm SHA256).Hash
           if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {

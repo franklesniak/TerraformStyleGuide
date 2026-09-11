@@ -228,17 +228,6 @@ function extractMarkdownFencesRecursive(content, filePath, baseLine = 0, depth =
 }
 
 /**
- * Extract markdown code fences from a file
- * @param {string} filePath - Path to the markdown file
- * @returns {Array} Array of extracted blocks with metadata
- */
-function extractMarkdownFences(filePath, repoRoot) {
-    const safeInputPath = validateMarkdownInput(repoRoot, filePath);
-    const content = fs.readFileSync(safeInputPath, 'utf8');
-    return extractMarkdownFencesRecursive(content, safeInputPath, 0, 0, '');
-}
-
-/**
  * Run markdownlint on extracted content
  * @param {string} content - Markdown content to lint
  * @param {object} config - Markdownlint configuration

@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260911.4
+# Version: 1.2.20260911.5
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -99,7 +99,7 @@ $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
 $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/copilot-setup-steps.yml' =
-        '130dbdabb4ef6471b2282fca98ebd0d057fda7d31ac7e06d78ceb2a88ae5a53e'
+        '8ee50094c3aaa46356b5c3d6be37e60b85730729d4e108a793e9f672244f52d6'
     '.github/workflows/package.json' =
         '494edc3ed1917effd870cb7f797a861778dd288bfdbb1ab07dd07d77d8bb6109'
     '.github/workflows/package-lock.json' =
@@ -109,7 +109,7 @@ $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/lint-staged-markdown.mjs' =
         '6e8ac89afb17dd36f1edcf9b59ddfb066706fc6686be22e007c540ae20c810c2'
     '.pre-commit-config.yaml' =
-        'bd66d055a6b0ab683b1962ccefe51a942de6db7238ea7dd9e2f662ef0c7e826e'
+        '31127565a6b921001af7aa5f21f8f7b7e1edeff107eccc2006e511d4f7779424'
 }
 $script:strWorkflowPolicyCommandPrefix =
     'node .github/workflows/Validate-WorkflowPolicy.mjs'
@@ -1672,7 +1672,7 @@ function Get-HuskySetupContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.14.20260911.0
+    # Version: 1.15.20260911.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -1808,38 +1808,88 @@ function Get-HuskySetupContractFailure {
             )
         }
     }
-    $hashtableExpectedPreCommitRevision = [ordered]@{
-        'https://github.com/pre-commit/pre-commit-hooks' =
-            '3e8a8703264a2f4a69428a0aa4dcb512790b2c8c'
-        'https://github.com/adrienverge/yamllint' =
-            'cba56bcde1fdd01c1deb3f945e69764c291a6530'
-        'https://github.com/rhysd/actionlint' =
-            '011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7'
-        'https://github.com/python-jsonschema/check-jsonschema' =
-            '6b63472e72e1a91ed8a2f6d483790dfb644fa1d3'
-    }
-    $arrRemoteRepositoryBlocks = @([regex]::Matches(
+    $arrRepositoryBlocks = @([regex]::Matches(
             $PreCommitConfigContent,
-            '(?ms)^  - repo: (?<Repository>https://[^\r\n]+)\r?\n' +
+            '(?ms)^  - repo: (?<Repository>[^\r\n]+)\r?\n' +
             '(?<Body>.*?)(?=^  - repo:|\z)'
         ))
-    if ($arrRemoteRepositoryBlocks.Count -ne
-        $hashtableExpectedPreCommitRevision.Count) {
-        Write-Output 'Pre-commit must declare only the four reviewed remote hook repositories.'
+    $arrLocalRepositoryBlocks = @($arrRepositoryBlocks | Where-Object {
+            $_.Groups['Repository'].Value -ceq 'local'
+        })
+    $arrRemoteRepositoryBlocks = @($arrRepositoryBlocks | Where-Object {
+            $_.Groups['Repository'].Value -cne 'local'
+        })
+    if ($arrRepositoryBlocks.Count -ne 3 -or
+        $arrLocalRepositoryBlocks.Count -ne 2 -or
+        $arrRemoteRepositoryBlocks.Count -ne 1) {
+        Write-Output (
+            'Pre-commit must use two local hook groups and only one reviewed ' +
+            'remote hook repository.'
+        )
     }
-    foreach ($objExpectedRevision in $hashtableExpectedPreCommitRevision.GetEnumerator()) {
-        $arrMatchingRepositoryBlocks = @($arrRemoteRepositoryBlocks | Where-Object {
-                $_.Groups['Repository'].Value -ceq $objExpectedRevision.Key
-            })
-        if ($arrMatchingRepositoryBlocks.Count -ne 1 -or
+    $strExpectedActionlintRepository = 'https://github.com/rhysd/actionlint'
+    $strExpectedActionlintRevision = '011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7'
+    if ($arrRemoteRepositoryBlocks.Count -ne 1 -or
+        $arrRemoteRepositoryBlocks[0].Groups['Repository'].Value -cne
+            $strExpectedActionlintRepository -or
+        [regex]::Matches(
+            $arrRemoteRepositoryBlocks[0].Groups['Body'].Value,
+            '(?m)^    rev: "' + [regex]::Escape($strExpectedActionlintRevision) +
+            '"(?: # [^\r\n]+)?\r?$'
+        ).Count -ne 1 -or
+        [regex]::Matches(
+            $arrRemoteRepositoryBlocks[0].Groups['Body'].Value,
+            '(?m)^      - id: actionlint\r?$'
+        ).Count -ne 1 -or
+        [regex]::Matches(
+            $arrRemoteRepositoryBlocks[0].Groups['Body'].Value,
+            '(?m)^      - id:'
+        ).Count -ne 1) {
+        Write-Output (
+            "Pre-commit hook repository $strExpectedActionlintRepository must " +
+            "use reviewed full commit $strExpectedActionlintRevision and contain " +
+            'only actionlint.'
+        )
+    }
+    if ([regex]::Matches(
+            $PreCommitConfigContent,
+            '(?m)^        (?:language: python|additional_dependencies:)\r?$'
+        ).Count -ne 0) {
+        Write-Output 'Python pre-commit hooks must not resolve separate environments.'
+    }
+    $hashtableExpectedLockedPythonHookModule = [ordered]@{
+        'check-json' = 'pre_commit_hooks.check_json'
+        'check-yaml' = 'pre_commit_hooks.check_yaml'
+        'end-of-file-fixer' = 'pre_commit_hooks.end_of_file_fixer'
+        'trailing-whitespace' = 'pre_commit_hooks.trailing_whitespace_fixer'
+        yamllint = 'yamllint'
+        'check-dependabot' = 'check_jsonschema'
+        'check-github-workflows' = 'check_jsonschema'
+    }
+    foreach ($objLockedPythonHook in
+        $hashtableExpectedLockedPythonHookModule.GetEnumerator()) {
+        $arrLockedPythonHook = @([regex]::Matches(
+                $PreCommitConfigContent,
+                "(?ms)^      - id: $([regex]::Escape($objLockedPythonHook.Key))\r?\n" +
+                '(?<Body>.*?)(?=^      - id:|^  - repo:|\z)'
+            ))
+        if ($arrLockedPythonHook.Count -ne 1 -or
             [regex]::Matches(
-                $arrMatchingRepositoryBlocks[0].Groups['Body'].Value,
-                '(?m)^    rev: "' + [regex]::Escape($objExpectedRevision.Value) +
-                '"(?: # [^\r\n]+)?\r?$'
+                $arrLockedPythonHook[0].Groups['Body'].Value,
+                '(?m)^          \.github/workflows/Invoke-LockedPythonHook\.ps1\r?$'
+            ).Count -ne 1 -or
+            [regex]::Matches(
+                $arrLockedPythonHook[0].Groups['Body'].Value,
+                '(?m)^          -Module ' +
+                [regex]::Escape($objLockedPythonHook.Value) + '\r?$'
+            ).Count -ne 1 -or
+            [regex]::Matches(
+                $arrLockedPythonHook[0].Groups['Body'].Value,
+                '(?m)^        language: system\r?$'
             ).Count -ne 1) {
             Write-Output (
-                "Pre-commit hook repository $($objExpectedRevision.Key) must use " +
-                "reviewed full commit $($objExpectedRevision.Value)."
+                "The $($objLockedPythonHook.Key) hook must run module " +
+                "$($objLockedPythonHook.Value) from the locked local system environment."
             )
         }
     }
@@ -2024,7 +2074,7 @@ function Get-HuskySetupContractFailure {
         }
     }
     $strExpectedPythonInstallSequence = @'
-          reviewed_requirements_sha256='6f02e9a6b589db021bb4a48de4d9b8f28f30470386f06d702acb2987127decda'
+          reviewed_requirements_sha256='f9aaac5456d8c076becff82222a49a3a16ef1267de93d347ebcac0fe3a3f5652'
           test "$(sha256sum requirements-dev.txt | cut -d ' ' -f 1)" \
             = "${reviewed_requirements_sha256}"
           python -m pip install --requirement requirements-dev.txt
@@ -2160,7 +2210,7 @@ function Get-PreCommitBootstrapContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.2.20260910.0
+    # Version: 1.3.20260911.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -2182,16 +2232,35 @@ function Get-PreCommitBootstrapContractFailure {
         "`n"
     )
     $hashtableExpectedPythonPackage = [ordered]@{
+        attrs = [pscustomobject]@{ Version = '26.1.0'; HashCount = 1 }
+        certifi = [pscustomobject]@{ Version = '2026.7.22'; HashCount = 1 }
         cfgv = [pscustomobject]@{ Version = '3.5.0'; HashCount = 1 }
+        'charset-normalizer' = [pscustomobject]@{ Version = '3.5.1'; HashCount = 9 }
+        'check-jsonschema' = [pscustomobject]@{ Version = '0.37.4'; HashCount = 1 }
+        click = [pscustomobject]@{ Version = '8.5.0'; HashCount = 1 }
         distlib = [pscustomobject]@{ Version = '0.4.3'; HashCount = 1 }
         filelock = [pscustomobject]@{ Version = '3.32.6'; HashCount = 1 }
         identify = [pscustomobject]@{ Version = '2.6.19'; HashCount = 1 }
+        idna = [pscustomobject]@{ Version = '3.19'; HashCount = 1 }
+        jsonschema = [pscustomobject]@{ Version = '4.26.0'; HashCount = 1 }
+        'jsonschema-specifications' =
+            [pscustomobject]@{ Version = '2025.9.1'; HashCount = 1 }
         nodeenv = [pscustomobject]@{ Version = '1.10.0'; HashCount = 1 }
+        pathspec = [pscustomobject]@{ Version = '1.1.1'; HashCount = 1 }
         platformdirs = [pscustomobject]@{ Version = '4.11.8'; HashCount = 1 }
         'pre-commit' = [pscustomobject]@{ Version = '4.6.2'; HashCount = 1 }
+        'pre-commit-hooks' = [pscustomobject]@{ Version = '6.0.0'; HashCount = 1 }
         'python-discovery' = [pscustomobject]@{ Version = '1.6.0'; HashCount = 1 }
         pyyaml = [pscustomobject]@{ Version = '6.0.3'; HashCount = 10 }
+        referencing = [pscustomobject]@{ Version = '0.37.0'; HashCount = 1 }
+        regress = [pscustomobject]@{ Version = '2026.9.1'; HashCount = 10 }
+        requests = [pscustomobject]@{ Version = '2.34.2'; HashCount = 1 }
+        'rpds-py' = [pscustomobject]@{ Version = '2026.6.3'; HashCount = 10 }
+        'ruamel-yaml' = [pscustomobject]@{ Version = '0.19.1'; HashCount = 1 }
+        'typing-extensions' = [pscustomobject]@{ Version = '4.16.0'; HashCount = 1 }
+        urllib3 = [pscustomobject]@{ Version = '2.7.0'; HashCount = 1 }
         virtualenv = [pscustomobject]@{ Version = '21.7.9'; HashCount = 1 }
+        yamllint = [pscustomobject]@{ Version = '1.38.0'; HashCount = 1 }
     }
     $strLockPreamble = "--only-binary=:all:`n--require-hashes`n`n"
     $boolRequirementsLockValid = $strNormalizedRequirements.StartsWith(
@@ -7417,7 +7486,7 @@ $arrAgentSetupInputSpecs = @(
         Path = '.github/workflows/scripts-README.md'
         MaximumBytes = 32768
     }
-    [pscustomobject]@{ Path = 'requirements-dev.txt'; MaximumBytes = 4096 }
+    [pscustomobject]@{ Path = 'requirements-dev.txt'; MaximumBytes = 16384 }
 )
 $arrGovernedInstructionDocuments = @(
     [pscustomobject]@{
@@ -8194,10 +8263,7 @@ if ($SelfTest) {
         )
     }
     $hashtableMutablePreCommitRevision = [ordered]@{
-        '3e8a8703264a2f4a69428a0aa4dcb512790b2c8c' = 'v6.0.0'
-        'cba56bcde1fdd01c1deb3f945e69764c291a6530' = 'v1.38.0'
         '011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7' = 'v1.7.12'
-        '6b63472e72e1a91ed8a2f6d483790dfb644fa1d3' = '0.37.4'
     }
     foreach ($objMutableRevision in $hashtableMutablePreCommitRevision.GetEnumerator()) {
         $strMutableRevisionConfig = $strPreCommitConfigContent.Replace(
@@ -8219,6 +8285,47 @@ if ($SelfTest) {
                 'must use reviewed full commit')) {
             throw "Mutable pre-commit revision $($objMutableRevision.Value) did not fail closed."
         }
+    }
+    $strRemotePythonHookMutation = $strPreCommitConfigContent.Replace(
+        "  - repo: local`n    hooks:`n      - id: check-json",
+        "  - repo: https://github.com/pre-commit/pre-commit-hooks`n" +
+            "    rev: `"v6.0.0`"`n    hooks:`n      - id: check-json"
+    )
+    if ($strRemotePythonHookMutation -ceq $strPreCommitConfigContent) {
+        throw 'Could not create the remote Python hook mutation.'
+    }
+    $arrRemotePythonHookFailures = @(Get-HuskySetupContractFailure `
+            -RootPackageContent $strRootPackageContent `
+            -WorkflowPackageContent $strWorkflowPackageContent `
+            -WorkflowPackageLockContent $strWorkflowPackageLockContent `
+            -HookContent $strHuskyHookContent `
+            -CopilotSetupContent $strCopilotSetupContent `
+            -PreCommitConfigContent $strRemotePythonHookMutation `
+            -StagedMarkdownHelperContent $strStagedMarkdownHelperContent)
+    if ($arrRemotePythonHookFailures -cnotcontains
+        'Pre-commit must use two local hook groups and only one reviewed remote hook repository.') {
+        throw 'The remote Python hook mutation did not fail closed.'
+    }
+    $strSeparatePythonEnvironmentMutation = $strPreCommitConfigContent.Replace(
+        '          -Module pre_commit_hooks.check_json' + "`n" +
+            '        language: system',
+        '          -Module pre_commit_hooks.check_json' + "`n" +
+            '        language: python'
+    )
+    if ($strSeparatePythonEnvironmentMutation -ceq $strPreCommitConfigContent) {
+        throw 'Could not create the separate Python environment mutation.'
+    }
+    $arrSeparatePythonEnvironmentFailures = @(Get-HuskySetupContractFailure `
+            -RootPackageContent $strRootPackageContent `
+            -WorkflowPackageContent $strWorkflowPackageContent `
+            -WorkflowPackageLockContent $strWorkflowPackageLockContent `
+            -HookContent $strHuskyHookContent `
+            -CopilotSetupContent $strCopilotSetupContent `
+            -PreCommitConfigContent $strSeparatePythonEnvironmentMutation `
+            -StagedMarkdownHelperContent $strStagedMarkdownHelperContent)
+    if ($arrSeparatePythonEnvironmentFailures -cnotcontains
+        'Python pre-commit hooks must not resolve separate environments.') {
+        throw 'The separate Python environment mutation did not fail closed.'
     }
     foreach ($strYamlHookId in @('check-yaml', 'yamllint')) {
         $objYamlSelectorPattern = [regex]::new(
@@ -8340,6 +8447,20 @@ if ($SelfTest) {
                 "pip==26.0.1 \\`n" +
                 '    --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000' +
                 "`n"
+            Failure = 'complete reviewed binary-only Python 3.12 tool closure'
+        },
+        [pscustomobject]@{
+            Name = 'locked hook package removed'
+            Agents = $strAgentsContent
+            Claude = $strClaudeContent
+            ScriptIndex = $strScriptIndexContent
+            Requirements = [regex]::Replace(
+                $strRequirementsContent,
+                '(?m)^check-jsonschema==0\.37\.4 \\\r?\n' +
+                    '    --hash=sha256:[0-9a-f]{64}\r?\n',
+                '',
+                1
+            )
             Failure = 'complete reviewed binary-only Python 3.12 tool closure'
         },
         [pscustomobject]@{
@@ -8839,7 +8960,7 @@ if ($SelfTest) {
         [pscustomobject]@{
             Name = 'reviewed Python requirements digest drifts'
             Content = $strCopilotSetupContent.Replace(
-                '6f02e9a6b589db021bb4a48de4d9b8f28f30470386f06d702acb2987127decda',
+                'f9aaac5456d8c076becff82222a49a3a16ef1267de93d347ebcac0fe3a3f5652',
                 ('0' * 64)
             )
             Failure = 'authenticate requirements before pip installs them'
