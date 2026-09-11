@@ -40,7 +40,7 @@ async function readJson(url, token, fetchImplementation, displayName) {
 function validateCurrentRun(run, expected) {
   if (String(run?.id) !== expected.runId ||
       run?.repository?.full_name !== expected.repository ||
-      run?.head_repository?.full_name !== expected.repository ||
+      run?.head_repository?.full_name !== expected.headRepository ||
       run?.head_sha !== expected.runHeadRevision ||
       run?.head_branch !== expected.runHeadRefName ||
       run?.event !== expected.eventName ||
@@ -54,7 +54,7 @@ function validateCurrentRun(run, expected) {
 function validateHistoricalRun(run, expected, currentCreatedTime) {
   if (!Number.isSafeInteger(run?.id) || run.id <= 0 ||
       run?.repository?.full_name !== expected.repository ||
-      run?.head_repository?.full_name !== expected.repository ||
+      run?.head_repository?.full_name !== expected.headRepository ||
       run?.workflow_id !== expected.workflowId ||
       run?.path !== expected.workflowPath ||
       run?.head_sha !== expected.runHeadRevision ||
@@ -150,6 +150,7 @@ export async function resolveFinalizationTimestamp({
   eventName,
   runHeadRevision,
   runHeadRefName,
+  runHeadRepository,
   token,
   now = Date.now(),
   fetchImplementation = globalThis.fetch,
@@ -159,9 +160,13 @@ export async function resolveFinalizationTimestamp({
       !positiveIntegerPattern.test(runAttempt ?? '') ||
       !['push', 'pull_request_target', 'workflow_dispatch'].includes(eventName) ||
       !objectIdPattern.test(runHeadRevision ?? '') || !runHeadRefName ||
+      !repositoryPattern.test(runHeadRepository ?? '') ||
       /[\u0000\r\n]/u.test(runHeadRefName) || !token ||
       !Number.isFinite(now) || typeof fetchImplementation !== 'function') {
     throw new Error('Trusted workflow-run inputs are unavailable or invalid.');
+  }
+  if (eventName !== 'pull_request_target' && runHeadRepository !== repository) {
+    throw new Error('The workflow-run head repository is invalid for this event.');
   }
 
   const root = apiUrl.replace(/\/+$/u, '');
@@ -178,6 +183,7 @@ export async function resolveFinalizationTimestamp({
     repository,
     runHeadRevision,
     runHeadRefName,
+    headRepository: runHeadRepository,
     eventName,
   };
   validateCurrentRun(currentRun, expectedCurrent);
@@ -192,6 +198,7 @@ export async function resolveFinalizationTimestamp({
 
   const expectedPush = {
     repository,
+    headRepository: repository,
     runHeadRevision,
     runHeadRefName,
     workflowId: currentRun.workflow_id,
@@ -223,6 +230,7 @@ export async function resolveFinalizationTimestamp({
     fetchImplementation,
     expected: {
       ...expectedPush,
+      headRepository: runHeadRepository,
       eventName: 'pull_request_target',
       requireSuccess: false,
     },
@@ -327,6 +335,7 @@ export async function runSelfTest() {
     eventName: 'workflow_dispatch',
     runHeadRevision: 'a'.repeat(40),
     runHeadRefName: 'topic/branch',
+    runHeadRepository: 'owner/repository',
     token: 'fixture-token',
     now: Date.parse('2026-09-10T12:01:00Z'),
   };
@@ -369,8 +378,12 @@ export async function runSelfTest() {
   const initialPullRequestTimestamp = await resolveFinalizationTimestamp({
     ...base,
     eventName: 'pull_request_target',
+    runHeadRepository: 'fork-owner/repository',
     fetchImplementation: makeFixtureFetch({
-      current: makeRun({ event: 'pull_request_target' }),
+      current: makeRun({
+        event: 'pull_request_target',
+        head_repository: { full_name: 'fork-owner/repository' },
+      }),
     }),
   });
   assertEqual(
@@ -382,12 +395,17 @@ export async function runSelfTest() {
   const reopenedPullRequestTimestamp = await resolveFinalizationTimestamp({
     ...base,
     eventName: 'pull_request_target',
+    runHeadRepository: 'fork-owner/repository',
     fetchImplementation: makeFixtureFetch({
-      current: makeRun({ event: 'pull_request_target' }),
+      current: makeRun({
+        event: 'pull_request_target',
+        head_repository: { full_name: 'fork-owner/repository' },
+      }),
       pullRequestPages: [makeResponse({
         total_count: 1,
         workflow_runs: [makeHistoricalRun({
           event: 'pull_request_target',
+          head_repository: { full_name: 'fork-owner/repository' },
           status: 'completed',
           conclusion: 'failure',
           created_at: '2026-09-09T23:59:59Z',
@@ -572,6 +590,7 @@ async function main() {
     eventName: process.env.EVENT_NAME,
     runHeadRevision: process.env.RUN_HEAD_REVISION,
     runHeadRefName: process.env.RUN_HEAD_REF_NAME,
+    runHeadRepository: process.env.RUN_HEAD_REPOSITORY,
     token: process.env.GITHUB_TOKEN,
   });
   appendFileSync(output, `timestamp=${timestamp}\n`, 'utf8');

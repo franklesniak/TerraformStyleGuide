@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260911.1
+# Version: 1.2.20260911.2
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -7065,6 +7065,7 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
         '        id: resolve_run_time',
         "          RUN_HEAD_REVISION: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}",
         "          RUN_HEAD_REF_NAME: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.ref || github.ref_name }}",
+        "          RUN_HEAD_REPOSITORY: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}",
         '        run: node .github/workflows/Resolve-AgentInstructionFinalizationTime.mjs',
         '      - name: Resolve authenticated one-parent merge source',
         '          if (( ${#head_and_parents[@]} != 2 )); then',
@@ -13317,7 +13318,7 @@ if ($SelfTest) {
         }
     }
     foreach ($strSharedRunIdentityLiteral in @(
-            '      run?.head_repository?.full_name !== expected.repository ||',
+            '      run?.head_repository?.full_name !== expected.headRepository ||',
             '      run?.head_branch !== expected.runHeadRefName ||',
             '      run?.event !== expected.eventName ||'
         )) {
@@ -13410,6 +13411,11 @@ if ($SelfTest) {
             Name = 'PR head ref identity removed'
             From = "          RUN_HEAD_REF_NAME: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.ref || github.ref_name }}"
             To = '          RUN_HEAD_REF_NAME: ${{ github.ref_name }}'
+        },
+        [pscustomobject]@{
+            Name = 'PR head repository identity removed'
+            From = "          RUN_HEAD_REPOSITORY: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}"
+            To = '          RUN_HEAD_REPOSITORY: ${{ github.repository }}'
         },
         [pscustomobject]@{
             Name = 'finalization resolver bypassed'
