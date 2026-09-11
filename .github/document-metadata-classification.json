@@ -1,5 +1,6 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "authorizedExemptionPaths": [],
   "tier2Paths": [
     "ACKNOWLEDGMENTS.md",
     "CONTRIBUTING.md",

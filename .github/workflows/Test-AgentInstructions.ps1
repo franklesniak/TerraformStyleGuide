@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260911.0
+# Version: 1.2.20260911.1
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -3836,19 +3836,19 @@ function Get-GovernedDecisionDocumentPath {
     # Selects Markdown decision records from candidate Git paths.
     #
     # .DESCRIPTION
-    # Returns a deterministic, duplicate-free inventory for Markdown below any
-    # repository directory whose exact path segment is `decisions`.
+    # Returns a deterministic, duplicate-free inventory for Markdown below the
+    # repository's configured `docs/decisions/` decision-record root.
     #
     # .PARAMETER CandidatePath
     # Repository-relative paths found in the candidate state or event range.
     #
     # .EXAMPLE
     # Get-GovernedDecisionDocumentPath -CandidatePath @(
-    #     '.github/decisions/0004-example.md',
+    #     'docs/user/decisions/provider-selection.md',
     #     'docs/decisions/archive/0003-old.md'
     # )
     #
-    # # Returns both Markdown paths.
+    # # Returns only the formal decision record.
     #
     # .INPUTS
     # None. You can't pipe objects to this function.
@@ -3862,7 +3862,7 @@ function Get-GovernedDecisionDocumentPath {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.2.20260910.0
+    # Version: 1.3.20260911.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -3874,8 +3874,7 @@ function Get-GovernedDecisionDocumentPath {
     return @(
         $CandidatePath |
             Where-Object {
-                [string]$_ -cmatch `
-                    '^(?:[^/]+/)*decisions/(?:[^/]+/)*[^/]+\.md$'
+                [string]$_ -cmatch '^docs/decisions/(?:[^/]+/)*[^/]+\.md$'
             } |
             Sort-Object -CaseSensitive -Unique
     )
@@ -4020,8 +4019,9 @@ function Get-DocumentMetadataClassificationContext {
     #
     # .DESCRIPTION
     # Requires a strict, bounded JSON object with one schema version and sorted
-    # exact-path arrays for Tier 2 and generated documents. Every exemption must
-    # be a safe tracked Markdown path, and categories must not overlap.
+    # exact-path arrays for Tier 2, generated, and future authorized exemptions.
+    # Active exemptions must be safe tracked Markdown paths. Authorization paths
+    # are inert until they exist in a trusted published baseline.
     #
     # .PARAMETER Content
     # The strict JSON manifest text.
@@ -4031,7 +4031,7 @@ function Get-DocumentMetadataClassificationContext {
     #
     # .EXAMPLE
     # Get-DocumentMetadataClassificationContext `
-    #     -Content '{"schemaVersion":1,"tier2Paths":[],"generatedPaths":[]}' `
+    #     -Content '{"schemaVersion":2,"authorizedExemptionPaths":[],"tier2Paths":[],"generatedPaths":[]}' `
     #     -TrackedPath @()
     #
     # # Returns an empty, valid exemption set.
@@ -4040,7 +4040,7 @@ function Get-DocumentMetadataClassificationContext {
     # None. You can't pipe objects to this function.
     #
     # .OUTPUTS
-    # [pscustomobject] The failure, if any, and exact metadata-exempt paths.
+    # [pscustomobject] The failure, active exemptions, and authorization paths.
     #
     # .NOTES
     # PRIVATE/INTERNAL HELPER - This function is not part of the
@@ -4048,7 +4048,7 @@ function Get-DocumentMetadataClassificationContext {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.0.20260910.0
+    # Version: 1.1.20260911.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
@@ -4066,6 +4066,7 @@ function Get-DocumentMetadataClassificationContext {
         return [pscustomobject]@{
             Failure = $Message
             ExemptPaths = [string[]]@()
+            AuthorizedExemptionPaths = [string[]]@()
         }
     }
     $objJsonOptions = [System.Text.Json.JsonDocumentOptions]@{
@@ -4090,7 +4091,12 @@ function Get-DocumentMetadataClassificationContext {
                 string,
                 System.Text.Json.JsonElement
             ]]::new([System.StringComparer]::Ordinal)
-        $arrAllowedProperties = @('schemaVersion', 'tier2Paths', 'generatedPaths')
+        $arrAllowedProperties = @(
+            'schemaVersion',
+            'authorizedExemptionPaths',
+            'tier2Paths',
+            'generatedPaths'
+        )
         foreach ($objProperty in $objRoot.EnumerateObject()) {
             if ($arrAllowedProperties -cnotcontains $objProperty.Name) {
                 return & $scriptBlockFailure -Message (
@@ -4118,9 +4124,9 @@ function Get-DocumentMetadataClassificationContext {
         $intSchemaVersion = 0
         if (-not $dictionaryProperties['schemaVersion'].TryGetInt32(
                 [ref]$intSchemaVersion
-            ) -or $intSchemaVersion -ne 1) {
+            ) -or $intSchemaVersion -ne 2) {
             return & $scriptBlockFailure `
-                -Message 'The document classification schemaVersion must be integer 1.'
+                -Message 'The document classification schemaVersion must be integer 2.'
         }
 
         $setTrackedPaths = [System.Collections.Generic.HashSet[string]]::new(
@@ -4178,9 +4184,56 @@ function Get-DocumentMetadataClassificationContext {
             }
         }
 
+        $objAuthorizationArray = $dictionaryProperties['authorizedExemptionPaths']
+        if ($objAuthorizationArray.ValueKind -ne [System.Text.Json.JsonValueKind]::Array) {
+            return & $scriptBlockFailure -Message (
+                'The document classification authorizedExemptionPaths value must be an array.'
+            )
+        }
+        $listAuthorizedExemptionPaths = [System.Collections.Generic.List[string]]::new()
+        $strPreviousAuthorizationPath = $null
+        foreach ($objPathValue in $objAuthorizationArray.EnumerateArray()) {
+            if ($objPathValue.ValueKind -ne [System.Text.Json.JsonValueKind]::String) {
+                return & $scriptBlockFailure -Message (
+                    'The document classification authorizedExemptionPaths entries must be strings.'
+                )
+            }
+            $strPath = $objPathValue.GetString()
+            if ([string]::IsNullOrWhiteSpace($strPath) -or
+                [System.IO.Path]::IsPathRooted($strPath) -or
+                $strPath.Contains('\', [System.StringComparison]::Ordinal) -or
+                $strPath -match '(?:^|/)\.\.(?:/|$)' -or
+                $strPath -match '[\x00-\x1f\x7f]' -or
+                $strPath -cnotmatch '\.(?:md|mdc)$') {
+                return & $scriptBlockFailure -Message (
+                    "The document classification contains an unsafe path: $strPath"
+                )
+            }
+            if ($null -ne $strPreviousAuthorizationPath -and
+                [string]::CompareOrdinal(
+                    $strPreviousAuthorizationPath,
+                    $strPath
+                ) -ge 0) {
+                return & $scriptBlockFailure -Message (
+                    'The document classification authorizedExemptionPaths array must be ' +
+                    'strictly ordinal-sorted and duplicate-free.'
+                )
+            }
+            if ($setExemptPaths.Contains($strPath) -or
+                $listAuthorizedExemptionPaths.Contains($strPath)) {
+                return & $scriptBlockFailure -Message (
+                    "The document classification repeats a path: $strPath"
+                )
+            }
+            $listAuthorizedExemptionPaths.Add($strPath)
+            $strPreviousAuthorizationPath = $strPath
+        }
+
         return [pscustomobject]@{
             Failure = $null
             ExemptPaths = [string[]]$listExemptPaths.ToArray()
+            AuthorizedExemptionPaths =
+                [string[]]$listAuthorizedExemptionPaths.ToArray()
         }
     }
     catch [System.Text.Json.JsonException] {
@@ -4200,7 +4253,9 @@ function Get-DocumentMetadataClassificationExpansionFailure {
     #
     # .DESCRIPTION
     # Compares the parsed candidate exemption set with an authenticated baseline.
-    # A baseline omission is permitted only for the one-time manifest bootstrap.
+    # A new active exemption must already be active or authorized in the trusted
+    # published baseline. Candidate-only authorizations are inert. A missing
+    # baseline manifest is permitted only for the one-time manifest bootstrap.
     # Removals are permitted because they strengthen metadata validation.
     #
     # .PARAMETER HasTrustedBaselineManifest
@@ -4209,6 +4264,9 @@ function Get-DocumentMetadataClassificationExpansionFailure {
     # .PARAMETER TrustedBaselineExemptPath
     # Parsed exact exemptions in the authenticated baseline.
     #
+    # .PARAMETER TrustedBaselineAuthorizedExemptionPath
+    # Parsed exact future exemptions authorized in the authenticated baseline.
+    #
     # .PARAMETER CandidateExemptPath
     # Parsed exact exemptions in the candidate revision.
     #
@@ -4216,6 +4274,7 @@ function Get-DocumentMetadataClassificationExpansionFailure {
     # Get-DocumentMetadataClassificationExpansionFailure `
     #     -HasTrustedBaselineManifest $true `
     #     -TrustedBaselineExemptPath @('README.md') `
+    #     -TrustedBaselineAuthorizedExemptionPath @('docs/guide.md') `
     #     -CandidateExemptPath @('README.md', 'docs/RUNBOOK.md')
     #
     # # Reports docs/RUNBOOK.md as an unauthenticated exemption addition.
@@ -4232,7 +4291,7 @@ function Get-DocumentMetadataClassificationExpansionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.0.20260910.0
+    # Version: 1.1.20260911.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -4242,6 +4301,10 @@ function Get-DocumentMetadataClassificationExpansionFailure {
         [Parameter(Mandatory)]
         [AllowEmptyCollection()]
         [string[]] $TrustedBaselineExemptPath,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]] $TrustedBaselineAuthorizedExemptionPath,
 
         [Parameter(Mandatory)]
         [AllowEmptyCollection()]
@@ -4256,14 +4319,24 @@ function Get-DocumentMetadataClassificationExpansionFailure {
             $TrustedBaselineExemptPath,
             [System.StringComparer]::Ordinal
         )
+    $setTrustedBaselineAuthorizedExemptionPaths =
+        [System.Collections.Generic.HashSet[string]]::new(
+            $TrustedBaselineAuthorizedExemptionPath,
+            [System.StringComparer]::Ordinal
+        )
     foreach ($strCandidateExemptPath in
         ($CandidateExemptPath | Sort-Object -CaseSensitive -Unique)) {
-        if ($setTrustedBaselineExemptPaths.Contains($strCandidateExemptPath)) {
+        if ($setTrustedBaselineExemptPaths.Contains($strCandidateExemptPath) -or
+            $setTrustedBaselineAuthorizedExemptionPaths.Contains(
+                $strCandidateExemptPath
+            )) {
             continue
         }
         Write-Output (
             'The document classification adds an unauthenticated metadata ' +
-            "exemption: $strCandidateExemptPath"
+            "exemption: $strCandidateExemptPath. Add the exact path to " +
+            'authorizedExemptionPaths in a separate change and publish that ' +
+            'authorization before activating the exemption.'
         )
     }
 }
@@ -7482,6 +7555,7 @@ else {
 }
 $boolHasTrustedBaselineClassificationManifest = $false
 $arrTrustedBaselineClassificationExemptPaths = @()
+$arrTrustedBaselineClassificationAuthorizedExemptionPaths = @()
 if (-not [string]::IsNullOrEmpty($strDocumentClassificationBaselineRevision) -and
     $strDocumentClassificationBaselineRevision -notmatch '^(?:0{40}|0{64})$') {
     if ($strDocumentClassificationBaselineRevision -notmatch
@@ -7531,6 +7605,9 @@ if (-not [string]::IsNullOrEmpty($strDocumentClassificationBaselineRevision) -an
         $arrTrustedBaselineClassificationExemptPaths = @(
             $objBaselineDocumentClassificationContext.ExemptPaths
         )
+        $arrTrustedBaselineClassificationAuthorizedExemptionPaths = @(
+            $objBaselineDocumentClassificationContext.AuthorizedExemptionPaths
+        )
     }
 }
 $arrDocumentClassificationExpansionFailures = @(
@@ -7539,6 +7616,8 @@ $arrDocumentClassificationExpansionFailures = @(
             $boolHasTrustedBaselineClassificationManifest `
         -TrustedBaselineExemptPath `
             $arrTrustedBaselineClassificationExemptPaths `
+        -TrustedBaselineAuthorizedExemptionPath `
+            $arrTrustedBaselineClassificationAuthorizedExemptionPaths `
         -CandidateExemptPath $objDocumentClassificationContext.ExemptPaths
 )
 if ($arrDocumentClassificationExpansionFailures.Count -gt 0) {
@@ -7608,7 +7687,8 @@ if (-not [string]::IsNullOrEmpty($strDecisionInventoryBaseRevision) -and
             -RepositoryRootPath $strRepositoryRootPath `
             -Argument @(
                 'log', '--format=', '--name-only', '-z', '--no-renames',
-                $strDecisionInventoryRange, '--', ':(glob)**/decisions/**/*.md'
+                $strDecisionInventoryRange, '--',
+                ':(glob)docs/decisions/**/*.md'
             ) `
             -DisplayName 'decision records in the validation range'
     )
@@ -9313,19 +9393,29 @@ if ($SelfTest) {
                 'architecture/decisions/0005-design.md',
                 'docs/decisions/0004-future-record.md',
                 'docs/decisions/archive/0003-old-record.md',
+                'docs/user/decisions/provider-selection.md',
                 'docs/decisions/0005-not-markdown.txt',
                 'docs/decisions/0004-future-record.md'
             ))
-    if ($arrDecisionInventoryFixture.Count -ne 4 -or
+    if ($arrDecisionInventoryFixture.Count -ne 2 -or
         $arrDecisionInventoryFixture[0] -cne
-        '.github/decisions/0006-workflow.md' -or
-        $arrDecisionInventoryFixture[1] -cne
-        'architecture/decisions/0005-design.md' -or
-        $arrDecisionInventoryFixture[2] -cne
         'docs/decisions/0004-future-record.md' -or
-        $arrDecisionInventoryFixture[3] -cne
+        $arrDecisionInventoryFixture[1] -cne
         'docs/decisions/archive/0003-old-record.md') {
-        throw 'The decision inventory did not select every recursive decisions directory.'
+        throw 'The decision inventory did not select only the configured recursive root.'
+    }
+    $strOrdinaryDecisionsPath = 'docs/user/decisions/provider-selection.md'
+    $arrOrdinaryDecisionsSelection = @(Get-GovernedDecisionDocumentPath `
+            -CandidatePath @($strOrdinaryDecisionsPath))
+    $arrOrdinaryDecisionsDiscovery = @(
+        Get-DiscoveredGovernedMarkdownDocumentPath `
+            -CandidatePath @($strOrdinaryDecisionsPath) `
+            -KnownGovernedPath $arrOrdinaryDecisionsSelection `
+            -ExemptPath @($strOrdinaryDecisionsPath)
+    )
+    if ($arrOrdinaryDecisionsSelection.Count -ne 0 -or
+        $arrOrdinaryDecisionsDiscovery.Count -ne 0) {
+        throw 'An ordinary Tier 2 decisions-directory document was promoted.'
     }
 
     $arrDiscoveredMarkdownFixture = @(
@@ -9349,7 +9439,8 @@ if ($SelfTest) {
         -Content $strDocumentClassificationContent `
         -TrackedPath $arrTrackedRepositoryPaths
     if ($null -ne $objClassificationFixture.Failure -or
-        $objClassificationFixture.ExemptPaths.Count -ne 9) {
+        $objClassificationFixture.ExemptPaths.Count -ne 9 -or
+        $objClassificationFixture.AuthorizedExemptionPaths.Count -ne 0) {
         throw 'The repository document classification manifest is not canonical.'
     }
     $strClassificationNewLine = if ($strDocumentClassificationContent.Contains(
@@ -9365,24 +9456,24 @@ if ($SelfTest) {
         [pscustomobject]@{
             Name = 'wrong schema version'
             Content = $strDocumentClassificationContent.Replace(
-                '"schemaVersion": 1',
-                '"schemaVersion": 2'
+                '"schemaVersion": 2',
+                '"schemaVersion": 3'
             )
-            Expected = 'schemaVersion must be integer 1'
+            Expected = 'schemaVersion must be integer 2'
         },
         [pscustomobject]@{
             Name = 'unknown property'
             Content = $strDocumentClassificationContent.Replace(
-                '"schemaVersion": 1,',
-                '"unknown": true, "schemaVersion": 1,'
+                '"schemaVersion": 2,',
+                '"unknown": true, "schemaVersion": 2,'
             )
             Expected = 'unknown property'
         },
         [pscustomobject]@{
             Name = 'duplicate property'
             Content = $strDocumentClassificationContent.Replace(
-                '"schemaVersion": 1,',
-                '"schemaVersion": 1, "schemaVersion": 1,'
+                '"schemaVersion": 2,',
+                '"schemaVersion": 2, "schemaVersion": 2,'
             )
             Expected = 'duplicate property'
         },
@@ -9430,6 +9521,22 @@ if ($SelfTest) {
             Expected = 'repeats a path'
         },
         [pscustomobject]@{
+            Name = 'active authorization overlap'
+            Content = $strDocumentClassificationContent.Replace(
+                '"authorizedExemptionPaths": []',
+                '"authorizedExemptionPaths": ["README.md"]'
+            )
+            Expected = 'repeats a path'
+        },
+        [pscustomobject]@{
+            Name = 'unsafe authorization path'
+            Content = $strDocumentClassificationContent.Replace(
+                '"authorizedExemptionPaths": []',
+                '"authorizedExemptionPaths": ["../future.md"]'
+            )
+            Expected = 'unsafe path'
+        },
+        [pscustomobject]@{
             Name = 'trailing comma'
             Content = $strDocumentClassificationContent.Replace(
                 '"terraform.instructions.md"',
@@ -9461,11 +9568,27 @@ if ($SelfTest) {
             )
         }
     }
+    $strUntrackedAuthorizationPath = 'docs/future-end-user-guide.md'
+    $strAuthorizationFixtureContent = $strDocumentClassificationContent.Replace(
+        '"authorizedExemptionPaths": []',
+        '"authorizedExemptionPaths": ["' +
+            $strUntrackedAuthorizationPath + '"]'
+    )
+    $objAuthorizationFixture = Get-DocumentMetadataClassificationContext `
+        -Content $strAuthorizationFixtureContent `
+        -TrackedPath $arrTrackedRepositoryPaths
+    if ($null -ne $objAuthorizationFixture.Failure -or
+        $objAuthorizationFixture.AuthorizedExemptionPaths.Count -ne 1 -or
+        $objAuthorizationFixture.AuthorizedExemptionPaths[0] -cne
+            $strUntrackedAuthorizationPath) {
+        throw 'An inert future exemption authorization was rejected.'
+    }
     $arrClassificationExpansionBaseline = @('README.md', 'templates/README.md')
     $arrUnchangedClassificationExpansionFailures = @(
         Get-DocumentMetadataClassificationExpansionFailure `
             -HasTrustedBaselineManifest $true `
             -TrustedBaselineExemptPath $arrClassificationExpansionBaseline `
+            -TrustedBaselineAuthorizedExemptionPath @() `
             -CandidateExemptPath $arrClassificationExpansionBaseline
     )
     if ($arrUnchangedClassificationExpansionFailures.Count -ne 0) {
@@ -9475,6 +9598,7 @@ if ($SelfTest) {
         Get-DocumentMetadataClassificationExpansionFailure `
             -HasTrustedBaselineManifest $true `
             -TrustedBaselineExemptPath $arrClassificationExpansionBaseline `
+            -TrustedBaselineAuthorizedExemptionPath @() `
             -CandidateExemptPath @('README.md')
     )
     if ($arrClassificationRemovalFailures.Count -ne 0) {
@@ -9484,6 +9608,7 @@ if ($SelfTest) {
         Get-DocumentMetadataClassificationExpansionFailure `
             -HasTrustedBaselineManifest $true `
             -TrustedBaselineExemptPath $arrClassificationExpansionBaseline `
+            -TrustedBaselineAuthorizedExemptionPath @() `
             -CandidateExemptPath @(
                 'README.md',
                 'docs/RELEASE-RUNBOOK.md',
@@ -9493,13 +9618,32 @@ if ($SelfTest) {
     if ($arrClassificationAdditionFailures.Count -ne 1 -or
         $arrClassificationAdditionFailures[0] -cne
             ('The document classification adds an unauthenticated metadata ' +
-             'exemption: docs/RELEASE-RUNBOOK.md')) {
+             'exemption: docs/RELEASE-RUNBOOK.md. Add the exact path to ' +
+             'authorizedExemptionPaths in a separate change and publish that ' +
+             'authorization before activating the exemption.')) {
         throw 'A document classification exemption addition did not fail closed.'
+    }
+    $arrAuthorizedClassificationAdditionFailures = @(
+        Get-DocumentMetadataClassificationExpansionFailure `
+            -HasTrustedBaselineManifest $true `
+            -TrustedBaselineExemptPath $arrClassificationExpansionBaseline `
+            -TrustedBaselineAuthorizedExemptionPath @(
+                'docs/RELEASE-RUNBOOK.md'
+            ) `
+            -CandidateExemptPath @(
+                'README.md',
+                'docs/RELEASE-RUNBOOK.md',
+                'templates/README.md'
+            )
+    )
+    if ($arrAuthorizedClassificationAdditionFailures.Count -ne 0) {
+        throw 'A published exemption authorization was not consumable.'
     }
     $arrClassificationBootstrapFailures = @(
         Get-DocumentMetadataClassificationExpansionFailure `
             -HasTrustedBaselineManifest $false `
             -TrustedBaselineExemptPath @() `
+            -TrustedBaselineAuthorizedExemptionPath @() `
             -CandidateExemptPath @('README.md', 'docs/RELEASE-RUNBOOK.md')
     )
     if ($arrClassificationBootstrapFailures.Count -ne 0) {
@@ -11635,7 +11779,7 @@ if ($SelfTest) {
         $strUnicodeInstructionRepositoryPath =
             "$strUnicodeDirectoryName/AGENTS.md"
         $strUnicodeDecisionRepositoryPath =
-            "$strUnicodeDirectoryName/decisions/$strUnicodeDecisionFileName"
+            "docs/decisions/$strUnicodeDirectoryName/$strUnicodeDecisionFileName"
         foreach ($strUnicodeRepositoryPath in @(
                 $strUnicodeInstructionRepositoryPath,
                 $strUnicodeDecisionRepositoryPath
@@ -11729,7 +11873,7 @@ if ($SelfTest) {
                 -Argument @(
                     'log', '--format=', '--name-only', '-z', '--no-renames',
                     "$strMergeBaseCommit..$strUnicodeCommit", '--',
-                    ':(glob)**/decisions/**/*.md'
+                    ':(glob)docs/decisions/**/*.md'
                 ) `
                 -DisplayName 'non-ASCII range decision paths'
         )
