@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260911.2
+# Version: 1.2.20260911.3
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -7069,7 +7069,8 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
         '        run: node .github/workflows/Resolve-AgentInstructionFinalizationTime.mjs',
         '      - name: Resolve authenticated one-parent merge source',
         '          if (( ${#head_and_parents[@]} != 2 )); then',
-        '              `/repos/${repository}/commits/${head}/pulls?per_page=100&page=${page}`',
+        "          const apiRoot = apiUrl.replace(/\/+$/u, '');",
+        '              `${apiRoot}/repos/${repository}/commits/${head}/pulls?per_page=100&page=${page}`',
         "            pull?.state === 'closed' &&",
         '            pull?.base?.repo?.full_name === repository &&',
         '            pull?.base?.ref === defaultBranch &&',
@@ -13366,6 +13367,11 @@ if ($SelfTest) {
             Name = 'merge head identity removed'
             From = '            pull?.merge_commit_sha === head &&'
             To = '            pull?.merge_commit_sha !== head &&'
+        },
+        [pscustomobject]@{
+            Name = 'Enterprise API base prefix removed'
+            From = '              `${apiRoot}/repos/${repository}/commits/${head}/pulls?per_page=100&page=${page}`'
+            To = '              `/repos/${repository}/commits/${head}/pulls?per_page=100&page=${page}`'
         },
         [pscustomobject]@{
             Name = 'unchanged source identity accepted'

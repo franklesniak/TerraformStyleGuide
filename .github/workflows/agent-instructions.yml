@@ -184,10 +184,10 @@ jobs:
           }
 
           const records = [];
+          const apiRoot = apiUrl.replace(/\/+$/u, '');
           for (let page = 1; page <= 20; page += 1) {
             const url = new URL(
-              `/repos/${repository}/commits/${head}/pulls?per_page=100&page=${page}`,
-              apiUrl,
+              `${apiRoot}/repos/${repository}/commits/${head}/pulls?per_page=100&page=${page}`,
             );
             const response = await fetch(url, {
               headers: {
