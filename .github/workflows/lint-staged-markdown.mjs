@@ -13,6 +13,10 @@ const exitStatus = Object.freeze({
   lintFailure: 1,
   toolingFailure: 2
 });
+const normalizeMarkdownlintExitCode = (value) =>
+  value === exitStatus.success || value === exitStatus.lintFailure
+    ? value
+    : exitStatus.toolingFailure;
 
 let rootPackage;
 
@@ -107,13 +111,18 @@ let exitCode;
 
 try {
   const { main: markdownlintCli2 } = await import('markdownlint-cli2');
-  exitCode = await markdownlintCli2({
+  const markdownlintExitCode = await markdownlintCli2({
     directory: repoRoot,
     argv: ['--config', '.github/workflows/.markdownlint.jsonc'],
     nonFileContents: stagedMarkdownByAbsolutePosixPath,
     logMessage: console.log,
     logError: console.error
   });
+  exitCode = normalizeMarkdownlintExitCode(markdownlintExitCode);
+  if (exitCode === exitStatus.toolingFailure) {
+    console.error('pre-commit: Markdown lint tooling returned an unexpected exit status.');
+    console.error('Try reinstalling dev dependencies: npm --prefix .github/workflows ci');
+  }
 } catch (error) {
   console.error(error);
   console.error('pre-commit: Markdown lint tooling failed to run.');
@@ -121,11 +130,11 @@ try {
   process.exit(exitStatus.toolingFailure);
 }
 
-if (exitCode !== 0) {
+if (exitCode === exitStatus.lintFailure) {
   console.error('');
   console.error('pre-commit: Markdown lint failed for staged Markdown.');
   console.error('To check all Markdown files, run: npm --prefix .github/workflows run lint:md');
-} else {
+} else if (exitCode === exitStatus.success) {
   try {
     const require = createRequire(import.meta.url);
     const {

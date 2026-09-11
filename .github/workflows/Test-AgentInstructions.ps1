@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260910.5
+# Version: 1.2.20260910.8
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -107,7 +107,7 @@ $script:hashtableReviewedAgentSetupSha256 = @{
     '.husky/pre-commit' =
         '8989ab5075c077599a6dea88e656ac2837af4800e0bb5daef364514f00255467'
     '.github/workflows/lint-staged-markdown.mjs' =
-        'bdfa40197cb7a4c8720e3d402b426a741c03c30748a82c3a02d1d89765be54c9'
+        '6e8ac89afb17dd36f1edcf9b59ddfb066706fc6686be22e007c540ae20c810c2'
     '.pre-commit-config.yaml' =
         'e43a1ed2ad92bdb9407f9140ae40f7d46962181999e072f9a3724cf5cef2e946'
 }
@@ -736,7 +736,7 @@ function Read-RepositoryInputData {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.0.20260819.0
+    # Version: 1.1.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([byte])]
     param(
@@ -775,8 +775,98 @@ function Read-RepositoryInputData {
         }
     }
 
-    $strResolvedInputPath =
+    $strResolvedRepositoryRootPath = [System.IO.Path]::GetFullPath(
+        $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
+            $RepositoryRootPath
+        )
+    )
+    $strResolvedInputPath = [System.IO.Path]::GetFullPath(
         $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+    )
+    $objPathComparison = if ([System.OperatingSystem]::IsWindows()) {
+        [System.StringComparison]::OrdinalIgnoreCase
+    }
+    else {
+        [System.StringComparison]::Ordinal
+    }
+    $strRepositoryBoundary = $strResolvedRepositoryRootPath
+    if (-not $strRepositoryBoundary.EndsWith(
+            [System.IO.Path]::DirectorySeparatorChar
+        ) -and
+        -not $strRepositoryBoundary.EndsWith(
+            [System.IO.Path]::AltDirectorySeparatorChar
+        )) {
+        $strRepositoryBoundary += [System.IO.Path]::DirectorySeparatorChar
+    }
+    $strExpectedInputPath = [System.IO.Path]::GetFullPath(
+        [System.IO.Path]::Combine(
+            $strResolvedRepositoryRootPath,
+            $RepositoryRelativePath.Replace(
+                [System.IO.Path]::AltDirectorySeparatorChar,
+                [System.IO.Path]::DirectorySeparatorChar
+            )
+        )
+    )
+    if ([System.IO.Path]::IsPathRooted($RepositoryRelativePath) -or
+        $RepositoryRelativePath -match '(^|[\\/])\.{1,2}([\\/]|$)' -or
+        -not $strExpectedInputPath.StartsWith(
+            $strRepositoryBoundary,
+            $objPathComparison
+        ) -or
+        -not $strExpectedInputPath.Equals(
+            $strResolvedInputPath,
+            $objPathComparison
+        )) {
+        throw "Repository input is unsafe:`n- $DisplayName must resolve below the repository root."
+    }
+    $strCurrentAncestorPath = [System.IO.Path]::GetDirectoryName(
+        $strExpectedInputPath
+    )
+    while (-not [string]::IsNullOrEmpty($strCurrentAncestorPath) -and
+        -not $strCurrentAncestorPath.Equals(
+            $strResolvedRepositoryRootPath,
+            $objPathComparison
+        )) {
+        if (-not $strCurrentAncestorPath.StartsWith(
+                $strRepositoryBoundary,
+                $objPathComparison
+            )) {
+            throw "Repository input is unsafe:`n- $DisplayName must resolve below the repository root."
+        }
+        $objAncestorItem = Get-Item -Force -LiteralPath $strCurrentAncestorPath
+        $objAncestorLinkTypeProperty =
+            $objAncestorItem.PSObject.Properties['LinkType']
+        $strAncestorLinkType = if ($null -eq $objAncestorLinkTypeProperty) {
+            ''
+        }
+        else {
+            [string] $objAncestorLinkTypeProperty.Value
+        }
+        if ($objAncestorItem -isnot [System.IO.DirectoryInfo] -or
+            ($objAncestorItem.Attributes -band
+                [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            -not [string]::IsNullOrEmpty($strAncestorLinkType)) {
+            $strUnsafeAncestor = [System.IO.Path]::GetRelativePath(
+                $strResolvedRepositoryRootPath,
+                $strCurrentAncestorPath
+            ).Replace([System.IO.Path]::DirectorySeparatorChar, '/')
+            throw (
+                "Repository input is unsafe:`n- $DisplayName must not traverse " +
+                "a symbolic link or reparse point: $strUnsafeAncestor."
+            )
+        }
+        $strParentAncestorPath = [System.IO.Path]::GetDirectoryName(
+            $strCurrentAncestorPath
+        )
+        if ([string]::IsNullOrEmpty($strParentAncestorPath) -or
+            $strParentAncestorPath.Equals(
+                $strCurrentAncestorPath,
+                $objPathComparison
+            )) {
+            throw "Repository input is unsafe:`n- $DisplayName has an invalid parent path."
+        }
+        $strCurrentAncestorPath = $strParentAncestorPath
+    }
     $objInputItem = Get-Item -Force -LiteralPath $strResolvedInputPath
     $objLinkTypeProperty = $objInputItem.PSObject.Properties['LinkType']
     $strLinkType = if ($null -eq $objLinkTypeProperty) { '' } else { [string] $objLinkTypeProperty.Value }
@@ -1238,7 +1328,7 @@ function Get-GovernedDocumentParentContext {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.2.20260908.0
+    # Version: 1.3.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
@@ -1327,7 +1417,7 @@ function Get-GovernedDocumentParentContext {
         }
         $strParentRevision = $PublishedBaselineRevision
         $strExpectedUtcDate = if ($intDiffExitCode -eq 1) {
-            [DateTimeOffset]::UtcNow.ToString('yyyy-MM-dd')
+            $script:strMaximumMetadataUtcDate
         }
         else {
             ''
@@ -1362,7 +1452,7 @@ function Get-GovernedDocumentParentContext {
 
     if ($intDiffExitCode -eq 1) {
         $strParentRevision = 'HEAD'
-        $strExpectedUtcDate = [DateTimeOffset]::UtcNow.ToString('yyyy-MM-dd')
+        $strExpectedUtcDate = $script:strMaximumMetadataUtcDate
     }
     else {
         $strParentRevision = 'HEAD^'
@@ -1500,7 +1590,7 @@ function Get-HuskySetupContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.12.20260910.0
+    # Version: 1.13.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -1680,6 +1770,28 @@ function Get-HuskySetupContractFailure {
         $intStagedLintIndex -gt $intOuterLintIndex -or
         $intOuterLintIndex -gt $intNestedLintIndex) {
         Write-Output 'Husky must lint the staged index before both retained worktree phases.'
+    }
+    $arrStagedMarkdownExitContractLiterals = @(
+        'const normalizeMarkdownlintExitCode = (value) =>',
+        '  value === exitStatus.success || value === exitStatus.lintFailure',
+        '    : exitStatus.toolingFailure;',
+        '  exitCode = normalizeMarkdownlintExitCode(markdownlintExitCode);',
+        'if (exitCode === exitStatus.lintFailure) {',
+        '} else if (exitCode === exitStatus.success) {'
+    )
+    foreach ($strStagedMarkdownExitContractLiteral in
+        $arrStagedMarkdownExitContractLiterals) {
+        if ([regex]::Matches(
+                $StagedMarkdownHelperContent,
+                '(?m)^' + [regex]::Escape($strStagedMarkdownExitContractLiteral) +
+                '\r?$'
+            ).Count -ne 1) {
+            Write-Output (
+                'The staged-Markdown helper must normalize every dependency result ' +
+                'to exit status 0, 1, or 2.'
+            )
+            break
+        }
     }
 
     $hashtableReviewedSetupContent = @{
@@ -6659,7 +6771,7 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.3.20260910.0
+    # Version: 1.4.20260910.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -6668,6 +6780,12 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
     )
 
     $arrExactLiterals = @(
+        '  pull_request_target:',
+        '    types:',
+        '      - opened',
+        '      - synchronize',
+        '      - reopened',
+        '      - edited',
         '  actions: read',
         '  pull-requests: read',
         '      - name: Resolve trusted workflow-run finalization time',
@@ -8191,6 +8309,29 @@ if ($SelfTest) {
         '.github/workflows/lint-staged-markdown.mjs text must match the reviewed SHA-256 digest.') {
         throw 'The staged-Markdown helper digest mutation did not fail closed.'
     }
+    $strStagedMarkdownExitNormalizationMutation =
+        $strStagedMarkdownHelperContent.Replace(
+            '    : exitStatus.toolingFailure;',
+            '    : value;'
+        )
+    if ($strStagedMarkdownExitNormalizationMutation -ceq
+        $strStagedMarkdownHelperContent) {
+        throw 'Could not create the staged-Markdown exit-normalization mutation.'
+    }
+    $arrStagedMarkdownExitNormalizationFailures = @(
+        Get-HuskySetupContractFailure `
+            -RootPackageContent $strRootPackageContent `
+            -WorkflowPackageContent $strWorkflowPackageContent `
+            -WorkflowPackageLockContent $strWorkflowPackageLockContent `
+            -HookContent $strHuskyHookContent `
+            -CopilotSetupContent $strCopilotSetupContent `
+            -PreCommitConfigContent $strPreCommitConfigContent `
+            -StagedMarkdownHelperContent $strStagedMarkdownExitNormalizationMutation
+    )
+    if ($arrStagedMarkdownExitNormalizationFailures -cnotcontains
+        'The staged-Markdown helper must normalize every dependency result to exit status 0, 1, or 2.') {
+        throw 'The staged-Markdown exit-normalization mutation did not fail closed.'
+    }
     $arrStagedMarkdownSelectorMutationFailures = @(Get-HuskySetupContractFailure `
             -RootPackageContent $strRootPackageContent `
             -WorkflowPackageContent $strWorkflowPackageContent `
@@ -9599,6 +9740,109 @@ if ($SelfTest) {
         -Name 'Unix device mutation' `
         -UnixMode 'crw-rw-rw-' `
         -ExpectedFailure 'Unix device mutation must have a regular Unix file type.'
+
+    $strAncestorLinkFixtureRoot = [System.IO.Path]::GetFullPath(
+        [System.IO.Path]::Combine(
+            [System.IO.Path]::GetTempPath(),
+            'agent-instruction-ancestor-link-' + [guid]::NewGuid().ToString('N')
+        )
+    )
+    $strAncestorLinkSystemTempRoot = [System.IO.Path]::GetFullPath(
+        [System.IO.Path]::GetTempPath()
+    )
+    if (-not $strAncestorLinkFixtureRoot.StartsWith(
+            $strAncestorLinkSystemTempRoot,
+            [System.StringComparison]::OrdinalIgnoreCase
+        )) {
+        throw 'The ancestor-link fixture root escaped the system temporary directory.'
+    }
+    $strAncestorLinkRepositoryRoot = Join-Path `
+        -Path $strAncestorLinkFixtureRoot `
+        -ChildPath 'repository'
+    $strAncestorLinkExternalRoot = Join-Path `
+        -Path $strAncestorLinkFixtureRoot `
+        -ChildPath 'external'
+    $strAncestorLinkPath = Join-Path `
+        -Path $strAncestorLinkRepositoryRoot `
+        -ChildPath 'docs'
+    $strAncestorLinkTrackedPath = Join-Path `
+        -Path $strAncestorLinkPath `
+        -ChildPath 'input.md'
+    $strAncestorLinkExternalPath = Join-Path `
+        -Path $strAncestorLinkExternalRoot `
+        -ChildPath 'input.md'
+    try {
+        [void][System.IO.Directory]::CreateDirectory($strAncestorLinkPath)
+        [void][System.IO.Directory]::CreateDirectory($strAncestorLinkExternalRoot)
+        [System.IO.File]::WriteAllText(
+            $strAncestorLinkTrackedPath,
+            'tracked bytes',
+            [System.Text.UTF8Encoding]::new($false)
+        )
+        & git -C $strAncestorLinkRepositoryRoot init --quiet
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not initialize the ancestor-link fixture repository.'
+        }
+        & git -C $strAncestorLinkRepositoryRoot add -- docs/input.md
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not stage the ancestor-link fixture input.'
+        }
+        [System.IO.File]::Delete($strAncestorLinkTrackedPath)
+        [System.IO.Directory]::Delete($strAncestorLinkPath)
+        [System.IO.File]::WriteAllText(
+            $strAncestorLinkExternalPath,
+            'external bytes',
+            [System.Text.UTF8Encoding]::new($false)
+        )
+        if ([System.OperatingSystem]::IsWindows()) {
+            [void](New-Item `
+                    -ItemType Junction `
+                    -Path $strAncestorLinkPath `
+                    -Target $strAncestorLinkExternalRoot)
+        }
+        else {
+            [void](New-Item `
+                    -ItemType SymbolicLink `
+                    -Path $strAncestorLinkPath `
+                    -Target $strAncestorLinkExternalRoot)
+        }
+        $boolAncestorLinkRejected = $false
+        try {
+            [void](Read-RepositoryInputData `
+                    -Path $strAncestorLinkTrackedPath `
+                    -RepositoryRootPath $strAncestorLinkRepositoryRoot `
+                    -RepositoryRelativePath 'docs/input.md' `
+                    -DisplayName 'ancestor-link fixture' `
+                    -MaximumBytes 1024)
+        }
+        catch {
+            $strExpectedAncestorLinkFailure =
+                "Repository input is unsafe:`n- ancestor-link fixture must not " +
+                'traverse a symbolic link or reparse point: docs.'
+            if ($_.Exception.Message -cne $strExpectedAncestorLinkFailure) {
+                throw (
+                    'The ancestor-link fixture returned an unexpected failure: ' +
+                    $_.Exception.Message
+                )
+            }
+            $boolAncestorLinkRejected = $true
+        }
+        if (-not $boolAncestorLinkRejected) {
+            throw 'The ancestor-link fixture was accepted.'
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $strAncestorLinkPath) {
+            Remove-Item -LiteralPath $strAncestorLinkPath -Force
+        }
+        if ([System.IO.Directory]::Exists($strAncestorLinkFixtureRoot) -and
+            $strAncestorLinkFixtureRoot.StartsWith(
+                $strAncestorLinkSystemTempRoot,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )) {
+            Remove-Item -LiteralPath $strAncestorLinkFixtureRoot -Recurse -Force
+        }
+    }
 
     Assert-OversizedStreamMutationRejected
 
@@ -12364,35 +12608,43 @@ if ($SelfTest) {
         if ($LASTEXITCODE -ne 1) {
             throw 'The dirty published-baseline fixture did not become dirty.'
         }
-        $objDirtyPublishedContext = Get-GovernedDocumentParentContext `
-            -RepositoryRootPath $strMergeFixtureRoot `
-            -RepositoryRelativePath 'AGENTS.md' `
-            -MaximumBytes $intAgentsMaximumInputBytes `
-            -PublishedBaselineRevision $strResolvedPublishedBaseline
-        if ($objDirtyPublishedContext.ParentRevision -cne $strMergeBaseCommit -or
-            $objDirtyPublishedContext.ParentContent -cne $strMergeBaseContent -or
-            $objDirtyPublishedContext.ExpectedUtcDate -cne
-                $script:strMaximumMetadataUtcDate -or
-            -not $objDirtyPublishedContext.IsWorktreeTransition) {
-            throw (
-                'A dirty multi-commit topic did not use HEAD and the current UTC date.'
-            )
+        $strSavedMaximumMetadataUtcDate = $script:strMaximumMetadataUtcDate
+        $strDirtyFixtureUtcDate = '2030-01-02'
+        $script:strMaximumMetadataUtcDate = $strDirtyFixtureUtcDate
+        try {
+            $objDirtyPublishedContext = Get-GovernedDocumentParentContext `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -RepositoryRelativePath 'AGENTS.md' `
+                -MaximumBytes $intAgentsMaximumInputBytes `
+                -PublishedBaselineRevision $strResolvedPublishedBaseline
+            if ($objDirtyPublishedContext.ParentRevision -cne $strMergeBaseCommit -or
+                $objDirtyPublishedContext.ParentContent -cne $strMergeBaseContent -or
+                $objDirtyPublishedContext.ExpectedUtcDate -cne
+                    $strDirtyFixtureUtcDate -or
+                -not $objDirtyPublishedContext.IsWorktreeTransition) {
+                throw (
+                    'A dirty multi-commit topic did not use HEAD and the trusted UTC date.'
+                )
+            }
+            $arrDirtyPublishedFailures = @(Get-DocumentMetadataTransitionFailure `
+                    -Name 'AGENTS.md' `
+                    -CurrentContent (
+                        $strMergeTopicContent + [Environment]::NewLine +
+                        'Dirty final state.'
+                    ) `
+                    -ParentContent $objDirtyPublishedContext.ParentContent `
+                    -ExpectedUtcDate $objDirtyPublishedContext.ExpectedUtcDate `
+                    -IsNewDocumentTransition $false)
+            if ($arrDirtyPublishedFailures.Count -eq 0 -or
+                -not ($arrDirtyPublishedFailures -join '; ').Contains(
+                    "Last Updated must be $strDirtyFixtureUtcDate",
+                    [System.StringComparison]::Ordinal
+                )) {
+                throw 'Dirty published-baseline metadata did not require the trusted UTC date.'
+            }
         }
-        $arrDirtyPublishedFailures = @(Get-DocumentMetadataTransitionFailure `
-                -Name 'AGENTS.md' `
-                -CurrentContent (
-                    $strMergeTopicContent + [Environment]::NewLine +
-                    'Dirty final state.'
-                ) `
-                -ParentContent $objDirtyPublishedContext.ParentContent `
-                -ExpectedUtcDate $objDirtyPublishedContext.ExpectedUtcDate `
-                -IsNewDocumentTransition $false)
-        if ($arrDirtyPublishedFailures.Count -eq 0 -or
-            -not ($arrDirtyPublishedFailures -join '; ').Contains(
-                "Last Updated must be $script:strMaximumMetadataUtcDate",
-                [System.StringComparison]::Ordinal
-            )) {
-            throw 'Dirty published-baseline metadata did not require the current UTC date.'
+        finally {
+            $script:strMaximumMetadataUtcDate = $strSavedMaximumMetadataUtcDate
         }
 
         & git -C $strMergeFixtureRoot symbolic-ref --delete refs/remotes/origin/HEAD
@@ -13008,6 +13260,21 @@ if ($SelfTest) {
                 'and must not use a path filter.'
             )
         }
+        $strExpectedPullRequestTargetBody =
+            "    types:`n" +
+            "      - opened`n" +
+            "      - synchronize`n" +
+            "      - reopened`n" +
+            '      - edited'
+        $strNormalizedPullRequestTargetBody =
+            $objTriggerMatch.Groups['Body'].Value.Replace("`r`n", "`n").TrimEnd("`n")
+        if ($strNormalizedPullRequestTargetBody -cne
+            $strExpectedPullRequestTargetBody) {
+            Write-Output (
+                'The pull_request_target agent-validation trigger must subscribe ' +
+                'exactly to opened, synchronize, reopened, and edited.'
+            )
+        }
     }
 
     $arrRequiredTriggerPaths = @(
@@ -13146,8 +13413,8 @@ if ($SelfTest) {
         }
     }
     $strFilteredPullRequestTargetWorkflow = $strAgentWorkflowContent.Replace(
-        "  pull_request_target:`n",
-        "  pull_request_target:`n    paths:`n      - AGENTS.md`n"
+        "      - edited`n",
+        "      - edited`n    paths:`n      - AGENTS.md`n"
     )
     if ($strFilteredPullRequestTargetWorkflow -ceq $strAgentWorkflowContent) {
         throw 'Could not create the pull_request_target path-filter mutation.'
@@ -13159,6 +13426,21 @@ if ($SelfTest) {
     if (-not ($arrFilteredPullRequestTargetFailures -match
             'must be unconditional and must not use a path filter')) {
         throw 'The pull_request_target path-filter mutation did not fail closed.'
+    }
+    $strUnretargetedPullRequestTargetWorkflow = $strAgentWorkflowContent.Replace(
+        "      - edited`n",
+        ''
+    )
+    if ($strUnretargetedPullRequestTargetWorkflow -ceq $strAgentWorkflowContent) {
+        throw 'Could not create the pull_request_target edited-removal mutation.'
+    }
+    $arrUnretargetedPullRequestTargetFailures = @(
+        & $scriptBlockGetPullRequestTargetFailures `
+            -WorkflowContent $strUnretargetedPullRequestTargetWorkflow
+    )
+    if (-not ($arrUnretargetedPullRequestTargetFailures -match
+            'must subscribe exactly to opened, synchronize, reopened, and edited')) {
+        throw 'The pull_request_target edited-removal mutation did not fail closed.'
     }
 
     $arrUnchangedFailures = @(Get-TrustRootRangeMutationFailure `
