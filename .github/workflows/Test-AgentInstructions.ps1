@@ -99,7 +99,7 @@ $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
 $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/copilot-setup-steps.yml' =
-        '9a40aed7450605390c3028dbbc6841db7fb45d84ac5f1d64efe756ffae34a980'
+        '86ad7afdf584156f6f6a47497e45344d7fdf8044bbeb1db503d86ce2ae6b173f'
     '.github/workflows/package.json' =
         '3f9a89e9f0abc17c81a7268c15d8c82eef5f766ecaf1b9b82e7b2cc7bd6c7c19'
     '.github/workflows/package-lock.json' =
