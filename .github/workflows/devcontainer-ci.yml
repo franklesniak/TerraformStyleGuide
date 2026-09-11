@@ -26,13 +26,33 @@ jobs:
     env:
       EXPECTED_REPOSITORY: ${{ github.repository }}
       EXPECTED_REVISION: ${{ github.sha }}
+      EXPECTED_SERVER_URL: ${{ github.server_url }}
     steps:
       - name: Acquire the event commit anonymously and verify the boundary
         shell: bash
         run: |
           set -euo pipefail
-          [[ "${EXPECTED_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
           [[ "${EXPECTED_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+
+          build_repository_url() {
+            local server_url="${1%/}"
+            local repository="$2"
+            [[ "${server_url}" =~ ^https?://[^/?#[:space:]]+$ ]] || return 1
+            [[ "${repository}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
+            printf '%s/%s.git\n' "${server_url}" "${repository}"
+          }
+
+          test "$(build_repository_url \
+            'https://github.com' 'owner/repository')" = \
+            'https://github.com/owner/repository.git'
+          test "$(build_repository_url \
+            'https://ghe.example/' 'owner/repository')" = \
+            'https://ghe.example/owner/repository.git'
+          if build_repository_url \
+            'https://ghe.example/path' 'owner/repository'; then
+            printf '%s\n' 'A server URL with a path was accepted.' >&2
+            exit 1
+          fi
 
           has_devcontainer_entry() {
             local candidate_path=''
@@ -128,8 +148,12 @@ jobs:
           test ! -e "${checkout_root}"
           /usr/bin/mkdir -m 0700 -- "${checkout_root}"
           /usr/bin/git -C "${checkout_root}" init --quiet
+          repository_remote="$(
+            build_repository_url "${EXPECTED_SERVER_URL}" "${EXPECTED_REPOSITORY}"
+          )"
+          readonly repository_remote
           /usr/bin/git -C "${checkout_root}" remote add origin \
-            "https://github.com/${EXPECTED_REPOSITORY}.git"
+            "${repository_remote}"
           /usr/bin/git -C "${checkout_root}" \
             -c credential.helper= \
             -c core.askPass= \
