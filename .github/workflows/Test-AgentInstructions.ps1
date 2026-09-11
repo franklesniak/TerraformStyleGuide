@@ -13301,6 +13301,11 @@ if ($SelfTest) {
         '      run?.workflow_id !== expected.workflowId ||',
         '       (run?.status !== ''completed'' || run?.conclusion !== ''success'')) ||',
         '  const pushCandidates = await readHistoricalRuns({',
+        '    return readForkHeadPublication({',
+        '  url.searchParams.set(''ref'', `refs/heads/${headRefName}`);',
+        '    null,',
+        "  if (!['push', 'force_push', 'branch_creation'].includes(activity.activity_type)) {",
+        "      'No exact fork-head publication activity matches this revision and ref.',",
         '  const pullRequestCandidates = await readHistoricalRuns({',
         '  candidates.sort((left, right) => left.createdTime - right.createdTime);',
         '    return pushCandidates[0].createdAt;',
@@ -13341,7 +13346,7 @@ if ($SelfTest) {
     if ($intFinalizationResolverSelfTestExit -ne 0 -or
         $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
         [string]$arrFinalizationResolverSelfTestOutput[0] -cne
-        'Finalization resolver self-tests passed: 22 fixtures.') {
+        'Finalization resolver self-tests passed: 29 fixtures.') {
         throw (
             'The finalization-time resolver self-test failed: ' +
             ($arrFinalizationResolverSelfTestOutput -join '; ')

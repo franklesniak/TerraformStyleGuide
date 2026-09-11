@@ -21,12 +21,15 @@ function parseTimestamp(value, maximumTime, displayName) {
 }
 
 async function readJson(url, token, fetchImplementation, displayName) {
+  const headers = {
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
   const response = await fetchImplementation(url, {
-    headers: {
-      Accept: 'application/vnd.github+json',
-      Authorization: `Bearer ${token}`,
-      'X-GitHub-Api-Version': '2022-11-28',
-    },
+    headers,
   });
   if (!response?.ok) {
     throw new Error(`${displayName} failed: ${response?.status ?? 'unknown'}.`);
@@ -35,6 +38,89 @@ async function readJson(url, token, fetchImplementation, displayName) {
     headers: response.headers,
     value: await response.json(),
   };
+}
+
+function validateRepositoryActivity(activity, expected, currentCreatedTime) {
+  const knownActivityTypes = [
+    'push',
+    'force_push',
+    'branch_creation',
+    'branch_deletion',
+    'pr_merge',
+    'merge_queue_merge',
+  ];
+  if (!Number.isSafeInteger(activity?.id) || activity.id <= 0 ||
+      !knownActivityTypes.includes(activity?.activity_type) ||
+      activity?.ref !== expected.ref) {
+    throw new Error('A fork-head repository activity has an unexpected identity.');
+  }
+  const createdTime = parseTimestamp(
+    activity.timestamp,
+    currentCreatedTime,
+    'A fork-head repository-activity timestamp',
+  );
+  if (!['push', 'force_push', 'branch_creation'].includes(activity.activity_type)) {
+    return null;
+  }
+  if (!objectIdPattern.test(activity?.before ?? '') ||
+      !objectIdPattern.test(activity?.after ?? '')) {
+    throw new Error('A fork-head publication activity has a malformed revision.');
+  }
+  if (activity.after !== expected.revision) {
+    return null;
+  }
+  return { createdAt: activity.timestamp, createdTime };
+}
+
+async function readForkHeadPublication({
+  root,
+  headRepository,
+  headRefName,
+  headRevision,
+  fetchImplementation,
+  currentCreatedTime,
+}) {
+  const url = new URL(`${root}/repos/${headRepository}/activity`);
+  url.searchParams.set('direction', 'desc');
+  url.searchParams.set('per_page', String(recordsPerPage));
+  url.searchParams.set('ref', `refs/heads/${headRefName}`);
+  const response = await readJson(
+    url,
+    null,
+    fetchImplementation,
+    'Fork-head repository-activity lookup',
+  );
+  if (!Array.isArray(response.value)) {
+    throw new Error('The fork-head repository-activity response is malformed.');
+  }
+
+  const seenIds = new Set();
+  const candidates = [];
+  const expected = {
+    ref: `refs/heads/${headRefName}`,
+    revision: headRevision,
+  };
+  for (const activity of response.value) {
+    if (seenIds.has(activity?.id)) {
+      throw new Error('The fork-head repository-activity response contains a duplicate.');
+    }
+    seenIds.add(activity?.id);
+    const candidate = validateRepositoryActivity(
+      activity,
+      expected,
+      currentCreatedTime,
+    );
+    if (candidate) {
+      candidates.push(candidate);
+    }
+  }
+  candidates.sort((left, right) => right.createdTime - left.createdTime);
+  if (candidates.length === 0) {
+    throw new Error(
+      'No exact fork-head publication activity matches this revision and ref.',
+    );
+  }
+  return candidates[0].createdAt;
 }
 
 function validateCurrentRun(run, expected) {
@@ -196,6 +282,17 @@ export async function resolveFinalizationTimestamp({
     return currentRun.created_at;
   }
 
+  if (eventName === 'pull_request_target' && runHeadRepository !== repository) {
+    return readForkHeadPublication({
+      root,
+      headRepository: runHeadRepository,
+      headRefName: runHeadRefName,
+      headRevision: runHeadRevision,
+      fetchImplementation,
+      currentCreatedTime,
+    });
+  }
+
   const expectedPush = {
     repository,
     headRepository: repository,
@@ -282,15 +379,40 @@ function makeHistoricalRun(overrides = {}) {
   });
 }
 
+function makeActivity(overrides = {}) {
+  return {
+    id: 10,
+    activity_type: 'push',
+    before: 'b'.repeat(40),
+    after: 'a'.repeat(40),
+    ref: 'refs/heads/topic/branch',
+    timestamp: '2026-09-10T10:00:00Z',
+    ...overrides,
+  };
+}
+
 function makeFixtureFetch({
   current = makeRun(),
   pages = [],
   pullRequestPages = [],
+  forkActivities = [],
 }) {
-  return async (request) => {
+  return async (request, options) => {
     const url = new URL(String(request));
+    if (url.pathname === '/api/v3/repos/fork-owner/repository/activity') {
+      if (options?.headers?.Authorization ||
+          url.searchParams.get('direction') !== 'desc' ||
+          url.searchParams.get('per_page') !== String(recordsPerPage) ||
+          url.searchParams.get('ref') !== 'refs/heads/topic/branch') {
+        throw new Error('The fork-head activity query is not exact or anonymous.');
+      }
+      return makeResponse(forkActivities);
+    }
     if (!url.pathname.startsWith('/api/v3/repos/owner/repository/')) {
       throw new Error('The API base path was not preserved.');
+    }
+    if (options?.headers?.Authorization !== 'Bearer fixture-token') {
+      throw new Error('A base-repository API request was not authenticated.');
     }
     if (url.pathname.endsWith('/actions/runs/1')) {
       return makeResponse(current);
@@ -379,17 +501,20 @@ export async function runSelfTest() {
     ...base,
     eventName: 'pull_request_target',
     runHeadRepository: 'fork-owner/repository',
+    now: Date.parse('2026-09-11T00:01:00Z'),
     fetchImplementation: makeFixtureFetch({
       current: makeRun({
         event: 'pull_request_target',
         head_repository: { full_name: 'fork-owner/repository' },
+        created_at: '2026-09-11T00:00:05Z',
       }),
+      forkActivities: [makeActivity({ timestamp: '2026-09-10T23:59:55Z' })],
     }),
   });
   assertEqual(
-    'initial pull request falls back to current run',
+    'initial fork pull request preserves the preceding UTC date',
     initialPullRequestTimestamp,
-    '2026-09-10T12:00:00Z',
+    '2026-09-10T23:59:55Z',
   );
 
   const reopenedPullRequestTimestamp = await resolveFinalizationTimestamp({
@@ -401,22 +526,120 @@ export async function runSelfTest() {
         event: 'pull_request_target',
         head_repository: { full_name: 'fork-owner/repository' },
       }),
-      pullRequestPages: [makeResponse({
-        total_count: 1,
-        workflow_runs: [makeHistoricalRun({
-          event: 'pull_request_target',
-          head_repository: { full_name: 'fork-owner/repository' },
-          status: 'completed',
-          conclusion: 'failure',
-          created_at: '2026-09-09T23:59:59Z',
-        })],
+      forkActivities: [makeActivity({
+        activity_type: 'force_push',
+        timestamp: '2026-09-09T23:59:59Z',
       })],
     }),
   });
   assertEqual(
-    'reopened pull request preserves earliest exact-head run',
+    'fork force push supplies the exact publication time',
     reopenedPullRequestTimestamp,
     '2026-09-09T23:59:59Z',
+  );
+
+  const branchCreationTimestamp = await resolveFinalizationTimestamp({
+    ...base,
+    eventName: 'pull_request_target',
+    runHeadRepository: 'fork-owner/repository',
+    fetchImplementation: makeFixtureFetch({
+      current: makeRun({
+        event: 'pull_request_target',
+        head_repository: { full_name: 'fork-owner/repository' },
+      }),
+      forkActivities: [makeActivity({ activity_type: 'branch_creation' })],
+    }),
+  });
+  assertEqual(
+    'fork branch creation supplies the exact publication time',
+    branchCreationTimestamp,
+    '2026-09-10T10:00:00Z',
+  );
+
+  const latestForkPublicationTimestamp = await resolveFinalizationTimestamp({
+    ...base,
+    eventName: 'pull_request_target',
+    runHeadRepository: 'fork-owner/repository',
+    fetchImplementation: makeFixtureFetch({
+      current: makeRun({
+        event: 'pull_request_target',
+        head_repository: { full_name: 'fork-owner/repository' },
+      }),
+      forkActivities: [
+        makeActivity({ id: 11, timestamp: '2026-09-10T11:00:00Z' }),
+        makeActivity({ id: 12, timestamp: '2026-09-10T10:00:00Z' }),
+      ],
+    }),
+  });
+  assertEqual(
+    'fork selects the latest exact publication time',
+    latestForkPublicationTimestamp,
+    '2026-09-10T11:00:00Z',
+  );
+
+  const forkBase = {
+    ...base,
+    eventName: 'pull_request_target',
+    runHeadRepository: 'fork-owner/repository',
+  };
+  const forkCurrent = makeRun({
+    event: 'pull_request_target',
+    head_repository: { full_name: 'fork-owner/repository' },
+  });
+  await reject(
+    'missing exact fork publication',
+    () => resolveFinalizationTimestamp({
+      ...forkBase,
+      fetchImplementation: makeFixtureFetch({
+        current: forkCurrent,
+        forkActivities: [makeActivity({ after: 'c'.repeat(40) })],
+      }),
+    }),
+    /No exact fork-head publication activity/u,
+  );
+  await reject(
+    'malformed fork publication revision',
+    () => resolveFinalizationTimestamp({
+      ...forkBase,
+      fetchImplementation: makeFixtureFetch({
+        current: forkCurrent,
+        forkActivities: [makeActivity({ before: 'invalid' })],
+      }),
+    }),
+    /malformed revision/u,
+  );
+  await reject(
+    'mismatched fork publication ref',
+    () => resolveFinalizationTimestamp({
+      ...forkBase,
+      fetchImplementation: makeFixtureFetch({
+        current: forkCurrent,
+        forkActivities: [makeActivity({ ref: 'refs/heads/other' })],
+      }),
+    }),
+    /unexpected identity/u,
+  );
+  await reject(
+    'future fork publication timestamp',
+    () => resolveFinalizationTimestamp({
+      ...forkBase,
+      fetchImplementation: makeFixtureFetch({
+        current: forkCurrent,
+        forkActivities: [makeActivity({ timestamp: '2026-09-10T12:00:01Z' })],
+      }),
+    }),
+    /repository-activity timestamp.*invalid/u,
+  );
+  await reject(
+    'duplicate fork publication activity',
+    () => resolveFinalizationTimestamp({
+      ...forkBase,
+      fetchImplementation: makeFixtureFetch({
+        current: forkCurrent,
+        forkActivities: [makeActivity(), makeActivity()],
+      }),
+    }),
+    /contains a duplicate/u,
   );
 
   const paginatedTimestamp = await resolveFinalizationTimestamp({
