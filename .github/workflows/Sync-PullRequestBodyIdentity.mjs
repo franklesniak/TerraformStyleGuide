@@ -10,7 +10,7 @@ import path from 'node:path';
 import { TextDecoder } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-const TOOL_VERSION = '1.0.20260912.3';
+const TOOL_VERSION = '1.0.20260912.4';
 const RESULT_SCHEMA = 'TerraformStyleGuide.PullRequestBodyIdentityResult.v1';
 const CASE_SCHEMA = 'TerraformStyleGuide.PullRequestBodyIdentityCases.v1';
 const IDENTITY_SCHEMA = 'TerraformStyleGuide.PullRequestBodyIdentity.v1';
@@ -745,6 +745,19 @@ function consumeApiResponse(response, request) {
   });
 }
 
+function createApiDeadline(milliseconds) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(new Error('api-deadline'));
+  }, milliseconds);
+  return {
+    signal: controller.signal,
+    clear() {
+      clearTimeout(timer);
+    },
+  };
+}
+
 function apiRequest(apiRoot, token, method, relativePath, requestBody) {
   validateApiToken(token);
   assert(['GET', 'PATCH'].includes(method) &&
@@ -758,23 +771,43 @@ function apiRequest(apiRoot, token, method, relativePath, requestBody) {
     Buffer.from(JSON.stringify(requestBody), 'utf8');
   assert(bodyBytes.length <= MAXIMUM_BODY_BYTES + 4096, 'api-request');
   return new Promise((resolve, reject) => {
-    const request = https.request(url, {
-      method,
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${token}`,
-        'Content-Length': String(bodyBytes.length),
-        'Content-Type': 'application/json',
-        'User-Agent': `TerraformStyleGuide-PR-Body-Identity/${TOOL_VERSION}`,
-        'X-GitHub-Api-Version': API_VERSION,
-      },
-      timeout: REQUEST_TIMEOUT_MILLISECONDS,
-    }, (response) => consumeApiResponse(response, request)
-      .then(resolve, reject));
-    request.on('timeout', () => request.destroy(new Error('api-timeout')));
-    request.on('error', reject);
-    if (bodyBytes.length !== 0) request.write(bodyBytes);
-    request.end();
+    const deadline = createApiDeadline(REQUEST_TIMEOUT_MILLISECONDS);
+    let settled = false;
+    const settle = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      deadline.clear();
+      callback(value);
+    };
+    let request;
+    try {
+      request = https.request(url, {
+        method,
+        headers: {
+          Accept: 'application/vnd.github+json',
+          Authorization: `Bearer ${token}`,
+          'Content-Length': String(bodyBytes.length),
+          'Content-Type': 'application/json',
+          'User-Agent': `TerraformStyleGuide-PR-Body-Identity/${TOOL_VERSION}`,
+          'X-GitHub-Api-Version': API_VERSION,
+        },
+        signal: deadline.signal,
+        timeout: REQUEST_TIMEOUT_MILLISECONDS,
+      }, (response) => consumeApiResponse(response, request)
+        .then(
+          (value) => settle(resolve, value),
+          (error) => settle(reject, error),
+        ));
+      request.once('timeout', () => {
+        request.destroy(new Error('api-timeout'));
+      });
+      request.once('error', (error) => settle(reject, error));
+      if (bodyBytes.length !== 0) request.write(bodyBytes);
+      request.end();
+    } catch (error) {
+      if (request !== undefined) request.destroy();
+      settle(reject, error);
+    }
   });
 }
 
@@ -1236,6 +1269,19 @@ async function runApiResponseEventSelfTests() {
   return 2;
 }
 
+async function runApiDeadlineSelfTests() {
+  const expired = createApiDeadline(1);
+  const cleared = createApiDeadline(1);
+  cleared.clear();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert(expired.signal.aborted && expired.signal.reason instanceof Error &&
+    expired.signal.reason.message === 'api-deadline',
+  'api-deadline-expiry-self-test');
+  expired.clear();
+  assert(!cleared.signal.aborted, 'api-deadline-clear-self-test');
+  return 2;
+}
+
 async function runCaseCatalog(catalog, repositoryRoot) {
   const identity = fixtureIdentity();
   validateIdentity(identity);
@@ -1254,6 +1300,7 @@ async function runCaseCatalog(catalog, repositoryRoot) {
     passed += 1;
   }
   passed += await runApiResponseEventSelfTests();
+  passed += await runApiDeadlineSelfTests();
   const baselineSnapshot = collectSnapshot(repositoryRoot);
   const originalGitDirectory = process.env.GIT_DIR;
   try {
