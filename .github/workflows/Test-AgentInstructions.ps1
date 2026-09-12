@@ -30,6 +30,10 @@
 # Indicates that a push created the ref and RangeBaseRevision is Git's
 # all-zero no-prior-ref sentinel.
 #
+# .PARAMETER RangeComparisonMode
+# Selects merge-base comparison for pull requests and synthetic ranges, or
+# authenticated published-endpoint comparison for an existing direct push.
+#
 # .PARAMETER AutomatedMergeSourceRevision
 # The authenticated pull-request head for a one-parent automated merge result.
 # The empty default disables that narrowly proved transition mode.
@@ -53,7 +57,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.3.20260912.2
+# Version: 1.3.20260912.3
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -78,6 +82,10 @@ param(
 
     [Parameter()]
     [switch] $RangeIsNewRef,
+
+    [Parameter()]
+    [ValidateSet('MergeBase', 'PublishedEndpoints')]
+    [string] $RangeComparisonMode = 'MergeBase',
 
     [Parameter()]
     [AllowEmptyString()]
@@ -126,6 +134,7 @@ if ($RequireStagedInputMatch -and (
         -not [string]::IsNullOrEmpty($RangeBaseRevision) -or
         -not [string]::IsNullOrEmpty($RangeHeadRevision) -or
         $RangeIsNewRef -or
+        $RangeComparisonMode -ne 'MergeBase' -or
         -not [string]::IsNullOrEmpty($AutomatedMergeSourceRevision) -or
         -not [string]::IsNullOrEmpty($TrustedFinalizationTimestamp)
     )) {
@@ -5964,6 +5973,10 @@ function Get-GovernedDocumentRangeTransitionFailure {
     # .PARAMETER IsNewRefRange
     # Indicates that the event created a ref and supplied an all-zero base.
     #
+    # .PARAMETER RangeComparisonMode
+    # Uses the unique merge base for pull requests and synthetic ranges. Uses
+    # the authenticated event endpoints for an existing direct push.
+    #
     # .PARAMETER PolicyRepositoryRelativePath
     # The repository-relative file that contains the policy marker.
     #
@@ -5999,7 +6012,7 @@ function Get-GovernedDocumentRangeTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.11.20260912.0
+    # Version: 1.12.20260912.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -6034,6 +6047,10 @@ function Get-GovernedDocumentRangeTransitionFailure {
 
         [Parameter(Mandatory)]
         [bool] $IsNewRefRange,
+
+        [Parameter()]
+        [ValidateSet('MergeBase', 'PublishedEndpoints')]
+        [string] $RangeComparisonMode = 'MergeBase',
 
         [Parameter(Mandatory)]
         [string] $PolicyRepositoryRelativePath,
@@ -6077,6 +6094,9 @@ function Get-GovernedDocumentRangeTransitionFailure {
         if ($IsNewRefRange) {
             throw 'A new-ref metadata event range must supply base and head revisions.'
         }
+        if ($RangeComparisonMode -eq 'PublishedEndpoints') {
+            throw 'Published-endpoint comparison requires a metadata event range.'
+        }
         if (-not [string]::IsNullOrEmpty($AutomatedMergeSourceRevision)) {
             throw 'An automated merge source requires a metadata event range.'
         }
@@ -6099,7 +6119,9 @@ function Get-GovernedDocumentRangeTransitionFailure {
     if ($HeadRevision -match $strZeroObjectIdPattern) {
         throw 'The metadata event-range head must not be an all-zero object ID.'
     }
-
+    if ($RangeComparisonMode -eq 'PublishedEndpoints' -and $IsNewRefRange) {
+        throw 'Published-endpoint comparison cannot validate a new-ref range.'
+    }
     if (-not [string]::IsNullOrEmpty($AutomatedMergeSourceRevision)) {
         if ($IsNewRefRange) {
             throw 'A new-ref metadata event range cannot use an automated merge source.'
@@ -6255,22 +6277,27 @@ function Get-GovernedDocumentRangeTransitionFailure {
 
     $strPublishedComparisonRevision = ''
     if (-not [string]::IsNullOrEmpty($strEffectiveBaseRevision)) {
-        $arrPublishedMergeBaseRevisions = @(
-            & git -C $RepositoryRootPath merge-base --all `
-                $strEffectiveBaseRevision $HeadRevision 2>$null
-        )
-        if ($LASTEXITCODE -ne 0 -or $arrPublishedMergeBaseRevisions.Count -ne 1) {
-            throw 'The published metadata range must have exactly one merge base.'
+        if ($RangeComparisonMode -eq 'PublishedEndpoints') {
+            $strPublishedComparisonRevision = $strEffectiveBaseRevision
         }
-        $strPublishedComparisonRevision =
-            ([string]$arrPublishedMergeBaseRevisions[0]).Trim()
+        else {
+            $arrPublishedMergeBaseRevisions = @(
+                & git -C $RepositoryRootPath merge-base --all `
+                    $strEffectiveBaseRevision $HeadRevision 2>$null
+            )
+            if ($LASTEXITCODE -ne 0 -or $arrPublishedMergeBaseRevisions.Count -ne 1) {
+                throw 'The published metadata range must have exactly one merge base.'
+            }
+            $strPublishedComparisonRevision =
+                ([string]$arrPublishedMergeBaseRevisions[0]).Trim()
+        }
         if ($strPublishedComparisonRevision -notmatch $strObjectIdPattern) {
-            throw 'The published metadata range merge base is invalid.'
+            throw 'The published metadata comparison revision is invalid.'
         }
         & git -C $RepositoryRootPath cat-file -e `
             "$strPublishedComparisonRevision`^{commit}" 2>$null
         if ($LASTEXITCODE -ne 0) {
-            throw 'The published metadata range merge base is unavailable.'
+            throw 'The published metadata comparison revision is unavailable.'
         }
     }
 
@@ -7318,7 +7345,8 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
     # .DESCRIPTION
     # Requires the tested finalization-time resolver, exact default-branch push
     # scoping, associated-PR lookup, merge identity filters, non-force PR-head
-    # acquisition, SHA readback, and validator handoff.
+    # acquisition, SHA readback, event-specific range comparison, and validator
+    # handoff.
     #
     # .PARAMETER WorkflowContent
     # The complete agent-instruction workflow YAML text to inspect.
@@ -7382,6 +7410,9 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
         '          test "${fetched_source}" = "${SOURCE_REVISION}"',
         '          AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE: >-',
         "            `${{ steps.resolve_automated_merge_source.outputs.source_revision || '' }}",
+        '          AGENT_INSTRUCTION_RANGE_COMPARISON_MODE: >-',
+        '          -RangeComparisonMode',
+        '          $env:AGENT_INSTRUCTION_RANGE_COMPARISON_MODE',
         '          -AutomatedMergeSourceRevision',
         '          $env:AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE',
         '          AGENT_INSTRUCTION_TRUSTED_FINALIZATION_TIMESTAMP: >-',
@@ -7413,6 +7444,18 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
             [System.StringComparison]::Ordinal
         )) {
         Write-Output 'The automated merge-source resolver condition is not exact.'
+    }
+
+    $strRangeComparisonModeHandoff = @'
+          AGENT_INSTRUCTION_RANGE_COMPARISON_MODE: >-
+            ${{ github.event_name == 'push' &&
+              !github.event.created && 'PublishedEndpoints' || 'MergeBase' }}
+'@.TrimEnd()
+    if (-not $WorkflowContent.Contains(
+            $strRangeComparisonModeHandoff,
+            [System.StringComparison]::Ordinal
+        )) {
+        Write-Output 'The event-range comparison-mode selector is not exact.'
     }
 
     $arrUnsafeResolverPatterns = @(
@@ -8305,6 +8348,14 @@ if ($boolHasExplicitEventRange -and
     [string]::IsNullOrEmpty($TrustedFinalizationTimestamp)) {
     throw 'An event-range validation requires a trusted finalization timestamp.'
 }
+if ($RangeComparisonMode -eq 'PublishedEndpoints') {
+    if (-not $boolHasExplicitEventRange) {
+        throw 'Published-endpoint comparison requires an explicit event range.'
+    }
+    if ($RangeIsNewRef) {
+        throw 'Published-endpoint comparison cannot validate a new-ref event.'
+    }
+}
 $strEffectiveRangeBaseRevision = if ($boolUseLocalWorktreeRange) {
     $strLocalWorktreeBaselineRevision
 }
@@ -8401,6 +8452,7 @@ foreach ($objDocumentContext in $listGovernedDocumentContexts) {
                 -InputRevision $strValidatedInputRevision `
                 -AutomatedMergeSourceRevision $AutomatedMergeSourceRevision `
                 -IsNewRefRange $boolEffectiveRangeIsNewRef `
+                -RangeComparisonMode $RangeComparisonMode `
                 -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
                 -PolicyMaximumBytes $intValidatorMaximumInputBytes `
                 -PolicyMarker $strMetadataRangePolicyMarker `
@@ -12526,6 +12578,151 @@ if ($SelfTest) {
             -Timestamp ($strMergeHistoricalDate + 'T08:00:00Z') `
             -Message 'merge fixture base'
 
+        & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not initialize the disconnected-push fixture index.'
+        }
+        $strDisconnectedPushVersion = '**Version:** ' +
+            $objAgentsVersionMatch.Groups['Prefix'].Value +
+            $strMergeHistoricalDate.Replace('-', '') + '.1'
+        $strDisconnectedPushContent = $strMergeBaseContent.Replace(
+            $strMergeBaseVersion,
+            $strDisconnectedPushVersion
+        ) + [Environment]::NewLine + 'Disconnected push fixture.'
+        [System.IO.File]::WriteAllText(
+            [System.IO.Path]::Combine($strMergeFixtureRoot, 'AGENTS.md'),
+            $strDisconnectedPushContent,
+            $objUtf8WithoutBom
+        )
+        & git -C $strMergeFixtureRoot add -- 'AGENTS.md'
+        $strDisconnectedPushTree =
+            ([string] (& git -C $strMergeFixtureRoot write-tree)).Trim()
+        if ($LASTEXITCODE -ne 0 -or
+            $strDisconnectedPushTree -notmatch
+                '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$') {
+            throw 'Could not create the disconnected-push fixture tree.'
+        }
+        $strDisconnectedPushCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strDisconnectedPushTree `
+            -Parents @() `
+            -Timestamp ($strMergeHistoricalDate + 'T09:00:00Z') `
+            -Message 'disconnected direct push'
+        $hashtableDisconnectedPushArguments = @{
+            Name = 'AGENTS.md'
+            RepositoryRootPath = $strMergeFixtureRoot
+            RepositoryRelativePath = 'AGENTS.md'
+            MaximumBytes = $intAgentsMaximumInputBytes
+            BaseRevision = $strMergeBaseCommit
+            HeadRevision = $strDisconnectedPushCommit
+            InputRevision = $strDisconnectedPushCommit
+            IsNewRefRange = $false
+            RangeComparisonMode = 'PublishedEndpoints'
+            PolicyRepositoryRelativePath = '.github/workflows/Test-AgentInstructions.ps1'
+            PolicyMaximumBytes = 1024
+            PolicyMarker = $strMetadataRangePolicyMarker
+        }
+        $arrDisconnectedPushFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                @hashtableDisconnectedPushArguments
+        )
+        if ($arrDisconnectedPushFailures.Count -ne 0) {
+            throw (
+                'A valid disconnected direct push failed endpoint validation: ' +
+                ($arrDisconnectedPushFailures -join '; ')
+            )
+        }
+
+        $hashtableDisconnectedPullRequestArguments = @{}
+        foreach ($strDisconnectedPushArgumentName in
+            $hashtableDisconnectedPushArguments.Keys) {
+            $hashtableDisconnectedPullRequestArguments[
+                $strDisconnectedPushArgumentName
+            ] = $hashtableDisconnectedPushArguments[$strDisconnectedPushArgumentName]
+        }
+        $hashtableDisconnectedPullRequestArguments.RangeComparisonMode = 'MergeBase'
+        $boolDisconnectedPullRequestRejected = $false
+        try {
+            [void](Get-GovernedDocumentRangeTransitionFailure `
+                    @hashtableDisconnectedPullRequestArguments)
+        }
+        catch {
+            $boolDisconnectedPullRequestRejected = $_.Exception.Message.Contains(
+                'must have exactly one merge base',
+                [System.StringComparison]::Ordinal
+            )
+        }
+        if (-not $boolDisconnectedPullRequestRejected) {
+            throw 'A disconnected pull-request range did not fail closed.'
+        }
+
+        $hashtableInvalidRangeComparisonArguments = @{}
+        foreach ($strDisconnectedPushArgumentName in
+            $hashtableDisconnectedPushArguments.Keys) {
+            $hashtableInvalidRangeComparisonArguments[
+                $strDisconnectedPushArgumentName
+            ] = $hashtableDisconnectedPushArguments[$strDisconnectedPushArgumentName]
+        }
+        $hashtableInvalidRangeComparisonArguments.RangeComparisonMode = 'UntrustedMode'
+        $boolInvalidRangeComparisonModeRejected = $false
+        try {
+            [void](Get-GovernedDocumentRangeTransitionFailure `
+                    @hashtableInvalidRangeComparisonArguments)
+        }
+        catch {
+            $boolInvalidRangeComparisonModeRejected = $_.Exception.Message.Contains(
+                'RangeComparisonMode',
+                [System.StringComparison]::OrdinalIgnoreCase
+            )
+        }
+        if (-not $boolInvalidRangeComparisonModeRejected) {
+            throw 'An invalid metadata range-comparison mode was accepted.'
+        }
+
+        & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not reset the invalid disconnected-push fixture index.'
+        }
+        $strDisconnectedInvalidVersion = '**Version:** ' +
+            $objAgentsVersionMatch.Groups['Prefix'].Value +
+            $strMergeHistoricalDate.Replace('-', '') + '.2'
+        $strDisconnectedInvalidContent = $strMergeBaseContent.Replace(
+            $strMergeBaseVersion,
+            $strDisconnectedInvalidVersion
+        ) + [Environment]::NewLine + 'Invalid disconnected push fixture.'
+        [System.IO.File]::WriteAllText(
+            [System.IO.Path]::Combine($strMergeFixtureRoot, 'AGENTS.md'),
+            $strDisconnectedInvalidContent,
+            $objUtf8WithoutBom
+        )
+        & git -C $strMergeFixtureRoot add -- 'AGENTS.md'
+        $strDisconnectedInvalidTree =
+            ([string] (& git -C $strMergeFixtureRoot write-tree)).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not create the invalid disconnected-push fixture tree.'
+        }
+        $strDisconnectedInvalidCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strDisconnectedInvalidTree `
+            -Parents @() `
+            -Timestamp ($strMergeHistoricalDate + 'T09:05:00Z') `
+            -Message 'invalid disconnected direct push'
+        $hashtableDisconnectedPushArguments.HeadRevision =
+            $strDisconnectedInvalidCommit
+        $hashtableDisconnectedPushArguments.InputRevision =
+            $strDisconnectedInvalidCommit
+        $arrDisconnectedInvalidFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                @hashtableDisconnectedPushArguments
+        )
+        if (-not ($arrDisconnectedInvalidFailures -match
+                'Version revision must be 1 after a content change')) {
+            throw 'An invalid disconnected direct push passed metadata validation.'
+        }
+
+        & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not restore the base tree after disconnected-push fixtures.'
+        }
+
         $arrNewRefRangeFailures = @(
             Get-GovernedDocumentRangeTransitionFailure `
                 -Name 'AGENTS.md' `
@@ -14445,7 +14642,7 @@ if ($SelfTest) {
     if ($intFinalizationResolverSelfTestExit -ne 0 -or
         $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
         [string]$arrFinalizationResolverSelfTestOutput[0] -cne
-        'Finalization resolver self-tests passed: 33 fixtures.') {
+        'Finalization resolver self-tests passed: 35 fixtures.') {
         throw (
             'The finalization-time resolver self-test failed: ' +
             ($arrFinalizationResolverSelfTestOutput -join '; ')
@@ -14505,6 +14702,16 @@ if ($SelfTest) {
         [pscustomobject]@{
             Name = 'validator source handoff removed'
             From = '          -AutomatedMergeSourceRevision'
+            To = '          -Verbose'
+        },
+        [pscustomobject]@{
+            Name = 'published-endpoint selector removed'
+            From = "              !github.event.created && 'PublishedEndpoints' || 'MergeBase' }}"
+            To = "              github.event.created && 'PublishedEndpoints' || 'MergeBase' }}"
+        },
+        [pscustomobject]@{
+            Name = 'range comparison-mode handoff removed'
+            From = '          -RangeComparisonMode'
             To = '          -Verbose'
         },
         [pscustomobject]@{

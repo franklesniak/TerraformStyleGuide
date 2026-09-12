@@ -327,6 +327,9 @@ jobs:
             ${{ github.event_name == 'push' &&
               github.ref_name == github.event.repository.default_branch &&
               github.event.created || false }}
+          AGENT_INSTRUCTION_RANGE_COMPARISON_MODE: >-
+            ${{ github.event_name == 'push' &&
+              !github.event.created && 'PublishedEndpoints' || 'MergeBase' }}
           AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE: >-
             ${{ steps.resolve_automated_merge_source.outputs.source_revision || '' }}
           AGENT_INSTRUCTION_TRUSTED_FINALIZATION_TIMESTAMP: >-
@@ -337,6 +340,8 @@ jobs:
           -RangeBaseRevision $env:AGENT_INSTRUCTION_RANGE_BASE
           -RangeHeadRevision $env:AGENT_INSTRUCTION_RANGE_HEAD
           -RangeIsNewRef:([bool]::Parse($env:AGENT_INSTRUCTION_RANGE_IS_NEW_REF))
+          -RangeComparisonMode
+          $env:AGENT_INSTRUCTION_RANGE_COMPARISON_MODE
           -AutomatedMergeSourceRevision
           $env:AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE
           -TrustedFinalizationTimestamp

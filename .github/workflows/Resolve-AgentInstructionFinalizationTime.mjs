@@ -139,7 +139,7 @@ function validateRepositoryActivity(activity, expected, currentCreatedTime) {
     return null;
   }
   if (expected.baseRevision && activity.before !== expected.baseRevision) {
-    throw new Error('The head publication activity has an unexpected prior revision.');
+    return null;
   }
   return { createdAt: activity.timestamp, createdTime };
 }
@@ -530,7 +530,7 @@ export async function runSelfTest() {
 
   let mismatchedPriorWaits = 0;
   await reject(
-    'direct push rejects a mismatched prior revision',
+    'direct push rejects only mismatched prior revisions after bounded retries',
     () => resolveFinalizationTimestamp({
       ...base,
       eventName: 'push',
@@ -542,10 +542,10 @@ export async function runSelfTest() {
         mismatchedPriorWaits += 1;
       },
     }),
-    /unexpected prior revision/u,
+    /No exact head publication activity/u,
   );
-  if (mismatchedPriorWaits !== 0) {
-    throw new Error('The direct-push identity failure entered the retry path.');
+  if (mismatchedPriorWaits !== 3) {
+    throw new Error('The mismatched direct-push publication retry bound changed.');
   }
 
   const concurrentDirectPushTimestamp = await resolveFinalizationTimestamp({
@@ -567,6 +567,54 @@ export async function runSelfTest() {
     'post-run direct republish does not hide the exact triggering push',
     concurrentDirectPushTimestamp,
     '2026-09-10T11:59:59Z',
+  );
+
+  const equalSecondDirectPushTimestamp = await resolveFinalizationTimestamp({
+    ...base,
+    eventName: 'push',
+    fetchImplementation: makeFixtureFetch({
+      current: makeRun({ event: 'push' }),
+      repositoryActivities: [
+        makeActivity({
+          id: 13,
+          before: 'c'.repeat(40),
+          timestamp: '2026-09-10T12:00:00Z',
+        }),
+        makeActivity({ id: 14, timestamp: '2026-09-10T11:59:59Z' }),
+      ],
+    }),
+  });
+  assertEqual(
+    'same-second direct republish does not hide the exact triggering push',
+    equalSecondDirectPushTimestamp,
+    '2026-09-10T11:59:59Z',
+  );
+
+  const paginatedEqualSecondDirectPushTimestamp =
+    await resolveFinalizationTimestamp({
+      ...base,
+      eventName: 'push',
+      fetchImplementation: makeFixtureFetch({
+        current: makeRun({ event: 'push' }),
+        repositoryActivityPages: [
+          makeResponse(
+            [makeActivity({
+              id: 15,
+              before: 'c'.repeat(40),
+              timestamp: '2026-09-10T12:00:00Z',
+            })],
+            { link: makeActivityNextLink('owner/repository', 'cursor-1') },
+          ),
+          makeResponse([
+            makeActivity({ id: 16, timestamp: '2026-09-10T11:59:58Z' }),
+          ]),
+        ],
+      }),
+    });
+  assertEqual(
+    'same-second direct republish does not stop exact-pair pagination',
+    paginatedEqualSecondDirectPushTimestamp,
+    '2026-09-10T11:59:58Z',
   );
 
   let absentActivityRequests = 0;
