@@ -53,7 +53,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.3.20260912.1
+# Version: 1.3.20260912.2
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -106,7 +106,7 @@ $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
 $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/copilot-setup-steps.yml' =
-        '9974997af6758c62bd33cb9b77c3233b53b3064645c7d455bb111bd2a887ee85'
+        'ef89f6f6265371880caad3eeb126ca33698923e8c7bc46c49ca754e6313df226'
     '.github/workflows/package.json' =
         'c6db6befda88e58aa5568f52f44ca934af5751e545dba0644297b9fb15577e0d'
     '.github/workflows/package-lock.json' =

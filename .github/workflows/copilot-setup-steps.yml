@@ -127,7 +127,7 @@ jobs:
             ["${workflow_manifest}"]='c6db6befda88e58aa5568f52f44ca934af5751e545dba0644297b9fb15577e0d'
             ["${workflow_lock}"]='84cbe61e33e4c66b653efd2bfbe3f80b0061368a64ad80ef0de4898da28d887d'
             ["${pre_commit_config}"]='0e9da6a7c4bd0d89c83fd3041e67921e3bc08d159f4b6cd36b1b2e9f0b63a37b'
-            ["${python_hook_launcher}"]='b4ef9791bef6c915d4c7b9057d07153579a91df988070c8bc24c192e46884720'
+            ["${python_hook_launcher}"]='9bc31918ba4407bf86a4d0d8e568962d05c157752a9df13e9bae2f081aa80e96'
             ["${staged_markdown_helper}"]='6e8ac89afb17dd36f1edcf9b59ddfb066706fc6686be22e007c540ae20c810c2'
           )
           for reviewed_input in "${!reviewed_sha256[@]}"; do
