@@ -364,8 +364,11 @@ jobs:
               steps.resolve_run_time.outputs.new_ref == 'true' &&
               github.ref_name == github.event.repository.default_branch) || false }}
           AGENT_INSTRUCTION_RANGE_COMPARISON_MODE: >-
-            ${{ github.event_name == 'push' &&
-              !github.event.created && 'PublishedEndpoints' || 'MergeBase' }}
+            ${{ ((github.event_name == 'push' &&
+              !github.event.created) ||
+              (github.event_name == 'workflow_dispatch' &&
+              steps.resolve_run_time.outputs.new_ref == 'false')) &&
+              'PublishedEndpoints' || 'MergeBase' }}
           AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE: >-
             ${{ steps.resolve_automated_merge_source.outputs.source_revision || '' }}
           AGENT_INSTRUCTION_TRUSTED_FINALIZATION_TIMESTAMP: >-

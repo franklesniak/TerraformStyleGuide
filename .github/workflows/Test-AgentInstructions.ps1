@@ -57,7 +57,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.5.20260912.0
+# Version: 1.6.20260912.0
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -7391,7 +7391,7 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.5.20260912.0
+    # Version: 1.6.20260912.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -7477,8 +7477,11 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
 
     $strRangeComparisonModeHandoff = @'
           AGENT_INSTRUCTION_RANGE_COMPARISON_MODE: >-
-            ${{ github.event_name == 'push' &&
-              !github.event.created && 'PublishedEndpoints' || 'MergeBase' }}
+            ${{ ((github.event_name == 'push' &&
+              !github.event.created) ||
+              (github.event_name == 'workflow_dispatch' &&
+              steps.resolve_run_time.outputs.new_ref == 'false')) &&
+              'PublishedEndpoints' || 'MergeBase' }}
 '@.TrimEnd()
     if (-not $WorkflowContent.Contains(
             $strRangeComparisonModeHandoff,
@@ -12740,6 +12743,24 @@ if ($SelfTest) {
             )
         }
 
+        $hashtableDisconnectedManualRetryArguments = @{}
+        foreach ($strDisconnectedPushArgumentName in
+            $hashtableDisconnectedPushArguments.Keys) {
+            $hashtableDisconnectedManualRetryArguments[
+                $strDisconnectedPushArgumentName
+            ] = $hashtableDisconnectedPushArguments[$strDisconnectedPushArgumentName]
+        }
+        $arrDisconnectedManualRetryFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                @hashtableDisconnectedManualRetryArguments
+        )
+        if ($arrDisconnectedManualRetryFailures.Count -ne 0) {
+            throw (
+                'A valid disconnected manual retry failed endpoint validation: ' +
+                ($arrDisconnectedManualRetryFailures -join '; ')
+            )
+        }
+
         $hashtableDisconnectedPullRequestArguments = @{}
         foreach ($strDisconnectedPushArgumentName in
             $hashtableDisconnectedPushArguments.Keys) {
@@ -14881,9 +14902,29 @@ if ($SelfTest) {
             To = '          -Verbose'
         },
         [pscustomobject]@{
-            Name = 'published-endpoint selector removed'
-            From = "              !github.event.created && 'PublishedEndpoints' || 'MergeBase' }}"
-            To = "              github.event.created && 'PublishedEndpoints' || 'MergeBase' }}"
+            Name = 'push published-endpoint selector inverted'
+            From = '              !github.event.created) ||'
+            To = '              github.event.created) ||'
+        },
+        [pscustomobject]@{
+            Name = 'manual published-endpoint selector removed'
+            From = "              (github.event_name == 'workflow_dispatch' &&`n" +
+                "              steps.resolve_run_time.outputs.new_ref == 'false')) &&"
+            To = "              (github.event_name == 'pull_request_target' &&`n" +
+                "              steps.resolve_run_time.outputs.new_ref == 'false')) &&"
+        },
+        [pscustomobject]@{
+            Name = 'manual published-endpoint new-ref state inverted'
+            From = "              (github.event_name == 'workflow_dispatch' &&`n" +
+                "              steps.resolve_run_time.outputs.new_ref == 'false')) &&"
+            To = "              (github.event_name == 'workflow_dispatch' &&`n" +
+                "              steps.resolve_run_time.outputs.new_ref == 'true')) &&"
+        },
+        [pscustomobject]@{
+            Name = 'manual published-endpoint new-ref guard removed'
+            From = "              (github.event_name == 'workflow_dispatch' &&`n" +
+                "              steps.resolve_run_time.outputs.new_ref == 'false')) &&"
+            To = "              (github.event_name == 'workflow_dispatch')) &&"
         },
         [pscustomobject]@{
             Name = 'range comparison-mode handoff removed'
