@@ -123,7 +123,7 @@ jobs:
           git diff --quiet --no-ext-diff
           git diff --cached --quiet --no-ext-diff
 
-      - name: Resolve authenticated one-parent merge source
+      - name: Resolve authenticated merge source
         id: resolve_automated_merge_source
         if: >-
           github.event_name == 'push' &&
@@ -140,14 +140,6 @@ jobs:
         run: |
           set -euo pipefail
           [[ "${RANGE_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]
-          IFS=' ' read -r -a head_and_parents <<< "$(
-            git rev-list --parents -n 1 "${RANGE_HEAD_SHA}"
-          )"
-          test "${head_and_parents[0]}" = "${RANGE_HEAD_SHA}"
-          if (( ${#head_and_parents[@]} != 2 )); then
-            printf 'source_revision=\npull_number=\n' >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
           node --input-type=module <<'NODE'
           import { appendFileSync } from 'node:fs';
 
@@ -223,7 +215,7 @@ jobs:
           }
           NODE
 
-      - name: Fetch authenticated one-parent merge source as data
+      - name: Fetch authenticated merge source as data
         if: steps.resolve_automated_merge_source.outputs.source_revision != ''
         shell: bash
         env:
@@ -231,10 +223,12 @@ jobs:
           SOURCE_REVISION: >-
             ${{ steps.resolve_automated_merge_source.outputs.source_revision }}
           PR_NUMBER: ${{ steps.resolve_automated_merge_source.outputs.pull_number }}
+          MERGE_RESULT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${MERGE_RESULT_SHA}" =~ ^[0-9a-f]{40}$ ]]
           source_ref="refs/remotes/automated-merge/${PR_NUMBER}/head"
           git check-ref-format "${source_ref}"
           authorization="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 -w 0)"
@@ -246,15 +240,27 @@ jobs:
           unset authorization
           fetched_source="$(git rev-parse --verify "${source_ref}^{commit}")"
           test "${fetched_source}" = "${SOURCE_REVISION}"
+          IFS=' ' read -r -a head_and_parents <<< "$(
+            git rev-list --parents -n 1 "${MERGE_RESULT_SHA}"
+          )"
+          test "${head_and_parents[0]}" = "${MERGE_RESULT_SHA}"
+          (( ${#head_and_parents[@]} >= 2 ))
+          if (( ${#head_and_parents[@]} > 2 )); then
+            printf '%s\n' "${head_and_parents[@]:1}" |
+              grep -Fqx -- "${SOURCE_REVISION}"
+          fi
           git diff --quiet --no-ext-diff
           git diff --cached --quiet --no-ext-diff
 
       - name: Fetch default-branch published baseline as data
         id: fetch_default_baseline
         if: >-
-          github.event_name == 'push' &&
+          (github.event_name == 'push' &&
           github.event.created &&
-          github.ref_name != github.event.repository.default_branch
+          github.ref_name != github.event.repository.default_branch) ||
+          (github.event_name == 'workflow_dispatch' &&
+          steps.resolve_run_time.outputs.new_ref == 'true' &&
+          github.ref_name != github.event.repository.default_branch)
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -279,7 +285,9 @@ jobs:
           git diff --cached --quiet --no-ext-diff
 
       - name: Fetch manual publication range base as data
-        if: github.event_name == 'workflow_dispatch'
+        if: >-
+          github.event_name == 'workflow_dispatch' &&
+          steps.resolve_run_time.outputs.new_ref == 'false'
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -338,6 +346,10 @@ jobs:
               github.ref_name != github.event.repository.default_branch) &&
               steps.fetch_default_baseline.outputs.revision ||
               github.event_name == 'workflow_dispatch' &&
+              steps.resolve_run_time.outputs.new_ref == 'true' &&
+              github.ref_name != github.event.repository.default_branch &&
+              steps.fetch_default_baseline.outputs.revision ||
+              github.event_name == 'workflow_dispatch' &&
               steps.resolve_run_time.outputs.base_revision || '' }}
           AGENT_INSTRUCTION_RANGE_HEAD: >-
             ${{ github.event_name == 'pull_request_target' &&
@@ -345,9 +357,12 @@ jobs:
               github.event_name == 'push' && github.sha ||
               github.event_name == 'workflow_dispatch' && github.sha || '' }}
           AGENT_INSTRUCTION_RANGE_IS_NEW_REF: >-
-            ${{ github.event_name == 'push' &&
+            ${{ (github.event_name == 'push' &&
               github.ref_name == github.event.repository.default_branch &&
-              github.event.created || false }}
+              github.event.created) ||
+              (github.event_name == 'workflow_dispatch' &&
+              steps.resolve_run_time.outputs.new_ref == 'true' &&
+              github.ref_name == github.event.repository.default_branch) || false }}
           AGENT_INSTRUCTION_RANGE_COMPARISON_MODE: >-
             ${{ github.event_name == 'push' &&
               !github.event.created && 'PublishedEndpoints' || 'MergeBase' }}

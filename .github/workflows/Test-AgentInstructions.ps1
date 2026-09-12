@@ -35,7 +35,7 @@
 # authenticated published-endpoint comparison for an existing direct push.
 #
 # .PARAMETER AutomatedMergeSourceRevision
-# The authenticated pull-request head for a one-parent automated merge result.
+# The authenticated pull-request head for an automated merge result.
 # The empty default disables that narrowly proved transition mode.
 #
 # .PARAMETER TrustedFinalizationTimestamp
@@ -57,7 +57,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.4.20260912.0
+# Version: 1.5.20260912.0
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -5759,9 +5759,9 @@ function Get-GovernedDocumentCommitTransitionFailure {
     # Finds metadata-policy failures for one commit and all its direct parents.
     #
     # .DESCRIPTION
-    # Compares one governed Git blob with every direct parent. A merge can retain
-    # the metadata date of an identical parent, but anti-rollback checks still
-    # apply against every parent whose governed blob differs.
+    # Compares one governed Git blob with every direct parent. Without trusted
+    # event evidence, every changed-parent transition uses the commit date and
+    # published revision convention.
     #
     # .PARAMETER Name
     # The governed document name used in failure records.
@@ -5804,7 +5804,7 @@ function Get-GovernedDocumentCommitTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.3.20260912.0
+    # Version: 1.4.20260912.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -5865,7 +5865,6 @@ function Get-GovernedDocumentCommitTransitionFailure {
     }
 
     $listChangedParents = [System.Collections.Generic.List[string]]::new()
-    $boolInheritsParentPath = $false
     foreach ($strParentRevision in $arrCommitAndParents[1..$intParentCount]) {
         if ($strParentRevision -notmatch $strObjectIdPattern) {
             throw "Git returned an invalid parent for metadata range commit $CommitRevision."
@@ -5880,7 +5879,6 @@ function Get-GovernedDocumentCommitTransitionFailure {
             $strParentRevision $CommitRevision -- $RepositoryRelativePath
         $intDiffExitCode = $LASTEXITCODE
         if ($intDiffExitCode -eq 0) {
-            $boolInheritsParentPath = $true
             continue
         }
         if ($intDiffExitCode -ne 1) {
@@ -5923,9 +5921,6 @@ function Get-GovernedDocumentCommitTransitionFailure {
         -RepositoryRelativePath $RepositoryRelativePath `
         -MaximumBytes $MaximumBytes `
         -RequireRegularFile
-    $boolRequireExpectedUtcDate = -not (
-        $intParentCount -gt 1 -and $boolInheritsParentPath
-    )
     $listTransitions = [System.Collections.Generic.List[pscustomobject]]::new()
     foreach ($strChangedParentRevision in $listChangedParents) {
         & git -C $RepositoryRootPath cat-file -e `
@@ -5947,10 +5942,8 @@ function Get-GovernedDocumentCommitTransitionFailure {
                 ExpectedUtcDate = $objCommitTimestamp.UtcDateTime.ToString('yyyy-MM-dd')
                 CurrentRevision = $CommitRevision
                 ParentRevision = $strChangedParentRevision
-                RequireExpectedUtcDateForRenderedChange = $boolRequireExpectedUtcDate
-                RequirePublishedRevisionConvention = -not (
-                    $intParentCount -gt 1 -and $boolInheritsParentPath
-                )
+                RequireExpectedUtcDateForRenderedChange = $true
+                RequirePublishedRevisionConvention = $true
             })
     }
 
@@ -5993,8 +5986,9 @@ function Get-GovernedDocumentRangeTransitionFailure {
     # The optional commit that supplies the current governed input state.
     #
     # .PARAMETER AutomatedMergeSourceRevision
-    # The authenticated pull-request head for a one-parent automated merge.
-    # A matching document blob uses that commit's date as the finalization date.
+    # The authenticated pull-request head for an automated merge. For a
+    # multi-parent result, the source must also be one of its direct parents.
+    # A matching document blob retains its already-published metadata.
     #
     # .PARAMETER IsNewRefRange
     # Indicates that the event created a ref and supplied an all-zero base.
@@ -6348,7 +6342,7 @@ function Get-GovernedDocumentRangeTransitionFailure {
     )
     $strHeadTimestamp = ''
     $intHeadParentCount = 0
-    $boolHeadInheritsParentPath = $false
+    $arrHeadParentRevisions = @()
     $boolHeadMatchesAutomatedMergeSourcePath = $false
     if (-not [string]::IsNullOrEmpty($AutomatedMergeSourceRevision)) {
         $strSourceTimestamp = [string] (
@@ -6490,21 +6484,10 @@ function Get-GovernedDocumentRangeTransitionFailure {
             )) {
             $strHeadTimestamp = $objCommitTimestamp.UtcDateTime.ToString('yyyy-MM-dd')
             $intHeadParentCount = $intParentCount
-            if ($intParentCount -gt 1) {
-                foreach ($strParentRevision in $arrCommitAndParents[1..$intParentCount]) {
-                    & git -C $RepositoryRootPath diff --quiet --no-ext-diff --no-textconv `
-                        $strParentRevision $HeadRevision -- $RepositoryRelativePath
-                    $intDiffExitCode = $LASTEXITCODE
-                    if ($intDiffExitCode -eq 0) {
-                        $boolHeadInheritsParentPath = $true
-                    }
-                    elseif ($intDiffExitCode -ne 1) {
-                        throw (
-                            "Could not compare $RepositoryRelativePath for metadata range " +
-                            "commit $HeadRevision."
-                        )
-                    }
-                }
+            if ($intParentCount -gt 0) {
+                $arrHeadParentRevisions = @(
+                    $arrCommitAndParents[1..$intParentCount]
+                )
             }
         }
     }
@@ -6513,8 +6496,27 @@ function Get-GovernedDocumentRangeTransitionFailure {
     }
 
     if (-not [string]::IsNullOrEmpty($AutomatedMergeSourceRevision)) {
-        if ($intHeadParentCount -ne 1) {
-            throw 'An automated merge source requires a one-parent event-range head.'
+        if ($intHeadParentCount -eq 0) {
+            throw 'An automated merge source requires an event-range head parent.'
+        }
+        if ($intHeadParentCount -gt 1) {
+            $boolSourceIsHeadParent = $false
+            foreach ($strHeadParentRevision in $arrHeadParentRevisions) {
+                if ([string]::Equals(
+                        $strHeadParentRevision,
+                        $AutomatedMergeSourceRevision,
+                        [System.StringComparison]::OrdinalIgnoreCase
+                    )) {
+                    $boolSourceIsHeadParent = $true
+                    break
+                }
+            }
+            if (-not $boolSourceIsHeadParent) {
+                throw (
+                    'An authenticated multi-parent merge source must be a direct ' +
+                    'parent of the event-range head.'
+                )
+            }
         }
         & git -C $RepositoryRootPath cat-file -e `
             "$AutomatedMergeSourceRevision`:$RepositoryRelativePath" 2>$null
@@ -6568,12 +6570,7 @@ function Get-GovernedDocumentRangeTransitionFailure {
         }
     }
 
-    $boolHeadInheritsMergeParentPath =
-        $intHeadParentCount -gt 1 -and $boolHeadInheritsParentPath
-    $boolHeadInheritsAutomatedMergeSourcePath =
-        $intHeadParentCount -eq 1 -and $boolHeadMatchesAutomatedMergeSourcePath
-    $boolHeadInheritsPublishedContent = $boolHeadInheritsMergeParentPath -or
-        $boolHeadInheritsAutomatedMergeSourcePath
+    $boolHeadInheritsPublishedContent = $boolHeadMatchesAutomatedMergeSourcePath
     $strFinalizationTimestamp = if (-not [string]::IsNullOrEmpty(
             $strTrustedFinalizationUtcDate
         )) {
@@ -7366,7 +7363,7 @@ function Get-PushRangeBaseFetchContractFailure {
 
 function Get-AutomatedMergeSourceWorkflowContractFailure {
     # .SYNOPSIS
-    # Validates trusted run-time and one-parent merge-source workflow contracts.
+    # Validates trusted run-time and authenticated merge-source workflow contracts.
     #
     # .DESCRIPTION
     # Requires the tested finalization-time resolver, exact default-branch push
@@ -7380,7 +7377,7 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
     # .EXAMPLE
     # Get-AutomatedMergeSourceWorkflowContractFailure -WorkflowContent $strWorkflow
     #
-    # # Returns no output when the one-parent merge-source contract is intact.
+    # # Returns no output when the merge-source contract is intact.
     #
     # .INPUTS
     # None. You can't pipe objects to this function.
@@ -7394,7 +7391,7 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.4.20260910.0
+    # Version: 1.5.20260912.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -7419,8 +7416,7 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
         "          RUN_HEAD_REF: `${{ github.event_name == 'pull_request_target' && format('refs/heads/{0}', github.event.pull_request.head.ref) || github.ref }}",
         "          RUN_HEAD_REPOSITORY: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}",
         '        run: node .github/workflows/Resolve-AgentInstructionFinalizationTime.mjs',
-        '      - name: Resolve authenticated one-parent merge source',
-        '          if (( ${#head_and_parents[@]} != 2 )); then',
+        '      - name: Resolve authenticated merge source',
         "          const apiRoot = apiUrl.replace(/\/+$/u, '');",
         '              `${apiRoot}/repos/${repository}/commits/${head}/pulls?per_page=100&page=${page}`',
         "            pull?.state === 'closed' &&",
@@ -7430,10 +7426,17 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
         '            pull.head.sha !== head,',
         "              throw new Error('Associated pull-request pagination exceeded 20 pages.');",
         "            throw new Error('More than one exact automated merge source matched the pushed head.');",
-        '      - name: Fetch authenticated one-parent merge source as data',
+        '      - name: Fetch authenticated merge source as data',
         "        if: steps.resolve_automated_merge_source.outputs.source_revision != ''",
+        '          MERGE_RESULT_SHA: ${{ github.sha }}',
+        '          [[ "${MERGE_RESULT_SHA}" =~ ^[0-9a-f]{40}$ ]]',
         '              "refs/pull/${PR_NUMBER}/head:${source_ref}"',
         '          test "${fetched_source}" = "${SOURCE_REVISION}"',
+        '            git rev-list --parents -n 1 "${MERGE_RESULT_SHA}"',
+        '          test "${head_and_parents[0]}" = "${MERGE_RESULT_SHA}"',
+        '          (( ${#head_and_parents[@]} >= 2 ))',
+        '          if (( ${#head_and_parents[@]} > 2 )); then',
+        '              grep -Fqx -- "${SOURCE_REVISION}"',
         '          AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE: >-',
         "            `${{ steps.resolve_automated_merge_source.outputs.source_revision || '' }}",
         '          AGENT_INSTRUCTION_RANGE_COMPARISON_MODE: >-',
@@ -14036,11 +14039,57 @@ if ($SelfTest) {
                 -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
                 -PolicyMaximumBytes 1024 `
                 -PolicyMarker $strMetadataRangePolicyMarker)
-        if ($arrInheritedMergeFailures.Count -ne 0) {
+        if (-not ($arrInheritedMergeFailures -match
+                [regex]::Escape("Last Updated must be $strMergeCurrentDate"))) {
+            throw 'An unproved merge-parent inheritance received a date exemption.'
+        }
+        $arrAuthenticatedInheritedMergeFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                -Name 'AGENTS.md' `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -RepositoryRelativePath 'AGENTS.md' `
+                -MaximumBytes $intAgentsMaximumInputBytes `
+                -BaseRevision $strAdvancedBaseCommit `
+                -HeadRevision $strInheritedMergeCommit `
+                -InputRevision $strInheritedMergeCommit `
+                -AutomatedMergeSourceRevision $strMergeTopicCommit `
+                -IsNewRefRange $false `
+                -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
+                -PolicyMaximumBytes 1024 `
+                -PolicyMarker $strMetadataRangePolicyMarker `
+                -TrustedFinalizationTimestamp ($strMergeCurrentDate + 'T00:02:00Z')
+        )
+        if ($arrAuthenticatedInheritedMergeFailures.Count -ne 0) {
             throw (
-                'A merge that inherited governed content from its non-first parent failed: ' +
-                ($arrInheritedMergeFailures -join '; ')
+                'An authenticated merge-source inheritance failed: ' +
+                ($arrAuthenticatedInheritedMergeFailures -join '; ')
             )
+        }
+        $boolNonParentMergeSourceRejected = $false
+        try {
+            [void](Get-GovernedDocumentRangeTransitionFailure `
+                    -Name 'AGENTS.md' `
+                    -RepositoryRootPath $strMergeFixtureRoot `
+                    -RepositoryRelativePath 'AGENTS.md' `
+                    -MaximumBytes $intAgentsMaximumInputBytes `
+                    -BaseRevision $strAdvancedBaseCommit `
+                    -HeadRevision $strInheritedMergeCommit `
+                    -InputRevision $strInheritedMergeCommit `
+                    -AutomatedMergeSourceRevision $strMergeCopilotChangedCommit `
+                    -IsNewRefRange $false `
+                    -PolicyRepositoryRelativePath `
+                        '.github/workflows/Test-AgentInstructions.ps1' `
+                    -PolicyMaximumBytes 1024 `
+                    -PolicyMarker $strMetadataRangePolicyMarker)
+        }
+        catch {
+            $boolNonParentMergeSourceRejected = $_.Exception.Message.Contains(
+                'must be a direct parent',
+                [System.StringComparison]::Ordinal
+            )
+        }
+        if (-not $boolNonParentMergeSourceRejected) {
+            throw 'A non-parent merge source was accepted for a multi-parent result.'
         }
         $arrDirectInheritedFailures = @(Get-GovernedDocumentCommitTransitionFailure `
                 -Name 'AGENTS.md' `
@@ -14048,11 +14097,9 @@ if ($SelfTest) {
                 -RepositoryRelativePath 'AGENTS.md' `
                 -MaximumBytes $intAgentsMaximumInputBytes `
                 -CommitRevision $strInheritedMergeCommit)
-        if ($arrDirectInheritedFailures.Count -ne 0) {
-            throw (
-                'Direct validation rejected content inherited from a non-first parent: ' +
-                ($arrDirectInheritedFailures -join '; ')
-            )
+        if (-not ($arrDirectInheritedFailures -match
+                [regex]::Escape("Last Updated must be $strMergeCurrentDate"))) {
+            throw 'No-range validation trusted an unauthenticated merge parent.'
         }
 
         & git -C $strMergeFixtureRoot read-tree $strAdvancedBaseTree
@@ -14686,6 +14733,8 @@ if ($SelfTest) {
         'async function readHeadPublication({',
         '  initialUrl.searchParams.set(''ref'', headRef);',
         '  if (!publicationActivityTypes.includes(activity.activity_type)) {',
+        "  const isNewRef = activity.activity_type === 'branch_creation';",
+        '  if (isNewRef !== zeroObjectIdPattern.test(activity.before)) {',
         "    'No exact head publication activity matches this revision and ref.',",
         '        `Repository-activity pagination exceeded ${maximumPageCount} pages.`,',
         '  return readHeadPublicationWithRetry({',
@@ -14697,7 +14746,7 @@ if ($SelfTest) {
         '  const evidence = await resolveFinalizationEvidence({',
         '    runHeadRef: process.env.RUN_HEAD_REF,',
         '    runBaseRevision: process.env.RUN_BASE_REVISION,',
-        '    `timestamp=${evidence.createdAt}\nbase_revision=${evidence.baseRevision}\n`,'
+        '    `timestamp=${evidence.createdAt}\nbase_revision=${evidence.baseRevision}\nnew_ref=${evidence.isNewRef}\n`,'
     )
     foreach ($strFinalizationResolverLiteral in $arrFinalizationResolverLiterals) {
         if ([regex]::Matches(
@@ -14764,7 +14813,7 @@ if ($SelfTest) {
     if ($intFinalizationResolverSelfTestExit -ne 0 -or
         $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
         [string]$arrFinalizationResolverSelfTestOutput[0] -cne
-        'Finalization resolver self-tests passed: 39 fixtures.') {
+        'Finalization resolver self-tests passed: 42 fixtures.') {
         throw (
             'The finalization-time resolver self-test failed: ' +
             ($arrFinalizationResolverSelfTestOutput -join '; ')
@@ -14782,9 +14831,14 @@ if ($SelfTest) {
     }
     $arrAutomatedMergeWorkflowMutations = @(
         [pscustomobject]@{
-            Name = 'one-parent gate removed'
-            From = '          if (( ${#head_and_parents[@]} != 2 )); then'
-            To = '          if (( ${#head_and_parents[@]} != 3 )); then'
+            Name = 'multi-parent source proof removed'
+            From = '          if (( ${#head_and_parents[@]} > 2 )); then'
+            To = '          if (( ${#head_and_parents[@]} < 2 )); then'
+        },
+        [pscustomobject]@{
+            Name = 'merge-result revision disconnected'
+            From = '          MERGE_RESULT_SHA: ${{ github.sha }}'
+            To = '          MERGE_RESULT_SHA: ${{ steps.resolve_automated_merge_source.outputs.source_revision }}'
         },
         [pscustomobject]@{
             Name = 'merge head identity removed'
@@ -15031,9 +15085,12 @@ if ($SelfTest) {
         $strExpectedCondition = @(
             '        id: fetch_default_baseline',
             '        if: >-',
-            "          github.event_name == 'push' &&",
+            "          (github.event_name == 'push' &&",
             '          github.event.created &&',
-            '          github.ref_name != github.event.repository.default_branch',
+            '          github.ref_name != github.event.repository.default_branch) ||',
+            "          (github.event_name == 'workflow_dispatch' &&",
+            "          steps.resolve_run_time.outputs.new_ref == 'true' &&",
+            '          github.ref_name != github.event.repository.default_branch)',
             '        shell: bash'
         ) -join "`n"
         if (-not $strNormalizedWorkflow.Contains(
@@ -15089,7 +15146,9 @@ if ($SelfTest) {
         }
         $strManualStepBody = $arrManualStepMatches[0].Groups['Body'].Value
         foreach ($strRequiredLiteral in @(
-                "        if: github.event_name == 'workflow_dispatch'",
+                '        if: >-',
+                "          github.event_name == 'workflow_dispatch' &&",
+                "          steps.resolve_run_time.outputs.new_ref == 'false'",
                 '        shell: bash',
                 '          GITHUB_TOKEN: ${{ github.token }}',
                 '          RANGE_BASE_SHA: ${{ steps.resolve_run_time.outputs.base_revision }}',
@@ -15130,10 +15189,10 @@ if ($SelfTest) {
         if ([regex]::Matches(
                 $WorkflowContent,
                 'steps\.fetch_default_baseline\.outputs\.revision'
-            ).Count -ne 1) {
+            ).Count -ne 2) {
             Write-Output (
-                'New non-default push runs must use the verified default-branch baseline ' +
-                'output once.'
+                'New non-default push and manual runs must use the verified default-branch ' +
+                'baseline output exactly twice.'
             )
         }
         if ([regex]::Matches(
@@ -15158,6 +15217,10 @@ if ($SelfTest) {
             '              github.ref_name != github.event.repository.default_branch) &&',
             '              steps.fetch_default_baseline.outputs.revision ||',
             "              github.event_name == 'workflow_dispatch' &&",
+            "              steps.resolve_run_time.outputs.new_ref == 'true' &&",
+            '              github.ref_name != github.event.repository.default_branch &&',
+            '              steps.fetch_default_baseline.outputs.revision ||',
+            "              github.event_name == 'workflow_dispatch' &&",
             "              steps.resolve_run_time.outputs.base_revision || '' }}"
         ) -join "`n"
         if (-not $strNormalizedWorkflow.Contains(
@@ -15168,9 +15231,12 @@ if ($SelfTest) {
         }
         $strExpectedNewRef = @(
             '          AGENT_INSTRUCTION_RANGE_IS_NEW_REF: >-',
-            "            `${{ github.event_name == 'push' &&",
+            "            `${{ (github.event_name == 'push' &&",
             '              github.ref_name == github.event.repository.default_branch &&',
-            '              github.event.created || false }}'
+            '              github.event.created) ||',
+            "              (github.event_name == 'workflow_dispatch' &&",
+            "              steps.resolve_run_time.outputs.new_ref == 'true' &&",
+            '              github.ref_name == github.event.repository.default_branch) || false }}'
         ) -join "`n"
         if (-not $strNormalizedWorkflow.Contains(
                 $strExpectedNewRef,
@@ -15205,8 +15271,8 @@ if ($SelfTest) {
         },
         [pscustomobject]@{
             Name = 'new-ref condition removed'
-            From = '          github.event.created &&'
-            To = '          !github.event.created &&'
+            From = "          steps.resolve_run_time.outputs.new_ref == 'true' &&"
+            To = "          steps.resolve_run_time.outputs.new_ref == 'false' &&"
         },
         [pscustomobject]@{
             Name = 'ref validation removed'
@@ -15247,6 +15313,18 @@ if ($SelfTest) {
             Name = 'manual zero base accepted'
             From = 'test "${RANGE_BASE_SHA}" != "0000000000000000000000000000000000000000"'
             To = 'test -n "${RANGE_BASE_SHA}"'
+        },
+        [pscustomobject]@{
+            Name = 'manual new-ref fetch guard inverted'
+            From = "          steps.resolve_run_time.outputs.new_ref == 'false'"
+            To = "          steps.resolve_run_time.outputs.new_ref == 'true'"
+        },
+        [pscustomobject]@{
+            Name = 'manual new topic baseline route removed'
+            From = "              steps.resolve_run_time.outputs.new_ref == 'true' &&`n" +
+                '              github.ref_name != github.event.repository.default_branch &&'
+            To = "              steps.resolve_run_time.outputs.new_ref == 'false' &&`n" +
+                '              github.ref_name != github.event.repository.default_branch &&'
         },
         [pscustomobject]@{
             Name = 'topic push baseline condition inverted'

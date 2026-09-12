@@ -5,6 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
 const objectIdPattern = /^[0-9a-f]{40}$/u;
+const zeroObjectIdPattern = /^0{40}$/u;
 const positiveIntegerPattern = /^[1-9][0-9]*$/u;
 const repositoryPattern = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
 const repositoryRefPattern = /^refs\/(?:heads|tags)\/(.+)$/u;
@@ -137,6 +138,12 @@ function validateRepositoryActivity(activity, expected, currentCreatedTime) {
   if (activity.after !== expected.revision) {
     return null;
   }
+  const isNewRef = activity.activity_type === 'branch_creation';
+  if (isNewRef !== zeroObjectIdPattern.test(activity.before)) {
+    throw new Error(
+      'A head publication activity has inconsistent new-ref identity.',
+    );
+  }
   const createdTime = Date.parse(activity.timestamp ?? '');
   if (!rfc3339UtcPattern.test(activity.timestamp ?? '') ||
       !Number.isFinite(createdTime)) {
@@ -152,6 +159,7 @@ function validateRepositoryActivity(activity, expected, currentCreatedTime) {
     baseRevision: activity.before,
     createdAt: activity.timestamp,
     createdTime,
+    isNewRef,
   };
 }
 
@@ -800,7 +808,10 @@ export async function runSelfTest() {
         event: 'pull_request_target',
         head_repository: { full_name: 'fork-owner/repository' },
       }),
-      forkActivities: [makeActivity({ activity_type: 'branch_creation' })],
+      forkActivities: [makeActivity({
+        activity_type: 'branch_creation',
+        before: '0'.repeat(40),
+      })],
     }),
   });
   assertEqual(
@@ -982,8 +993,45 @@ export async function runSelfTest() {
   });
   assertEqual(
     'manual event returns its authenticated publication base',
-    `${manualActivityEvidence.createdAt}|${manualActivityEvidence.baseRevision}`,
-    `2026-09-10T09:59:58Z|${'d'.repeat(40)}`,
+    `${manualActivityEvidence.createdAt}|${manualActivityEvidence.baseRevision}|${manualActivityEvidence.isNewRef}`,
+    `2026-09-10T09:59:58Z|${'d'.repeat(40)}|false`,
+  );
+
+  const manualBranchCreationEvidence = await resolveFinalizationEvidence({
+    ...base,
+    fetchImplementation: makeFixtureFetch({
+      repositoryActivities: [makeActivity({
+        activity_type: 'branch_creation',
+        before: '0'.repeat(40),
+        timestamp: '2026-09-10T09:59:57Z',
+      })],
+    }),
+  });
+  assertEqual(
+    'manual branch creation returns authenticated new-ref evidence',
+    `${manualBranchCreationEvidence.createdAt}|${manualBranchCreationEvidence.baseRevision}|${manualBranchCreationEvidence.isNewRef}`,
+    `2026-09-10T09:59:57Z|${'0'.repeat(40)}|true`,
+  );
+
+  await reject(
+    'branch creation requires the all-zero prior revision',
+    () => resolveFinalizationTimestamp({
+      ...base,
+      fetchImplementation: makeFixtureFetch({
+        repositoryActivities: [makeActivity({ activity_type: 'branch_creation' })],
+      }),
+    }),
+    /inconsistent new-ref identity/u,
+  );
+  await reject(
+    'ordinary publication rejects the all-zero prior revision',
+    () => resolveFinalizationTimestamp({
+      ...base,
+      fetchImplementation: makeFixtureFetch({
+        repositoryActivities: [makeActivity({ before: '0'.repeat(40) })],
+      }),
+    }),
+    /inconsistent new-ref identity/u,
   );
 
   const manualTagActivityTimestamp = await resolveFinalizationTimestamp({
@@ -1164,7 +1212,7 @@ async function main() {
   });
   appendFileSync(
     output,
-    `timestamp=${evidence.createdAt}\nbase_revision=${evidence.baseRevision}\n`,
+    `timestamp=${evidence.createdAt}\nbase_revision=${evidence.baseRevision}\nnew_ref=${evidence.isNewRef}\n`,
     'utf8',
   );
 }
