@@ -57,7 +57,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.3.20260912.3
+# Version: 1.4.20260912.0
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -1474,7 +1474,7 @@ function Get-GovernedDocumentParentContext {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.4.20260911.0
+    # Version: 1.5.20260912.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
@@ -1505,11 +1505,34 @@ function Get-GovernedDocumentParentContext {
         if ($LASTEXITCODE -ne 0) {
             throw "The governed-document input commit is unavailable: $Revision"
         }
-        $strParentRevision = "$Revision`^1"
-        & git -C $RepositoryRootPath cat-file -e `
-            "$strParentRevision`^{commit}" 2>$null
+        $strParentLine = [string] (
+            & git -C $RepositoryRootPath rev-list --parents -n 1 $Revision
+        )
         if ($LASTEXITCODE -ne 0) {
-            throw "The governed-document input commit has no first parent: $Revision"
+            throw "Could not read the governed-document input ancestry: $Revision"
+        }
+        $arrCommitAndParents = @($strParentLine.Trim() -split '\s+')
+        if ($arrCommitAndParents.Count -eq 0 -or
+            -not [string]::Equals(
+                $arrCommitAndParents[0],
+                $Revision,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )) {
+            throw "The governed-document input ancestry is invalid: $Revision"
+        }
+        $strParentRevision = ''
+        if ($arrCommitAndParents.Count -gt 1) {
+            $strResolvedParentRevision = $arrCommitAndParents[1]
+            if ($strResolvedParentRevision -notmatch
+                '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$') {
+                throw "The governed-document input first parent is invalid: $Revision"
+            }
+            & git -C $RepositoryRootPath cat-file -e `
+                "$strResolvedParentRevision`^{commit}" 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                throw "The governed-document input first parent is unavailable: $Revision"
+            }
+            $strParentRevision = "$Revision`^1"
         }
         $strCommitTimestamp = [string] (
             & git -C $RepositoryRootPath show -s --format=%cI $Revision
@@ -1524,18 +1547,21 @@ function Get-GovernedDocumentParentContext {
             )) {
             throw "The input commit timestamp is invalid: $Revision"
         }
-        & git -C $RepositoryRootPath cat-file -e `
-            "$strParentRevision`:$RepositoryRelativePath" 2>$null
-        $strParentContent = if ($LASTEXITCODE -eq 0) {
-            Read-GitRevisionText `
-                -RepositoryRootPath $RepositoryRootPath `
-                -Revision $strParentRevision `
-                -RepositoryRelativePath $RepositoryRelativePath `
-                -MaximumBytes $MaximumBytes `
-                -RequireRegularFile
-        }
-        else {
-            $null
+        $strParentContent = $null
+        if (-not [string]::IsNullOrEmpty($strParentRevision)) {
+            & git -C $RepositoryRootPath cat-file -e `
+                "$strParentRevision`:$RepositoryRelativePath" 2>$null
+            $strParentContent = if ($LASTEXITCODE -eq 0) {
+                Read-GitRevisionText `
+                    -RepositoryRootPath $RepositoryRootPath `
+                    -Revision $strParentRevision `
+                    -RepositoryRelativePath $RepositoryRelativePath `
+                    -MaximumBytes $MaximumBytes `
+                    -RequireRegularFile
+            }
+            else {
+                $null
+            }
         }
         return [pscustomobject]@{
             ParentContent = $strParentContent
@@ -7780,6 +7806,8 @@ $arrGovernedNonInstructionDocuments = @(
         RequiresMetadata = $true
     }
 )
+$boolHasExplicitEventRange = -not [string]::IsNullOrEmpty($RangeBaseRevision) -or
+    -not [string]::IsNullOrEmpty($RangeHeadRevision)
 $strValidatedInputRevision = ''
 
 if (-not [string]::IsNullOrEmpty($InputRevision)) {
@@ -8302,12 +8330,21 @@ foreach ($objDocumentSpec in $arrGovernedMetadataDocuments) {
 
 $listGovernedDocumentContexts = [System.Collections.Generic.List[pscustomobject]]::new()
 foreach ($objDocumentSpec in $arrGovernedMetadataDocuments) {
-    $objParentContext = Get-GovernedDocumentParentContext `
-        -RepositoryRootPath $strRepositoryRootPath `
-        -RepositoryRelativePath $objDocumentSpec.Path `
-        -MaximumBytes $objDocumentSpec.MaximumBytes `
-        -Revision $strValidatedInputRevision `
-        -LocalBaselineRevision $strLocalWorktreeBaselineRevision
+    $objParentContext = if ($boolHasExplicitEventRange) {
+        [pscustomobject]@{
+            ParentContent = $null
+            ExpectedUtcDate = ''
+            IsWorktreeTransition = $false
+        }
+    }
+    else {
+        Get-GovernedDocumentParentContext `
+            -RepositoryRootPath $strRepositoryRootPath `
+            -RepositoryRelativePath $objDocumentSpec.Path `
+            -MaximumBytes $objDocumentSpec.MaximumBytes `
+            -Revision $strValidatedInputRevision `
+            -LocalBaselineRevision $strLocalWorktreeBaselineRevision
+    }
     $listGovernedDocumentContexts.Add([pscustomobject]@{
             Path = $objDocumentSpec.Path
             MaximumBytes = $objDocumentSpec.MaximumBytes
@@ -8342,8 +8379,6 @@ if ([string]::IsNullOrEmpty($RangeBaseRevision) -and
 $boolUseLocalWorktreeRange = -not [string]::IsNullOrEmpty(
     $strLocalWorktreeBaselineRevision
 )
-$boolHasExplicitEventRange = -not [string]::IsNullOrEmpty($RangeBaseRevision) -or
-    -not [string]::IsNullOrEmpty($RangeHeadRevision)
 if ($boolHasExplicitEventRange -and
     [string]::IsNullOrEmpty($TrustedFinalizationTimestamp)) {
     throw 'An event-range validation requires a trusted finalization timestamp.'
@@ -8470,6 +8505,63 @@ Write-Output 'Agent-instruction contract passed.'
 
 if ($SelfTest) {
     #region Mutation self-tests
+
+    $strAgentValidatorContent = [System.IO.File]::ReadAllText($PSCommandPath)
+    $scriptBlockGetExplicitRangeParentContextFailure = {
+        param([string] $ValidatorContent)
+
+        $intRangeStateIndex = $ValidatorContent.IndexOf(
+            '$boolHasExplicitEventRange = -not [string]::IsNullOrEmpty($RangeBaseRevision)',
+            [System.StringComparison]::Ordinal
+        )
+        $intContextListIndex = $ValidatorContent.IndexOf(
+            '$listGovernedDocumentContexts =',
+            [System.StringComparison]::Ordinal
+        )
+        if ($intRangeStateIndex -lt 0 -or
+            $intContextListIndex -lt 0 -or
+            $intRangeStateIndex -gt $intContextListIndex) {
+            Write-Output 'Explicit range state must be established before parent contexts.'
+        }
+        $strExpectedParentContextGuard = @(
+            '    $objParentContext = if ($boolHasExplicitEventRange) {',
+            '        [pscustomobject]@{',
+            '            ParentContent = $null',
+            "            ExpectedUtcDate = ''",
+            '            IsWorktreeTransition = $false',
+            '        }',
+            '    }',
+            '    else {',
+            '        Get-GovernedDocumentParentContext `'
+        ) -join "`n"
+        if (-not $ValidatorContent.Contains(
+                $strExpectedParentContextGuard,
+                [System.StringComparison]::Ordinal
+            )) {
+            Write-Output 'Explicit ranges must bypass the unused parent-context lookup.'
+        }
+    }
+    $arrExplicitRangeParentContextFailures = @(
+        & $scriptBlockGetExplicitRangeParentContextFailure `
+            -ValidatorContent $strAgentValidatorContent
+    )
+    if ($arrExplicitRangeParentContextFailures.Count -gt 0) {
+        throw (
+            'The explicit-range parent-context contract failed: ' +
+            ($arrExplicitRangeParentContextFailures -join '; ')
+        )
+    }
+    $strMutatedParentContextGuard = $strAgentValidatorContent.Replace(
+        'if ($boolHasExplicitEventRange) {',
+        'if (-not $boolHasExplicitEventRange) {'
+    )
+    $arrMutatedParentContextFailures = @(
+        & $scriptBlockGetExplicitRangeParentContextFailure `
+            -ValidatorContent $strMutatedParentContextGuard
+    )
+    if ($arrMutatedParentContextFailures.Count -eq 0) {
+        throw 'The explicit-range parent-context guard mutation was accepted.'
+    }
 
     $strLockedPythonHookPath = Join-Path `
         -Path $strRepositoryRootPath `
@@ -12577,6 +12669,19 @@ if ($SelfTest) {
             -Parents @() `
             -Timestamp ($strMergeHistoricalDate + 'T08:00:00Z') `
             -Message 'merge fixture base'
+
+        $objRootParentContext = Get-GovernedDocumentParentContext `
+            -RepositoryRootPath $strMergeFixtureRoot `
+            -RepositoryRelativePath 'AGENTS.md' `
+            -MaximumBytes $intAgentsMaximumInputBytes `
+            -Revision $strMergeBaseCommit
+        if ($null -ne $objRootParentContext.ParentContent -or
+            -not [string]::IsNullOrEmpty($objRootParentContext.ParentRevision) -or
+            $objRootParentContext.ExpectedUtcDate -cne $strMergeHistoricalDate -or
+            $objRootParentContext.IsWorktreeTransition -or
+            $objRootParentContext.UsesLocalBaseline) {
+            throw 'A root input commit did not produce an exact null-parent context.'
+        }
 
         & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
         if ($LASTEXITCODE -ne 0) {
