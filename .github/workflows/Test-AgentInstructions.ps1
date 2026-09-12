@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260911.9
+# Version: 1.2.20260911.10
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -7002,11 +7002,11 @@ function Get-AgentInstructionFailure {
 
 function Get-PushRangeBaseFetchContractFailure {
     # .SYNOPSIS
-    # Validates the workflow step that acquires a default-branch push range base.
+    # Validates the workflow step that acquires an existing push range base.
     #
     # .DESCRIPTION
     # Parses the named workflow step as inert text. Confirms that only an
-    # existing, non-deleted default-branch push runs the step, that the
+    # existing, non-deleted branch push runs the step, that the
     # authenticated event's exact prior SHA is fetched without force or a local
     # destination, that the resolved commit matches, and that the operation
     # leaves tracked state clean.
@@ -7031,7 +7031,7 @@ function Get-PushRangeBaseFetchContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.1.20260908.0
+    # Version: 1.2.20260911.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -7053,7 +7053,6 @@ function Get-PushRangeBaseFetchContractFailure {
     if ($strStepBody -notmatch
         '(?ms)^        if: >-\r?\n' +
             "          github\.event_name == 'push' &&\r?\n" +
-            '          github\.ref_name == github\.event\.repository\.default_branch &&\r?\n' +
             '          !github\.event\.created &&\r?\n' +
             '          !github\.event\.deleted\r?$') {
         Write-Output 'The push range-base acquisition condition is not exact.'
@@ -13527,6 +13526,61 @@ if ($SelfTest) {
             -Parents @($strMergeTopicCommit) `
             -Timestamp ($strMergeHistoricalDate + 'T13:00:00Z') `
             -Message 'second internal topic iteration'
+        & git -C $strMergeFixtureRoot read-tree $strMergeTopicTree
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not restore the topic tree for the later-push fixture.'
+        }
+        [System.IO.File]::WriteAllText(
+            [System.IO.Path]::Combine($strMergeFixtureRoot, 'later-push.txt'),
+            'Unrelated later direct-push content.',
+            $objUtf8WithoutBom
+        )
+        & git -C $strMergeFixtureRoot add -- 'later-push.txt'
+        $strLaterUnrelatedTopicTree =
+            ([string] (& git -C $strMergeFixtureRoot write-tree)).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not create the unrelated later-push tree.'
+        }
+        $strLaterUnrelatedTopicCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strLaterUnrelatedTopicTree `
+            -Parents @($strSecondTopicCommit) `
+            -Timestamp ($strMergeCurrentDate + 'T13:00:00Z') `
+            -Message 'unrelated later direct push'
+        $hashtableLaterTopicPushArguments = @{
+            Name = 'AGENTS.md'
+            RepositoryRootPath = $strMergeFixtureRoot
+            RepositoryRelativePath = 'AGENTS.md'
+            MaximumBytes = $intAgentsMaximumInputBytes
+            HeadRevision = $strLaterUnrelatedTopicCommit
+            InputRevision = $strLaterUnrelatedTopicCommit
+            IsNewRefRange = $false
+            PolicyRepositoryRelativePath = '.github/workflows/Test-AgentInstructions.ps1'
+            PolicyMaximumBytes = 1024
+            PolicyMarker = $strMetadataRangePolicyMarker
+            TrustedFinalizationTimestamp = $strMergeCurrentDate + 'T13:00:00Z'
+        }
+        $arrPriorTopicBaseFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                @hashtableLaterTopicPushArguments `
+                -BaseRevision $strSecondTopicCommit
+        )
+        if ($arrPriorTopicBaseFailures.Count -ne 0) {
+            throw (
+                'An unrelated later topic push revalidated unchanged metadata: ' +
+                ($arrPriorTopicBaseFailures -join '; ')
+            )
+        }
+        $arrMovingDefaultBaseFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                @hashtableLaterTopicPushArguments `
+                -BaseRevision $strMergeBaseCommit
+        )
+        if (-not ($arrMovingDefaultBaseFailures -join '; ').Contains(
+                "Last Updated must be $strMergeCurrentDate",
+                [System.StringComparison]::Ordinal
+            )) {
+            throw 'The later topic-push fixture did not expose the moving-base false failure.'
+        }
         & git -C $strMergeFixtureRoot update-ref `
             refs/remotes/origin/main $strMergeBaseCommit
         & git -C $strMergeFixtureRoot symbolic-ref `
@@ -13722,6 +13776,82 @@ if ($SelfTest) {
     $strAgentWorkflowContent = [System.IO.File]::ReadAllText(
         [System.IO.Path]::Combine($PSScriptRoot, 'agent-instructions.yml')
     )
+    $scriptBlockGetDeletedPushJobGuardFailures = {
+        param([string] $WorkflowContent)
+
+        $strNormalizedWorkflow = $WorkflowContent -replace '\r\n?', "`n"
+        $strExpectedGuard = @(
+            '  validate-agent-instructions:',
+            '    if: >-',
+            "      github.event_name != 'push' ||",
+            '      !github.event.deleted',
+            '    name: Validate agent instructions'
+        ) -join "`n"
+        if (-not $strNormalizedWorkflow.Contains(
+                $strExpectedGuard,
+                [System.StringComparison]::Ordinal
+            )) {
+            Write-Output 'The agent-validation job deletion guard is not exact.'
+        }
+    }
+    $arrDeletedPushJobGuardFailures = @(
+        & $scriptBlockGetDeletedPushJobGuardFailures `
+            -WorkflowContent $strAgentWorkflowContent
+    )
+    if ($arrDeletedPushJobGuardFailures.Count -gt 0) {
+        throw (
+            'The deleted-push job guard contract failed: ' +
+            ($arrDeletedPushJobGuardFailures -join '; ')
+        )
+    }
+    $arrDeletedPushJobGuardMutations = @(
+        [pscustomobject]@{
+            Name = 'guard bypassed'
+            From = "      github.event_name != 'push' ||"
+            To = '      true ||'
+        },
+        [pscustomobject]@{
+            Name = 'guard inverted'
+            From = '      !github.event.deleted'
+            To = '      github.event.deleted'
+        },
+        [pscustomobject]@{
+            Name = 'event scope removed'
+            From = "      github.event_name != 'push' ||"
+            To = '      !github.event.deleted ||'
+        },
+        [pscustomobject]@{
+            Name = 'creation substituted for deletion'
+            From = '      !github.event.deleted'
+            To = '      !github.event.created'
+        }
+    )
+    foreach ($objDeletedPushJobGuardMutation in
+        $arrDeletedPushJobGuardMutations) {
+        if (-not $strAgentWorkflowContent.Contains(
+                $objDeletedPushJobGuardMutation.From,
+                [System.StringComparison]::Ordinal
+            )) {
+            throw (
+                'The deleted-push job guard mutation fixture is unavailable: ' +
+                $objDeletedPushJobGuardMutation.Name
+            )
+        }
+        $strMutatedAgentWorkflowContent = $strAgentWorkflowContent.Replace(
+            $objDeletedPushJobGuardMutation.From,
+            $objDeletedPushJobGuardMutation.To
+        )
+        $arrMutatedDeletedPushJobGuardFailures = @(
+            & $scriptBlockGetDeletedPushJobGuardFailures `
+                -WorkflowContent $strMutatedAgentWorkflowContent
+        )
+        if ($arrMutatedDeletedPushJobGuardFailures.Count -eq 0) {
+            throw (
+                'The deleted-push job guard mutation was accepted: ' +
+                $objDeletedPushJobGuardMutation.Name
+            )
+        }
+    }
     $strFinalizationResolverPath = [System.IO.Path]::Combine(
         $PSScriptRoot,
         'Resolve-AgentInstructionFinalizationTime.mjs'
@@ -13966,9 +14096,9 @@ if ($SelfTest) {
             To = "github.event_name == 'workflow_dispatch' &&"
         },
         [pscustomobject]@{
-            Name = 'non-default push uses its prior topic commit'
-            From = 'github.ref_name == github.event.repository.default_branch &&'
-            To = 'github.ref_name != github.event.repository.default_branch &&'
+            Name = 'existing push narrowed to the default branch'
+            From = '          !github.event.created &&'
+            To = '          github.ref_name == github.event.repository.default_branch &&'
         },
         [pscustomobject]@{
             Name = 'created-ref guard inverted'
@@ -14060,6 +14190,7 @@ if ($SelfTest) {
             '        if: >-',
             "          github.event_name == 'workflow_dispatch' ||",
             "          (github.event_name == 'push' &&",
+            '          github.event.created &&',
             '          github.ref_name != github.event.repository.default_branch)',
             '        shell: bash'
         ) -join "`n"
@@ -14116,7 +14247,7 @@ if ($SelfTest) {
                 'steps\.fetch_default_baseline\.outputs\.revision'
             ).Count -ne 1) {
             Write-Output (
-                'Manual and non-default push runs must use the verified default-branch ' +
+                'Manual and new non-default push runs must use the verified default-branch ' +
                 'baseline output once.'
             )
         }
@@ -14125,9 +14256,11 @@ if ($SelfTest) {
             "            `${{ github.event_name == 'pull_request_target' &&",
             '              github.event.pull_request.base.sha ||',
             "              github.event_name == 'push' &&",
-            '              github.ref_name == github.event.repository.default_branch &&',
+            '              (!github.event.created ||',
+            '              github.ref_name == github.event.repository.default_branch) &&',
             '              github.event.before ||',
             "              (github.event_name == 'push' &&",
+            '              github.event.created &&',
             '              github.ref_name != github.event.repository.default_branch ||',
             "              github.event_name == 'workflow_dispatch') &&",
             "              steps.fetch_default_baseline.outputs.revision || '' }}"
@@ -14171,9 +14304,14 @@ if ($SelfTest) {
             To = 'DEFAULT_BRANCH: main'
         },
         [pscustomobject]@{
-            Name = 'non-default push omitted'
+            Name = 'new non-default push omitted'
             From = 'github.ref_name != github.event.repository.default_branch)'
             To = 'github.ref_name == github.event.repository.default_branch)'
+        },
+        [pscustomobject]@{
+            Name = 'new-ref condition removed'
+            From = '          github.event.created &&'
+            To = '          !github.event.created &&'
         },
         [pscustomobject]@{
             Name = 'ref validation removed'
@@ -14196,7 +14334,7 @@ if ($SelfTest) {
             To = "github.event_name == 'workflow_dispatch' && ''"
         },
         [pscustomobject]@{
-            Name = 'baseline output replaced by topic predecessor'
+            Name = 'new-ref baseline output replaced by nonexistent predecessor'
             From = 'steps.fetch_default_baseline.outputs.revision'
             To = 'github.event.before'
         },

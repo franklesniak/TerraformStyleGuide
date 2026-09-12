@@ -42,6 +42,9 @@ permissions:
 
 jobs:
   validate-agent-instructions:
+    if: >-
+      github.event_name != 'push' ||
+      !github.event.deleted
     name: Validate agent instructions
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -122,7 +125,6 @@ jobs:
       - name: Fetch existing push range base as data
         if: >-
           github.event_name == 'push' &&
-          github.ref_name == github.event.repository.default_branch &&
           !github.event.created &&
           !github.event.deleted
         shell: bash
@@ -275,6 +277,7 @@ jobs:
         if: >-
           github.event_name == 'workflow_dispatch' ||
           (github.event_name == 'push' &&
+          github.event.created &&
           github.ref_name != github.event.repository.default_branch)
         shell: bash
         env:
@@ -330,9 +333,11 @@ jobs:
             ${{ github.event_name == 'pull_request_target' &&
               github.event.pull_request.base.sha ||
               github.event_name == 'push' &&
-              github.ref_name == github.event.repository.default_branch &&
+              (!github.event.created ||
+              github.ref_name == github.event.repository.default_branch) &&
               github.event.before ||
               (github.event_name == 'push' &&
+              github.event.created &&
               github.ref_name != github.event.repository.default_branch ||
               github.event_name == 'workflow_dispatch') &&
               steps.fetch_default_baseline.outputs.revision || '' }}
