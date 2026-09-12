@@ -6,7 +6,7 @@
 
 - **Status:** Active
 - **Owner:** Repository maintainer (@franklesniak)
-- **Last Updated:** 2026-09-11
+- **Last Updated:** 2026-09-12
 - **Scope:** Repository-owned scripts in `.github/workflows` and their supported local entry points.
 - **Related:** [Markdown lint implementation](MARKDOWN-LINTING-IMPLEMENTATION.md)
 
@@ -18,6 +18,7 @@
 | `Get-SupplyFreezeDigest.mjs` | Computes the reviewed workflow supply-freeze digest. | `node .github/workflows/Get-SupplyFreezeDigest.mjs` |
 | `lint-nested-markdown.js` | Recursively lints `markdown` and `md` fenced content in repository `.md` and `.mdc` files. | `npm run lint:md:nested` |
 | `lint-staged-markdown.mjs` | Selects and lints outer and nested staged `.md` and `.mdc` content without replacing worktree files. | `node .github/workflows/lint-staged-markdown.mjs` |
+| `Sync-PullRequestBodyIdentity.mjs` | Derives, checks, or updates the deterministic pull-request body identity block and runs its dependency-free case suite. | `node .github/workflows/Sync-PullRequestBodyIdentity.mjs --self-test`; use `--generate`, `--check-event EVENT`, or `--update --repository OWNER/REPO --pull-request NUMBER` for the other modes. Update mode reads its token only from the `GITHUB_TOKEN` environment variable. |
 | `Test-AgentInstructionParserManifest.mjs` | Validates the root parser manifest and lock as inert data before dependency installation. | `node .github/workflows/Test-AgentInstructionParserManifest.mjs --repository-root . --trusted-revision $(git rev-parse HEAD) --input-revision $(git rev-parse HEAD) --self-test` |
 | `Test-AgentInstructions.ps1` | Validates governed instruction capacity, operative policy, metadata transitions, Git ranges, and mutation controls. | `npm run test:agent-instructions` |
 | `Validate-WorkflowPolicy.mjs` | Validates the repository's embedded workflow policy and negative fixtures. | `node .github/workflows/Validate-WorkflowPolicy.mjs .github/workflows/build.yml .github/workflows/markdownlint.yml` |
