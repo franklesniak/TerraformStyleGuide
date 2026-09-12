@@ -2,6 +2,7 @@
 
 import childProcess from 'node:child_process';
 import crypto from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import https from 'node:https';
 import os from 'node:os';
@@ -9,7 +10,7 @@ import path from 'node:path';
 import { TextDecoder } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-const TOOL_VERSION = '1.0.20260912.2';
+const TOOL_VERSION = '1.0.20260912.3';
 const RESULT_SCHEMA = 'TerraformStyleGuide.PullRequestBodyIdentityResult.v1';
 const CASE_SCHEMA = 'TerraformStyleGuide.PullRequestBodyIdentityCases.v1';
 const IDENTITY_SCHEMA = 'TerraformStyleGuide.PullRequestBodyIdentity.v1';
@@ -721,6 +722,29 @@ function validateApiToken(token) {
     !/[\u0000-\u001f\u007f]/u.test(token), 'api-token');
 }
 
+function consumeApiResponse(response, request) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let length = 0;
+    response.on('data', (chunk) => {
+      length += chunk.length;
+      if (length > MAXIMUM_RESPONSE_BYTES) {
+        const error = new Error('api-response-oversized');
+        request.destroy(error);
+        reject(error);
+        return;
+      }
+      chunks.push(chunk);
+    });
+    response.once('aborted', () => reject(new Error('api-response-aborted')));
+    response.once('error', reject);
+    response.once('end', () => resolve({
+      statusCode: response.statusCode,
+      bytes: Buffer.concat(chunks),
+    }));
+  });
+}
+
 function apiRequest(apiRoot, token, method, relativePath, requestBody) {
   validateApiToken(token);
   assert(['GET', 'PATCH'].includes(method) &&
@@ -745,22 +769,8 @@ function apiRequest(apiRoot, token, method, relativePath, requestBody) {
         'X-GitHub-Api-Version': API_VERSION,
       },
       timeout: REQUEST_TIMEOUT_MILLISECONDS,
-    }, (response) => {
-      const chunks = [];
-      let length = 0;
-      response.on('data', (chunk) => {
-        length += chunk.length;
-        if (length > MAXIMUM_RESPONSE_BYTES) {
-          request.destroy(new Error('api-response-oversized'));
-          return;
-        }
-        chunks.push(chunk);
-      });
-      response.on('end', () => resolve({
-        statusCode: response.statusCode,
-        bytes: Buffer.concat(chunks),
-      }));
-    });
+    }, (response) => consumeApiResponse(response, request)
+      .then(resolve, reject));
     request.on('timeout', () => request.destroy(new Error('api-timeout')));
     request.on('error', reject);
     if (bodyBytes.length !== 0) request.write(bodyBytes);
@@ -1191,6 +1201,41 @@ function createMockApi(scenario, identity) {
   };
 }
 
+async function runApiResponseEventSelfTests() {
+  const createResponse = () => {
+    const response = new EventEmitter();
+    response.statusCode = 200;
+    return response;
+  };
+  const request = { destroy() {} };
+  const abortResponse = createResponse();
+  const abortPromise = consumeApiResponse(abortResponse, request);
+  abortResponse.emit('data', Buffer.from('{"partial":', 'utf8'));
+  abortResponse.emit('aborted');
+  abortResponse.emit('error', new Error('simulated response error after abort'));
+  let abortRejected = false;
+  try {
+    await abortPromise;
+  } catch (error) {
+    abortRejected = error instanceof Error &&
+      error.message === 'api-response-aborted';
+  }
+  assert(abortRejected, 'api-response-abort-self-test');
+
+  const errorResponse = createResponse();
+  const errorPromise = consumeApiResponse(errorResponse, request);
+  const simulatedError = new Error('simulated response stream error');
+  errorResponse.emit('error', simulatedError);
+  let errorRejected = false;
+  try {
+    await errorPromise;
+  } catch (error) {
+    errorRejected = error === simulatedError;
+  }
+  assert(errorRejected, 'api-response-error-self-test');
+  return 2;
+}
+
 async function runCaseCatalog(catalog, repositoryRoot) {
   const identity = fixtureIdentity();
   validateIdentity(identity);
@@ -1208,6 +1253,7 @@ async function runCaseCatalog(catalog, repositoryRoot) {
     assert(rejected, 'token-self-test');
     passed += 1;
   }
+  passed += await runApiResponseEventSelfTests();
   const baselineSnapshot = collectSnapshot(repositoryRoot);
   const originalGitDirectory = process.env.GIT_DIR;
   try {
