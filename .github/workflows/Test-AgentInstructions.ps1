@@ -14586,11 +14586,13 @@ if ($SelfTest) {
         '  return readHeadPublicationWithRetry({',
         "    headBaseRevision: eventName === 'push' ? runBaseRevision : null,",
         '    token: runHeadRepository === repository ? token : null,',
-        '    return candidates[0].createdAt;',
-        '  const timestamp = await resolveFinalizationTimestamp({',
+        '    return candidates[0];',
+        'export async function resolveFinalizationEvidence({',
+        'export async function resolveFinalizationTimestamp(options) {',
+        '  const evidence = await resolveFinalizationEvidence({',
         '    runHeadRef: process.env.RUN_HEAD_REF,',
         '    runBaseRevision: process.env.RUN_BASE_REVISION,',
-        '  appendFileSync(output, `timestamp=${timestamp}\n`, ''utf8'');'
+        '    `timestamp=${evidence.createdAt}\nbase_revision=${evidence.baseRevision}\n`,'
     )
     foreach ($strFinalizationResolverLiteral in $arrFinalizationResolverLiterals) {
         if ([regex]::Matches(
@@ -14642,7 +14644,7 @@ if ($SelfTest) {
     if ($intFinalizationResolverSelfTestExit -ne 0 -or
         $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
         [string]$arrFinalizationResolverSelfTestOutput[0] -cne
-        'Finalization resolver self-tests passed: 35 fixtures.') {
+        'Finalization resolver self-tests passed: 36 fixtures.') {
         throw (
             'The finalization-time resolver self-test failed: ' +
             ($arrFinalizationResolverSelfTestOutput -join '; ')
@@ -14909,10 +14911,9 @@ if ($SelfTest) {
         $strExpectedCondition = @(
             '        id: fetch_default_baseline',
             '        if: >-',
-            "          github.event_name == 'workflow_dispatch' ||",
-            "          (github.event_name == 'push' &&",
+            "          github.event_name == 'push' &&",
             '          github.event.created &&',
-            '          github.ref_name != github.event.repository.default_branch)',
+            '          github.ref_name != github.event.repository.default_branch',
             '        shell: bash'
         ) -join "`n"
         if (-not $strNormalizedWorkflow.Contains(
@@ -14957,6 +14958,49 @@ if ($SelfTest) {
             $strDefaultStepBody -match '"\+\$\{default_ref\}') {
             Write-Output 'The default-branch baseline fetch must be exact and non-force.'
         }
+        $arrManualStepMatches = @([regex]::Matches(
+            $WorkflowContent,
+            '(?ms)^      - name: Fetch manual publication range base as data\r?\n' +
+                '(?<Body>.*?)(?=^      - name: |\z)'
+        ))
+        if ($arrManualStepMatches.Count -ne 1) {
+            Write-Output 'The manual publication-base acquisition step must occur exactly once.'
+            return
+        }
+        $strManualStepBody = $arrManualStepMatches[0].Groups['Body'].Value
+        foreach ($strRequiredLiteral in @(
+                "        if: github.event_name == 'workflow_dispatch'",
+                '        shell: bash',
+                '          GITHUB_TOKEN: ${{ github.token }}',
+                '          RANGE_BASE_SHA: ${{ steps.resolve_run_time.outputs.base_revision }}',
+                '          set -euo pipefail',
+                '          [[ "${RANGE_BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]',
+                '          test "${RANGE_BASE_SHA}" != "0000000000000000000000000000000000000000"',
+                '          authorization="$(printf ''x-access-token:%s'' "${GITHUB_TOKEN}" | base64 -w 0)"',
+                '          GIT_CONFIG_COUNT=1 \',
+                '            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \',
+                '            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \',
+                '            git fetch --no-tags --no-recurse-submodules origin "${RANGE_BASE_SHA}"',
+                '          unset authorization',
+                '          fetched_base="$(git rev-parse --verify "${RANGE_BASE_SHA}^{commit}")"',
+                '          test "${fetched_base}" = "${RANGE_BASE_SHA}"',
+                '          git diff --quiet --no-ext-diff',
+                '          git diff --cached --quiet --no-ext-diff'
+            )) {
+            if (-not $strManualStepBody.Contains(
+                    $strRequiredLiteral,
+                    [System.StringComparison]::Ordinal
+                )) {
+                Write-Output "The manual publication-base acquisition is missing: $strRequiredLiteral"
+            }
+        }
+        if ([regex]::Matches(
+                $strManualStepBody,
+                '(?m)^\s+git fetch '
+            ).Count -ne 1 -or
+            $strManualStepBody -match '(?m)(^|\s)--force(\s|$)') {
+            Write-Output 'The manual publication-base fetch must be exact and non-force.'
+        }
         if ([regex]::Matches(
                 $WorkflowContent,
                 "github.event_name == 'workflow_dispatch' && github.sha"
@@ -14968,8 +15012,17 @@ if ($SelfTest) {
                 'steps\.fetch_default_baseline\.outputs\.revision'
             ).Count -ne 1) {
             Write-Output (
-                'Manual and new non-default push runs must use the verified default-branch ' +
-                'baseline output once.'
+                'New non-default push runs must use the verified default-branch baseline ' +
+                'output once.'
+            )
+        }
+        if ([regex]::Matches(
+                $WorkflowContent,
+                'steps\.resolve_run_time\.outputs\.base_revision'
+            ).Count -ne 2) {
+            Write-Output (
+                'Manual runs must fetch and validate with the authenticated publication ' +
+                'base exactly twice.'
             )
         }
         $strExpectedRangeBase = @(
@@ -14982,9 +15035,10 @@ if ($SelfTest) {
             '              github.event.before ||',
             "              (github.event_name == 'push' &&",
             '              github.event.created &&',
-            '              github.ref_name != github.event.repository.default_branch ||',
-            "              github.event_name == 'workflow_dispatch') &&",
-            "              steps.fetch_default_baseline.outputs.revision || '' }}"
+            '              github.ref_name != github.event.repository.default_branch) &&',
+            '              steps.fetch_default_baseline.outputs.revision ||',
+            "              github.event_name == 'workflow_dispatch' &&",
+            "              steps.resolve_run_time.outputs.base_revision || '' }}"
         ) -join "`n"
         if (-not $strNormalizedWorkflow.Contains(
                 $strExpectedRangeBase,
@@ -15026,8 +15080,8 @@ if ($SelfTest) {
         },
         [pscustomobject]@{
             Name = 'new non-default push omitted'
-            From = 'github.ref_name != github.event.repository.default_branch)'
-            To = 'github.ref_name == github.event.repository.default_branch)'
+            From = 'github.ref_name != github.event.repository.default_branch'
+            To = 'github.ref_name == github.event.repository.default_branch'
         },
         [pscustomobject]@{
             Name = 'new-ref condition removed'
@@ -15060,9 +15114,24 @@ if ($SelfTest) {
             To = 'github.event.before'
         },
         [pscustomobject]@{
+            Name = 'manual publication-base step removed'
+            From = 'Fetch manual publication range base as data'
+            To = 'Removed manual publication-base acquisition'
+        },
+        [pscustomobject]@{
+            Name = 'manual publication base replaced by head'
+            From = 'steps.resolve_run_time.outputs.base_revision'
+            To = 'github.sha'
+        },
+        [pscustomobject]@{
+            Name = 'manual zero base accepted'
+            From = 'test "${RANGE_BASE_SHA}" != "0000000000000000000000000000000000000000"'
+            To = 'test -n "${RANGE_BASE_SHA}"'
+        },
+        [pscustomobject]@{
             Name = 'topic push baseline condition inverted'
-            From = 'github.ref_name != github.event.repository.default_branch ||'
-            To = 'github.ref_name == github.event.repository.default_branch ||'
+            From = 'github.ref_name != github.event.repository.default_branch) &&'
+            To = 'github.ref_name == github.event.repository.default_branch) &&'
         },
         [pscustomobject]@{
             Name = 'topic branch allowed new-ref semantics'

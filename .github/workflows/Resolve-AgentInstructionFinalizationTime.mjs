@@ -141,7 +141,11 @@ function validateRepositoryActivity(activity, expected, currentCreatedTime) {
   if (expected.baseRevision && activity.before !== expected.baseRevision) {
     return null;
   }
-  return { createdAt: activity.timestamp, createdTime };
+  return {
+    baseRevision: activity.before,
+    createdAt: activity.timestamp,
+    createdTime,
+  };
 }
 
 async function readHeadPublication({
@@ -192,7 +196,7 @@ async function readHeadPublication({
     }
     candidates.sort((left, right) => right.createdTime - left.createdTime);
     if (candidates.length > 0) {
-      return candidates[0].createdAt;
+      return candidates[0];
     }
 
     const nextUrl = readNextActivityUrl(
@@ -264,7 +268,7 @@ function validateCurrentRun(run, expected) {
   }
 }
 
-export async function resolveFinalizationTimestamp({
+export async function resolveFinalizationEvidence({
   apiUrl,
   repository,
   runId,
@@ -335,6 +339,11 @@ export async function resolveFinalizationTimestamp({
     waitImplementation,
     currentCreatedTime,
   });
+}
+
+export async function resolveFinalizationTimestamp(options) {
+  const evidence = await resolveFinalizationEvidence(options);
+  return evidence.createdAt;
 }
 
 function makeResponse(value, { link = '', ok = true, status = 200 } = {}) {
@@ -915,6 +924,21 @@ export async function runSelfTest() {
     '2026-09-10T09:59:59Z',
   );
 
+  const manualActivityEvidence = await resolveFinalizationEvidence({
+    ...base,
+    fetchImplementation: makeFixtureFetch({
+      repositoryActivities: [makeActivity({
+        before: 'd'.repeat(40),
+        timestamp: '2026-09-10T09:59:58Z',
+      })],
+    }),
+  });
+  assertEqual(
+    'manual event returns its authenticated publication base',
+    `${manualActivityEvidence.createdAt}|${manualActivityEvidence.baseRevision}`,
+    `2026-09-10T09:59:58Z|${'d'.repeat(40)}`,
+  );
+
   const manualTagActivityTimestamp = await resolveFinalizationTimestamp({
     ...base,
     runHeadRefName: 'release',
@@ -1078,7 +1102,7 @@ async function main() {
   if (!output) {
     throw new Error('The GitHub output path is unavailable.');
   }
-  const timestamp = await resolveFinalizationTimestamp({
+  const evidence = await resolveFinalizationEvidence({
     apiUrl: process.env.API_URL,
     repository: process.env.REPOSITORY,
     runId: process.env.RUN_ID,
@@ -1091,7 +1115,11 @@ async function main() {
     runHeadRepository: process.env.RUN_HEAD_REPOSITORY,
     token: process.env.GITHUB_TOKEN,
   });
-  appendFileSync(output, `timestamp=${timestamp}\n`, 'utf8');
+  appendFileSync(
+    output,
+    `timestamp=${evidence.createdAt}\nbase_revision=${evidence.baseRevision}\n`,
+    'utf8',
+  );
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

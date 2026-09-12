@@ -252,10 +252,9 @@ jobs:
       - name: Fetch default-branch published baseline as data
         id: fetch_default_baseline
         if: >-
-          github.event_name == 'workflow_dispatch' ||
-          (github.event_name == 'push' &&
+          github.event_name == 'push' &&
           github.event.created &&
-          github.ref_name != github.event.repository.default_branch)
+          github.ref_name != github.event.repository.default_branch
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -276,6 +275,27 @@ jobs:
           fetched_baseline="$(git rev-parse --verify "${remote_ref}^{commit}")"
           [[ "${fetched_baseline}" =~ ^[0-9a-f]{40}$ ]]
           printf 'revision=%s\n' "${fetched_baseline}" >> "${GITHUB_OUTPUT}"
+          git diff --quiet --no-ext-diff
+          git diff --cached --quiet --no-ext-diff
+
+      - name: Fetch manual publication range base as data
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RANGE_BASE_SHA: ${{ steps.resolve_run_time.outputs.base_revision }}
+        run: |
+          set -euo pipefail
+          [[ "${RANGE_BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          test "${RANGE_BASE_SHA}" != "0000000000000000000000000000000000000000"
+          authorization="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 -w 0)"
+          GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \
+            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \
+            git fetch --no-tags --no-recurse-submodules origin "${RANGE_BASE_SHA}"
+          unset authorization
+          fetched_base="$(git rev-parse --verify "${RANGE_BASE_SHA}^{commit}")"
+          test "${fetched_base}" = "${RANGE_BASE_SHA}"
           git diff --quiet --no-ext-diff
           git diff --cached --quiet --no-ext-diff
 
@@ -315,9 +335,10 @@ jobs:
               github.event.before ||
               (github.event_name == 'push' &&
               github.event.created &&
-              github.ref_name != github.event.repository.default_branch ||
-              github.event_name == 'workflow_dispatch') &&
-              steps.fetch_default_baseline.outputs.revision || '' }}
+              github.ref_name != github.event.repository.default_branch) &&
+              steps.fetch_default_baseline.outputs.revision ||
+              github.event_name == 'workflow_dispatch' &&
+              steps.resolve_run_time.outputs.base_revision || '' }}
           AGENT_INSTRUCTION_RANGE_HEAD: >-
             ${{ github.event_name == 'pull_request_target' &&
               github.event.pull_request.head.sha ||
