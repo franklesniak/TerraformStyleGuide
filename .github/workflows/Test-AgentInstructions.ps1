@@ -49,7 +49,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260911.10
+# Version: 1.2.20260911.11
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -136,6 +136,8 @@ $script:hashtableLegacyMetadataParentSha256 = @{
     'docs/decisions/0003-accept-required-check-workflow-edit-residual.md' =
         'c4ac1757ef081ff085f2e5c112682181b97d3d202acd9418253ac63c1d492f97'
 }
+$script:strLegacyProcessParentRevision =
+    '497e8fb655e10a3e4fd43b6ad543b48f11e9f0ad'
 $script:arrAllowedMetadataStatuses = @(
     'Draft', 'Proposed', 'Active', 'Accepted', 'Superseded', 'Deprecated'
 )
@@ -1300,73 +1302,6 @@ function Test-GitRevisionFileContainsLiteral {
     return $strRevisionContent.Contains($Literal, [System.StringComparison]::Ordinal)
 }
 
-function Get-LocalPublishedBaselineRevision {
-    # .SYNOPSIS
-    # Resolves the local remote-default commit used as a published baseline.
-    #
-    # .DESCRIPTION
-    # Resolves `refs/remotes/origin/HEAD`, requires it to identify a valid remote
-    # tracking branch, and returns its available commit object ID.
-    #
-    # .PARAMETER RepositoryRootPath
-    # The absolute repository root whose origin tracking references are inspected.
-    #
-    # .EXAMPLE
-    # Get-LocalPublishedBaselineRevision -RepositoryRootPath $strRoot
-    #
-    # # Returns the exact local commit tracked by origin's default branch.
-    #
-    # .INPUTS
-    # None. You can't pipe objects to this function.
-    #
-    # .OUTPUTS
-    # [string] The verified published-baseline commit object ID.
-    #
-    # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260907.0
-    [CmdletBinding(PositionalBinding = $false)]
-    [OutputType([string])]
-    param(
-        [Parameter(Mandatory)]
-        [string] $RepositoryRootPath
-    )
-
-    $strRemoteHeadReference = [string] (
-        & git -C $RepositoryRootPath symbolic-ref --quiet `
-            refs/remotes/origin/HEAD 2>$null
-    )
-    if ($LASTEXITCODE -ne 0 -or
-        -not $strRemoteHeadReference.StartsWith(
-            'refs/remotes/origin/',
-            [System.StringComparison]::Ordinal
-        ) -or
-        $strRemoteHeadReference.Trim() -ceq 'refs/remotes/origin/HEAD') {
-        throw (
-            'The local published baseline is unavailable. Fetch origin and set its ' +
-            'remote-default tracking reference.'
-        )
-    }
-    $strRemoteHeadReference = $strRemoteHeadReference.Trim()
-    & git -C $RepositoryRootPath check-ref-format $strRemoteHeadReference 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        throw 'The local published-baseline reference is malformed.'
-    }
-    $strBaselineRevision = [string] (
-        & git -C $RepositoryRootPath rev-parse --verify `
-            "$strRemoteHeadReference`^{commit}" 2>$null
-    )
-    if ($LASTEXITCODE -ne 0 -or
-        $strBaselineRevision.Trim() -notmatch '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$') {
-        throw 'The local published-baseline commit is unavailable.'
-    }
-    return $strBaselineRevision.Trim()
-}
-
 function Get-GovernedDocumentParentContext {
     # .SYNOPSIS
     # Gets the comparison context for one governed document.
@@ -1374,8 +1309,7 @@ function Get-GovernedDocumentParentContext {
     # .DESCRIPTION
     # Selects the worktree comparison source or the first parent of an explicit
     # input revision and derives the applicable UTC metadata date. A local
-    # published baseline is the direct parent for both clean and dirty topic
-    # snapshots so that internal commits are not separate metadata transitions.
+    # worktree baseline is the direct parent for both clean and dirty snapshots.
     #
     # .PARAMETER RepositoryRootPath
     # The absolute repository root path used by Git.
@@ -1389,8 +1323,8 @@ function Get-GovernedDocumentParentContext {
     # .PARAMETER Revision
     # The optional commit whose first parent supplies the comparison content.
     #
-    # .PARAMETER PublishedBaselineRevision
-    # The verified remote-default commit used for local no-range validation.
+    # .PARAMETER LocalBaselineRevision
+    # The verified checked-out commit used for local no-range validation.
     #
     # .EXAMPLE
     # Get-GovernedDocumentParentContext -RepositoryRootPath $strRoot `
@@ -1410,7 +1344,7 @@ function Get-GovernedDocumentParentContext {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.3.20260910.0
+    # Version: 1.4.20260911.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
@@ -1430,7 +1364,7 @@ function Get-GovernedDocumentParentContext {
 
         [Parameter()]
         [AllowEmptyString()]
-        [string] $PublishedBaselineRevision = ''
+        [string] $LocalBaselineRevision = ''
     )
 
     if (-not [string]::IsNullOrEmpty($Revision)) {
@@ -1478,26 +1412,26 @@ function Get-GovernedDocumentParentContext {
             ExpectedUtcDate = $objCommitTimestamp.UtcDateTime.ToString('yyyy-MM-dd')
             ParentRevision = $strParentRevision
             IsWorktreeTransition = $false
-            UsesPublishedBaseline = $false
+            UsesLocalBaseline = $false
         }
     }
 
-    if (-not [string]::IsNullOrEmpty($PublishedBaselineRevision)) {
-        if ($PublishedBaselineRevision -notmatch
+    if (-not [string]::IsNullOrEmpty($LocalBaselineRevision)) {
+        if ($LocalBaselineRevision -notmatch
             '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$') {
-            throw "The local published-baseline commit is invalid: $PublishedBaselineRevision"
+            throw "The local baseline commit is invalid: $LocalBaselineRevision"
         }
         & git -C $RepositoryRootPath cat-file -e `
-            "$PublishedBaselineRevision`^{commit}" 2>$null
+            "$LocalBaselineRevision`^{commit}" 2>$null
         if ($LASTEXITCODE -ne 0) {
-            throw "The local published-baseline commit is unavailable: $PublishedBaselineRevision"
+            throw "The local baseline commit is unavailable: $LocalBaselineRevision"
         }
         & git -C $RepositoryRootPath diff --quiet HEAD -- $RepositoryRelativePath
         $intDiffExitCode = $LASTEXITCODE
         if ($intDiffExitCode -notin @(0, 1)) {
             throw "Could not compare $RepositoryRelativePath with HEAD."
         }
-        $strParentRevision = $PublishedBaselineRevision
+        $strParentRevision = $LocalBaselineRevision
         $strExpectedUtcDate = if ($intDiffExitCode -eq 1) {
             $script:strMaximumMetadataUtcDate
         }
@@ -1522,7 +1456,7 @@ function Get-GovernedDocumentParentContext {
             ExpectedUtcDate = $strExpectedUtcDate
             ParentRevision = $strParentRevision
             IsWorktreeTransition = $intDiffExitCode -eq 1
-            UsesPublishedBaseline = $true
+            UsesLocalBaseline = $true
         }
     }
 
@@ -1567,7 +1501,7 @@ function Get-GovernedDocumentParentContext {
         ExpectedUtcDate = $strExpectedUtcDate
         ParentRevision = $strParentRevision
         IsWorktreeTransition = $intDiffExitCode -eq 1
-        UsesPublishedBaseline = $false
+        UsesLocalBaseline = $false
     }
 }
 
@@ -7607,12 +7541,11 @@ if (-not [string]::IsNullOrEmpty($strValidatedInputRevision) -and
     }
 }
 
-$strLocalPublishedBaselineRevision = ''
+$strLocalWorktreeBaselineRevision = ''
 if ([string]::IsNullOrEmpty($strValidatedInputRevision) -and
     [string]::IsNullOrEmpty($RangeBaseRevision) -and
     [string]::IsNullOrEmpty($RangeHeadRevision)) {
-    $strLocalPublishedBaselineRevision = Get-LocalPublishedBaselineRevision `
-        -RepositoryRootPath $strRepositoryRootPath
+    $strLocalWorktreeBaselineRevision = $strCheckedOutRevision
 }
 
 if ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
@@ -7661,9 +7594,9 @@ if ($null -ne $objDocumentClassificationContext.Failure) {
     throw $objDocumentClassificationContext.Failure
 }
 $strDocumentClassificationBaselineRevision = if (
-    -not [string]::IsNullOrEmpty($strLocalPublishedBaselineRevision)
+    -not [string]::IsNullOrEmpty($strLocalWorktreeBaselineRevision)
 ) {
-    $strLocalPublishedBaselineRevision
+    $strLocalWorktreeBaselineRevision
 }
 else {
     $RangeBaseRevision
@@ -7751,15 +7684,15 @@ foreach ($strTrackedRepositoryPath in $arrTrackedRepositoryPaths) {
     $listGovernedDecisionCandidatePaths.Add([string]$strTrackedRepositoryPath)
 }
 $strDecisionInventoryBaseRevision = if (
-    -not [string]::IsNullOrEmpty($strLocalPublishedBaselineRevision)
+    -not [string]::IsNullOrEmpty($strLocalWorktreeBaselineRevision)
 ) {
-    $strLocalPublishedBaselineRevision
+    $strLocalWorktreeBaselineRevision
 }
 else {
     $RangeBaseRevision
 }
 $strDecisionInventoryHeadRevision = if (
-    -not [string]::IsNullOrEmpty($strLocalPublishedBaselineRevision)
+    -not [string]::IsNullOrEmpty($strLocalWorktreeBaselineRevision)
 ) {
     $strCheckedOutRevision
 }
@@ -8035,7 +7968,7 @@ foreach ($objDocumentSpec in $arrGovernedMetadataDocuments) {
         -RepositoryRelativePath $objDocumentSpec.Path `
         -MaximumBytes $objDocumentSpec.MaximumBytes `
         -Revision $strValidatedInputRevision `
-        -PublishedBaselineRevision $strLocalPublishedBaselineRevision
+        -LocalBaselineRevision $strLocalWorktreeBaselineRevision
     $listGovernedDocumentContexts.Add([pscustomobject]@{
             Path = $objDocumentSpec.Path
             MaximumBytes = $objDocumentSpec.MaximumBytes
@@ -8067,8 +8000,8 @@ if ([string]::IsNullOrEmpty($RangeBaseRevision) -and
     $arrNoRangeCommitAndParents = @($strNoRangeParentLine.Trim() -split '\s+')
     $boolNoRangeCommitHasParent = $arrNoRangeCommitAndParents.Count -gt 1
 }
-$boolUseLocalPublishedRange = -not [string]::IsNullOrEmpty(
-    $strLocalPublishedBaselineRevision
+$boolUseLocalWorktreeRange = -not [string]::IsNullOrEmpty(
+    $strLocalWorktreeBaselineRevision
 )
 $boolHasExplicitEventRange = -not [string]::IsNullOrEmpty($RangeBaseRevision) -or
     -not [string]::IsNullOrEmpty($RangeHeadRevision)
@@ -8076,19 +8009,19 @@ if ($boolHasExplicitEventRange -and
     [string]::IsNullOrEmpty($TrustedFinalizationTimestamp)) {
     throw 'An event-range validation requires a trusted finalization timestamp.'
 }
-$strEffectiveRangeBaseRevision = if ($boolUseLocalPublishedRange) {
-    $strLocalPublishedBaselineRevision
+$strEffectiveRangeBaseRevision = if ($boolUseLocalWorktreeRange) {
+    $strLocalWorktreeBaselineRevision
 }
 else {
     $RangeBaseRevision
 }
-$strEffectiveRangeHeadRevision = if ($boolUseLocalPublishedRange) {
+$strEffectiveRangeHeadRevision = if ($boolUseLocalWorktreeRange) {
     $strCheckedOutRevision
 }
 else {
     $RangeHeadRevision
 }
-$boolEffectiveRangeIsNewRef = if ($boolUseLocalPublishedRange) {
+$boolEffectiveRangeIsNewRef = if ($boolUseLocalWorktreeRange) {
     $false
 }
 else {
@@ -8123,7 +8056,7 @@ $arrRepositoryFailures += @(Get-PreCommitBootstrapContractFailure `
 foreach ($objDocumentContext in $listGovernedDocumentContexts) {
     if ([string]::IsNullOrEmpty($RangeBaseRevision) -and
         [string]::IsNullOrEmpty($RangeHeadRevision)) {
-        if ($boolUseLocalPublishedRange) {
+        if ($boolUseLocalWorktreeRange) {
             if ($objDocumentContext.RequiresMetadata -and
                 $objDocumentContext.IsWorktreeTransition) {
                 $arrRepositoryFailures += @(Get-DocumentMetadataTransitionFailure `
@@ -8160,7 +8093,7 @@ foreach ($objDocumentContext in $listGovernedDocumentContexts) {
         }
     }
     $boolWorktreeReplacesLocalRange =
-        $boolUseLocalPublishedRange -and $objDocumentContext.IsWorktreeTransition
+        $boolUseLocalWorktreeRange -and $objDocumentContext.IsWorktreeTransition
     if (-not $boolWorktreeReplacesLocalRange) {
         $arrRepositoryFailures += @(Get-GovernedDocumentRangeTransitionFailure `
                 -Name $objDocumentContext.Path `
@@ -9499,12 +9432,6 @@ if ($SelfTest) {
         '.github/workflows/MARKDOWN-LINTING-IMPLEMENTATION.md'
         '.github/workflows/scripts-README.md'
     )
-    $strLegacyProcessBaselineRevision = $strEffectiveRangeBaseRevision
-    if ([string]::IsNullOrEmpty($strLegacyProcessBaselineRevision) -or
-        $strLegacyProcessBaselineRevision -match '^0+$') {
-        $strLegacyProcessBaselineRevision = Get-LocalPublishedBaselineRevision `
-            -RepositoryRootPath $strRepositoryRootPath
-    }
     foreach ($strLegacyProcessPath in $arrLegacyProcessPaths) {
         $objLegacyProcessContext = $listGovernedDocumentContexts |
             Where-Object { $_.Path -ceq $strLegacyProcessPath }
@@ -9518,7 +9445,7 @@ if ($SelfTest) {
         }
         $strLegacyProcessParentContent = Read-GitRevisionText `
             -RepositoryRootPath $strRepositoryRootPath `
-            -Revision $strLegacyProcessBaselineRevision `
+            -Revision $script:strLegacyProcessParentRevision `
             -RepositoryRelativePath $strLegacyProcessPath `
             -MaximumBytes $objLegacyProcessContext.MaximumBytes `
             -RequireRegularFile
@@ -11839,37 +11766,6 @@ if ($SelfTest) {
         [string]::IsNullOrEmpty($objExistingRevisionParentFixture.ParentContent)) {
         throw 'The explicit existing-document parent context is invalid.'
     }
-    $arrNewRefRangeFailures = @(
-        if ([string]::Equals(
-                $strRevisionAgentsFixture,
-                $strAgentsContent,
-                [System.StringComparison]::Ordinal
-            )) {
-            Get-GovernedDocumentRangeTransitionFailure `
-                -Name 'AGENTS.md' `
-                -RepositoryRootPath $strRepositoryRootPath `
-                -RepositoryRelativePath 'AGENTS.md' `
-                -MaximumBytes $intAgentsMaximumInputBytes `
-                -BaseRevision $strNewRefZeroRevision `
-                -HeadRevision $strNewRefTestHead `
-                -IsNewRefRange $true `
-                -PolicyRepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
-                -PolicyMaximumBytes $intValidatorMaximumInputBytes `
-                -PolicyMarker $strMetadataRangePolicyMarker
-        }
-        else {
-            Get-DocumentMetadataTransitionFailure `
-                -Name 'AGENTS.md' `
-                -CurrentContent $strAgentsContent `
-                -ParentContent $null `
-                -ExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-                -IsNewDocumentTransition $true
-        }
-    )
-    if ($arrNewRefRangeFailures.Count -ne 0) {
-        throw "Valid new-ref metadata range failed: $($arrNewRefRangeFailures -join '; ')"
-    }
-
     $boolUnflaggedZeroBaseRejected = $false
     try {
         [void](Get-GovernedDocumentRangeTransitionFailure `
@@ -12073,6 +11969,53 @@ if ($SelfTest) {
             -Parents @() `
             -Timestamp ($strMergeHistoricalDate + 'T08:00:00Z') `
             -Message 'merge fixture base'
+
+        $arrNewRefRangeFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                -Name 'AGENTS.md' `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -RepositoryRelativePath 'AGENTS.md' `
+                -MaximumBytes $intAgentsMaximumInputBytes `
+                -BaseRevision $strNewRefZeroRevision `
+                -HeadRevision $strMergeBaseCommit `
+                -InputRevision $strMergeBaseCommit `
+                -IsNewRefRange $true `
+                -PolicyRepositoryRelativePath `
+                    '.github/workflows/Test-AgentInstructions.ps1' `
+                -PolicyMaximumBytes 1024 `
+                -PolicyMarker $strMetadataRangePolicyMarker `
+                -TrustedFinalizationTimestamp `
+                    ($strMergeHistoricalDate + 'T08:00:00Z')
+        )
+        if ($arrNewRefRangeFailures.Count -ne 0) {
+            throw (
+                'Valid new-ref metadata range failed: ' +
+                ($arrNewRefRangeFailures -join '; ')
+            )
+        }
+        $arrNewRefWrongDateFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                -Name 'AGENTS.md' `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -RepositoryRelativePath 'AGENTS.md' `
+                -MaximumBytes $intAgentsMaximumInputBytes `
+                -BaseRevision $strNewRefZeroRevision `
+                -HeadRevision $strMergeBaseCommit `
+                -InputRevision $strMergeBaseCommit `
+                -IsNewRefRange $true `
+                -PolicyRepositoryRelativePath `
+                    '.github/workflows/Test-AgentInstructions.ps1' `
+                -PolicyMaximumBytes 1024 `
+                -PolicyMarker $strMetadataRangePolicyMarker `
+                -TrustedFinalizationTimestamp `
+                    ($strMergeCurrentDate + 'T08:00:00Z')
+        )
+        if (-not ($arrNewRefWrongDateFailures -join '; ').Contains(
+                "AGENTS.md Last Updated must be $strMergeCurrentDate",
+                [System.StringComparison]::Ordinal
+            )) {
+            throw 'A new-ref metadata range accepted the wrong finalization date.'
+        }
 
         & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
         $strTrustRangeOrdinaryPath = [System.IO.Path]::Combine(
@@ -13581,14 +13524,10 @@ if ($SelfTest) {
             )) {
             throw 'The later topic-push fixture did not expose the moving-base false failure.'
         }
-        & git -C $strMergeFixtureRoot update-ref `
-            refs/remotes/origin/main $strMergeBaseCommit
-        & git -C $strMergeFixtureRoot symbolic-ref `
-            refs/remotes/origin/HEAD refs/remotes/origin/main
         & git -C $strMergeFixtureRoot update-ref refs/heads/topic $strSecondTopicCommit
         & git -C $strMergeFixtureRoot symbolic-ref HEAD refs/heads/topic
         if ($LASTEXITCODE -ne 0) {
-            throw 'Could not configure the local published-baseline fixture refs.'
+            throw 'Could not configure the local worktree-baseline fixture ref.'
         }
         [System.IO.File]::WriteAllText(
             [System.IO.Path]::Combine($strMergeFixtureRoot, 'AGENTS.md'),
@@ -13598,33 +13537,37 @@ if ($SelfTest) {
         & git -C $strMergeFixtureRoot read-tree $strSecondTopicCommit
         & git -C $strMergeFixtureRoot diff --quiet HEAD -- 'AGENTS.md'
         if ($LASTEXITCODE -ne 0) {
-            throw 'The clean published-baseline fixture is not clean.'
+            throw 'The clean worktree-baseline fixture is not clean.'
         }
-        $strResolvedPublishedBaseline = Get-LocalPublishedBaselineRevision `
-            -RepositoryRootPath $strMergeFixtureRoot
-        $objCleanPublishedContext = Get-GovernedDocumentParentContext `
+        $strResolvedLocalBaseline = [string] (
+            & git -C $strMergeFixtureRoot rev-parse --verify 'HEAD^{commit}'
+        )
+        if ($LASTEXITCODE -ne 0 -or
+            $strResolvedLocalBaseline.Trim() -cne $strSecondTopicCommit) {
+            throw 'Could not resolve the checked-out worktree baseline.'
+        }
+        $strResolvedLocalBaseline = $strResolvedLocalBaseline.Trim()
+        $objCleanLocalContext = Get-GovernedDocumentParentContext `
             -RepositoryRootPath $strMergeFixtureRoot `
             -RepositoryRelativePath 'AGENTS.md' `
             -MaximumBytes $intAgentsMaximumInputBytes `
-            -PublishedBaselineRevision $strResolvedPublishedBaseline
-        if ($strResolvedPublishedBaseline -cne $strMergeBaseCommit -or
-            $objCleanPublishedContext.ParentRevision -cne $strMergeBaseCommit -or
-            $objCleanPublishedContext.ParentContent -cne $strMergeBaseContent -or
-            $objCleanPublishedContext.ExpectedUtcDate -cne '' -or
-            $objCleanPublishedContext.IsWorktreeTransition -or
-            -not $objCleanPublishedContext.UsesPublishedBaseline) {
+            -LocalBaselineRevision $strResolvedLocalBaseline
+        if ($objCleanLocalContext.ParentRevision -cne $strSecondTopicCommit -or
+            $objCleanLocalContext.ParentContent -cne $strMergeTopicContent -or
+            $objCleanLocalContext.ExpectedUtcDate -cne '' -or
+            $objCleanLocalContext.IsWorktreeTransition -or
+            -not $objCleanLocalContext.UsesLocalBaseline) {
             throw (
-                'A clean multi-commit topic did not use the remote published baseline ' +
-                'without creating a direct worktree transition.'
+                'A clean topic did not use checked-out HEAD as its worktree baseline.'
             )
         }
-        $arrCleanPublishedRangeFailures = @(
+        $arrCleanLocalRangeFailures = @(
             Get-GovernedDocumentRangeTransitionFailure `
                 -Name 'AGENTS.md' `
                 -RepositoryRootPath $strMergeFixtureRoot `
                 -RepositoryRelativePath 'AGENTS.md' `
                 -MaximumBytes $intAgentsMaximumInputBytes `
-                -BaseRevision $strResolvedPublishedBaseline `
+                -BaseRevision $strResolvedLocalBaseline `
                 -HeadRevision $strSecondTopicCommit `
                 -InputRevision $strSecondTopicCommit `
                 -IsNewRefRange $false `
@@ -13633,10 +13576,10 @@ if ($SelfTest) {
                 -PolicyMaximumBytes 1024 `
                 -PolicyMarker $strMetadataRangePolicyMarker
         )
-        if ($arrCleanPublishedRangeFailures.Count -ne 0) {
+        if ($arrCleanLocalRangeFailures.Count -ne 0) {
             throw (
-                'A clean published range with an unrelated later commit failed: ' +
-                ($arrCleanPublishedRangeFailures -join '; ')
+                'A clean local HEAD range failed: ' +
+                ($arrCleanLocalRangeFailures -join '; ')
             )
         }
 
@@ -13647,78 +13590,48 @@ if ($SelfTest) {
         )
         & git -C $strMergeFixtureRoot diff --quiet HEAD -- 'AGENTS.md'
         if ($LASTEXITCODE -ne 1) {
-            throw 'The dirty published-baseline fixture did not become dirty.'
+            throw 'The dirty worktree-baseline fixture did not become dirty.'
         }
         $strSavedMaximumMetadataUtcDate = $script:strMaximumMetadataUtcDate
         $strDirtyFixtureUtcDate = '2030-01-02'
         $script:strMaximumMetadataUtcDate = $strDirtyFixtureUtcDate
         try {
-            $objDirtyPublishedContext = Get-GovernedDocumentParentContext `
+            $objDirtyLocalContext = Get-GovernedDocumentParentContext `
                 -RepositoryRootPath $strMergeFixtureRoot `
                 -RepositoryRelativePath 'AGENTS.md' `
                 -MaximumBytes $intAgentsMaximumInputBytes `
-                -PublishedBaselineRevision $strResolvedPublishedBaseline
-            if ($objDirtyPublishedContext.ParentRevision -cne $strMergeBaseCommit -or
-                $objDirtyPublishedContext.ParentContent -cne $strMergeBaseContent -or
-                $objDirtyPublishedContext.ExpectedUtcDate -cne
+                -LocalBaselineRevision $strResolvedLocalBaseline
+            if ($objDirtyLocalContext.ParentRevision -cne $strSecondTopicCommit -or
+                $objDirtyLocalContext.ParentContent -cne $strMergeTopicContent -or
+                $objDirtyLocalContext.ExpectedUtcDate -cne
                     $strDirtyFixtureUtcDate -or
-                -not $objDirtyPublishedContext.IsWorktreeTransition) {
+                -not $objDirtyLocalContext.IsWorktreeTransition -or
+                -not $objDirtyLocalContext.UsesLocalBaseline) {
                 throw (
-                    'A dirty multi-commit topic did not use HEAD and the trusted UTC date.'
+                    'A dirty topic did not use checked-out HEAD and the trusted UTC date.'
                 )
             }
-            $arrDirtyPublishedFailures = @(Get-DocumentMetadataTransitionFailure `
+            $arrDirtyLocalFailures = @(Get-DocumentMetadataTransitionFailure `
                     -Name 'AGENTS.md' `
                     -CurrentContent (
                         $strMergeTopicContent + [Environment]::NewLine +
                         'Dirty final state.'
                     ) `
-                    -ParentContent $objDirtyPublishedContext.ParentContent `
-                    -ExpectedUtcDate $objDirtyPublishedContext.ExpectedUtcDate `
+                    -ParentContent $objDirtyLocalContext.ParentContent `
+                    -ExpectedUtcDate $objDirtyLocalContext.ExpectedUtcDate `
                     -IsNewDocumentTransition $false)
-            if ($arrDirtyPublishedFailures.Count -eq 0 -or
-                -not ($arrDirtyPublishedFailures -join '; ').Contains(
+            if ($arrDirtyLocalFailures.Count -eq 0 -or
+                -not ($arrDirtyLocalFailures -join '; ').Contains(
                     "Last Updated must be $strDirtyFixtureUtcDate",
                     [System.StringComparison]::Ordinal
                 )) {
-                throw 'Dirty published-baseline metadata did not require the trusted UTC date.'
+                throw 'Dirty local metadata did not require the trusted UTC date.'
             }
         }
         finally {
             $script:strMaximumMetadataUtcDate = $strSavedMaximumMetadataUtcDate
         }
 
-        & git -C $strMergeFixtureRoot symbolic-ref --delete refs/remotes/origin/HEAD
-        $boolMissingPublishedBaselineRejected = $false
-        try {
-            [void](Get-LocalPublishedBaselineRevision `
-                    -RepositoryRootPath $strMergeFixtureRoot)
-        }
-        catch {
-            $boolMissingPublishedBaselineRejected = $_.Exception.Message.Contains(
-                'published baseline is unavailable',
-                [System.StringComparison]::Ordinal
-            )
-        }
-        if (-not $boolMissingPublishedBaselineRejected) {
-            throw 'A missing remote-default published baseline was accepted.'
-        }
-        & git -C $strMergeFixtureRoot symbolic-ref `
-            refs/remotes/origin/HEAD refs/heads/topic
-        $boolMisScopedPublishedBaselineRejected = $false
-        try {
-            [void](Get-LocalPublishedBaselineRevision `
-                    -RepositoryRootPath $strMergeFixtureRoot)
-        }
-        catch {
-            $boolMisScopedPublishedBaselineRejected = $_.Exception.Message.Contains(
-                'published baseline is unavailable',
-                [System.StringComparison]::Ordinal
-            )
-        }
-        if (-not $boolMisScopedPublishedBaselineRejected) {
-            throw 'A mis-scoped remote-default published baseline was accepted.'
-        }
     }
     finally {
         if ($boolHadAuthorDate) {
