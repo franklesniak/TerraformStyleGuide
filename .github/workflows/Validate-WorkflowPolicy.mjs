@@ -118,18 +118,17 @@ const EXPECTED_TRIGGER = Object.freeze({
 });
 
 const PULL_REQUEST_BODY_IDENTITY_TRIGGER = Object.freeze({
-  pull_request: Object.freeze({
+  pull_request_target: Object.freeze({
     branches: Object.freeze(['main']),
     types: Object.freeze(['edited', 'opened', 'reopened', 'synchronize']),
   }),
 });
 
 const PULL_REQUEST_BODY_IDENTITY_POLICY = Object.freeze({
-  command: './.github/workflows/Sync-PullRequestBodyIdentity.mjs',
   nodeVersion: '24.18.1',
-  acquireDigest: '48244600ff17b77a1a0ca8a18e336991520e54dbdd05ec42ad4e1e250f5bb28c',
-  selfTestDigest: 'c1d04cb022f5e031b906609c2cabddba1aa026a43d5e3bbe885a2c5ba31ea10b',
-  checkEventDigest: 'df27ae84d15ee3f583b991849fd58252f5943a48b3ed72ce039708b131532e67',
+  acquireDigest: '0bb312633b52714e10220b99ffdf0d23ccfe7215b3d2b211887fbf39e1edccb1',
+  selfTestDigest: '1da1e1bc600de17e14d8813b0bcd64579369ef93ba6fabcacfe69da22eed0172',
+  checkEventDigest: 'fe37f056e253ac3fb5d0a40ccda11e40788b8f6477945293a7a38c0f5c255c25',
 });
 
 // The Markdown workflow hashes package.json and package-lock.json only against
@@ -3224,6 +3223,11 @@ export function validatePullRequestBodyIdentityPolicy(workflow, source) {
     ['the event repository identity',
       'if ($objEvent.repository.full_name -cne $strRepository -or\n' +
       '    $objEvent.pull_request.base.repo.full_name -cne $strRepository) {'],
+    ['the trusted base revision',
+      '$strBaseSha = [string]$objEvent.pull_request.base.sha'],
+    ['the trusted workflow revision equality',
+      "if ($strBaseSha -cnotmatch '^[0-9a-f]{40}$' -or\n" +
+      '    $strWorkflowSha -cne $strBaseSha) {'],
     ['the public head repository shape', "if ($strHeadRepository -cnotmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {"],
     ['a full pull-request head commit', "if ($strHeadSha -cnotmatch '^[0-9a-f]{40}$') {"],
     ['an empty workspace', 'if (@([System.IO.Directory]::EnumerateFileSystemEntries($PWD.Path)).Count -ne 0) {'],
@@ -3232,8 +3236,17 @@ export function validatePullRequestBodyIdentityPolicy(workflow, source) {
       "    Where-Object { $_.Name -clike 'GIT_*' } |\n" +
       '    ForEach-Object { Remove-Item -LiteralPath "Env:$($_.Name)" }'],
     ['replacement-object refusal', "$env:GIT_NO_REPLACE_OBJECTS = '1'"],
-    ['an anonymous fetch of the exact head',
-      '& $strGitPath --no-replace-objects -c core.fsmonitor=false fetch --depth 1 --no-tags --no-recurse-submodules origin $strHeadSha'],
+    ['an anonymous fetch of the exact trusted base',
+      '& $strGitPath --no-replace-objects -c core.fsmonitor=false fetch --depth 1 --no-tags --no-recurse-submodules trusted $strBaseSha'],
+    ['a detached worktree for the trusted base',
+      '& $strGitPath --no-replace-objects -c core.fsmonitor=false worktree add --quiet --detach $strTrustedRoot $strBaseSha'],
+    ['ordinary trusted verifier inputs',
+      "$_ -cnotmatch '^100644 blob [0-9a-f]{40}\\t\\.github/workflows/(Sync-PullRequestBodyIdentity\\.mjs|pull-request-body-identity-cases\\.json|pull-request-body-identity\\.yml)$'"],
+    ['the trusted verifier input existence check',
+      'if (-not [System.IO.File]::Exists($strTrustedCommandPath) -or\n' +
+      '    -not [System.IO.File]::Exists($strTrustedCasesPath)) {'],
+    ['an anonymous fetch of the exact proposed head',
+      '& $strGitPath --no-replace-objects -c core.fsmonitor=false fetch --depth 1 --no-tags --no-recurse-submodules proposed $strHeadSha'],
     ['an exact detached checkout',
       '& $strGitPath --no-replace-objects -c core.fsmonitor=false checkout --quiet --detach FETCH_HEAD'],
     ['the checked-out commit identity',
@@ -3246,6 +3259,9 @@ export function validatePullRequestBodyIdentityPolicy(workflow, source) {
       'if ($LASTEXITCODE -ne 0 -or $strObservedHead -cne $strHeadSha -or\n' +
       "    $strObservedTree -cnotmatch '^[0-9a-f]{40}$' -or\n" +
       '    $arrReplacementRefs.Count -ne 0) {'],
+    ['unchanged proposed trust-root inputs',
+      '[string]::Join("`n", $arrProposedEntries) -cne\n' +
+      '    [string]::Join("`n", $arrTrustedEntries)) {'],
   ];
   for (const [requirement, sequence] of acquireSequences) {
     if (!acquire.run.includes(sequence)) {
@@ -3289,17 +3305,29 @@ export function validatePullRequestBodyIdentityPolicy(workflow, source) {
     reject('identity-acquire-policy', 'pull-request-body-identity.acquire adds indirect execution');
   }
 
-  const command = PULL_REQUEST_BODY_IDENTITY_POLICY.command;
+  const command = '& $strNodePath $strTrustedCommandPath';
   const commandOccurrences = [selfTest.run, checkEvent.run]
     .reduce((count, run) => count + run.split(command).length - 1, 0);
   if (commandOccurrences !== 2) {
     reject('identity-command-policy', 'pull-request-body-identity command path or invocation count changed');
   }
-  if (!selfTest.run.includes(`& $strNodePath ${command} --self-test`) ||
+  const trustedCommandPath =
+    "$strTrustedCommandPath = [System.IO.Path]::Combine(\n" +
+    '    $env:RUNNER_TEMP,\n' +
+    "    'pr-body-identity-trusted',\n" +
+    "    '.github',\n" +
+    "    'workflows',\n" +
+    "    'Sync-PullRequestBodyIdentity.mjs'\n" +
+    ')';
+  if (!selfTest.run.includes(trustedCommandPath) ||
+      !checkEvent.run.includes(trustedCommandPath)) {
+    reject('identity-command-policy', 'pull-request-body-identity command does not come from the trusted base');
+  }
+  if (!selfTest.run.includes(`${command} --self-test --repository-root $PWD.Path`) ||
       (selfTest.run.match(/--self-test\b/gu) ?? []).length !== 1) {
     reject('identity-mode-policy', 'pull-request-body-identity test step must run self-test exactly once');
   }
-  if (!checkEvent.run.includes(`& $strNodePath ${command} --check-event $env:GITHUB_EVENT_PATH`) ||
+  if (!checkEvent.run.includes(`${command} --check-event $env:GITHUB_EVENT_PATH --repository-root $PWD.Path`) ||
       (checkEvent.run.match(/--check-event\b/gu) ?? []).length !== 1) {
     reject('identity-event-policy', 'pull-request-body-identity check step must use the trusted event path exactly once');
   }
@@ -4708,7 +4736,7 @@ const PULL_REQUEST_BODY_IDENTITY_FIXTURES = Object.freeze([
     'identity-credential-policy: pull-request-body-identity introduces a credential'],
   ['T3-IDENTITY-009', 'exact-head fetch weakened',
     (source) => replaceOnce(source, 'fetch --depth 1 --no-tags', 'fetch --depth 2 --no-tags'),
-    'identity-acquire-policy: pull-request-body-identity.acquire no longer asserts an anonymous fetch of the exact head'],
+    'identity-acquire-policy: pull-request-body-identity.acquire no longer asserts an anonymous fetch of the exact trusted base'],
   ['T3-IDENTITY-010', 'Node archive selector drift',
     (source) => replaceOnce(source, 'node-v24.18.1-linux-x64.tar.xz', 'node-v24.18.0-linux-x64.tar.xz'),
     'identity-node-policy: pull-request-body-identity.acquire no longer asserts the exact reviewed Node archive URL'],
@@ -4723,13 +4751,13 @@ const PULL_REQUEST_BODY_IDENTITY_FIXTURES = Object.freeze([
     ),
     'identity-node-policy: pull-request-body-identity.acquire network request count changed'],
   ['T3-IDENTITY-013', 'identity command path drift',
-    (source) => replaceOnce(source, './.github/workflows/Sync-PullRequestBodyIdentity.mjs --self-test', './scripts/identity.mjs --self-test'),
+    (source) => replaceOnce(source, '& $strNodePath $strTrustedCommandPath --self-test', '& $strNodePath ./scripts/identity.mjs --self-test'),
     'identity-command-policy: pull-request-body-identity command path or invocation count changed'],
   ['T3-IDENTITY-014', 'write mode introduced in the self-test step',
-    (source) => replaceOnce(source, '--self-test\n', '--update 38\n'),
+    (source) => replaceOnce(source, '--self-test --repository-root $PWD.Path\n', '--update --repository owner/repository --pull-request 38\n'),
     'identity-mode-policy: pull-request-body-identity test step must run self-test exactly once'],
   ['T3-IDENTITY-015', 'event path drift',
-    (source) => replaceOnce(source, '--check-event $env:GITHUB_EVENT_PATH\n', "--check-event './event.json'\n"),
+    (source) => replaceOnce(source, '--check-event $env:GITHUB_EVENT_PATH --repository-root $PWD.Path\n', "--check-event './event.json' --repository-root $PWD.Path\n"),
     'identity-event-policy: pull-request-body-identity check step must use the trusted event path exactly once'],
   ['T3-IDENTITY-016', 'step-order identity drift',
     (source) => replaceOnce(source, '        id: test_pull_request_body_identity\n', '        id: late_test_pull_request_body_identity\n'),
@@ -4751,8 +4779,8 @@ const PULL_REQUEST_BODY_IDENTITY_FIXTURES = Object.freeze([
   ['T3-IDENTITY-019', 'unmodelled acquire script change',
     (source) => replaceOnce(
       source,
-      '          Write-Information "acquire: pull request head $strObservedHead tree $strObservedTree and reviewed Node $strNodeVersion" -InformationAction Continue\n',
-      '          Write-Information "acquire: validation complete" -InformationAction Continue\n          Write-Information "acquire: pull request head $strObservedHead tree $strObservedTree and reviewed Node $strNodeVersion" -InformationAction Continue\n',
+      '          Write-Information "acquire: trusted base $strObservedBase, pull request head $strObservedHead tree $strObservedTree, and reviewed Node $strNodeVersion" -InformationAction Continue\n',
+      '          Write-Information "acquire: validation complete" -InformationAction Continue\n          Write-Information "acquire: trusted base $strObservedBase, pull request head $strObservedHead tree $strObservedTree, and reviewed Node $strNodeVersion" -InformationAction Continue\n',
     ),
     'identity-policy: pull-request-body-identity acquire script does not match its reviewed digest'],
   ['T3-IDENTITY-020', 'acquire bypass control flow introduced',
@@ -4762,6 +4790,40 @@ const PULL_REQUEST_BODY_IDENTITY_FIXTURES = Object.freeze([
       "          $ErrorActionPreference = 'Stop'\n          return\n",
     ),
     'identity-acquire-policy: pull-request-body-identity.acquire adds bypass control flow'],
+  ['T3-IDENTITY-021', 'trusted trigger downgraded',
+    (source) => replaceOnce(source, '  pull_request_target:\n', '  pull_request:\n'),
+    'policy: pull-request-body-identity triggers differs from the locked policy'],
+  ['T3-IDENTITY-022', 'trusted workflow revision equality weakened',
+    (source) => replaceOnce(source, '$strWorkflowSha -cne $strBaseSha', '$strWorkflowSha -cne $strHeadSha'),
+    'identity-acquire-policy: pull-request-body-identity.acquire no longer asserts the trusted workflow revision equality'],
+  ['T3-IDENTITY-023', 'trusted verifier source changed to proposed head',
+    (source) => replaceOnce(
+      source,
+      'fetch --depth 1 --no-tags --no-recurse-submodules trusted $strBaseSha',
+      'fetch --depth 1 --no-tags --no-recurse-submodules trusted $strHeadSha',
+    ),
+    'identity-acquire-policy: pull-request-body-identity.acquire no longer asserts an anonymous fetch of the exact trusted base'],
+  ['T3-IDENTITY-024', 'self-test executes proposed verifier',
+    (source) => replaceOnce(
+      source,
+      '& $strNodePath $strTrustedCommandPath --self-test',
+      '& $strNodePath ./.github/workflows/Sync-PullRequestBodyIdentity.mjs --self-test',
+    ),
+    'identity-command-policy: pull-request-body-identity command path or invocation count changed'],
+  ['T3-IDENTITY-025', 'body check executes proposed verifier',
+    (source) => replaceOnce(
+      source,
+      '& $strNodePath $strTrustedCommandPath --check-event',
+      '& $strNodePath ./.github/workflows/Sync-PullRequestBodyIdentity.mjs --check-event',
+    ),
+    'identity-command-policy: pull-request-body-identity command path or invocation count changed'],
+  ['T3-IDENTITY-026', 'proposed trust-root comparison removed',
+    (source) => replaceOnce(
+      source,
+      '[string]::Join("`n", $arrProposedEntries) -cne\n              [string]::Join("`n", $arrTrustedEntries)',
+      '[string]::Join("`n", $arrProposedEntries) -cne\n              [string]::Join("`n", $arrProposedEntries)',
+    ),
+    'identity-acquire-policy: pull-request-body-identity.acquire no longer asserts unchanged proposed trust-root inputs'],
 ]);
 
 function runPullRequestBodyIdentityNegativeFixtures(identityWorkflowSource) {
