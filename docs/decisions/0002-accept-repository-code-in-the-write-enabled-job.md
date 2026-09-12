@@ -1,6 +1,16 @@
+<!-- markdownlint-disable MD013 -->
 # Decision 0002: Accept repository-controlled code running in the write-enabled job
 
-## Status
+## Metadata
+
+- **Status:** Superseded
+- **Owner:** TerraformStyleGuide Repository Maintainers
+- **Date:** 2026-08-01
+- **Last Updated:** 2026-09-11
+- **Scope:** Records the accepted risk of repository-controlled code in the former write-enabled job and the later removal of that job.
+- **Related:** [T1 supply-freeze record](../T1-SUPPLY-FREEZE-v1.md)
+
+## 1. Context
 
 **Superseded on 2026-08-02.** The `temporary-writer` job was deleted in T1 itself — the
 change this record accompanies, issue #20 — and not in a later slate issue. No job in this
@@ -41,8 +51,6 @@ review triggers in the last section fire, this decision must be reopened.
 This decision carries an obligation on issue #22 that the other accepted limitation in this
 directory does not. Section 6 explains why, and section 7 states the required action.
 
-## 1. The concern, and whether it is real
-
 The `temporary-writer` job in `.github/workflows/build.yml` is the only job in this
 repository holding `contents: write`. Within it, two things happen in order:
 
@@ -71,7 +79,7 @@ is real. It invalidates the premise behind a series of containment measures adde
 in that review — pinning the Git executable, clearing the child environment, authoring
 `.git/config`, and restricting transports all assume the step's own process starts clean.
 
-## 2. What an attacker actually gains, and what they do not
+## 2. Consequences
 
 | Capability | Available? |
 | --- | --- |
@@ -151,7 +159,7 @@ Two classes remain open, and they are the substance of what is accepted here:
   That example is nameable; the class is not reliably enumerable, which is the reason this
   record exists rather than a fourth targeted check.
 
-## 3. Options considered
+## 3. Alternatives Considered
 
 - **A. Accept and document only.** Record the residual; change nothing further.
 - **B. Accept, document, and require issue #22 to close it** by an explicit acceptance

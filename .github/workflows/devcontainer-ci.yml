@@ -1,0 +1,191 @@
+name: Dev container boundary
+
+on:
+  workflow_dispatch:
+  push:
+  pull_request:
+  merge_group:
+    types:
+      - checks_requested
+  schedule:
+    - cron: "23 06 * * 1"
+
+permissions: {}
+
+# Keep each exact-ref check independent. A superseded run can still prove the
+# immutable commit that triggered it, and cancellation cannot obscure failure.
+concurrency:
+  group: devcontainer-boundary-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-no-devcontainer-contract:
+    name: Validate the Terraform devcontainer exclusion
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      EXPECTED_REPOSITORY: ${{ github.repository }}
+      EXPECTED_REVISION: ${{ github.sha }}
+      EXPECTED_SERVER_URL: ${{ github.server_url }}
+    steps:
+      - name: Acquire the event commit anonymously and verify the boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${EXPECTED_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+
+          build_repository_url() {
+            local server_url="${1%/}"
+            local repository="$2"
+            [[ "${server_url}" =~ ^https?://[^/?#[:space:]]+$ ]] || return 1
+            [[ "${repository}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
+            printf '%s/%s.git\n' "${server_url}" "${repository}"
+          }
+
+          test "$(build_repository_url \
+            'https://github.com' 'owner/repository')" = \
+            'https://github.com/owner/repository.git'
+          test "$(build_repository_url \
+            'https://ghe.example/' 'owner/repository')" = \
+            'https://ghe.example/owner/repository.git'
+          if build_repository_url \
+            'https://ghe.example/path' 'owner/repository'; then
+            printf '%s\n' 'A server URL with a path was accepted.' >&2
+            exit 1
+          fi
+
+          has_devcontainer_entry() {
+            local candidate_path=''
+            local match_status=1
+            local normalized_path
+            local LC_ALL=C
+            while IFS= read -r -d '' candidate_path; do
+              normalized_path="${candidate_path,,}"
+              case "${normalized_path}" in
+                .devcontainer|.devcontainer/*|.devcontainer.json)
+                  match_status=0
+                  ;;
+                */.devcontainer|*/.devcontainer/*|*/.devcontainer.json)
+                  match_status=0
+                  ;;
+              esac
+            done
+            if [[ -n "${candidate_path}" ]]; then
+              return 2
+            fi
+            return "${match_status}"
+          }
+
+          has_devcontainer_entry < <(/usr/bin/printf '%s\0' '.devcontainer') || {
+            printf '%s\n' 'Directory boundary fixture was not rejected.' >&2
+            exit 1
+          }
+          has_devcontainer_entry < <(/usr/bin/printf '%s\0' '.devcontainer.json') || {
+            printf '%s\n' 'Root-file boundary fixture was not rejected.' >&2
+            exit 1
+          }
+          has_devcontainer_entry < <(/usr/bin/printf '%s\0' '.DEVCONTAINER') || {
+            printf '%s\n' 'Case-folded directory boundary fixture was not rejected.' >&2
+            exit 1
+          }
+          has_devcontainer_entry < <(/usr/bin/printf '%s\0' '.DEVCONTAINER.JSON') || {
+            printf '%s\n' 'Case-folded root-file boundary fixture was not rejected.' >&2
+            exit 1
+          }
+          has_devcontainer_entry \
+            < <(/usr/bin/printf '%s\0' 'module/.devcontainer/devcontainer.json') || {
+            printf '%s\n' 'Nested directory boundary fixture was not rejected.' >&2
+            exit 1
+          }
+          has_devcontainer_entry \
+            < <(/usr/bin/printf '%s\0' 'module/.devcontainer.json') || {
+            printf '%s\n' 'Nested file boundary fixture was not rejected.' >&2
+            exit 1
+          }
+          has_devcontainer_entry \
+            < <(/usr/bin/printf '%s\0' 'MODULE/.DEVCONTAINER/DEVCONTAINER.JSON') || {
+            printf '%s\n' 'Case-folded nested boundary fixture was not rejected.' >&2
+            exit 1
+          }
+          has_devcontainer_entry \
+            < <(/usr/bin/printf '%b\0' 'm\xc3\xb3dulo/.devcontainer.json') || {
+            printf '%s\n' 'UTF-8 nested-file boundary fixture was not rejected.' >&2
+            exit 1
+          }
+          has_devcontainer_entry \
+            < <(/usr/bin/printf '%b\0' 'module\nname/.devcontainer.json') || {
+            printf '%s\n' 'Newline nested-file boundary fixture was not rejected.' >&2
+            exit 1
+          }
+          if has_devcontainer_entry < <(/usr/bin/printf '%s\0' '.env'); then
+            printf '%s\n' 'Unrelated dot-file boundary fixture was rejected.' >&2
+            exit 1
+          fi
+          if has_devcontainer_entry \
+            < <(/usr/bin/printf '%s\0' \
+              'module/.devcontainer-example/devcontainer.json'); then
+            printf '%s\n' 'Similar nested directory fixture was rejected.' >&2
+            exit 1
+          fi
+          if has_devcontainer_entry \
+            < <(/usr/bin/printf '%s\0' 'module/.devcontainer.json.bak'); then
+            printf '%s\n' 'Similar nested file fixture was rejected.' >&2
+            exit 1
+          fi
+          if has_devcontainer_entry < <(/usr/bin/printf '%s' '.env'); then
+            printf '%s\n' 'Line-delimited boundary fixture was accepted.' >&2
+            exit 1
+          else
+            malformed_inventory_status="$?"
+            readonly malformed_inventory_status
+            if [[ "${malformed_inventory_status}" -ne 2 ]]; then
+              printf '%s\n' 'Malformed inventory did not fail closed.' >&2
+              exit 1
+            fi
+          fi
+
+          readonly checkout_root="${RUNNER_TEMP}/terraformstyleguide-devcontainer-boundary"
+          test ! -e "${checkout_root}"
+          /usr/bin/mkdir -m 0700 -- "${checkout_root}"
+          /usr/bin/git -C "${checkout_root}" init --quiet
+          repository_remote="$(
+            build_repository_url "${EXPECTED_SERVER_URL}" "${EXPECTED_REPOSITORY}"
+          )"
+          readonly repository_remote
+          /usr/bin/git -C "${checkout_root}" remote add origin \
+            "${repository_remote}"
+          /usr/bin/git -C "${checkout_root}" \
+            -c credential.helper= \
+            -c core.askPass= \
+            fetch --no-tags --no-recurse-submodules --depth=1 origin \
+            "${EXPECTED_REVISION}:refs/remotes/event/target"
+
+          fetched_revision="$(
+            /usr/bin/git -C "${checkout_root}" rev-parse --verify \
+              'refs/remotes/event/target^{commit}'
+          )"
+          readonly fetched_revision
+          test "${fetched_revision}" = "${EXPECTED_REVISION}"
+          test -z "$(
+            /usr/bin/git -C "${checkout_root}" config --local --get-regexp \
+              '^(credential\.|http\..*\.extraheader)' || true
+          )"
+
+          readonly devcontainer_inventory="${checkout_root}/tracked-paths.zlist"
+          /usr/bin/git -C "${checkout_root}" ls-tree -r --name-only -z \
+            "${fetched_revision}" > "${devcontainer_inventory}"
+          if has_devcontainer_entry < "${devcontainer_inventory}"; then
+            printf '%s\n' \
+              'TerraformStyleGuide has no authorized devcontainer contract.' >&2
+            exit 1
+          else
+            inventory_status="$?"
+            readonly inventory_status
+            if [[ "${inventory_status}" -ne 1 ]]; then
+              printf '%s\n' 'The tracked-path inventory was malformed.' >&2
+              exit 1
+            fi
+          fi
+
+          printf '%s\n' \
+            'The exact event commit preserves the Terraform devcontainer exclusion.'

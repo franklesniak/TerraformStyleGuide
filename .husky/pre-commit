@@ -1,12 +1,12 @@
 #!/bin/sh
 
 # Skip unless an added/copied/modified/renamed Markdown path is staged (any directory).
-if git diff --cached --quiet --diff-filter=ACMR -- '*.md'; then
+if git diff --cached --quiet --diff-filter=ACMR -- '*.md' '*.mdc'; then
   exit 0
 fi
 
-if ! command -v npm >/dev/null 2>&1; then
-  echo "Markdown is staged, but npm is not available to this Git hook."
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+  echo "Markdown is staged, but Node/npm is not available to this Git hook."
   echo "Make Node/npm available to the hook environment, then retry."
   echo "If you use a Node version manager with a GUI Git client, add its initialization"
   echo "to ~/.config/husky/init.sh, which Husky sources before each hook."
@@ -20,6 +20,36 @@ if [ ! -e .github/workflows/node_modules/.bin/markdownlint-cli2 ]; then
   echo "(or commit with --no-verify to deliberately skip this check once)"
   exit 1
 fi
+
+echo "Running staged Markdown lint against the Git index..."
+
+if node .github/workflows/lint-staged-markdown.mjs; then
+  staged_status=0
+else
+  staged_status=$?
+fi
+
+case "$staged_status" in
+  0)
+    ;;
+  1)
+    echo ""
+    echo "Staged Markdown lint reported errors. Review the output above, then retry."
+    exit 1
+    ;;
+  2)
+    echo ""
+    echo "Staged Markdown lint could not run because of a tooling or configuration problem."
+    echo "Review the output above, then retry."
+    exit 1
+    ;;
+  *)
+    echo ""
+    echo "Staged Markdown lint failed unexpectedly with exit status $staged_status."
+    echo "Review the output above, then retry."
+    exit 1
+    ;;
+esac
 
 echo "Running markdownlint with the repository configuration..."
 
