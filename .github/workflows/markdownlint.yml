@@ -179,7 +179,7 @@ jobs:
           # only that npm ci left these files alone; it cannot detect metadata
           # that was already altered at review time. This gate runs before
           # installation so unreviewed scripts are never installed and never run.
-          $strReviewedPackageHash = '494EDC3ED1917EFFD870CB7F797A861778DD288BFDBB1AB07DD07D77D8BB6109'
+          $strReviewedPackageHash = 'C6DB6BEFDA88E58AA5568F52F44CA934AF5751E545DBA0644297B9FB15577E0D'
           $strReviewedLockHash = '84CBE61E33E4C66B653EFD2BFBE3F80B0061368A64AD80EF0DE4898DA28D887D'
           $strPackageBefore = (Get-FileHash -LiteralPath package.json -Algorithm SHA256).Hash
           $strLockBefore = (Get-FileHash -LiteralPath package-lock.json -Algorithm SHA256).Hash
@@ -433,7 +433,7 @@ jobs:
           # only that npm ci left these files alone; it cannot detect metadata
           # that was already altered at review time. This gate runs before
           # installation so unreviewed scripts are never installed and never run.
-          $strReviewedPackageHash = '494EDC3ED1917EFFD870CB7F797A861778DD288BFDBB1AB07DD07D77D8BB6109'
+          $strReviewedPackageHash = 'C6DB6BEFDA88E58AA5568F52F44CA934AF5751E545DBA0644297B9FB15577E0D'
           $strReviewedLockHash = '84CBE61E33E4C66B653EFD2BFBE3F80B0061368A64AD80EF0DE4898DA28D887D'
           $strPackageBefore = (Get-FileHash -LiteralPath package.json -Algorithm SHA256).Hash
           $strLockBefore = (Get-FileHash -LiteralPath package-lock.json -Algorithm SHA256).Hash
@@ -510,7 +510,7 @@ jobs:
           # captured status, and every digest intact while both phases report
           # zero errors over nothing.
           $strReviewedLintConfigHash = '5EB07BF7F30829E0091E82F235A96FDBA21BE1EF1160CA1E22CDBE8D82DA5300'
-          $strReviewedLintHelperHash = '39D1C5AA23557163A6C864A314F6524CC38EC49EBCACD48D5BD18A577FE92FEE'
+          $strReviewedLintHelperHash = '5F3BBEFDD02AF786BD39AE6A31685A4DAF073981C2C072A51B590C75A6626205'
           $strLintConfigHash = (Get-FileHash -LiteralPath .markdownlint.jsonc -Algorithm SHA256).Hash
           $strLintHelperHash = (Get-FileHash -LiteralPath lint-nested-markdown.js -Algorithm SHA256).Hash
           if ($strLintConfigHash -cne $strReviewedLintConfigHash -or $strLintHelperHash -cne $strReviewedLintHelperHash) {

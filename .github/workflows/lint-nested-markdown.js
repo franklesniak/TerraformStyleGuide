@@ -7,7 +7,7 @@
  * markdownlint on them to ensure nested Markdown content follows the same
  * linting rules as the outer Markdown files.
  *
- * Usage: node .github/workflows/lint-nested-markdown.js
+ * Usage: node .github/workflows/lint-nested-markdown.js [--outer]
  */
 
 const fs = require('fs');
@@ -60,6 +60,27 @@ function validateMarkdownInput(repoRoot, filePath, fileSystem = fs) {
     }
 
     return resolvedInputPath;
+}
+
+/**
+ * Read every Markdown input after validating its repository boundary.
+ * @param {string} repoRoot - Repository root.
+ * @returns {Promise<Array<{filePath: string, content: string}>>} Safe inputs.
+ */
+async function readMarkdownInputs(repoRoot) {
+    const files = await findMarkdownFiles(repoRoot);
+    const markdownInputs = [];
+
+    for (const file of files) {
+        const relativePath = path.relative(repoRoot, file);
+        const safeInputPath = validateMarkdownInput(repoRoot, file);
+        markdownInputs.push({
+            filePath: relativePath,
+            content: fs.readFileSync(safeInputPath, 'utf8')
+        });
+    }
+
+    return markdownInputs;
 }
 
 /**
@@ -315,6 +336,32 @@ function lintNestedMarkdownContents(
 }
 
 /**
+ * Run outer Markdown lint against caller-supplied in-memory content.
+ * @param {string} repoRoot - Repository root.
+ * @param {Array<{filePath: string, content: string}>} markdownInputs - Safe inputs.
+ * @returns {Promise<number>} markdownlint-cli2 exit status.
+ */
+async function lintOuterMarkdownContents(repoRoot, markdownInputs) {
+    const { main: markdownlintCli2 } = await import('markdownlint-cli2');
+    const nonFileContents = {};
+
+    for (const input of markdownInputs) {
+        const absolutePosixPath = path.resolve(repoRoot, input.filePath)
+            .split(path.sep)
+            .join('/');
+        nonFileContents[absolutePosixPath] = input.content;
+    }
+
+    return markdownlintCli2({
+        directory: repoRoot,
+        argv: ['--config', '.github/workflows/.markdownlint.jsonc'],
+        nonFileContents,
+        logMessage: console.log,
+        logError: console.error
+    });
+}
+
+/**
  * Format and display linting results
  * @param {Array} allResults - Array of results with context
  * @returns {boolean} True if any errors were found
@@ -365,31 +412,37 @@ function displayResults(allResults) {
  */
 async function main() {
     try {
-        console.log(`${colors.bold}Linting nested Markdown in code fences...${colors.reset}\n`);
+        const mode = process.argv[2] ?? '--nested';
+        if (!['--nested', '--outer'].includes(mode) || process.argv.length > 3) {
+            throw new Error('Usage: lint-nested-markdown.js [--outer]');
+        }
+
+        const phaseName = mode === '--outer'
+            ? 'outer Markdown'
+            : 'nested Markdown in code fences';
+        console.log(`${colors.bold}Linting ${phaseName}...${colors.reset}\n`);
 
         runMarkdownInputSafetySelfTest();
 
-        // Load markdownlint configuration
-        const config = loadMarkdownlintConfig();
-
         // Repository root is two levels up from this script
         const repoRoot = path.resolve(__dirname, '../..');
+        const markdownInputs = await readMarkdownInputs(repoRoot);
+        console.log(`Found ${markdownInputs.length} Markdown file(s) to scan\n`);
 
-        // Find all Markdown and Cursor rule files (excluding node_modules)
-        const files = await findMarkdownFiles(repoRoot);
-
-        console.log(`Found ${files.length} Markdown file(s) to scan\n`);
-
-        const markdownInputs = [];
-        for (const file of files) {
-            const relativePath = path.relative(repoRoot, file);
-            const safeInputPath = validateMarkdownInput(repoRoot, file);
-            markdownInputs.push({
-                filePath: relativePath,
-                content: fs.readFileSync(safeInputPath, 'utf8')
-            });
+        if (mode === '--outer') {
+            const exitCode = await lintOuterMarkdownContents(
+                repoRoot,
+                markdownInputs
+            );
+            if (![0, 1].includes(exitCode)) {
+                throw new Error(`Outer Markdown lint returned exit status ${exitCode}.`);
+            }
+            process.exitCode = exitCode;
+            return;
         }
 
+        // Load markdownlint configuration
+        const config = loadMarkdownlintConfig();
         const { totalBlocks, allResults } = lintNestedMarkdownContents(
             markdownInputs,
             config,
@@ -424,7 +477,9 @@ if (require.main === module) {
 module.exports = {
     displayResults,
     findMarkdownFiles,
+    lintOuterMarkdownContents,
     lintNestedMarkdownContents,
+    readMarkdownInputs,
     runMarkdownInputSafetySelfTest,
     validateMarkdownInput
 };

@@ -124,12 +124,12 @@ const EXPECTED_TRIGGER = Object.freeze({
 // that check. These reviewed values are the independent baseline, so the
 // scripts the workflow runs and the graph it installs are fixed at review time.
 const REVIEWED_PACKAGE_DIGESTS = Object.freeze({
-  'package.json': '494edc3ed1917effd870cb7f797a861778dd288bfdbb1ab07dd07d77d8bb6109',
+  'package.json': 'c6db6befda88e58aa5568f52f44ca934af5751e545dba0644297b9fb15577e0d',
   'package-lock.json': '84cbe61e33e4c66b653efd2bfbe3f80b0061368a64ad80ef0de4898da28d887d',
 });
 
 const REVIEWED_SCRIPTS = Object.freeze({
-  'lint:md': 'cd ../.. && markdownlint-cli2 "**/*.md" "**/*.mdc" "#node_modules" "#.github/workflows/node_modules" --config .github/workflows/.markdownlint.jsonc',
+  'lint:md': 'cd ../.. && node .github/workflows/lint-nested-markdown.js --outer',
   'lint:md:nested': 'node lint-nested-markdown.js',
   prepare: 'cd ../.. && husky',
 });
@@ -254,8 +254,8 @@ const NETWORK_CLIENT =/\b(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|ir
 // Both orders were tried here and each one's fix was the other one's defect.
 // Separate jobs are separate runners with separate filesystems, which removes
 // the choice rather than making it.
-const REVIEWED_POLICY_STEP_DIGEST = 'a3f7458439114e2b0d761332fd19107c4f49f513deca8f2138259ce067acdc6c';
-const REVIEWED_LINT_STEP_DIGEST = '0ab80b7b5a92c85e795e297ea8a9b0e2c1159a1e97c28cc2aa79991960fa2349';
+const REVIEWED_POLICY_STEP_DIGEST = '428cdf339727deff41595d21bfae150d0d43e9f9a711ab97aa15aa4c42f865b0';
+const REVIEWED_LINT_STEP_DIGEST = '5ad46e3776a45dfe590ed308dd33688aa648ff0db1d7c38fdb6ef52f5a474636';
 
 // Both governed steps have to establish the same supply position before they
 // diverge: the pinned toolchain, the reviewed package metadata, and npm's
@@ -1006,7 +1006,7 @@ const REVIEWED_GENERATOR_DIGEST = '4ab4f6a9759671b545f5bc5df05f982df5f25b46095bd
 // so what the lint does is pinned alongside what it runs.
 const REVIEWED_LINT_DIGESTS = Object.freeze({
   '.markdownlint.jsonc': '5eb07bf7f30829e0091e82f235a96fdba21be1ef1160ca1e22cdbe8d82da5300',
-  'lint-nested-markdown.js': '39d1c5aa23557163a6c864a314f6524cc38ec49ebcacd48d5bd18a577fe92fee',
+  'lint-nested-markdown.js': '5f3bbefdd02af786bd39ae6a31685a4daf073981c2c072a51b590c75a6626205',
 });
 
 // Round 45, finding C. The invocation allowlist below records only lines whose
@@ -3385,7 +3385,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T1-MARKDOWN-008', 'nested lint removed', 'markdown', (source) => replaceOnce(source, 'run lint:md:nested', 'run lint:other:nested')],
   ['T1-MARKDOWN-009', 'policy validator removed', 'markdown', (source) => replaceOnce(source, './Validate-WorkflowPolicy.mjs', './other-validator.mjs')],
   ['T1-MARKDOWN-010', 'failure continuation', 'markdown', (source) => replaceOnce(source, '        shell: pwsh\n        working-directory:', '        shell: pwsh\n        continue-on-error: true\n        working-directory:')],
-  ['T1-MARKDOWN-011', 'reviewed package hash removed', 'markdown', (source) => replaceOnce(source, "'494EDC3ED1917EFFD870CB7F797A861778DD288BFDBB1AB07DD07D77D8BB6109'", "'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'")],
+  ['T1-MARKDOWN-011', 'reviewed package hash removed', 'markdown', (source) => replaceOnce(source, "'C6DB6BEFDA88E58AA5568F52F44CA934AF5751E545DBA0644297B9FB15577E0D'", "'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'")],
   ['T1-MARKDOWN-012', 'reviewed lock hash altered', 'markdown', (source) => replaceOnce(source, "'84CBE61E33E4C66B653EFD2BFBE3F80B0061368A64AD80EF0DE4898DA28D887D'", "'94CBE61E33E4C66B653EFD2BFBE3F80B0061368A64AD80EF0DE4898DA28D887D'")],
   ['T1-MARKDOWN-013', 'pre-install supply gate neutralized', 'markdown', (source) => replaceOnce(source, 'if ($strPackageBefore -cne $strReviewedPackageHash -or', 'if ($false -and $strPackageBefore -cne $strReviewedPackageHash -or')],
   ['T1-BUILD-042', 'workflow token referenced outside the approved push step', 'build', (source) => replaceOnce(source, "          $ErrorActionPreference = 'Stop'\n          $arrArtifacts", "          $ErrorActionPreference = 'Stop'\n          $strToken = '${{ github.token }}'\n          $arrArtifacts")],
@@ -4188,7 +4188,7 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T1-MARKDOWN-008": "markdown-policy: markdown.markdownlint.lint is missing a required phase: run lint:md:nested",
   "T1-MARKDOWN-009": "markdown-policy: markdown.policy.validate is missing a required phase: ./Validate-WorkflowPolicy.mjs ./build.yml ./markdownlint.yml",
   "T1-MARKDOWN-010": "schema: markdown.policy.validate has missing or extra keys",
-  "T1-MARKDOWN-011": "markdown-policy: markdown.policy.validate is missing a required phase: 494EDC3ED1917EFFD870CB7F797A861778DD288BFDBB1AB07DD07D77D8BB6109",
+  "T1-MARKDOWN-011": "markdown-policy: markdown.policy.validate is missing a required phase: C6DB6BEFDA88E58AA5568F52F44CA934AF5751E545DBA0644297B9FB15577E0D",
   "T1-MARKDOWN-012": "markdown-policy: markdown.policy.validate is missing a required phase: 84CBE61E33E4C66B653EFD2BFBE3F80B0061368A64AD80EF0DE4898DA28D887D",
   "T1-MARKDOWN-013": "markdown-policy: markdown.policy.validate is missing a required phase: if ($strPackageBefore -cne $strReviewedPackageHash -or $strLockBefore -cne $strReviewedLockHash)",
   "T1-BUILD-042": "credential-policy: verify.generate-and-verify expands an unapproved credential",

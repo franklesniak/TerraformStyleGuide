@@ -124,9 +124,9 @@ jobs:
           declare -Ar reviewed_sha256=(
             ["${root_manifest}"]='ca77a11a7bd4ae55842ef0f1b8c4b9c0d32e3d6b8fa202455a12e354bf2d696b'
             ["${root_lock}"]='e07939c3791be364486aedc928da532870f6d9f29ec2a6a4733be2cc143f5009'
-            ["${workflow_manifest}"]='494edc3ed1917effd870cb7f797a861778dd288bfdbb1ab07dd07d77d8bb6109'
+            ["${workflow_manifest}"]='c6db6befda88e58aa5568f52f44ca934af5751e545dba0644297b9fb15577e0d'
             ["${workflow_lock}"]='84cbe61e33e4c66b653efd2bfbe3f80b0061368a64ad80ef0de4898da28d887d'
-            ["${pre_commit_config}"]='31127565a6b921001af7aa5f21f8f7b7e1edeff107eccc2006e511d4f7779424'
+            ["${pre_commit_config}"]='0e9da6a7c4bd0d89c83fd3041e67921e3bc08d159f4b6cd36b1b2e9f0b63a37b'
             ["${python_hook_launcher}"]='b4ef9791bef6c915d4c7b9057d07153579a91df988070c8bc24c192e46884720'
             ["${staged_markdown_helper}"]='6e8ac89afb17dd36f1edcf9b59ddfb066706fc6686be22e007c540ae20c810c2'
           )

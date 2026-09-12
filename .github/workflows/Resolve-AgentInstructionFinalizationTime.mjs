@@ -130,14 +130,17 @@ function validateRepositoryActivity(activity, expected, currentCreatedTime) {
   if (activity.after !== expected.revision) {
     return null;
   }
+  const createdTime = Date.parse(activity.timestamp ?? '');
+  if (!rfc3339UtcPattern.test(activity.timestamp ?? '') ||
+      !Number.isFinite(createdTime)) {
+    throw new Error('A head repository-activity timestamp is unavailable or invalid.');
+  }
+  if (createdTime > currentCreatedTime) {
+    return null;
+  }
   if (expected.baseRevision && activity.before !== expected.baseRevision) {
     throw new Error('The head publication activity has an unexpected prior revision.');
   }
-  const createdTime = parseTimestamp(
-    activity.timestamp,
-    currentCreatedTime,
-    'A head repository-activity timestamp',
-  );
   return { createdAt: activity.timestamp, createdTime };
 }
 
@@ -545,6 +548,27 @@ export async function runSelfTest() {
     throw new Error('The direct-push identity failure entered the retry path.');
   }
 
+  const concurrentDirectPushTimestamp = await resolveFinalizationTimestamp({
+    ...base,
+    eventName: 'push',
+    fetchImplementation: makeFixtureFetch({
+      current: makeRun({ event: 'push' }),
+      repositoryActivities: [
+        makeActivity({
+          id: 11,
+          before: 'c'.repeat(40),
+          timestamp: '2026-09-10T12:00:01Z',
+        }),
+        makeActivity({ id: 12, timestamp: '2026-09-10T11:59:59Z' }),
+      ],
+    }),
+  });
+  assertEqual(
+    'post-run direct republish does not hide the exact triggering push',
+    concurrentDirectPushTimestamp,
+    '2026-09-10T11:59:59Z',
+  );
+
   let absentActivityRequests = 0;
   const absentWaits = [];
   const absentBaseFetch = makeFixtureFetch({
@@ -762,13 +786,59 @@ export async function runSelfTest() {
     }),
     /unexpected identity/u,
   );
+  const concurrentSameRevisionTimestamp = await resolveFinalizationTimestamp({
+    ...forkBase,
+    fetchImplementation: makeFixtureFetch({
+      current: forkCurrent,
+      forkActivities: [
+        makeActivity({ id: 11, timestamp: '2026-09-10T12:00:01Z' }),
+        makeActivity({ id: 12, timestamp: '2026-09-10T11:59:59Z' }),
+      ],
+    }),
+  });
+  assertEqual(
+    'same-revision republish after the run does not hide the triggering publication',
+    concurrentSameRevisionTimestamp,
+    '2026-09-10T11:59:59Z',
+  );
+  const paginatedSameRevisionTimestamp = await resolveFinalizationTimestamp({
+    ...forkBase,
+    fetchImplementation: makeFixtureFetch({
+      current: forkCurrent,
+      forkActivityPages: [
+        makeResponse(
+          [makeActivity({ id: 11, timestamp: '2026-09-10T12:00:01Z' })],
+          { link: makeActivityNextLink('fork-owner/repository', 'cursor-1') },
+        ),
+        makeResponse([
+          makeActivity({ id: 12, timestamp: '2026-09-10T11:59:58Z' }),
+        ]),
+      ],
+    }),
+  });
+  assertEqual(
+    'same-revision republish does not stop eligible-publication pagination',
+    paginatedSameRevisionTimestamp,
+    '2026-09-10T11:59:58Z',
+  );
   await reject(
-    'future fork publication timestamp',
+    'only post-run exact publications remain ineligible',
     () => resolveFinalizationTimestamp({
       ...forkBase,
       fetchImplementation: makeFixtureFetch({
         current: forkCurrent,
         forkActivities: [makeActivity({ timestamp: '2026-09-10T12:00:01Z' })],
+      }),
+    }),
+    /No exact head publication activity/u,
+  );
+  await reject(
+    'malformed exact publication timestamp',
+    () => resolveFinalizationTimestamp({
+      ...forkBase,
+      fetchImplementation: makeFixtureFetch({
+        current: forkCurrent,
+        forkActivities: [makeActivity({ timestamp: 'not-a-timestamp' })],
       }),
     }),
     /repository-activity timestamp.*invalid/u,

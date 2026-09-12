@@ -11,6 +11,10 @@
 # .PARAMETER SelfTest
 # Runs in-memory negative tests after the repository files pass validation.
 #
+# .PARAMETER RequireStagedInputMatch
+# Requires each staged validator input to match the worktree content that the
+# validator reads. Use this mode from pre-commit.
+#
 # .PARAMETER InputRevision
 # The optional Git commit whose governed files are validation inputs. The
 # validator and its executable dependencies still come from the checked-out
@@ -49,13 +53,16 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.2.20260911.11
+# Version: 1.3.20260912.0
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
 param(
     [Parameter()]
     [switch] $SelfTest,
+
+    [Parameter()]
+    [switch] $RequireStagedInputMatch,
 
     [Parameter()]
     [AllowEmptyString()]
@@ -99,9 +106,9 @@ $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
 $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/copilot-setup-steps.yml' =
-        '7303197940f5f3894390a2c38d4b4844d8c1cce7684b94598c331b2410cc0b36'
+        '9974997af6758c62bd33cb9b77c3233b53b3064645c7d455bb111bd2a887ee85'
     '.github/workflows/package.json' =
-        '494edc3ed1917effd870cb7f797a861778dd288bfdbb1ab07dd07d77d8bb6109'
+        'c6db6befda88e58aa5568f52f44ca934af5751e545dba0644297b9fb15577e0d'
     '.github/workflows/package-lock.json' =
         '84cbe61e33e4c66b653efd2bfbe3f80b0061368a64ad80ef0de4898da28d887d'
     '.husky/pre-commit' =
@@ -109,10 +116,21 @@ $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/lint-staged-markdown.mjs' =
         '6e8ac89afb17dd36f1edcf9b59ddfb066706fc6686be22e007c540ae20c810c2'
     '.pre-commit-config.yaml' =
-        '31127565a6b921001af7aa5f21f8f7b7e1edeff107eccc2006e511d4f7779424'
+        '0e9da6a7c4bd0d89c83fd3041e67921e3bc08d159f4b6cd36b1b2e9f0b63a37b'
 }
 $script:strWorkflowPolicyCommandPrefix =
     'node .github/workflows/Validate-WorkflowPolicy.mjs'
+
+if ($RequireStagedInputMatch -and (
+        -not [string]::IsNullOrEmpty($InputRevision) -or
+        -not [string]::IsNullOrEmpty($RangeBaseRevision) -or
+        -not [string]::IsNullOrEmpty($RangeHeadRevision) -or
+        $RangeIsNewRef -or
+        -not [string]::IsNullOrEmpty($AutomatedMergeSourceRevision) -or
+        -not [string]::IsNullOrEmpty($TrustedFinalizationTimestamp)
+    )) {
+    throw 'Staged-input matching cannot be combined with event-range validation.'
+}
 $script:strWorkflowPolicyCommand = $script:strWorkflowPolicyCommandPrefix +
     ' .github/workflows/build.yml .github/workflows/markdownlint.yml'
 $script:hashtableLegacyMetadataParentSha256 = @{
@@ -618,6 +636,74 @@ function Assert-RepositoryInputMetadataMutationRejected {
     }
 }
 
+function Get-StagedInputMatchFailure {
+    # .SYNOPSIS
+    # Finds a staged-input content mismatch.
+    #
+    # .DESCRIPTION
+    # Compares the exact decoded worktree and Git index content when a staged
+    # input is part of the candidate commit.
+    #
+    # .PARAMETER DisplayName
+    # The input name to include in a failure record.
+    #
+    # .PARAMETER RequireMatch
+    # Indicates that the input has a staged candidate that must match.
+    #
+    # .PARAMETER WorktreeContent
+    # The strict UTF-8 content read from the worktree.
+    #
+    # .PARAMETER IndexContent
+    # The strict UTF-8 content read from the stage-0 Git index blob.
+    #
+    # .EXAMPLE
+    # Get-StagedInputMatchFailure -DisplayName 'AGENTS.md' -RequireMatch `
+    #     -WorktreeContent $strWorktree -IndexContent $strIndex
+    #
+    # # Writes one failure when the staged and worktree content differ.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [string] A staged-input mismatch record.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the
+    # public API surface. Parameters, return shape, and positional
+    # contract may change without notice.
+    #
+    # This function does not support positional parameters.
+    # Version: 1.0.20260912.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $DisplayName,
+
+        [Parameter()]
+        [switch] $RequireMatch,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $WorktreeContent,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $IndexContent
+    )
+
+    if ($RequireMatch -and -not [string]::Equals(
+            $WorktreeContent,
+            $IndexContent,
+            [System.StringComparison]::Ordinal
+        )) {
+        Write-Output (
+            "$DisplayName worktree content must match its staged Git index blob."
+        )
+    }
+}
+
 function Read-BoundedStreamData {
     # .SYNOPSIS
     # Reads a stream through a strict byte limit.
@@ -719,6 +805,9 @@ function Read-RepositoryInputData {
     # .PARAMETER MaximumBytes
     # The largest accepted byte count.
     #
+    # .PARAMETER RequireIndexContentMatch
+    # Requires the worktree content to equal the stage-0 Git index blob.
+    #
     # .EXAMPLE
     # $arrBytes = @(Read-RepositoryInputData -Path $strPath `
     #     -RepositoryRootPath $strRoot -RepositoryRelativePath 'AGENTS.md' `
@@ -738,7 +827,7 @@ function Read-RepositoryInputData {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.1.20260910.0
+    # Version: 1.2.20260912.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([byte])]
     param(
@@ -756,7 +845,10 @@ function Read-RepositoryInputData {
 
         [Parameter(Mandatory)]
         [ValidateRange(1, 2147483646)]
-        [int] $MaximumBytes
+        [int] $MaximumBytes,
+
+        [Parameter()]
+        [switch] $RequireIndexContentMatch
     )
 
     $arrGitIndexEntries = @(& git -C $RepositoryRootPath ls-files --stage -- $RepositoryRelativePath 2>&1)
@@ -894,14 +986,38 @@ function Read-RepositoryInputData {
         [System.IO.FileShare]::Read
     )
     try {
-        return Read-BoundedStreamData `
+        [byte[]] $arrInputData = @(Read-BoundedStreamData `
             -Stream $objInputStream `
             -MaximumBytes $MaximumBytes `
-            -DisplayName $DisplayName
+            -DisplayName $DisplayName)
     }
     finally {
         $objInputStream.Dispose()
     }
+
+    if ($RequireIndexContentMatch) {
+        $strWorktreeContent = ConvertFrom-StrictUtf8Data `
+            -Bytes $arrInputData `
+            -DisplayName $DisplayName
+        $strIndexContent = Read-GitRevisionText `
+            -RepositoryRootPath $RepositoryRootPath `
+            -Revision '' `
+            -RepositoryRelativePath $RepositoryRelativePath `
+            -MaximumBytes $MaximumBytes
+        $arrStagedInputFailures = @(Get-StagedInputMatchFailure `
+                -DisplayName $DisplayName `
+                -RequireMatch `
+                -WorktreeContent $strWorktreeContent `
+                -IndexContent $strIndexContent)
+        if ($arrStagedInputFailures.Count -gt 0) {
+            throw (
+                "Repository input is unsafe:`n- " +
+                ($arrStagedInputFailures -join "`n- ")
+            )
+        }
+    }
+
+    return $arrInputData
 }
 
 function Read-GitRevisionText {
@@ -916,7 +1032,8 @@ function Read-GitRevisionText {
     # The absolute repository root path used by Git.
     #
     # .PARAMETER Revision
-    # The commit or tree revision that contains the file.
+    # The commit or tree revision that contains the file. An empty value selects
+    # the stage-0 Git index entry when RequireRegularFile is not set.
     #
     # .PARAMETER RepositoryRelativePath
     # The repository-relative blob path.
@@ -945,7 +1062,7 @@ function Read-GitRevisionText {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.1.20260820.0
+    # Version: 1.2.20260912.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -953,6 +1070,7 @@ function Read-GitRevisionText {
         [string] $RepositoryRootPath,
 
         [Parameter(Mandatory)]
+        [AllowEmptyString()]
         [string] $Revision,
 
         [Parameter(Mandatory)]
@@ -966,6 +1084,9 @@ function Read-GitRevisionText {
         [switch] $RequireRegularFile
     )
 
+    if ($RequireRegularFile -and [string]::IsNullOrEmpty($Revision)) {
+        throw 'A regular-file revision lookup requires a commit or tree.'
+    }
     if ($RequireRegularFile) {
         $objTreeEntry = Get-GitRevisionTreeEntryContext `
             -RepositoryRootPath $RepositoryRootPath `
@@ -1657,9 +1778,7 @@ function Get-HuskySetupContractFailure {
         Write-Output 'Root lint:md:nested must delegate to the workflow-local lint:md:nested script.'
     }
     $strExpectedWorkflowOuterLint =
-        'cd ../.. && markdownlint-cli2 "**/*.md" "**/*.mdc" "#node_modules" ' +
-        '"#.github/workflows/node_modules" --config ' +
-        '.github/workflows/.markdownlint.jsonc'
+        'cd ../.. && node .github/workflows/lint-nested-markdown.js --outer'
     if ([string]$objWorkflowPackage.scripts.'lint:md' -cne
         $strExpectedWorkflowOuterLint) {
         Write-Output (
@@ -1703,6 +1822,17 @@ function Get-HuskySetupContractFailure {
             '(?m)^' + [regex]::Escape($strExpectedStagedMarkdownSelector) + '\r?$'
         ).Count -ne 1) {
         Write-Output 'The staged-Markdown hook must select Markdown and helper-only changes.'
+    }
+    $strExpectedStagedInputEntry =
+        '          .github/workflows/Test-AgentInstructions.ps1 -SelfTest ' +
+        '-RequireStagedInputMatch'
+    if ([regex]::Matches(
+            $PreCommitConfigContent,
+            '(?m)^' + [regex]::Escape($strExpectedStagedInputEntry) + '\r?$'
+        ).Count -ne 1) {
+        Write-Output (
+            'The agent-instruction hook must require staged input matching.'
+        )
     }
     $strExpectedYamlSelector = '        files: ^.*\.ya?ml$'
     foreach ($strYamlHookId in @('check-yaml', 'yamllint')) {
@@ -7522,6 +7652,23 @@ if ($LASTEXITCODE -ne 0 -or $strCheckedOutRevision.Trim() -notmatch '^[0-9a-fA-F
     throw 'The checked-out trusted revision is unavailable.'
 }
 $strCheckedOutRevision = $strCheckedOutRevision.Trim()
+$setStagedInputPaths = [System.Collections.Generic.HashSet[string]]::new(
+    [System.StringComparer]::Ordinal
+)
+if ($RequireStagedInputMatch) {
+    $arrStagedInputPaths = @(
+        Invoke-GitNulRecordQuery `
+            -RepositoryRootPath $strRepositoryRootPath `
+            -Argument @(
+                'diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z',
+                '--'
+            ) `
+            -DisplayName 'staged validator inputs'
+    )
+    foreach ($strStagedInputPath in $arrStagedInputPaths) {
+        [void]$setStagedInputPaths.Add($strStagedInputPath)
+    }
+}
 if (-not [string]::IsNullOrEmpty($strValidatedInputRevision) -and
     -not [string]::Equals(
         $strValidatedInputRevision,
@@ -7576,7 +7723,11 @@ $strDocumentClassificationContent = if (
             -RepositoryRootPath $strRepositoryRootPath `
             -RepositoryRelativePath '.github/document-metadata-classification.json' `
             -DisplayName '.github/document-metadata-classification.json' `
-            -MaximumBytes $intDocumentClassificationMaximumInputBytes) `
+            -MaximumBytes $intDocumentClassificationMaximumInputBytes `
+            -RequireIndexContentMatch:($RequireStagedInputMatch -and
+                $setStagedInputPaths.Contains(
+                    '.github/document-metadata-classification.json'
+                ))) `
         -DisplayName '.github/document-metadata-classification.json'
 }
 else {
@@ -7837,7 +7988,9 @@ $strAgentsContent = if ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
             -RepositoryRootPath $strRepositoryRootPath `
             -RepositoryRelativePath 'AGENTS.md' `
             -DisplayName 'AGENTS.md' `
-            -MaximumBytes $intAgentsMaximumInputBytes) `
+            -MaximumBytes $intAgentsMaximumInputBytes `
+            -RequireIndexContentMatch:($RequireStagedInputMatch -and
+                $setStagedInputPaths.Contains('AGENTS.md'))) `
         -DisplayName 'AGENTS.md'
 }
 else {
@@ -7855,7 +8008,9 @@ $strClaudeContent = if ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
             -RepositoryRootPath $strRepositoryRootPath `
             -RepositoryRelativePath 'CLAUDE.md' `
             -DisplayName 'CLAUDE.md' `
-            -MaximumBytes $intClaudeMaximumInputBytes) `
+            -MaximumBytes $intClaudeMaximumInputBytes `
+            -RequireIndexContentMatch:($RequireStagedInputMatch -and
+                $setStagedInputPaths.Contains('CLAUDE.md'))) `
         -DisplayName 'CLAUDE.md'
 }
 else {
@@ -7873,7 +8028,9 @@ $strCodexConfigContent = if ([string]::IsNullOrEmpty($strValidatedInputRevision)
             -RepositoryRootPath $strRepositoryRootPath `
             -RepositoryRelativePath '.codex/config.toml' `
             -DisplayName '.codex/config.toml' `
-            -MaximumBytes $intCodexConfigMaximumInputBytes) `
+            -MaximumBytes $intCodexConfigMaximumInputBytes `
+            -RequireIndexContentMatch:($RequireStagedInputMatch -and
+                $setStagedInputPaths.Contains('.codex/config.toml'))) `
         -DisplayName '.codex/config.toml'
 }
 else {
@@ -7891,7 +8048,11 @@ $strDocsInstructionsContent = if ([string]::IsNullOrEmpty($strValidatedInputRevi
             -RepositoryRootPath $strRepositoryRootPath `
             -RepositoryRelativePath '.github/instructions/docs.instructions.md' `
             -DisplayName '.github/instructions/docs.instructions.md' `
-            -MaximumBytes $intDocsInstructionsMaximumInputBytes) `
+            -MaximumBytes $intDocsInstructionsMaximumInputBytes `
+            -RequireIndexContentMatch:($RequireStagedInputMatch -and
+                $setStagedInputPaths.Contains(
+                    '.github/instructions/docs.instructions.md'
+                ))) `
         -DisplayName '.github/instructions/docs.instructions.md'
 }
 else {
@@ -7914,7 +8075,11 @@ foreach ($objAgentSetupInputSpec in $arrAgentSetupInputSpecs) {
                 -RepositoryRootPath $strRepositoryRootPath `
                 -RepositoryRelativePath $objAgentSetupInputSpec.Path `
                 -DisplayName $objAgentSetupInputSpec.Path `
-                -MaximumBytes $objAgentSetupInputSpec.MaximumBytes) `
+                -MaximumBytes $objAgentSetupInputSpec.MaximumBytes `
+                -RequireIndexContentMatch:($RequireStagedInputMatch -and
+                    $setStagedInputPaths.Contains(
+                        $objAgentSetupInputSpec.Path
+                    ))) `
             -DisplayName $objAgentSetupInputSpec.Path
     }
     else {
@@ -7947,7 +8112,9 @@ foreach ($objDocumentSpec in $arrGovernedMetadataDocuments) {
                 -RepositoryRootPath $strRepositoryRootPath `
                 -RepositoryRelativePath $objDocumentSpec.Path `
                 -DisplayName $objDocumentSpec.Path `
-                -MaximumBytes $objDocumentSpec.MaximumBytes) `
+                -MaximumBytes $objDocumentSpec.MaximumBytes `
+                -RequireIndexContentMatch:($RequireStagedInputMatch -and
+                    $setStagedInputPaths.Contains($objDocumentSpec.Path))) `
             -DisplayName $objDocumentSpec.Path
     }
     else {
@@ -8856,6 +9023,26 @@ if ($SelfTest) {
                 ))) {
             throw "Husky mutation '$($arrHuskyMutation[0])' did not fail closed."
         }
+    }
+
+    $strStagedInputEntryMutation = $strPreCommitConfigContent.Replace(
+        ' -RequireStagedInputMatch',
+        ''
+    )
+    if ($strStagedInputEntryMutation -ceq $strPreCommitConfigContent) {
+        throw 'Could not construct the staged-input hook mutation.'
+    }
+    $arrStagedInputEntryMutationFailures = @(Get-HuskySetupContractFailure `
+            -RootPackageContent $strRootPackageContent `
+            -WorkflowPackageContent $strWorkflowPackageContent `
+            -WorkflowPackageLockContent $strWorkflowPackageLockContent `
+            -HookContent $strHuskyHookContent `
+            -CopilotSetupContent $strCopilotSetupContent `
+            -PreCommitConfigContent $strStagedInputEntryMutation `
+            -StagedMarkdownHelperContent $strStagedMarkdownHelperContent)
+    if ($arrStagedInputEntryMutationFailures -cnotcontains
+        'The agent-instruction hook must require staged input matching.') {
+        throw 'Removal of staged-input matching did not fail closed.'
     }
 
     $arrReviewedSetupInputMutations = @(
@@ -10568,6 +10755,33 @@ if ($SelfTest) {
         -Name 'Unix device mutation' `
         -UnixMode 'crw-rw-rw-' `
         -ExpectedFailure 'Unix device mutation must have a regular Unix file type.'
+
+    $arrDisabledStagedMatchFailures = @(Get-StagedInputMatchFailure `
+            -DisplayName 'disabled staged fixture' `
+            -WorktreeContent 'worktree bytes' `
+            -IndexContent 'index bytes')
+    if ($arrDisabledStagedMatchFailures.Count -ne 0) {
+        throw 'A disabled staged-input match produced a failure.'
+    }
+    $arrEqualStagedMatchFailures = @(Get-StagedInputMatchFailure `
+            -DisplayName 'equal staged fixture' `
+            -RequireMatch `
+            -WorktreeContent 'same bytes' `
+            -IndexContent 'same bytes')
+    if ($arrEqualStagedMatchFailures.Count -ne 0) {
+        throw 'Equal staged and worktree content produced a failure.'
+    }
+    $arrDivergentStagedMatchFailures = @(Get-StagedInputMatchFailure `
+            -DisplayName 'divergent staged fixture' `
+            -RequireMatch `
+            -WorktreeContent 'valid worktree bytes' `
+            -IndexContent 'invalid staged bytes')
+    $strExpectedStagedMatchFailure =
+        'divergent staged fixture worktree content must match its staged Git index blob.'
+    if ($arrDivergentStagedMatchFailures.Count -ne 1 -or
+        $arrDivergentStagedMatchFailures[0] -cne $strExpectedStagedMatchFailure) {
+        throw 'Divergent staged and worktree content did not fail closed.'
+    }
 
     $strAncestorLinkFixtureRoot = [System.IO.Path]::GetFullPath(
         [System.IO.Path]::Combine(
@@ -13844,7 +14058,7 @@ if ($SelfTest) {
     if ($intFinalizationResolverSelfTestExit -ne 0 -or
         $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
         [string]$arrFinalizationResolverSelfTestOutput[0] -cne
-        'Finalization resolver self-tests passed: 29 fixtures.') {
+        'Finalization resolver self-tests passed: 33 fixtures.') {
         throw (
             'The finalization-time resolver self-test failed: ' +
             ($arrFinalizationResolverSelfTestOutput -join '; ')
