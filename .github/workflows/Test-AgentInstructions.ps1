@@ -53,7 +53,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.3.20260912.0
+# Version: 1.3.20260912.1
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -4968,6 +4968,91 @@ function Get-DocumentMetadataContext {
     }
 }
 
+function Test-DocumentMetadataHeaderIntent {
+    # .SYNOPSIS
+    # Tests whether a Markdown document intentionally carries metadata.
+    #
+    # .DESCRIPTION
+    # Uses the locked Markdown parser to distinguish an operative document header
+    # from fenced, quoted, deleted, nested, or otherwise non-operative examples.
+    # A Metadata heading near the top of the body or an operative top-level
+    # metadata field identifies an optional metadata header that must be validated.
+    #
+    # .PARAMETER Content
+    # The Markdown document text.
+    #
+    # .EXAMPLE
+    # Test-DocumentMetadataHeaderIntent -Content $strReadmeContent
+    #
+    # # Returns true when README.md intentionally carries document metadata.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [bool] True when the document carries an operative metadata-header signal.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the
+    # public API surface. Parameters, return shape, and positional
+    # contract may change without notice.
+    #
+    # This function does not support positional parameters.
+    # Version: 1.0.20260912.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $Content
+    )
+
+    $strMetadataSignalPattern =
+        '(?m)^(?:## Metadata|- \*\*(?:Status|Owner|Last Updated|Scope):\*\*)'
+    if ($Content -cnotmatch $strMetadataSignalPattern) {
+        return $false
+    }
+
+    $arrLines = [regex]::Split($Content, '\r\n|\r|\n')
+    $arrParserLines = [string[]]$arrLines.Clone()
+    $intBodyStart = 0
+    if ($arrLines.Count -gt 0 -and $arrLines[0] -ceq '---') {
+        $intFrontMatterEnd = -1
+        for ($intLine = 1; $intLine -lt $arrLines.Count; $intLine++) {
+            if ($arrLines[$intLine] -ceq '---') {
+                $intFrontMatterEnd = $intLine
+                break
+            }
+        }
+        if ($intFrontMatterEnd -lt 0) {
+            return $true
+        }
+        for ($intLine = 0; $intLine -le $intFrontMatterEnd; $intLine++) {
+            $arrParserLines[$intLine] = ''
+        }
+        $intBodyStart = $intFrontMatterEnd + 1
+    }
+
+    $objParseContext = Get-MarkdownParseContext `
+        -Content ($arrParserLines -join "`n") `
+        -LineCount $arrLines.Count
+    foreach ($objBlock in @($objParseContext.TopLevelBlocks)) {
+        if ($objBlock.Type -ceq 'heading_open' -and
+            $objBlock.Tag -ceq 'h2' -and
+            $objBlock.Text -ceq 'Metadata' -and
+            ($objBlock.Start - $intBodyStart) -lt 30) {
+            return $true
+        }
+    }
+    foreach ($objListItem in @($objParseContext.TopLevelListItems)) {
+        if ($objListItem.Text -is [string] -and
+            $objListItem.Text -cmatch '^(?:Status|Owner|Last Updated|Scope):') {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Test-LegacyMetadataParentContent {
     # .SYNOPSIS
     # Tests one exact pre-metadata repository document.
@@ -5058,6 +5143,11 @@ function Get-DocumentMetadataTransitionFailure {
     # Indicates that changed content must recompute its revision from the
     # published baseline. Inherited merge results disable only this computation.
     #
+    # .PARAMETER MetadataRequired
+    # Indicates that the current document must carry metadata. When false, a
+    # document without metadata passes and a document with metadata receives the
+    # complete shape and transition validation.
+    #
     # .EXAMPLE
     # Get-DocumentMetadataTransitionFailure -Name 'AGENTS.md' `
     #     -CurrentContent $strCurrent -ParentContent $strParent `
@@ -5078,7 +5168,7 @@ function Get-DocumentMetadataTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.7.20260910.0
+    # Version: 1.8.20260912.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -5103,8 +5193,33 @@ function Get-DocumentMetadataTransitionFailure {
         [bool] $RequireExpectedUtcDateForRenderedChange = $true,
 
         [Parameter()]
-        [bool] $RequirePublishedRevisionConvention = $true
+        [bool] $RequirePublishedRevisionConvention = $true,
+
+        [Parameter()]
+        [bool] $MetadataRequired = $true
     )
+
+    if (-not $MetadataRequired -and
+        -not (Test-DocumentMetadataHeaderIntent -Content $CurrentContent)) {
+        return
+    }
+
+    $objParentMetadata = $null
+    if (-not $MetadataRequired -and
+        -not [string]::IsNullOrEmpty($ParentContent)) {
+        if (-not (Test-DocumentMetadataHeaderIntent -Content $ParentContent)) {
+            $ParentContent = $null
+            $IsNewDocumentTransition = $true
+        }
+        else {
+            $objParentMetadata = Get-DocumentMetadataContext -Content $ParentContent
+            if ($null -ne $objParentMetadata.Failure) {
+                $ParentContent = $null
+                $IsNewDocumentTransition = $true
+                $objParentMetadata = $null
+            }
+        }
+    }
 
     $objCurrentMetadata = Get-DocumentMetadataContext -Content $CurrentContent
     if ($null -ne $objCurrentMetadata.Failure) {
@@ -5187,7 +5302,9 @@ function Get-DocumentMetadataTransitionFailure {
         return
     }
 
-    $objParentMetadata = Get-DocumentMetadataContext -Content $ParentContent
+    if ($null -eq $objParentMetadata) {
+        $objParentMetadata = Get-DocumentMetadataContext -Content $ParentContent
+    }
     if ($null -ne $objParentMetadata.Failure) {
         Write-Output "The parent of $Name $($objParentMetadata.Failure)"
         return
@@ -5353,6 +5470,10 @@ function Get-DocumentMetadataRangeTransitionFailure {
     # The ordered transition records to validate. Optional date and published-
     # revision requirements default to true when absent.
     #
+    # .PARAMETER MetadataRequired
+    # Indicates whether each current document must carry metadata. When false,
+    # metadata is optional but receives full validation when present.
+    #
     # .EXAMPLE
     # Get-DocumentMetadataRangeTransitionFailure -Name 'AGENTS.md' `
     #     -TransitionContext $arrTransitions
@@ -5371,7 +5492,7 @@ function Get-DocumentMetadataRangeTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.1.20260909.0
+    # Version: 1.2.20260912.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -5380,7 +5501,10 @@ function Get-DocumentMetadataRangeTransitionFailure {
 
         [Parameter(Mandatory)]
         [AllowEmptyCollection()]
-        [pscustomobject[]] $TransitionContext
+        [pscustomobject[]] $TransitionContext,
+
+        [Parameter()]
+        [bool] $MetadataRequired = $true
     )
 
     foreach ($objTransition in $TransitionContext) {
@@ -5407,7 +5531,8 @@ function Get-DocumentMetadataRangeTransitionFailure {
                 -ExpectedUtcDate $objTransition.ExpectedUtcDate `
                 -IsNewDocumentTransition ($null -eq $objTransition.ParentContent) `
                 -RequireExpectedUtcDateForRenderedChange $boolRequireExpectedUtcDate `
-                -RequirePublishedRevisionConvention $boolRequirePublishedRevision)
+                -RequirePublishedRevisionConvention $boolRequirePublishedRevision `
+                -MetadataRequired $MetadataRequired)
         foreach ($strFailure in $arrTransitionFailures) {
             Write-Output (
                 "$Name transition $($objTransition.ParentRevision).." +
@@ -5619,7 +5744,8 @@ function Get-GovernedDocumentCommitTransitionFailure {
     # The exact commit whose direct transition is validated.
     #
     # .PARAMETER RequireMetadataTransition
-    # Indicates that visible document metadata must be validated after Git safety checks.
+    # Indicates that visible document metadata is required after Git safety checks.
+    # When false, metadata is optional but receives full validation when present.
     #
     # .PARAMETER TrustedFinalizationTimestamp
     # The authenticated workflow-run creation time for the published transition.
@@ -5643,7 +5769,7 @@ function Get-GovernedDocumentCommitTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.2.20260909.0
+    # Version: 1.3.20260912.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -5793,13 +5919,10 @@ function Get-GovernedDocumentCommitTransitionFailure {
             })
     }
 
-    if (-not $RequireMetadataTransition) {
-        return [string[]] @()
-    }
-
     return Get-DocumentMetadataRangeTransitionFailure `
         -Name $Name `
-        -TransitionContext $listTransitions.ToArray()
+        -TransitionContext $listTransitions.ToArray() `
+        -MetadataRequired $RequireMetadataTransition
 }
 
 function Get-GovernedDocumentRangeTransitionFailure {
@@ -5851,7 +5974,8 @@ function Get-GovernedDocumentRangeTransitionFailure {
     # The literal that identifies the policy introduction.
     #
     # .PARAMETER RequireMetadataTransition
-    # Indicates that visible document metadata must be validated after Git safety checks.
+    # Indicates that visible document metadata is required after Git safety checks.
+    # When false, metadata is optional but receives full validation when present.
     #
     # .EXAMPLE
     # Get-GovernedDocumentRangeTransitionFailure -Name 'AGENTS.md' `
@@ -5875,7 +5999,7 @@ function Get-GovernedDocumentRangeTransitionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.10.20260911.0
+    # Version: 1.11.20260912.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -6369,10 +6493,6 @@ function Get-GovernedDocumentRangeTransitionFailure {
         }
     }
 
-    if (-not $RequireMetadataTransition) {
-        return [string[]] @()
-    }
-
     $strCurrentContent = Read-GitRevisionText `
         -RepositoryRootPath $RepositoryRootPath `
         -Revision $HeadRevision `
@@ -6420,7 +6540,8 @@ function Get-GovernedDocumentRangeTransitionFailure {
     }
     return Get-DocumentMetadataRangeTransitionFailure `
         -Name $Name `
-        -TransitionContext @($objPublishedTransition)
+        -TransitionContext @($objPublishedTransition) `
+        -MetadataRequired $RequireMetadataTransition
 }
 
 function Get-TomlSemanticStatementContext {
@@ -7923,6 +8044,14 @@ foreach ($strDiscoveredGovernedMarkdownPath in
         RequiresMetadata = $true
     }
 }
+foreach ($strMetadataOptionalMarkdownDocument in
+    $arrMetadataExemptMarkdownDocuments) {
+    $arrGovernedNonInstructionDocuments += [pscustomobject]@{
+        Path = $strMetadataOptionalMarkdownDocument
+        MaximumBytes = $intValidatorMaximumInputBytes
+        RequiresMetadata = $false
+    }
+}
 $arrGovernedMetadataDocuments = @(
     $arrGovernedInstructionDocuments
     $arrGovernedNonInstructionDocuments
@@ -8224,8 +8353,7 @@ foreach ($objDocumentContext in $listGovernedDocumentContexts) {
     if ([string]::IsNullOrEmpty($RangeBaseRevision) -and
         [string]::IsNullOrEmpty($RangeHeadRevision)) {
         if ($boolUseLocalWorktreeRange) {
-            if ($objDocumentContext.RequiresMetadata -and
-                $objDocumentContext.IsWorktreeTransition) {
+            if ($objDocumentContext.IsWorktreeTransition) {
                 $arrRepositoryFailures += @(Get-DocumentMetadataTransitionFailure `
                         -Name $objDocumentContext.Path `
                         -CurrentContent $objDocumentContext.Content `
@@ -8233,12 +8361,12 @@ foreach ($objDocumentContext in $listGovernedDocumentContexts) {
                         -ExpectedUtcDate $objDocumentContext.ExpectedUtcDate `
                         -IsNewDocumentTransition (
                             $null -eq $objDocumentContext.ParentContent
-                        ))
+                        ) `
+                        -MetadataRequired $objDocumentContext.RequiresMetadata)
             }
         }
-        elseif ($objDocumentContext.RequiresMetadata -and
-            ($objDocumentContext.IsWorktreeTransition -or
-                -not $boolNoRangeCommitHasParent)) {
+        elseif ($objDocumentContext.IsWorktreeTransition -or
+            -not $boolNoRangeCommitHasParent) {
             $arrRepositoryFailures += @(Get-DocumentMetadataTransitionFailure `
                     -Name $objDocumentContext.Path `
                     -CurrentContent $objDocumentContext.Content `
@@ -8247,7 +8375,8 @@ foreach ($objDocumentContext in $listGovernedDocumentContexts) {
                     -IsNewDocumentTransition (
                         $null -eq $objDocumentContext.ParentContent -and
                         -not [string]::IsNullOrEmpty($objDocumentContext.ExpectedUtcDate)
-                    ))
+                    ) `
+                    -MetadataRequired $objDocumentContext.RequiresMetadata)
         }
         else {
             $arrRepositoryFailures += @(Get-GovernedDocumentCommitTransitionFailure `
@@ -8355,6 +8484,27 @@ if ($SelfTest) {
         )
     }
 
+    $objLiveLauncherPython = Get-Python312CommandContext `
+        -WindowsPlatform ([bool]$IsWindows)
+    if ($null -eq $objLiveLauncherPython) {
+        throw 'The locked Python launcher flag fixture requires Python 3.12.'
+    }
+    $arrLiveLauncherFlagOutput = @(
+        & $objLiveLauncherPython.Path `
+            @($objLiveLauncherPython.PrefixArgument) `
+            -E -P -c `
+            'import sys; print(int(sys.flags.ignore_environment), int(sys.flags.safe_path), int(sys.flags.no_user_site), int(sys.flags.isolated))'
+    )
+    $intLiveLauncherFlagExitCode = $LASTEXITCODE
+    if ($intLiveLauncherFlagExitCode -ne 0 -or
+        $arrLiveLauncherFlagOutput.Count -ne 1 -or
+        $arrLiveLauncherFlagOutput[0] -cne '1 1 0 0') {
+        throw (
+            'The locked Python launcher flags must ignore Python environment ' +
+            'variables and unsafe paths without disabling the user site.'
+        )
+    }
+
     $objPythonSelectionFixtureDirectory =
         [System.IO.Directory]::CreateTempSubdirectory(
             'terraform-style-guide-python-selection-'
@@ -8365,8 +8515,8 @@ if ($SelfTest) {
                 (Join-Path $objPythonSelectionFixtureDirectory.FullName 'py.cmd'),
                 (@(
                         '@echo off'
-                        'if "%~1"=="-3.12" if "%~2"=="-I" if "%~3"=="-c" ('
-                        '  if "%~5"=="" ('
+                        'if "%~1"=="-3.12" if "%~2"=="-E" if "%~3"=="-P" if "%~4"=="-c" ('
+                        '  if "%~6"=="" ('
                         '    echo 3.12'
                         '    exit /b 0'
                         '  )'
@@ -8382,11 +8532,11 @@ if ($SelfTest) {
                         'python3.12.cmd'),
                 (@(
                         '@echo off'
-                        'if "%~1"=="-I" if "%~2"=="-c" ('
-                        '  if "%~4"=="" echo 3.12'
+                        'if "%~1"=="-E" if "%~2"=="-P" if "%~3"=="-c" ('
+                        '  if "%~5"=="" echo 3.12'
                         '  exit /b 0'
                         ')'
-                        'if "%~1"=="-I" if "%~2"=="-m" ('
+                        'if "%~1"=="-E" if "%~2"=="-P" if "%~3"=="-m" ('
                         '  echo selected-equivalent'
                         '  exit /b 0'
                         ')'
@@ -8406,11 +8556,11 @@ if ($SelfTest) {
                 $strMissingModuleApplicationPath,
                 (@(
                         '#!/bin/sh'
-                        'if [ "$1" = "-I" ] && [ "$2" = "-c" ] && [ "$#" -eq 3 ]; then'
+                        'if [ "$1" = "-E" ] && [ "$2" = "-P" ] && [ "$3" = "-c" ] && [ "$#" -eq 4 ]; then'
                         '  printf "3.12\n"'
                         '  exit 0'
                         'fi'
-                        'if [ "$1" = "-I" ] && [ "$2" = "-c" ] && [ "$#" -eq 4 ]; then'
+                        'if [ "$1" = "-E" ] && [ "$2" = "-P" ] && [ "$3" = "-c" ] && [ "$#" -eq 5 ]; then'
                         '  exit 1'
                         'fi'
                         'exit 97'
@@ -8421,11 +8571,11 @@ if ($SelfTest) {
                 $strValidEquivalentApplicationPath,
                 (@(
                         '#!/bin/sh'
-                        'if [ "$1" = "-I" ] && [ "$2" = "-c" ]; then'
-                        '  if [ "$#" -eq 3 ]; then printf "3.12\n"; fi'
+                        'if [ "$1" = "-E" ] && [ "$2" = "-P" ] && [ "$3" = "-c" ]; then'
+                        '  if [ "$#" -eq 4 ]; then printf "3.12\n"; fi'
                         '  exit 0'
                         'fi'
-                        'if [ "$1" = "-I" ] && [ "$2" = "-m" ]; then'
+                        'if [ "$1" = "-E" ] && [ "$2" = "-P" ] && [ "$3" = "-m" ]; then'
                         '  printf "selected-equivalent\n"'
                         '  exit 0'
                         'fi'
@@ -9548,6 +9698,182 @@ if ($SelfTest) {
         }
     }
 
+    $strOptionalUpdatedDate = $script:strMaximumMetadataUtcDate
+    $strOptionalVersionDate = $strOptionalUpdatedDate.Replace('-', '')
+    $strOptionalNoMetadata = @(
+        '# Optional metadata fixture'
+        ''
+        'Body.'
+    ) -join "`n"
+    $strOptionalValidMetadata = @(
+        '# Optional metadata fixture'
+        ''
+        "**Version:** 1.0.$strOptionalVersionDate.0"
+        ''
+        '## Metadata'
+        ''
+        '- **Status:** Active'
+        '- **Owner:** Repository Maintainers'
+        "- **Last Updated:** $strOptionalUpdatedDate"
+        '- **Scope:** Optional metadata transition fixture.'
+        ''
+        'Body.'
+    ) -join "`n"
+    $strOptionalFencedExample = @(
+        '# Optional metadata fixture'
+        ''
+        '```markdown'
+        '## Metadata'
+        ''
+        '- **Status:** Invalid'
+        '- **Owner:** Example'
+        '- **Last Updated:** 2000-01-01'
+        '- **Scope:** Example only.'
+        '```'
+    ) -join "`n"
+    foreach ($objOptionalMetadataAbsenceFixture in @(
+            [pscustomobject]@{
+                Name = 'document without metadata'
+                Content = $strOptionalNoMetadata
+            }
+            [pscustomobject]@{
+                Name = 'fenced metadata example'
+                Content = $strOptionalFencedExample
+            }
+        )) {
+        if (Test-DocumentMetadataHeaderIntent `
+                -Content $objOptionalMetadataAbsenceFixture.Content) {
+            throw (
+                'Optional metadata intent was detected in a ' +
+                "$($objOptionalMetadataAbsenceFixture.Name)."
+            )
+        }
+        $arrOptionalMetadataAbsenceFailures = @(
+            Get-DocumentMetadataTransitionFailure `
+                -Name 'README.md' `
+                -CurrentContent $objOptionalMetadataAbsenceFixture.Content `
+                -ParentContent $strOptionalValidMetadata `
+                -ExpectedUtcDate $strOptionalUpdatedDate `
+                -IsNewDocumentTransition $false `
+                -MetadataRequired $false
+        )
+        if ($arrOptionalMetadataAbsenceFailures.Count -ne 0) {
+            throw (
+                'A valid metadata-optional absence fixture failed: ' +
+                $objOptionalMetadataAbsenceFixture.Name
+            )
+        }
+    }
+    if (-not (Test-DocumentMetadataHeaderIntent `
+            -Content $strOptionalValidMetadata)) {
+        throw 'An operative optional metadata header was not detected.'
+    }
+    $arrOptionalAdoptionFailures = @(
+        Get-DocumentMetadataTransitionFailure `
+            -Name 'README.md' `
+            -CurrentContent $strOptionalValidMetadata `
+            -ParentContent $strOptionalNoMetadata `
+            -ExpectedUtcDate $strOptionalUpdatedDate `
+            -IsNewDocumentTransition $false `
+            -MetadataRequired $false
+    )
+    if ($arrOptionalAdoptionFailures.Count -ne 0) {
+        throw 'A valid optional metadata adoption failed.'
+    }
+    $strOptionalInvalidStatus = $strOptionalValidMetadata.Replace(
+        '- **Status:** Active',
+        '- **Status:** Invalid'
+    )
+    $strOptionalMissingScope = $strOptionalValidMetadata.Replace(
+        "- **Scope:** Optional metadata transition fixture.`n",
+        ''
+    )
+    $strOptionalMismatchedVersion = $strOptionalValidMetadata.Replace(
+        "**Version:** 1.0.$strOptionalVersionDate.0",
+        '**Version:** 1.0.20000101.0'
+    )
+    foreach ($objInvalidOptionalMetadataFixture in @(
+            [pscustomobject]@{
+                Name = 'invalid status'
+                Content = $strOptionalInvalidStatus
+                Failure = 'Status'
+            }
+            [pscustomobject]@{
+                Name = 'missing Scope'
+                Content = $strOptionalMissingScope
+                Failure = 'Scope'
+            }
+            [pscustomobject]@{
+                Name = 'unsynchronized Version'
+                Content = $strOptionalMismatchedVersion
+                Failure = 'Version and Last Updated'
+            }
+        )) {
+        $arrInvalidOptionalMetadataFailures = @(
+            Get-DocumentMetadataTransitionFailure `
+                -Name 'README.md' `
+                -CurrentContent $objInvalidOptionalMetadataFixture.Content `
+                -ParentContent $strOptionalNoMetadata `
+                -ExpectedUtcDate $strOptionalUpdatedDate `
+                -IsNewDocumentTransition $false `
+                -MetadataRequired $false
+        )
+        if (-not ($arrInvalidOptionalMetadataFailures -match
+                [regex]::Escape($objInvalidOptionalMetadataFixture.Failure))) {
+            throw (
+                'An invalid optional metadata fixture did not fail closed: ' +
+                $objInvalidOptionalMetadataFixture.Name
+            )
+        }
+    }
+    $strOptionalPastUpdatedDate =
+        $script:objValidationUtcNow.AddDays(-1).ToString('yyyy-MM-dd')
+    $strOptionalPastVersionDate = $strOptionalPastUpdatedDate.Replace('-', '')
+    $strOptionalPastMetadata = $strOptionalValidMetadata.Replace(
+        $strOptionalVersionDate,
+        $strOptionalPastVersionDate
+    ).Replace(
+        $strOptionalUpdatedDate,
+        $strOptionalPastUpdatedDate
+    )
+    $arrOptionalStaleTransitionFailures = @(
+        Get-DocumentMetadataTransitionFailure `
+            -Name 'README.md' `
+            -CurrentContent ($strOptionalPastMetadata + "`n`nChanged body.") `
+            -ParentContent $strOptionalPastMetadata `
+            -ExpectedUtcDate $strOptionalUpdatedDate `
+            -IsNewDocumentTransition $false `
+            -MetadataRequired $false
+    )
+    if (-not ($arrOptionalStaleTransitionFailures -match
+            'Last Updated must be')) {
+        throw 'An optional metadata transition with a stale date was accepted.'
+    }
+    $arrOptionalRemovalFailures = @(
+        Get-DocumentMetadataTransitionFailure `
+            -Name 'README.md' `
+            -CurrentContent $strOptionalNoMetadata `
+            -ParentContent $strOptionalValidMetadata `
+            -ExpectedUtcDate $strOptionalUpdatedDate `
+            -IsNewDocumentTransition $false `
+            -MetadataRequired $false
+    )
+    if ($arrOptionalRemovalFailures.Count -ne 0) {
+        throw 'A valid removal of optional metadata failed.'
+    }
+    $arrOptionalLegacyRepairFailures = @(
+        Get-DocumentMetadataTransitionFailure `
+            -Name 'README.md' `
+            -CurrentContent $strOptionalValidMetadata `
+            -ParentContent $strOptionalInvalidStatus `
+            -ExpectedUtcDate $strOptionalUpdatedDate `
+            -IsNewDocumentTransition $false `
+            -MetadataRequired $false
+    )
+    if ($arrOptionalLegacyRepairFailures.Count -ne 0) {
+        throw 'A valid repair of malformed optional metadata failed.'
+    }
+
     $strDocsStaleMetadataMutation = $strDocsInstructionsContent +
         [Environment]::NewLine + [Environment]::NewLine +
         'Rendered docs metadata transition mutation.'
@@ -10527,14 +10853,30 @@ if ($SelfTest) {
         $listGovernedDocumentContexts |
             Where-Object { -not $_.RequiresMetadata }
     )
-    if ($arrMetadataOptionalContexts.Count -ne 1 -or
-        $arrMetadataOptionalContexts[0].Path -cne '.github/copilot-instructions.md') {
-        throw 'Only the Copilot instruction document can omit visible metadata.'
+    $arrExpectedMetadataOptionalPaths = @(
+        '.github/copilot-instructions.md'
+        $arrMetadataExemptMarkdownDocuments
+    ) | Select-Object -Unique
+    if ($arrMetadataOptionalContexts.Count -ne
+        $arrExpectedMetadataOptionalPaths.Count) {
+        throw 'The governed metadata-optional document count is not exact.'
+    }
+    foreach ($strExpectedMetadataOptionalPath in
+        $arrExpectedMetadataOptionalPaths) {
+        if (@(
+                $arrMetadataOptionalContexts |
+                    Where-Object { $_.Path -ceq $strExpectedMetadataOptionalPath }
+            ).Count -ne 1) {
+            throw (
+                'A governed metadata-optional document is missing or duplicated: ' +
+                $strExpectedMetadataOptionalPath
+            )
+        }
     }
     $arrUnexpectedMetadataRequirements = @(
         $listGovernedDocumentContexts |
             Where-Object {
-                $_.Path -cne '.github/copilot-instructions.md' -and
+                $arrExpectedMetadataOptionalPaths -cnotcontains $_.Path -and
                 -not $_.RequiresMetadata
             }
     )
@@ -12641,6 +12983,51 @@ if ($SelfTest) {
         if ($arrMetadataOptionalNewRefFailures.Count -ne 0) {
             throw 'A safe metadata-optional new-ref Copilot range failed.'
         }
+        [System.IO.File]::WriteAllText(
+            $strMergeCopilotPath,
+            $strOptionalInvalidStatus,
+            $objUtf8WithoutBom
+        )
+        & git -C $strMergeFixtureRoot add -- '.github/copilot-instructions.md'
+        $strMergeCopilotInvalidMetadataTree =
+            ([string] (& git -C $strMergeFixtureRoot write-tree)).Trim()
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not create the invalid optional-metadata Copilot tree.'
+        }
+        $strMergeCopilotInvalidMetadataCommit = & $scriptBlockCreateMergeFixtureCommit `
+            -Tree $strMergeCopilotInvalidMetadataTree `
+            -Parents @($strMergeBaseCommit) `
+            -Timestamp ($strMergeHistoricalDate + 'T08:35:00Z') `
+            -Message 'invalid optional-metadata Copilot change'
+        $hashtableInvalidCopilotTransitionArguments = @{}
+        foreach ($strCopilotArgumentName in $hashtableCopilotTransitionArguments.Keys) {
+            $hashtableInvalidCopilotTransitionArguments[$strCopilotArgumentName] =
+                $hashtableCopilotTransitionArguments[$strCopilotArgumentName]
+        }
+        $hashtableInvalidCopilotTransitionArguments.HeadRevision =
+            $strMergeCopilotInvalidMetadataCommit
+        $hashtableInvalidCopilotTransitionArguments.InputRevision =
+            $strMergeCopilotInvalidMetadataCommit
+        $arrInvalidMetadataOptionalRangeFailures = @(
+            Get-GovernedDocumentRangeTransitionFailure `
+                @hashtableInvalidCopilotTransitionArguments `
+                -RequireMetadataTransition $false
+        )
+        if (-not ($arrInvalidMetadataOptionalRangeFailures -match 'Status')) {
+            throw 'An invalid present metadata header passed the optional range gate.'
+        }
+        $arrInvalidMetadataOptionalCommitFailures = @(
+            Get-GovernedDocumentCommitTransitionFailure `
+                -Name '.github/copilot-instructions.md' `
+                -RepositoryRootPath $strMergeFixtureRoot `
+                -RepositoryRelativePath '.github/copilot-instructions.md' `
+                -MaximumBytes $intInstructionDocumentMaximumInputBytes `
+                -CommitRevision $strMergeCopilotInvalidMetadataCommit `
+                -RequireMetadataTransition $false
+        )
+        if (-not ($arrInvalidMetadataOptionalCommitFailures -match 'Status')) {
+            throw 'An invalid present metadata header passed the optional commit gate.'
+        }
         & git -C $strMergeFixtureRoot read-tree $strMergeBaseTree
         if ($LASTEXITCODE -ne 0) {
             throw 'Could not restore the merge-transition fixture base tree.'
@@ -14533,6 +14920,36 @@ if ($SelfTest) {
             }
         }
     }
+    $scriptBlockGetPushTriggerFailures = {
+        param([string] $WorkflowContent)
+
+        $objTriggerMatch = [regex]::Match(
+            $WorkflowContent,
+            '(?ms)^  push:\r?\n(?<Body>.*?)(?=^(?:\S| {2}\S)|\z)'
+        )
+        if (-not $objTriggerMatch.Success) {
+            Write-Output 'Could not parse the push agent-validation trigger.'
+            return
+        }
+        if ($objTriggerMatch.Groups['Body'].Value -cmatch
+            '(?m)^    paths(?:-ignore)?:') {
+            Write-Output (
+                'The push agent-validation trigger must be unconditional ' +
+                'and must not use a path filter.'
+            )
+        }
+        $strExpectedPushBody =
+            "    branches:`n" +
+            '      - "**"'
+        $strNormalizedPushBody =
+            $objTriggerMatch.Groups['Body'].Value.Replace("`r`n", "`n").TrimEnd("`n")
+        if ($strNormalizedPushBody -cne $strExpectedPushBody) {
+            Write-Output (
+                'The push agent-validation trigger must cover all branches, ' +
+                'exclude tags, and contain no other filters.'
+            )
+        }
+    }
     $scriptBlockGetPullRequestTargetFailures = {
         param([string] $WorkflowContent)
 
@@ -14568,46 +14985,10 @@ if ($SelfTest) {
         }
     }
 
-    $arrRequiredTriggerPaths = @(
-        $script:arrCheckoutAttributePaths
-        $script:arrTrustRootPaths
-        $arrAgentSetupInputSpecs |
-            Where-Object { $_.Path -cnotmatch '\.(?:md|mdc)$' } |
-            ForEach-Object { $_.Path }
-        '.codex/config.toml'
-        '.github/document-metadata-classification.json'
-        '"**/*.md"'
-        '"**/*.mdc"'
-    ) | Select-Object -Unique
-    $arrConsumedTriggerPaths = @(
-        $script:arrTrustRootPaths
-        $arrAgentSetupInputSpecs |
-            Where-Object { $_.Path -cnotmatch '\.(?:md|mdc)$' } |
-            ForEach-Object { $_.Path }
-        '.codex/config.toml'
-        '.github/document-metadata-classification.json'
-        '"**/*.md"'
-        '"**/*.mdc"'
-    ) | Select-Object -Unique
-    $arrTriggerPathFailures = @(& $scriptBlockGetTriggerPathFailures `
-            -WorkflowContent $strAgentWorkflowContent `
-            -Trigger 'push' `
-            -RequiredPath $arrRequiredTriggerPaths)
-    if ($arrTriggerPathFailures.Count -gt 0) {
-        throw $arrTriggerPathFailures[0]
-    }
-    $objPushTriggerMatch = [regex]::Match(
-        $strAgentWorkflowContent,
-        '(?ms)^  push:\r?\n(?<Body>.*?)(?=^(?:\S| {2}\S)|\z)'
-    )
-    $objBranchFilterMatch = [regex]::Match(
-        $objPushTriggerMatch.Groups['Body'].Value,
-        '(?ms)^    branches:\r?\n(?<Branches>(?:      - [^\r\n]+\r?\n)+)'
-    )
-    if (-not $objBranchFilterMatch.Success -or
-        $objBranchFilterMatch.Groups['Branches'].Value -cnotmatch
-            '^      - "\*\*"\r?\n$') {
-        throw 'The push agent-validation trigger must cover all branches and exclude tags.'
+    $arrPushTriggerFailures = @(& $scriptBlockGetPushTriggerFailures `
+            -WorkflowContent $strAgentWorkflowContent)
+    if ($arrPushTriggerFailures.Count -gt 0) {
+        throw $arrPushTriggerFailures[0]
     }
     $arrPullRequestTargetFailures = @(& $scriptBlockGetPullRequestTargetFailures `
             -WorkflowContent $strAgentWorkflowContent)
@@ -14669,38 +15050,20 @@ if ($SelfTest) {
             }
         }
     }
-    foreach ($strTrigger in @('push')) {
-        $objTriggerMatch = [regex]::Match(
-            $strAgentWorkflowContent,
-            "(?ms)^  $strTrigger`:\r?\n(?<Body>.*?)(?=^(?:\S| {2}\S)|\z)"
+    $strPushBranchAnchor = '      - "**"' + "`n"
+    foreach ($strPushPathFilter in @('paths', 'paths-ignore')) {
+        $strFilteredPushWorkflow = $strAgentWorkflowContent.Replace(
+            $strPushBranchAnchor,
+            $strPushBranchAnchor + "    $strPushPathFilter`:`n      - AGENTS.md`n"
         )
-        foreach ($strConsumedTriggerPath in $arrConsumedTriggerPaths) {
-            $objPathLineMatch = [regex]::Match(
-                $objTriggerMatch.Groups['Body'].Value,
-                "(?m)^      - $([regex]::Escape($strConsumedTriggerPath))\r?\n"
-            )
-            if (-not $objPathLineMatch.Success) {
-                throw "Could not create the $strTrigger path-removal mutation."
-            }
-            $intPathLineIndex =
-                $objTriggerMatch.Groups['Body'].Index + $objPathLineMatch.Index
-            $strMutatedAgentWorkflowContent = $strAgentWorkflowContent.Remove(
-                $intPathLineIndex,
-                $objPathLineMatch.Length
-            )
-            $arrMutatedTriggerFailures = @(& $scriptBlockGetTriggerPathFailures `
-                    -WorkflowContent $strMutatedAgentWorkflowContent `
-                    -Trigger $strTrigger `
-                    -RequiredPath $arrRequiredTriggerPaths)
-            if (-not ($arrMutatedTriggerFailures -match [regex]::Escape(
-                        "$strTrigger must cover consumed validation path " +
-                        "$strConsumedTriggerPath once."
-                    ))) {
-                throw (
-                    "$strTrigger path-removal mutation was accepted: " +
-                    $strConsumedTriggerPath
-                )
-            }
+        if ($strFilteredPushWorkflow -ceq $strAgentWorkflowContent) {
+            throw "Could not create the push $strPushPathFilter mutation."
+        }
+        $arrFilteredPushFailures = @(& $scriptBlockGetPushTriggerFailures `
+                -WorkflowContent $strFilteredPushWorkflow)
+        if (-not ($arrFilteredPushFailures -match
+                'must be unconditional and must not use a path filter')) {
+            throw "The push $strPushPathFilter mutation did not fail closed."
         }
     }
     $strFilteredPullRequestTargetWorkflow = $strAgentWorkflowContent.Replace(

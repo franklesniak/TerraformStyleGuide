@@ -28,7 +28,7 @@
 #
 # .NOTES
 # This script does not support positional parameters.
-# Version: 1.0.20260911.2
+# Version: 1.0.20260912.0
 
 [CmdletBinding(PositionalBinding = $false)]
 param(
@@ -75,7 +75,7 @@ foreach ($objPythonCandidate in $arrPythonCandidate) {
 
     $arrPrefixArgument = @($objPythonCandidate.PrefixArgument)
     $arrVersionOutput = @(
-        & $objPythonApplication.Source @arrPrefixArgument -I -c `
+        & $objPythonApplication.Source @arrPrefixArgument -E -P -c `
             'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' `
             2>$null
     )
@@ -86,14 +86,14 @@ foreach ($objPythonCandidate in $arrPythonCandidate) {
         continue
     }
 
-    & $objPythonApplication.Source @arrPrefixArgument -I -c `
+    & $objPythonApplication.Source @arrPrefixArgument -E -P -c `
         'import importlib.util, sys; sys.exit(0 if importlib.util.find_spec(sys.argv[1]) else 1)' `
         $Module 2>$null
     if ($LASTEXITCODE -ne 0) {
         continue
     }
 
-    & $objPythonApplication.Source @arrPrefixArgument -I -m $Module @Argument
+    & $objPythonApplication.Source @arrPrefixArgument -E -P -m $Module @Argument
     exit $LASTEXITCODE
 }
 
