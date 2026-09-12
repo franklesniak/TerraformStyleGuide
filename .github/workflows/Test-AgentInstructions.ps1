@@ -14580,7 +14580,7 @@ if ($SelfTest) {
         '      await waitImplementation(publicationRetryDelaysMilliseconds[attempt]);',
         'async function readHeadPublication({',
         '  initialUrl.searchParams.set(''ref'', headRef);',
-        "  if (!['push', 'force_push', 'branch_creation'].includes(activity.activity_type)) {",
+        '  if (!publicationActivityTypes.includes(activity.activity_type)) {',
         "    'No exact head publication activity matches this revision and ref.',",
         '        `Repository-activity pagination exceeded ${maximumPageCount} pages.`,',
         '  return readHeadPublicationWithRetry({',
@@ -14604,6 +14604,21 @@ if ($SelfTest) {
                 $strFinalizationResolverLiteral
             )
         }
+    }
+    $strExpectedPublicationActivityTypes = @(
+        'const publicationActivityTypes = Object.freeze([',
+        "  'push',",
+        "  'force_push',",
+        "  'branch_creation',",
+        "  'pr_merge',",
+        "  'merge_queue_merge',",
+        ']);'
+    ) -join "`n"
+    if (-not $strFinalizationResolverContent.Contains(
+            $strExpectedPublicationActivityTypes,
+            [System.StringComparison]::Ordinal
+        )) {
+        throw 'The finalization-time resolver publication allowlist is not exact.'
     }
     foreach ($strProhibitedFinalizationResolverLiteral in @(
             'readHistoricalRuns',
@@ -14644,7 +14659,7 @@ if ($SelfTest) {
     if ($intFinalizationResolverSelfTestExit -ne 0 -or
         $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
         [string]$arrFinalizationResolverSelfTestOutput[0] -cne
-        'Finalization resolver self-tests passed: 36 fixtures.') {
+        'Finalization resolver self-tests passed: 39 fixtures.') {
         throw (
             'The finalization-time resolver self-test failed: ' +
             ($arrFinalizationResolverSelfTestOutput -join '; ')

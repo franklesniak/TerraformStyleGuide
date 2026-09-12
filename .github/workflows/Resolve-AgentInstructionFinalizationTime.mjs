@@ -13,6 +13,21 @@ const maximumPageCount = 20;
 const recordsPerPage = 100;
 const maximumClockSkewMilliseconds = 300_000;
 const publicationRetryDelaysMilliseconds = Object.freeze([250, 1_000, 2_000]);
+const knownActivityTypes = Object.freeze([
+  'push',
+  'force_push',
+  'branch_creation',
+  'branch_deletion',
+  'pr_merge',
+  'merge_queue_merge',
+]);
+const publicationActivityTypes = Object.freeze([
+  'push',
+  'force_push',
+  'branch_creation',
+  'pr_merge',
+  'merge_queue_merge',
+]);
 
 class NoExactHeadPublicationError extends Error {}
 
@@ -107,20 +122,12 @@ function readNextActivityUrl(link, initialUrl) {
 }
 
 function validateRepositoryActivity(activity, expected, currentCreatedTime) {
-  const knownActivityTypes = [
-    'push',
-    'force_push',
-    'branch_creation',
-    'branch_deletion',
-    'pr_merge',
-    'merge_queue_merge',
-  ];
   if (!Number.isSafeInteger(activity?.id) || activity.id <= 0 ||
       !knownActivityTypes.includes(activity?.activity_type) ||
       activity?.ref !== expected.ref) {
     throw new Error('A head repository activity has an unexpected identity.');
   }
-  if (!['push', 'force_push', 'branch_creation'].includes(activity.activity_type)) {
+  if (!publicationActivityTypes.includes(activity.activity_type)) {
     return null;
   }
   if (!objectIdPattern.test(activity?.before ?? '') ||
@@ -507,6 +514,46 @@ export async function runSelfTest() {
     'direct push preserves the preceding UTC publication date',
     ordinaryTimestamp,
     '2026-09-10T23:59:55Z',
+  );
+
+  for (const [activityType, timestamp] of [
+    ['pr_merge', '2026-09-10T23:59:54Z'],
+    ['merge_queue_merge', '2026-09-10T23:59:53Z'],
+  ]) {
+    const mergePublicationTimestamp = await resolveFinalizationTimestamp({
+      ...base,
+      eventName: 'push',
+      now: Date.parse('2026-09-11T00:01:00Z'),
+      fetchImplementation: makeFixtureFetch({
+        current: makeRun({
+          event: 'push',
+          created_at: '2026-09-11T00:00:05Z',
+        }),
+        repositoryActivities: [makeActivity({
+          activity_type: activityType,
+          timestamp,
+        })],
+      }),
+    });
+    assertEqual(
+      `${activityType} is accepted as an exact publication`,
+      mergePublicationTimestamp,
+      timestamp,
+    );
+  }
+
+  await reject(
+    'branch deletion is not accepted as a publication',
+    () => resolveFinalizationTimestamp({
+      ...base,
+      eventName: 'push',
+      fetchImplementation: makeFixtureFetch({
+        current: makeRun({ event: 'push' }),
+        repositoryActivities: [makeActivity({ activity_type: 'branch_deletion' })],
+      }),
+      waitImplementation: async () => {},
+    }),
+    /No exact head publication activity/u,
   );
 
   let delayedActivityRequests = 0;
