@@ -126,7 +126,7 @@ const PULL_REQUEST_BODY_IDENTITY_TRIGGER = Object.freeze({
 
 const PULL_REQUEST_BODY_IDENTITY_POLICY = Object.freeze({
   nodeVersion: '24.18.1',
-  acquireDigest: 'd4eaef56f6bda683bc5edb663fde6aa8fe8b8856f428e04fe9d410edf27f5189',
+  acquireDigest: 'fee95022828376d3c7893bb04d21d8c8d5448d33929c2c3fac0c896237c617dc',
   selfTestDigest: '1da1e1bc600de17e14d8813b0bcd64579369ef93ba6fabcacfe69da22eed0172',
   checkEventDigest: 'fe37f056e253ac3fb5d0a40ccda11e40788b8f6477945293a7a38c0f5c255c25',
 });
@@ -3146,9 +3146,11 @@ export function validateMarkdownPolicy(workflow, source) {
   validateActionMultiset(source, []);
 }
 
-// This workflow reads the proposed pull-request head as bounded inert Git
-// objects. It executes only the trusted identity command, in an action-free
-// job with no token scope and an exact verified Node distribution. Named assertions precede the closing step digests so
+// This workflow reads exact proposed-head metadata without ancestor history,
+// then acquires only fixed, byte-bounded role blobs as inert Git objects. It
+// executes only the trusted identity command, in an action-free job with no
+// token scope and an exact verified Node distribution. Named
+// assertions precede the closing step digests so
 // mutations report the policy property they violate instead of only reporting
 // that bytes changed.
 export function validatePullRequestBodyIdentityPolicy(workflow, source) {
@@ -3245,7 +3247,7 @@ export function validatePullRequestBodyIdentityPolicy(workflow, source) {
       'if (-not [System.IO.File]::Exists($strTrustedCommandPath) -or\n' +
       '    -not [System.IO.File]::Exists($strTrustedCasesPath)) {'],
     ['an anonymous fetch of the exact proposed head',
-      '& $strGitPath --no-replace-objects -c core.fsmonitor=false fetch --filter=blob:none --depth 65 --no-tags --no-recurse-submodules proposed $strHeadSha'],
+      '& $strGitPath --no-replace-objects -c core.fsmonitor=false fetch --filter=blob:none --depth 1 --no-tags --no-recurse-submodules proposed $strHeadSha'],
     ['an exact detached object HEAD',
       '& $strGitPath --no-replace-objects -c core.fsmonitor=false update-ref --no-deref HEAD $strFetchedHead'],
     ['the object commit identity',
@@ -3270,7 +3272,7 @@ export function validatePullRequestBodyIdentityPolicy(workflow, source) {
   }
 
   const transferLiterals = [
-    'fetch --filter=blob:none --depth 65 --no-tags --no-recurse-submodules proposed $strHeadSha',
+    'fetch --filter=blob:none --depth 1 --no-tags --no-recurse-submodules proposed $strHeadSha',
     "$env:GIT_NO_LAZY_FETCH = '1'",
     'https://raw.githubusercontent.com/$strHeadRepository/$strHeadSha/$strEscapedPath',
     '--connect-timeout 15 --max-time 60',
@@ -3294,7 +3296,7 @@ export function validatePullRequestBodyIdentityPolicy(workflow, source) {
     transferLiterals.some((literal) => !acquire.run.includes(literal))
     || (acquire.run.match(/hash-object --no-filters/gu) ?? []).length !== 2
     || (powerShellTokenView(acquire.run).match(/Add-ProposedBlob\b/gu) ?? []).length !== 2
-    || /fetch --depth 65 --no-tags --no-recurse-submodules proposed/gu.test(acquire.run)
+    || /fetch --depth 1 --no-tags --no-recurse-submodules proposed/gu.test(acquire.run)
   ) {
     reject('identity-transfer-policy', 'pull-request-body-identity bounded transfer contract changed');
   }
@@ -4857,11 +4859,11 @@ const PULL_REQUEST_BODY_IDENTITY_FIXTURES = Object.freeze([
   ['T3-IDENTITY-027', "identity-proposed-checkout-reintroduced",
     (source) => replaceOnce(source, "& $strGitPath --no-replace-objects -c core.fsmonitor=false update-ref --no-deref HEAD $strFetchedHead", "& $strGitPath --no-replace-objects -c core.fsmonitor=false checkout --quiet --detach FETCH_HEAD"),
     "identity-acquire-policy: pull-request-body-identity.acquire no longer asserts an exact detached object HEAD"],
-  ['T3-IDENTITY-028', "identity-proposed-history-depth-weakened",
-    (source) => replaceOnce(source, "fetch --filter=blob:none --depth 65 --no-tags --no-recurse-submodules proposed $strHeadSha", "fetch --filter=blob:none --depth 1 --no-tags --no-recurse-submodules proposed $strHeadSha"),
+  ['T3-IDENTITY-028', "identity-proposed-history-depth-expanded",
+    (source) => replaceOnce(source, "fetch --filter=blob:none --depth 1 --no-tags --no-recurse-submodules proposed $strHeadSha", "fetch --filter=blob:none --depth 65 --no-tags --no-recurse-submodules proposed $strHeadSha"),
     "identity-acquire-policy: pull-request-body-identity.acquire no longer asserts an anonymous fetch of the exact proposed head"],
   ['T3-IDENTITY-029', "identity-proposed-blob-filter-removed",
-    (source) => replaceOnce(source, "fetch --filter=blob:none --depth 65 --no-tags --no-recurse-submodules proposed $strHeadSha", "fetch --depth 65 --no-tags --no-recurse-submodules proposed $strHeadSha"),
+    (source) => replaceOnce(source, "fetch --filter=blob:none --depth 1 --no-tags --no-recurse-submodules proposed $strHeadSha", "fetch --depth 1 --no-tags --no-recurse-submodules proposed $strHeadSha"),
     "identity-acquire-policy: pull-request-body-identity.acquire no longer asserts an anonymous fetch of the exact proposed head"],
   ['T3-IDENTITY-030', "identity-proposed-lazy-fetch-enabled",
     (source) => replaceOnce(source, "$env:GIT_NO_LAZY_FETCH = '1'", "$env:GIT_NO_LAZY_FETCH = '0'"),
