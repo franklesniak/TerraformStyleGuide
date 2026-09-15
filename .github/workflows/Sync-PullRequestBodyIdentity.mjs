@@ -10,7 +10,7 @@ import path from 'node:path';
 import { TextDecoder } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-const TOOL_VERSION = '1.0.20260915.1';
+const TOOL_VERSION = '1.0.20260915.2';
 const RESULT_SCHEMA = 'TerraformStyleGuide.PullRequestBodyIdentityResult.v1';
 const CASE_SCHEMA = 'TerraformStyleGuide.PullRequestBodyIdentityCases.v1';
 const IDENTITY_SCHEMA = 'TerraformStyleGuide.PullRequestBodyIdentity.v1';
@@ -1499,17 +1499,7 @@ function runJsonMutationSelfTests(baselineSnapshot) {
         setSnapshotBytes(formatted, repositoryPath, bytes);
       }
       // The identity reader binds the JSON bytes to the embedded validator.
-      const validator = formatted.files[SOURCE_PATHS.validator].bytes
-        .toString('utf8').replace(
-          /^(\s*'package(?:-lock)?\.json': ')[0-9a-f]{64}(',$)/gmu,
-          (_match, prefix, suffix) => {
-            const repositoryPath = prefix.includes('package-lock.json') ?
-              SOURCE_PATHS.workflowLock : SOURCE_PATHS.workflowPackage;
-            return `${prefix}${sha256(formatted.files[repositoryPath].bytes)}${suffix}`;
-          },
-        );
-      setSnapshotBytes(formatted, SOURCE_PATHS.validator,
-        Buffer.from(validator, 'utf8'));
+      bindSelfTestPackageDigests(formatted);
       deriveIdentity(formatted);
       for (const role of roles) {
         const isPackage = role === 'workflowPackage';
