@@ -10,7 +10,7 @@ import path from 'node:path';
 import { TextDecoder } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-const TOOL_VERSION = '1.0.20260915.0';
+const TOOL_VERSION = '1.0.20260915.1';
 const RESULT_SCHEMA = 'TerraformStyleGuide.PullRequestBodyIdentityResult.v1';
 const CASE_SCHEMA = 'TerraformStyleGuide.PullRequestBodyIdentityCases.v1';
 const IDENTITY_SCHEMA = 'TerraformStyleGuide.PullRequestBodyIdentity.v1';
@@ -1015,6 +1015,181 @@ function copySnapshot(snapshot) {
   };
 }
 
+function createSelfTestEntry(repositoryPath, text) {
+  const bytes = Buffer.from(text, 'utf8');
+  assert(bytes.length >= 1 && bytes.length <= 4096 &&
+    bytes.length <= SOURCE_LIMITS[repositoryPath],
+  'mutation-fixture-bound-self-test');
+  return {
+    path: repositoryPath,
+    mode: '100644',
+    blob: gitBlobId(bytes),
+    bytes,
+  };
+}
+
+function bindSelfTestPackageDigests(snapshot) {
+  const original = snapshot.files[SOURCE_PATHS.validator].bytes.toString('utf8');
+  const matches = [...original.matchAll(
+    /^(\s*'package(?:-lock)?\.json': ')[0-9a-f]{64}(',$)/gmu,
+  )];
+  assert(matches.length === 2, 'mutation-fixture-digest-self-test');
+  const updated = original.replace(
+    /^(\s*'package(?:-lock)?\.json': ')[0-9a-f]{64}(',$)/gmu,
+    (_match, prefix, suffix) => {
+      const repositoryPath = prefix.includes('package-lock.json') ?
+        SOURCE_PATHS.workflowLock : SOURCE_PATHS.workflowPackage;
+      return `${prefix}${sha256(snapshot.files[repositoryPath].bytes)}${suffix}`;
+    },
+  );
+  setSnapshotBytes(snapshot, SOURCE_PATHS.validator,
+    Buffer.from(updated, 'utf8'));
+}
+
+function createMutationSelfTestSnapshot(baselineSnapshot) {
+  // Do not copy arbitrary accepted source sizes or semantic values into the
+  // bounded mutation-only fixture.
+  const generatorVersion = '1.0.20260915.0';
+  const nodeVersion = '24.18.1';
+  const nodeDigest =
+    'D6C664DF3F3F61458E8C277585571328522D705166723A7C7823A9253A4D15A0';
+  const packageVersion = '1.0.0';
+  const workflowPackage = `${JSON.stringify({
+    name: 'terraformstyleguide',
+    version: packageVersion,
+    private: true,
+    devDependencies: { sentinel: '1.2.3' },
+    agentTest: { nested: ['keep', { value: true }] },
+  }, null, 2)}\n`;
+  const workflowLock = `${JSON.stringify({
+    name: 'terraformstyleguide',
+    version: packageVersion,
+    lockfileVersion: 3,
+    packages: {
+      '': { name: 'terraformstyleguide', version: packageVersion },
+      'node_modules/sentinel': {
+        name: 'terraformstyleguide',
+        version: '1.2.3',
+        integrity: 'keep',
+      },
+    },
+    agentTest: { nested: ['keep', { value: true }] },
+  }, null, 2)}\n`;
+  const validator = [
+    `const EXPECTED_VERSION = '${generatorVersion}';`,
+    `const REVIEWED_NODE_ARCHIVE_SHA256 = '${nodeDigest}';`,
+    `  'package.json': '${'0'.repeat(64)}',`,
+    `  'package-lock.json': '${'0'.repeat(64)}',`,
+    '',
+  ].join('\n');
+  const markdown = [
+    `$strNodeUrl = 'https://nodejs.org/dist/v${nodeVersion}/node-v${nodeVersion}-linux-x64.tar.xz'`,
+    `$strReviewedNodeSha256 = '${nodeDigest}'`,
+    `$strNodeUrl = 'https://nodejs.org/dist/v${nodeVersion}/node-v${nodeVersion}-linux-x64.tar.xz'`,
+    `$strReviewedNodeSha256 = '${nodeDigest}'`,
+    '',
+  ].join('\n');
+  const texts = {
+    [SOURCE_PATHS.generator]:
+      `$script:strGeneratorVersion = '${generatorVersion}'\n`,
+    [SOURCE_PATHS.build]:
+      `'Name' = 'GeneratorVersion'; 'Valid' = $objGeneratorResult.GeneratorVersion -ceq '${generatorVersion}'\n`,
+    [SOURCE_PATHS.validator]: validator,
+    [SOURCE_PATHS.supplyFreeze]: `const REVIEWED_NODE = 'v${nodeVersion}';\n`,
+    [SOURCE_PATHS.workflowPackage]: workflowPackage,
+    [SOURCE_PATHS.workflowLock]: workflowLock,
+    [SOURCE_PATHS.markdown]: markdown,
+  };
+  const snapshot = {
+    repositoryRoot: baselineSnapshot.repositoryRoot,
+    commit: baselineSnapshot.commit,
+    tree: baselineSnapshot.tree,
+    files: Object.fromEntries(Object.entries(texts).map(
+      ([repositoryPath, text]) => [
+        repositoryPath,
+        createSelfTestEntry(repositoryPath, text),
+      ],
+    )),
+  };
+  bindSelfTestPackageDigests(snapshot);
+  deriveIdentity(snapshot);
+  return snapshot;
+}
+
+function setSelfTestJsonAtLimit(snapshot, repositoryPath) {
+  const value = JSON.parse(snapshot.files[repositoryPath].bytes.toString('utf8'));
+  const propertyValue = repositoryPath === SOURCE_PATHS.workflowLock
+    ? (padding) => {
+      const split = Math.ceil(padding.length / 2);
+      return [padding.slice(0, split), padding.slice(split)];
+    }
+    : (padding) => padding;
+  value.codexPadding = propertyValue('');
+  const empty = `${JSON.stringify(value)}\n`;
+  const paddingLength = SOURCE_LIMITS[repositoryPath] -
+    Buffer.byteLength(empty, 'utf8');
+  assert(paddingLength >= 1, 'mutation-fixture-limit-self-test');
+  value.codexPadding = propertyValue('x'.repeat(paddingLength));
+  const bytes = Buffer.from(`${JSON.stringify(value)}\n`, 'utf8');
+  assert(bytes.length === SOURCE_LIMITS[repositoryPath],
+    'mutation-fixture-limit-self-test');
+  setSnapshotBytes(snapshot, repositoryPath, bytes);
+  bindSelfTestPackageDigests(snapshot);
+}
+
+function setSelfTestTextAtLimit(snapshot, repositoryPath, commentPrefix) {
+  const original = snapshot.files[repositoryPath].bytes;
+  const remaining = SOURCE_LIMITS[repositoryPath] - original.length;
+  assert(remaining > commentPrefix.length,
+    'mutation-fixture-limit-self-test');
+  setSnapshotBytes(snapshot, repositoryPath, Buffer.concat([
+    original,
+    Buffer.from(
+      `${commentPrefix}${'x'.repeat(remaining - commentPrefix.length - 1)}\n`,
+      'utf8',
+    ),
+  ]));
+}
+
+function runMutationBaselineIsolationSelfTests(boundedSnapshot, sourceCases) {
+  const scenarios = [
+    (snapshot) => setSelfTestJsonAtLimit(
+      snapshot,
+      SOURCE_PATHS.workflowPackage,
+    ),
+    (snapshot) => setSelfTestJsonAtLimit(
+      snapshot,
+      SOURCE_PATHS.workflowLock,
+    ),
+    (snapshot) => setSelfTestTextAtLimit(
+      snapshot,
+      SOURCE_PATHS.generator,
+      '#',
+    ),
+    (snapshot) => setSelfTestTextAtLimit(
+      snapshot,
+      SOURCE_PATHS.validator,
+      '//',
+    ),
+    (snapshot) => setSelfTestTextAtLimit(
+      snapshot,
+      SOURCE_PATHS.supplyFreeze,
+      '//',
+    ),
+  ];
+  const acceptedInputs = [boundedSnapshot];
+  for (const configure of scenarios) {
+    const acceptedAtLimit = copySnapshot(boundedSnapshot);
+    configure(acceptedAtLimit);
+    acceptedInputs.push(acceptedAtLimit);
+  }
+  return acceptedInputs.reduce(
+    (passed, acceptedInput) => passed +
+      runMutationSelfTestsForInput(acceptedInput, sourceCases),
+    0,
+  );
+}
+
 function setSnapshotBytes(snapshot, repositoryPath, bytes) {
   assert(Buffer.isBuffer(bytes) && bytes.length >= 1 &&
     bytes.length <= SOURCE_LIMITS[repositoryPath], 'source-mutation');
@@ -1425,6 +1600,31 @@ function runValidatorDigestMutationSelfTests(baselineSnapshot) {
   return passed;
 }
 
+function runSourceMutationSelfTests(baselineSnapshot, sourceCases) {
+  let passed = 0;
+  for (const testCase of sourceCases) {
+    let observed;
+    try {
+      deriveIdentity(mutatedSnapshot(baselineSnapshot, testCase.mutation));
+      observed = 'current';
+    } catch (error) {
+      if (!(error instanceof IdentityError)) throw error;
+      observed = error.category;
+    }
+    assert(observed === testCase.expected, `case-result-${testCase.id}`);
+    passed += 1;
+  }
+  return passed;
+}
+
+function runMutationSelfTestsForInput(acceptedInput, sourceCases) {
+  deriveIdentity(acceptedInput);
+  const boundedSnapshot = createMutationSelfTestSnapshot(acceptedInput);
+  return runJsonMutationSelfTests(boundedSnapshot) +
+    runValidatorDigestMutationSelfTests(boundedSnapshot) +
+    runSourceMutationSelfTests(boundedSnapshot, sourceCases);
+}
+
 async function runCaseCatalog(catalog, repositoryRoot) {
   const identity = fixtureIdentity();
   validateIdentity(identity);
@@ -1445,8 +1645,12 @@ async function runCaseCatalog(catalog, repositoryRoot) {
   passed += await runApiResponseEventSelfTests();
   passed += await runApiDeadlineSelfTests();
   const baselineSnapshot = collectSnapshot(repositoryRoot);
-  passed += runJsonMutationSelfTests(baselineSnapshot);
-  passed += runValidatorDigestMutationSelfTests(baselineSnapshot);
+  deriveIdentity(baselineSnapshot);
+  const mutationSnapshot = createMutationSelfTestSnapshot(baselineSnapshot);
+  passed += runMutationBaselineIsolationSelfTests(
+    mutationSnapshot,
+    catalog.sourceCases,
+  );
   const originalGitDirectory = process.env.GIT_DIR;
   try {
     process.env.GIT_DIR = path.join(repositoryRoot, 'invalid-git-directory');
@@ -1615,18 +1819,6 @@ async function runCaseCatalog(catalog, repositoryRoot) {
     fs.rmSync(resolved, { recursive: true, force: false });
   }
 
-  for (const testCase of catalog.sourceCases) {
-    let observed;
-    try {
-      deriveIdentity(mutatedSnapshot(baselineSnapshot, testCase.mutation));
-      observed = 'current';
-    } catch (error) {
-      if (!(error instanceof IdentityError)) throw error;
-      observed = error.category;
-    }
-    assert(observed === testCase.expected, `case-result-${testCase.id}`);
-    passed += 1;
-  }
   for (const testCase of catalog.bodyCases) {
     const body = fixtureBody(testCase.fixture, identity);
     let observed;
