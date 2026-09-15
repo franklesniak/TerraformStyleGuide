@@ -10,7 +10,7 @@ import path from 'node:path';
 import { TextDecoder } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-const TOOL_VERSION = '1.0.20260915.2';
+const TOOL_VERSION = '1.0.20260915.3';
 const RESULT_SCHEMA = 'TerraformStyleGuide.PullRequestBodyIdentityResult.v1';
 const CASE_SCHEMA = 'TerraformStyleGuide.PullRequestBodyIdentityCases.v1';
 const IDENTITY_SCHEMA = 'TerraformStyleGuide.PullRequestBodyIdentity.v1';
@@ -1590,12 +1590,137 @@ function runValidatorDigestMutationSelfTests(baselineSnapshot) {
   return passed;
 }
 
+function assertSourceMutation(baseline, mutated, mutation) {
+  // These embedded Node-supply cases have no PS identity-source counterpart.
+  // Keep their existing reader/category tests without importing another role map.
+  if (['supply-node-drift', 'supply-node-duplicate',
+    'markdown-node-url-drift', 'markdown-node-digest-drift',
+    'validator-node-digest-drift'].includes(mutation)) return;
+  const expected = Object.fromEntries(Object.entries(baseline.files).map(
+    ([repositoryPath, entry]) => [repositoryPath, Buffer.from(entry.bytes)],
+  ));
+  const generatorVersion = singleCapture(
+    expected[SOURCE_PATHS.generator].toString('utf8'),
+    /^\$script:strGeneratorVersion = '([^']+)'$/gmu,
+    'source-mutation-structure-self-test',
+  );
+  let jsonPath;
+  let expectedJson;
+  if (mutation === 'package-forbidden-key') {
+    jsonPath = SOURCE_PATHS.workflowPackage;
+    expectedJson = JSON.parse(expected[jsonPath]);
+    Object.defineProperty(expectedJson, '__proto__', {
+      value: {}, enumerable: true,
+    });
+  } else if (mutation === 'lock-package-name-drift') {
+    jsonPath = SOURCE_PATHS.workflowLock;
+    expectedJson = JSON.parse(expected[jsonPath]);
+    expectedJson.name = 'other-package';
+    expectedJson.packages[''].name = 'other-package';
+  } else if (mutation === 'package-malformed-json' ||
+    mutation === 'lock-malformed-json') {
+    const role = mutation === 'package-malformed-json' ? 'workflowPackage' :
+      'workflowLock';
+    expected[SOURCE_PATHS[role]] = Buffer.from('{\n');
+  } else if (mutation === 'generator-version-drift' ||
+    mutation === 'build-generator-drift' ||
+    mutation === 'validator-generator-drift') {
+    const role = mutation === 'generator-version-drift' ? 'generator' :
+      mutation === 'build-generator-drift' ? 'build' : 'validator';
+    const version = role === 'generator' ? '1.0.20260912.9' : '1.0.20000101.0';
+    expected[SOURCE_PATHS[role]] = Buffer.from(
+      expected[SOURCE_PATHS[role]].toString('utf8').replace(
+        generatorVersion, version,
+      ),
+    );
+  } else if (mutation === 'generator-duplicate-version' ||
+    mutation === 'validator-generator-duplicate') {
+    const role = mutation === 'generator-duplicate-version' ? 'generator' :
+      'validator';
+    const declaration = role === 'generator' ?
+      "$script:strGeneratorVersion = '1.0.20260912.9'\n" :
+      "const EXPECTED_VERSION = '1.0.20000101.0';\n";
+    expected[SOURCE_PATHS[role]] = Buffer.concat([
+      expected[SOURCE_PATHS[role]], Buffer.from(declaration),
+    ]);
+  } else if (mutation === 'generator-bom') {
+    expected[SOURCE_PATHS.generator] = Buffer.concat([
+      Buffer.from([0xef, 0xbb, 0xbf]), expected[SOURCE_PATHS.generator],
+    ]);
+  } else if (mutation === 'supply-crlf') {
+    const bytes = expected[SOURCE_PATHS.supplyFreeze];
+    const newline = bytes.indexOf(0x0a);
+    assert(newline >= 0, 'source-mutation-structure-self-test');
+    expected[SOURCE_PATHS.supplyFreeze] = Buffer.concat([
+      bytes.subarray(0, newline), Buffer.from([0x0d]), bytes.subarray(newline),
+    ]);
+  } else if (mutation === 'validator-package-digest-drift' ||
+    mutation === 'validator-lock-digest-drift') {
+    const role = mutation === 'validator-package-digest-drift' ?
+      'workflowPackage' : 'workflowLock';
+    expected[SOURCE_PATHS.validator] = Buffer.from(
+      expected[SOURCE_PATHS.validator].toString('utf8').replace(
+        sha256(expected[SOURCE_PATHS[role]]), '0'.repeat(64),
+      ),
+    );
+  } else {
+    assert(['none', 'source-wrong-mode', 'source-wrong-blob'].includes(mutation),
+      'source-mutation-structure-self-test');
+  }
+  for (const [repositoryPath, bytes] of Object.entries(expected)) {
+    const actual = mutated.files[repositoryPath];
+    const contentMatches = repositoryPath === jsonPath
+      ? canonicalJson(JSON.parse(actual.bytes)) === canonicalJson(expectedJson)
+      : actual.bytes.equals(bytes);
+    const isBuild = repositoryPath === SOURCE_PATHS.build;
+    assert(contentMatches && actual.path === repositoryPath &&
+      actual.mode === (isBuild && mutation === 'source-wrong-mode' ? '100755' :
+        baseline.files[repositoryPath].mode) &&
+      actual.blob === (isBuild && mutation === 'source-wrong-blob' ? '0'.repeat(40) :
+        gitBlobId(actual.bytes)), 'source-mutation-structure-self-test');
+  }
+}
+
+function runSourceMutationAssertionSelfTests(baselineSnapshot) {
+  const mutation = 'generator-duplicate-version';
+  const valid = mutatedSnapshot(baselineSnapshot, mutation);
+  assertSourceMutation(baselineSnapshot, valid, mutation);
+  const faults = [
+    (snapshot) => setSnapshotBytes(snapshot, SOURCE_PATHS.generator,
+      Buffer.from('# missing marker instead of duplicate\n')),
+    (snapshot) => setSnapshotBytes(snapshot, SOURCE_PATHS.generator,
+      Buffer.concat([snapshot.files[SOURCE_PATHS.generator].bytes,
+        Buffer.from('# unrelated test change\n')])),
+    (snapshot) => setSnapshotBytes(snapshot, SOURCE_PATHS.build,
+      Buffer.concat([snapshot.files[SOURCE_PATHS.build].bytes,
+        Buffer.from('# unrelated source change\n')])),
+    (snapshot) => { snapshot.files[SOURCE_PATHS.build].path = 'other.yml'; },
+    (snapshot) => { snapshot.files[SOURCE_PATHS.build].mode = '100755'; },
+    (snapshot) => { snapshot.files[SOURCE_PATHS.build].blob = '0'.repeat(40); },
+  ];
+  for (const configure of faults) {
+    const invalid = copySnapshot(valid);
+    configure(invalid);
+    let rejected = false;
+    try {
+      assertSourceMutation(baselineSnapshot, invalid, mutation);
+    } catch (error) {
+      if (!(error instanceof IdentityError)) throw error;
+      rejected = error.category === 'source-mutation-structure-self-test';
+    }
+    assert(rejected, 'source-mutation-assertion-self-test');
+  }
+  return faults.length + 1;
+}
+
 function runSourceMutationSelfTests(baselineSnapshot, sourceCases) {
   let passed = 0;
   for (const testCase of sourceCases) {
     let observed;
     try {
-      deriveIdentity(mutatedSnapshot(baselineSnapshot, testCase.mutation));
+      const mutated = mutatedSnapshot(baselineSnapshot, testCase.mutation);
+      assertSourceMutation(baselineSnapshot, mutated, testCase.mutation);
+      deriveIdentity(mutated);
       observed = 'current';
     } catch (error) {
       if (!(error instanceof IdentityError)) throw error;
@@ -1612,7 +1737,8 @@ function runMutationSelfTestsForInput(acceptedInput, sourceCases) {
   const boundedSnapshot = createMutationSelfTestSnapshot(acceptedInput);
   return runJsonMutationSelfTests(boundedSnapshot) +
     runValidatorDigestMutationSelfTests(boundedSnapshot) +
-    runSourceMutationSelfTests(boundedSnapshot, sourceCases);
+    runSourceMutationSelfTests(boundedSnapshot, sourceCases) +
+    runSourceMutationAssertionSelfTests(boundedSnapshot);
 }
 
 async function runCaseCatalog(catalog, repositoryRoot) {
