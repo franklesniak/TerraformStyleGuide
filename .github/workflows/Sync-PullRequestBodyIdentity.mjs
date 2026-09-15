@@ -10,7 +10,7 @@ import path from 'node:path';
 import { TextDecoder } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
-const TOOL_VERSION = '1.0.20260912.4';
+const TOOL_VERSION = '1.0.20260915.0';
 const RESULT_SCHEMA = 'TerraformStyleGuide.PullRequestBodyIdentityResult.v1';
 const CASE_SCHEMA = 'TerraformStyleGuide.PullRequestBodyIdentityCases.v1';
 const IDENTITY_SCHEMA = 'TerraformStyleGuide.PullRequestBodyIdentity.v1';
@@ -1031,20 +1031,36 @@ function mutateText(snapshot, repositoryPath, operation) {
   setSnapshotBytes(snapshot, repositoryPath, Buffer.from(updated, 'utf8'));
 }
 
+function mutateJson(snapshot, repositoryPath, operation) {
+  const value = JSON.parse(
+    snapshot.files[repositoryPath].bytes.toString('utf8'),
+  );
+  operation(value);
+  setSnapshotBytes(
+    snapshot,
+    repositoryPath,
+    Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8'),
+  );
+}
+
 function mutatedSnapshot(baseline, mutation) {
   const snapshot = copySnapshot(baseline);
   if (mutation === 'none') return snapshot;
   if (mutation === 'package-malformed-json') {
     setSnapshotBytes(snapshot, SOURCE_PATHS.workflowPackage, Buffer.from('{\n'));
   } else if (mutation === 'package-forbidden-key') {
-    mutateText(snapshot, SOURCE_PATHS.workflowPackage, (text) =>
-      text.replace('{\n', '{\n  "__proto__": {},\n'));
+    mutateJson(snapshot, SOURCE_PATHS.workflowPackage, (workflowPackage) => {
+      Object.defineProperty(workflowPackage, '__proto__', {
+        value: {}, enumerable: true,
+      });
+    });
   } else if (mutation === 'lock-malformed-json') {
     setSnapshotBytes(snapshot, SOURCE_PATHS.workflowLock, Buffer.from('{\n'));
   } else if (mutation === 'lock-package-name-drift') {
-    mutateText(snapshot, SOURCE_PATHS.workflowLock, (text) =>
-      text.replace(/"name": "terraformstyleguide"/gu,
-        '"name": "other-package"'));
+    mutateJson(snapshot, SOURCE_PATHS.workflowLock, (workflowLock) => {
+      workflowLock.name = 'other-package';
+      workflowLock.packages[''].name = 'other-package';
+    });
   } else if (mutation === 'generator-version-drift') {
     mutateText(snapshot, SOURCE_PATHS.generator, (text) => text.replace(
       /^\$script:strGeneratorVersion = '[^']+'$/mu,
@@ -1098,13 +1114,13 @@ function mutatedSnapshot(baseline, mutation) {
     ));
   } else if (mutation === 'validator-package-digest-drift') {
     mutateText(snapshot, SOURCE_PATHS.validator, (text) => text.replace(
-      /^  'package\.json': '[0-9a-f]{64}',$/mu,
-      `  'package.json': '${'0'.repeat(64)}',`,
+      /^(\s*'package\.json': ')[0-9a-f]{64}(',$)/mu,
+      (_match, prefix, suffix) => `${prefix}${'0'.repeat(64)}${suffix}`,
     ));
   } else if (mutation === 'validator-lock-digest-drift') {
     mutateText(snapshot, SOURCE_PATHS.validator, (text) => text.replace(
-      /^  'package-lock\.json': '[0-9a-f]{64}',$/mu,
-      `  'package-lock.json': '${'0'.repeat(64)}',`,
+      /^(\s*'package-lock\.json': ')[0-9a-f]{64}(',$)/mu,
+      (_match, prefix, suffix) => `${prefix}${'0'.repeat(64)}${suffix}`,
     ));
   } else if (mutation === 'source-wrong-mode') {
     snapshot.files[SOURCE_PATHS.build].mode = '100755';
@@ -1282,6 +1298,133 @@ async function runApiDeadlineSelfTests() {
   return 2;
 }
 
+function runJsonMutationSelfTests(baselineSnapshot) {
+  const baselinePackage = JSON.parse(
+    baselineSnapshot.files[SOURCE_PATHS.workflowPackage].bytes.toString('utf8'),
+  );
+  const baselineLock = JSON.parse(
+    baselineSnapshot.files[SOURCE_PATHS.workflowLock].bytes.toString('utf8'),
+  );
+  const representations = [
+    (value) => `${JSON.stringify(value, null, 2)}\n`,
+    (value) => `${JSON.stringify(value)}\n`,
+    (value) => `\n  ${JSON.stringify(value)}\n`,
+    (value) => `${JSON.stringify(value).replaceAll('"name":', '"\\u006eame":')}\n`,
+  ];
+  let passed = 0;
+  for (const roles of [
+    ['workflowPackage'], ['workflowLock'], ['workflowPackage', 'workflowLock'],
+  ]) {
+    for (const represent of representations) {
+      const formatted = copySnapshot(baselineSnapshot);
+      for (const role of roles) {
+        const repositoryPath = SOURCE_PATHS[role];
+        const value = role === 'workflowPackage' ? baselinePackage : baselineLock;
+        const bytes = Buffer.from(represent(value), 'utf8');
+        setSnapshotBytes(formatted, repositoryPath, bytes);
+      }
+      // The identity reader binds the JSON bytes to the embedded validator.
+      const validator = formatted.files[SOURCE_PATHS.validator].bytes
+        .toString('utf8').replace(
+          /^(\s*'package(?:-lock)?\.json': ')[0-9a-f]{64}(',$)/gmu,
+          (_match, prefix, suffix) => {
+            const repositoryPath = prefix.includes('package-lock.json') ?
+              SOURCE_PATHS.workflowLock : SOURCE_PATHS.workflowPackage;
+            return `${prefix}${sha256(formatted.files[repositoryPath].bytes)}${suffix}`;
+          },
+        );
+      setSnapshotBytes(formatted, SOURCE_PATHS.validator,
+        Buffer.from(validator, 'utf8'));
+      deriveIdentity(formatted);
+      for (const role of roles) {
+        const isPackage = role === 'workflowPackage';
+        const mutation = isPackage ? 'package-forbidden-key' :
+          'lock-package-name-drift';
+        const repositoryPath = SOURCE_PATHS[role];
+        const original = JSON.parse(
+          formatted.files[repositoryPath].bytes.toString('utf8'),
+        );
+        const mutated = mutatedSnapshot(formatted, mutation);
+        const badBytes = mutated.files[repositoryPath].bytes;
+        const badValue = JSON.parse(badBytes.toString('utf8'));
+        assert(!badBytes.equals(formatted.files[repositoryPath].bytes),
+          'json-mutation-bytes-self-test');
+        if (isPackage) {
+          assert(Object.hasOwn(badValue, '__proto__') &&
+            Object.prototype.propertyIsEnumerable.call(badValue, '__proto__'),
+          'forbidden-key-mutation-self-test');
+          delete badValue.__proto__;
+        } else {
+          assert(badValue.name === 'other-package' &&
+            badValue.packages[''].name === 'other-package',
+          'lock-name-mutation-self-test');
+          badValue.name = original.name;
+          badValue.packages[''].name = original.packages[''].name;
+        }
+        assert(canonicalJson(badValue) === canonicalJson(original),
+          'json-mutation-unrelated-data-self-test');
+        let rejected = false;
+        try {
+          deriveIdentity(mutated);
+        } catch (error) {
+          if (!(error instanceof IdentityError)) throw error;
+          rejected = error.category === (isPackage ? 'package-json' : 'lock-shape');
+        }
+        assert(rejected, 'json-mutation-category-self-test');
+        passed += 1;
+      }
+    }
+  }
+  return passed;
+}
+
+function runValidatorDigestMutationSelfTests(baselineSnapshot) {
+  let passed = 0;
+  for (const indentation of ['', '    ', '\t', '\n  ']) {
+    const formatted = copySnapshot(baselineSnapshot);
+    const original = formatted.files[SOURCE_PATHS.validator].bytes
+      .toString('utf8').replace(
+        /^[ \t]*('package(?:-lock)?\.json': '[0-9a-f]{64}',$)/gmu,
+        (_match, declaration) => `${indentation}${declaration}`,
+      );
+    setSnapshotBytes(formatted, SOURCE_PATHS.validator,
+      Buffer.from(original, 'utf8'));
+    deriveIdentity(formatted);
+    for (const [mutation, expression] of [
+      ['validator-package-digest-drift',
+        /^(\s*'package\.json': ')([0-9a-f]{64})(',$)/gmu],
+      ['validator-lock-digest-drift',
+        /^(\s*'package-lock\.json': ')([0-9a-f]{64})(',$)/gmu],
+    ]) {
+      const matches = [...original.matchAll(expression)];
+      assert(matches.length === 1, 'validator-digest-baseline-self-test');
+      const mutated = mutatedSnapshot(formatted, mutation);
+      const updated = mutated.files[SOURCE_PATHS.validator].bytes
+        .toString('utf8');
+      assert(updated !== original, 'validator-digest-bytes-self-test');
+      const changed = [...updated.matchAll(expression)];
+      assert(changed.length === 1 && changed[0][2] === '0'.repeat(64),
+        'validator-digest-value-self-test');
+      assert(updated.replace(expression,
+        (_match, prefix, _digest, suffix) =>
+          `${prefix}${matches[0][2]}${suffix}`) === original,
+      'validator-digest-unrelated-data-self-test');
+      let rejected = false;
+      try {
+        deriveIdentity(mutated);
+      } catch (error) {
+        if (!(error instanceof IdentityError)) throw error;
+        rejected = error.category === 'package-identity';
+      }
+      assert(rejected, 'validator-digest-category-self-test');
+      passed += 1;
+    }
+    // Exercise the coherent JSON-fixture rewrite on the same accepted grammar.
+    passed += runJsonMutationSelfTests(formatted);
+  }
+  return passed;
+}
+
 async function runCaseCatalog(catalog, repositoryRoot) {
   const identity = fixtureIdentity();
   validateIdentity(identity);
@@ -1302,6 +1445,8 @@ async function runCaseCatalog(catalog, repositoryRoot) {
   passed += await runApiResponseEventSelfTests();
   passed += await runApiDeadlineSelfTests();
   const baselineSnapshot = collectSnapshot(repositoryRoot);
+  passed += runJsonMutationSelfTests(baselineSnapshot);
+  passed += runValidatorDigestMutationSelfTests(baselineSnapshot);
   const originalGitDirectory = process.env.GIT_DIR;
   try {
     process.env.GIT_DIR = path.join(repositoryRoot, 'invalid-git-directory');
