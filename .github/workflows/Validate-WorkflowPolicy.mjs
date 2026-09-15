@@ -126,7 +126,7 @@ const PULL_REQUEST_BODY_IDENTITY_TRIGGER = Object.freeze({
 
 const PULL_REQUEST_BODY_IDENTITY_POLICY = Object.freeze({
   nodeVersion: '24.18.1',
-  acquireDigest: '0bb312633b52714e10220b99ffdf0d23ccfe7215b3d2b211887fbf39e1edccb1',
+  acquireDigest: 'fee95022828376d3c7893bb04d21d8c8d5448d33929c2c3fac0c896237c617dc',
   selfTestDigest: '1da1e1bc600de17e14d8813b0bcd64579369ef93ba6fabcacfe69da22eed0172',
   checkEventDigest: 'fe37f056e253ac3fb5d0a40ccda11e40788b8f6477945293a7a38c0f5c255c25',
 });
@@ -3146,10 +3146,11 @@ export function validateMarkdownPolicy(workflow, source) {
   validateActionMultiset(source, []);
 }
 
-// This workflow executes the proposed pull-request head. It therefore keeps
-// repository code in a job with no token scope and no JavaScript action, and
-// it acquires both the exact public head and the reviewed Node distribution
-// before that code runs. Named assertions precede the closing step digests so
+// This workflow reads exact proposed-head metadata without ancestor history,
+// then acquires only fixed, byte-bounded role blobs as inert Git objects. It
+// executes only the trusted identity command, in an action-free job with no
+// token scope and an exact verified Node distribution. Named
+// assertions precede the closing step digests so
 // mutations report the policy property they violate instead of only reporting
 // that bytes changed.
 export function validatePullRequestBodyIdentityPolicy(workflow, source) {
@@ -3246,19 +3247,20 @@ export function validatePullRequestBodyIdentityPolicy(workflow, source) {
       'if (-not [System.IO.File]::Exists($strTrustedCommandPath) -or\n' +
       '    -not [System.IO.File]::Exists($strTrustedCasesPath)) {'],
     ['an anonymous fetch of the exact proposed head',
-      '& $strGitPath --no-replace-objects -c core.fsmonitor=false fetch --depth 1 --no-tags --no-recurse-submodules proposed $strHeadSha'],
-    ['an exact detached checkout',
-      '& $strGitPath --no-replace-objects -c core.fsmonitor=false checkout --quiet --detach FETCH_HEAD'],
-    ['the checked-out commit identity',
+      '& $strGitPath --no-replace-objects -c core.fsmonitor=false fetch --filter=blob:none --depth 1 --no-tags --no-recurse-submodules proposed $strHeadSha'],
+    ['an exact detached object HEAD',
+      '& $strGitPath --no-replace-objects -c core.fsmonitor=false update-ref --no-deref HEAD $strFetchedHead'],
+    ['the object commit identity',
       "$strObservedHead = (& $strGitPath --no-replace-objects -c core.fsmonitor=false rev-parse --verify 'HEAD^{commit}').Trim()"],
-    ['the checked-out tree identity',
+    ['the object tree identity',
       "$strObservedTree = (& $strGitPath --no-replace-objects -c core.fsmonitor=false rev-parse --verify 'HEAD^{tree}').Trim()"],
     ['absence of replacement refs',
       "$arrReplacementRefs = @(& $strGitPath --no-replace-objects -c core.fsmonitor=false for-each-ref --format='%(refname)' refs/replace/)"],
     ['the exact observed head and ordinary tree',
       'if ($LASTEXITCODE -ne 0 -or $strObservedHead -cne $strHeadSha -or\n' +
       "    $strObservedTree -cnotmatch '^[0-9a-f]{40}$' -or\n" +
-      '    $arrReplacementRefs.Count -ne 0) {'],
+      '    $arrReplacementRefs.Count -ne 0 -or\n' +
+      '    $arrProposedWorktreeEntries.Count -ne 0) {'],
     ['unchanged proposed trust-root inputs',
       '[string]::Join("`n", $arrProposedEntries) -cne\n' +
       '    [string]::Join("`n", $arrTrustedEntries)) {'],
@@ -3267,6 +3269,36 @@ export function validatePullRequestBodyIdentityPolicy(workflow, source) {
     if (!acquire.run.includes(sequence)) {
       reject('identity-acquire-policy', `pull-request-body-identity.acquire no longer asserts ${requirement}`);
     }
+  }
+
+  const transferLiterals = [
+    'fetch --filter=blob:none --depth 1 --no-tags --no-recurse-submodules proposed $strHeadSha',
+    "$env:GIT_NO_LAZY_FETCH = '1'",
+    'https://raw.githubusercontent.com/$strHeadRepository/$strHeadSha/$strEscapedPath',
+    '--connect-timeout 15 --max-time 60',
+    '--speed-limit 1024 --speed-time 15',
+    '--max-filesize $longTransferLimit',
+    '--range "0-$MaximumBytes"',
+    '$MaximumBytes -gt 573440',
+    '$Sequence -lt 1 -or $Sequence -gt 24',
+    '$dictionaryProposedBlob.Count -gt 24',
+    '$longMaximumProposedBytes = 12599320',
+    '$longObservedProposedBytes -gt $longMaximumProposedBytes',
+    '$strObservedBlob.Trim() -cne $strTreeBlob',
+    '$strWrittenBlob.Trim() -cne $strTreeBlob',
+    'remote remove trusted',
+    'remote remove proposed',
+    "'^(remote\\..*|extensions\\.partialclone)$'",
+    '$intOfflineSelectorExit -ne 1',
+    '$arrOfflineSelector.Count -ne 0',
+  ];
+  if (
+    transferLiterals.some((literal) => !acquire.run.includes(literal))
+    || (acquire.run.match(/hash-object --no-filters/gu) ?? []).length !== 2
+    || (powerShellTokenView(acquire.run).match(/Add-ProposedBlob\b/gu) ?? []).length !== 2
+    || /fetch --depth 1 --no-tags --no-recurse-submodules proposed/gu.test(acquire.run)
+  ) {
+    reject('identity-transfer-policy', 'pull-request-body-identity bounded transfer contract changed');
   }
 
   const nodeSequences = [
@@ -3291,10 +3323,10 @@ export function validatePullRequestBodyIdentityPolicy(workflow, source) {
       reject('identity-node-policy', `pull-request-body-identity.acquire no longer asserts ${requirement}`);
     }
   }
-  if ((acquire.run.match(/& \$strCurlPath\b/gu) ?? []).length !== 1) {
+  if ((acquire.run.match(/& \$strCurlPath\b/gu) ?? []).length !== 2) {
     reject('identity-node-policy', 'pull-request-body-identity.acquire network request count changed');
   }
-  if (/(?:^|[;{}|])[	 ]*(?:exit|return|break|continue|trap)\b/imu.test(powerShellTokenView(acquire.run)) ||
+  if (/(?:^|[;{}|])[	 ]*(?:exit|return|break|continue|trap)\b/imu.test(powerShellTokenView(acquire.run.replace('return 0', '').replace('return $longObservedBytes', ''))) ||
       PROCESS_TERMINATION.test(acquire.run)) {
     reject('identity-acquire-policy', 'pull-request-body-identity.acquire adds bypass control flow');
   }
@@ -4824,6 +4856,48 @@ const PULL_REQUEST_BODY_IDENTITY_FIXTURES = Object.freeze([
       '[string]::Join("`n", $arrProposedEntries) -cne\n              [string]::Join("`n", $arrProposedEntries)',
     ),
     'identity-acquire-policy: pull-request-body-identity.acquire no longer asserts unchanged proposed trust-root inputs'],
+  ['T3-IDENTITY-027', "identity-proposed-checkout-reintroduced",
+    (source) => replaceOnce(source, "& $strGitPath --no-replace-objects -c core.fsmonitor=false update-ref --no-deref HEAD $strFetchedHead", "& $strGitPath --no-replace-objects -c core.fsmonitor=false checkout --quiet --detach FETCH_HEAD"),
+    "identity-acquire-policy: pull-request-body-identity.acquire no longer asserts an exact detached object HEAD"],
+  ['T3-IDENTITY-028', "identity-proposed-history-depth-expanded",
+    (source) => replaceOnce(source, "fetch --filter=blob:none --depth 1 --no-tags --no-recurse-submodules proposed $strHeadSha", "fetch --filter=blob:none --depth 65 --no-tags --no-recurse-submodules proposed $strHeadSha"),
+    "identity-acquire-policy: pull-request-body-identity.acquire no longer asserts an anonymous fetch of the exact proposed head"],
+  ['T3-IDENTITY-029', "identity-proposed-blob-filter-removed",
+    (source) => replaceOnce(source, "fetch --filter=blob:none --depth 1 --no-tags --no-recurse-submodules proposed $strHeadSha", "fetch --depth 1 --no-tags --no-recurse-submodules proposed $strHeadSha"),
+    "identity-acquire-policy: pull-request-body-identity.acquire no longer asserts an anonymous fetch of the exact proposed head"],
+  ['T3-IDENTITY-030', "identity-proposed-lazy-fetch-enabled",
+    (source) => replaceOnce(source, "$env:GIT_NO_LAZY_FETCH = '1'", "$env:GIT_NO_LAZY_FETCH = '0'"),
+    "identity-transfer-policy: pull-request-body-identity bounded transfer contract changed"],
+  ['T3-IDENTITY-031', "identity-proposed-raw-head-binding-weakened",
+    (source) => replaceOnce(source, "https://raw.githubusercontent.com/$strHeadRepository/$strHeadSha/$strEscapedPath", "https://raw.githubusercontent.com/$strHeadRepository/main/$strEscapedPath"),
+    "identity-transfer-policy: pull-request-body-identity bounded transfer contract changed"],
+  ['T3-IDENTITY-032', "identity-proposed-range-limit-weakened",
+    (source) => replaceOnce(source, "--range \"0-$MaximumBytes\"", "--range \"0-999999999\""),
+    "identity-transfer-policy: pull-request-body-identity bounded transfer contract changed"],
+  ['T3-IDENTITY-033', "identity-proposed-response-limit-weakened",
+    (source) => replaceOnce(source, "--max-filesize $longTransferLimit", "--max-filesize 999999999"),
+    "identity-transfer-policy: pull-request-body-identity bounded transfer contract changed"],
+  ['T3-IDENTITY-034', "identity-proposed-transfer-deadline-removed",
+    (source) => replaceOnce(source, "--connect-timeout 15 --max-time 60", "--connect-timeout 15"),
+    "identity-transfer-policy: pull-request-body-identity bounded transfer contract changed"],
+  ['T3-IDENTITY-035', "identity-proposed-path-count-weakened",
+    (source) => replaceOnce(source, "$dictionaryProposedBlob.Count -gt 24", "$dictionaryProposedBlob.Count -gt 240"),
+    "identity-policy: pull-request-body-identity acquire script does not match its reviewed digest"],
+  ['T3-IDENTITY-036', "identity-proposed-total-byte-limit-weakened",
+    (source) => replaceOnce(source, "$longMaximumProposedBytes = 12599320", "$longMaximumProposedBytes = 125993200"),
+    "identity-policy: pull-request-body-identity acquire script does not match its reviewed digest"],
+  ['T3-IDENTITY-037', "identity-proposed-blob-check-bypassed",
+    (source) => replaceOnce(source, "$strObservedBlob.Trim() -cne $strTreeBlob", "$false"),
+    "identity-transfer-policy: pull-request-body-identity bounded transfer contract changed"],
+  ['T3-IDENTITY-038', "identity-trusted-remote-removal-bypassed",
+    (source) => replaceOnce(source, "remote remove trusted", "remote get-url trusted"),
+    "identity-transfer-policy: pull-request-body-identity bounded transfer contract changed"],
+  ['T3-IDENTITY-039', "identity-proposed-remote-removal-bypassed",
+    (source) => replaceOnce(source, "remote remove proposed", "remote get-url proposed"),
+    "identity-transfer-policy: pull-request-body-identity bounded transfer contract changed"],
+  ['T3-IDENTITY-040', "identity-offline-selector-audit-narrowed",
+    (source) => replaceOnce(source, "'^(remote\\..*|extensions\\.partialclone)$'", () => "'^extensions\\.partialclone$'"),
+    "identity-transfer-policy: pull-request-body-identity bounded transfer contract changed"],
 ]);
 
 function runPullRequestBodyIdentityNegativeFixtures(identityWorkflowSource) {
