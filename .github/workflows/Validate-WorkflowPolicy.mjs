@@ -295,7 +295,7 @@ const REVIEWED_CREDENTIAL_STEP_DIGEST = 'e94b265f97f20d46df3bafcee77f546463f650c
 // individually below, but an inserted early exit satisfies every one of them
 // while skipping the probes entirely. The same backstop the Markdown step and
 // the former push step carry applies here for the same reason.
-const REVIEWED_VERIFY_STEP_DIGEST = 'e733062023ef746f828d68e6bd074beca588ab6a6c9b40f83ea00b3bac4d672e';
+const REVIEWED_VERIFY_STEP_DIGEST = '192f5e3b6352afd1b015113295e4ee81235659f7110a40301ff1e7840dfca42b';
 
 // Both jobs that run repository-controlled code now acquire their own revision
 // instead of using an action to do it, so neither contains a process holding
@@ -1879,6 +1879,122 @@ function invocationOperatorOffset(projectedLine) {
   return Math.min(intCall, intDot);
 }
 
+const GENERATOR_RESULT_CHECKS = Object.freeze([
+  Object.freeze({
+    label: 'NativeExit',
+    predicate: '$intGeneratorExit -is [int] -and $intGeneratorExit -eq 0',
+    actual: '$intGeneratorExit',
+  }),
+  Object.freeze({
+    label: 'Schema',
+    predicate: "$objGeneratorResult.Schema -is [string] -and $objGeneratorResult.Schema -ceq 'TerraformStyleGuide.GeneratorResult.v2'",
+    actual: '$objGeneratorResult.Schema',
+  }),
+  Object.freeze({
+    label: 'GeneratorVersion',
+    predicate: "$objGeneratorResult.GeneratorVersion -is [string] -and $objGeneratorResult.GeneratorVersion -ceq '1.0.20260818.2'",
+    actual: '$objGeneratorResult.GeneratorVersion',
+  }),
+  Object.freeze({
+    label: 'Overall',
+    predicate: "$objGeneratorResult.Overall -is [string] -and $objGeneratorResult.Overall -in @('Success', 'NoChange')",
+    actual: '$objGeneratorResult.Overall',
+  }),
+  Object.freeze({
+    label: 'Phase',
+    predicate: "$objGeneratorResult.Phase -is [string] -and $objGeneratorResult.Phase -ceq 'complete'",
+    actual: '$objGeneratorResult.Phase',
+  }),
+  Object.freeze({
+    label: 'Category',
+    predicate: "$objGeneratorResult.Category -is [string] -and $objGeneratorResult.Category -ceq 'none'",
+    actual: '$objGeneratorResult.Category',
+  }),
+  Object.freeze({
+    label: 'NativeOutcome',
+    predicate: "$objGeneratorResult.NativeOutcome -is [string] -and $objGeneratorResult.NativeOutcome -ceq 'Success'",
+    actual: '$objGeneratorResult.NativeOutcome',
+  }),
+  Object.freeze({
+    label: 'ResultExitCode',
+    predicate: '($objGeneratorResult.ExitCode -is [int] -or $objGeneratorResult.ExitCode -is [long]) -and $objGeneratorResult.ExitCode -eq 0',
+    actual: '$objGeneratorResult.ExitCode',
+  }),
+]);
+
+function validateGeneratorResultContract(source) {
+  const rows = GENERATOR_RESULT_CHECKS.map(({ label, predicate, actual }) => (
+    `    [ordered]@{ 'Name' = '${label}'; 'Valid' = ${predicate}; 'Actual' = ${actual} }`
+  ));
+  const positions = rows.map((row, index) => {
+    if (source.split(row).length - 1 !== 1) {
+      reject('generator-result-policy', `build.verify does not preserve the reviewed generator result predicate: ${GENERATOR_RESULT_CHECKS[index].label}`);
+    }
+    return source.indexOf(row);
+  });
+  if (positions.some((position, index) => index > 0 && position <= positions[index - 1])) {
+    reject('generator-result-policy', 'build.verify changes the reviewed generator result predicate order');
+  }
+
+  const accumulator = '$listGeneratorContractViolations = [System.Collections.Generic.List[string]]::new()';
+  const renderer = Object.freeze([
+    'foreach ($hashtableGeneratorContractCheck in $arrGeneratorContractChecks) {',
+    '    if (-not $hashtableGeneratorContractCheck.Valid) {',
+    '        $strGeneratorContractActual = if ($null -eq $hashtableGeneratorContractCheck.Actual) {',
+    "            '<null>'",
+    '        } else {',
+    '            [string]$hashtableGeneratorContractCheck.Actual',
+    '        }',
+    "        $strGeneratorContractActual = $strGeneratorContractActual -replace '[^\\x20-\\x7E]', '?'",
+    '        if ($strGeneratorContractActual.Length -gt 64) {',
+    "            $strGeneratorContractActual = $strGeneratorContractActual.Substring(0, 64) + '...'",
+    '        }',
+    '        $listGeneratorContractViolations.Add(',
+    '            "$($hashtableGeneratorContractCheck.Name)=$strGeneratorContractActual"',
+    '        )',
+    '    }',
+    '}',
+  ]).join('\n');
+  const guard = Object.freeze([
+    'if ($listGeneratorContractViolations.Count -ne 0) {',
+    '    throw "generator: result contract violation: $($listGeneratorContractViolations -join \'; \')"',
+    '}',
+  ]).join('\n');
+  for (const [fragment, category] of [
+    [accumulator, 'accumulator'],
+    [renderer, 'bounded diagnostic renderer'],
+    [guard, 'single deciding guard'],
+  ]) {
+    if (source.split(fragment).length - 1 !== 1) {
+      reject('generator-result-policy', `build.verify does not preserve the reviewed generator result ${category}`);
+    }
+  }
+
+  const block = [
+    '$arrGeneratorContractChecks = @(',
+    ...rows,
+    ')',
+    accumulator,
+    renderer,
+    guard,
+  ].join('\n');
+  const blockIndex = source.indexOf(block);
+  if (source.split(block).length - 1 !== 1) {
+    reject('generator-result-policy', 'build.verify changes the reviewed generator result accumulation or flow');
+  }
+  if (powerShellBraceDepthAt(powerShellCodeProjection(source), blockIndex) !== 0) {
+    reject('generator-result-policy', 'build.verify generator result contract is not reachable at the reviewed depth');
+  }
+  const region = [
+    '$objGeneratorResult = $arrGeneratorResult[0] | ConvertFrom-Json',
+    block,
+    '$arrExpectedArtifactRecords = @(',
+  ].join('\n');
+  if (source.split(region).length - 1 !== 1) {
+    reject('generator-result-policy', 'build.verify changes the reviewed generator result active region');
+  }
+}
+
 export function validateBuildPolicy(workflow, source) {
   assertKeys(workflow, ['name', 'on', 'permissions', 'jobs'], 'build root');
   if (workflow.name !== 'Build Style Guide Artifacts') reject('policy', 'build workflow name is not locked');
@@ -2195,21 +2311,7 @@ export function validateBuildPolicy(workflow, source) {
   // treats a backtick as an escape and removes it, so a statement broken
   // across lines had already lost the only marker saying it was one.
   const strVerifyCode = powerShellTokenView(normalizeLineContinuations(generateStep.run));
-  const arrGeneratorContractDiagnosticFragments = Object.freeze([
-    "'Name' = 'NativeExit'", "'Name' = 'Schema'", "'Name' = 'GeneratorVersion'",
-    "'Name' = 'Overall'", "'Name' = 'Phase'", "'Name' = 'Category'",
-    "'Name' = 'NativeOutcome'", "'Name' = 'ResultExitCode'",
-    '$strGeneratorContractActual = if ($null -eq $hashtableGeneratorContractCheck.Actual) {',
-    "'<null>'",
-    "$strGeneratorContractActual = $strGeneratorContractActual -replace '[^\\x20-\\x7E]', '?'",
-    "$strGeneratorContractActual = $strGeneratorContractActual.Substring(0, 64) + '...'",
-    "throw \"generator: result contract violation: $($listGeneratorContractViolations -join '; ')\"",
-  ]);
-  for (const strFragment of arrGeneratorContractDiagnosticFragments) {
-    if (generateStep.run.split(strFragment).length - 1 !== 1) {
-      reject('side-effect-policy', `build.verify does not preserve the reviewed generator contract diagnostic: ${strFragment}`);
-    }
-  }
+  validateGeneratorResultContract(generateStep.run);
   assertReviewedGuards(strVerifyCode, REVIEWED_VERIFY_GUARDS, 'side-effect-policy', (kind, frag) => kind === 'missing'
     ? `build.verify no longer performs a reviewed drift guard: ${frag}`
     : `a reviewed drift guard is no longer reachable where it was reviewed: ${frag}`);
@@ -4375,6 +4477,39 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T2-GENERATOR-FILE-014', 'missing rationale marker no longer fails closed', 'generator', (source) => replaceOnce(source, "                throw 'missing-rationale-anchor'\n", '')],
   ['T2-GENERATOR-FILE-015', 'missing rationale marker returns to a warning', 'generator', (source) => replaceOnce(source, "                throw 'missing-rationale-anchor'\n", "                Write-Warning \"No rationale section found for marker: $strMarkerKey\"\n")],
   ['T2-GENERATOR-FILE-016', 'generator result contract diagnostic guard is disabled', 'build', (source) => replaceOnce(source, '          if ($listGeneratorContractViolations.Count -ne 0) {', '          if ($false) {')],
+  ['T2-GENERATOR-FILE-017', 'native exit scalar type check is removed', 'build', (source) => replaceOnce(source, "$intGeneratorExit -is [int] -and $intGeneratorExit -eq 0", '$intGeneratorExit -eq 0')],
+  ['T2-GENERATOR-FILE-018', 'schema scalar type check is removed', 'build', (source) => replaceOnce(source, '$objGeneratorResult.Schema -is [string] -and $objGeneratorResult.Schema -ceq', '$objGeneratorResult.Schema -ceq')],
+  ['T2-GENERATOR-FILE-019', 'generator version scalar type check is removed', 'build', (source) => replaceOnce(source, '$objGeneratorResult.GeneratorVersion -is [string] -and $objGeneratorResult.GeneratorVersion -ceq', '$objGeneratorResult.GeneratorVersion -ceq')],
+  ['T2-GENERATOR-FILE-020', 'overall scalar type check is removed', 'build', (source) => replaceOnce(source, '$objGeneratorResult.Overall -is [string] -and $objGeneratorResult.Overall -in', '$objGeneratorResult.Overall -in')],
+  ['T2-GENERATOR-FILE-021', 'phase scalar type check is removed', 'build', (source) => replaceOnce(source, '$objGeneratorResult.Phase -is [string] -and $objGeneratorResult.Phase -ceq', '$objGeneratorResult.Phase -ceq')],
+  ['T2-GENERATOR-FILE-022', 'category scalar type check is removed', 'build', (source) => replaceOnce(source, '$objGeneratorResult.Category -is [string] -and $objGeneratorResult.Category -ceq', '$objGeneratorResult.Category -ceq')],
+  ['T2-GENERATOR-FILE-023', 'native outcome scalar type check is removed', 'build', (source) => replaceOnce(source, '$objGeneratorResult.NativeOutcome -is [string] -and $objGeneratorResult.NativeOutcome -ceq', '$objGeneratorResult.NativeOutcome -ceq')],
+  ['T2-GENERATOR-FILE-024', 'result exit scalar type check is removed', 'build', (source) => replaceOnce(source, '($objGeneratorResult.ExitCode -is [int] -or $objGeneratorResult.ExitCode -is [long]) -and $objGeneratorResult.ExitCode -eq 0', '$objGeneratorResult.ExitCode -eq 0')],
+  ['T2-GENERATOR-FILE-025', 'generator result predicate order changes', 'build', (source) => replaceOnce(
+    source,
+    "              [ordered]@{ 'Name' = 'Schema'; 'Valid' = $objGeneratorResult.Schema -is [string] -and $objGeneratorResult.Schema -ceq 'TerraformStyleGuide.GeneratorResult.v2'; 'Actual' = $objGeneratorResult.Schema }\n              [ordered]@{ 'Name' = 'GeneratorVersion'; 'Valid' = $objGeneratorResult.GeneratorVersion -is [string] -and $objGeneratorResult.GeneratorVersion -ceq '1.0.20260818.2'; 'Actual' = $objGeneratorResult.GeneratorVersion }",
+    "              [ordered]@{ 'Name' = 'GeneratorVersion'; 'Valid' = $objGeneratorResult.GeneratorVersion -is [string] -and $objGeneratorResult.GeneratorVersion -ceq '1.0.20260818.2'; 'Actual' = $objGeneratorResult.GeneratorVersion }\n              [ordered]@{ 'Name' = 'Schema'; 'Valid' = $objGeneratorResult.Schema -is [string] -and $objGeneratorResult.Schema -ceq 'TerraformStyleGuide.GeneratorResult.v2'; 'Actual' = $objGeneratorResult.Schema }",
+  )],
+  ['T2-GENERATOR-FILE-026', 'generator result accumulator type is widened', 'build', (source) => replaceOnce(source, '$listGeneratorContractViolations = [System.Collections.Generic.List[string]]::new()', '$listGeneratorContractViolations = @()')],
+  ['T2-GENERATOR-FILE-027', 'generator result accumulation condition is disabled', 'build', (source) => replaceOnce(source, '          if (-not $hashtableGeneratorContractCheck.Valid) {', '          if ($false) {')],
+  ['T2-GENERATOR-FILE-028', 'generator result null marker changes', 'build', (source) => replaceOnce(source, "                      '<null>'", "                      'null'")],
+  ['T2-GENERATOR-FILE-029', 'generator result ASCII replacement is removed', 'build', (source) => replaceOnce(source, "                  $strGeneratorContractActual = $strGeneratorContractActual -replace '[^\\x20-\\x7E]', '?'\n", '')],
+  ['T2-GENERATOR-FILE-030', 'generator result value bound is widened', 'build', (source) => replaceOnce(source, '$strGeneratorContractActual.Length -gt 64', '$strGeneratorContractActual.Length -gt 65')],
+  ['T2-GENERATOR-FILE-031', 'generator result ellipsis changes', 'build', (source) => replaceOnce(source, ".Substring(0, 64) + '...'", ".Substring(0, 64) + '..'")],
+  ['T2-GENERATOR-FILE-032', 'generator result separator changes', 'build', (source) => replaceOnce(source, "-join '; '", "-join ', '")],
+  ['T2-GENERATOR-FILE-033', 'statement is inserted into generator result flow', 'build', (source) => replaceOnce(source, '          )\n          $listGeneratorContractViolations =', '          )\n          $null = $null\n          $listGeneratorContractViolations =')],
+  ['T2-GENERATOR-FILE-034', 'generator result contract is nested in a dead block', 'build', (source) => {
+    const opened = replaceOnce(
+      source,
+      '          $arrGeneratorContractChecks = @(\n',
+      '          if ($false) {\n          $arrGeneratorContractChecks = @(\n',
+    );
+    return replaceOnce(
+      opened,
+      '          }\n          $arrExpectedArtifactRecords = @(\n',
+      '          }\n          }\n          $arrExpectedArtifactRecords = @(\n',
+    );
+  }],
 ]);
 
 // What each fixture must be rejected BY, not merely that it was rejected. A
@@ -4730,7 +4865,25 @@ const FIXTURE_EXPECTATIONS = Object.freeze({
   "T2-GENERATOR-FILE-013": "supply-policy: the generator does not preserve the reviewed culture-invariant rationale anchor assertion count",
   "T2-GENERATOR-FILE-014": "supply-policy: the generator does not preserve the reviewed missing-rationale failure assertion count",
   "T2-GENERATOR-FILE-015": "supply-policy: the generator runs an unreviewed command: Write-Warning",
-  "T2-GENERATOR-FILE-016": "side-effect-policy: build.verify no longer performs a reviewed drift guard: if ($listGeneratorContractViolations.Count -ne 0) {",
+  "T2-GENERATOR-FILE-016": "generator-result-policy: build.verify does not preserve the reviewed generator result single deciding guard",
+  "T2-GENERATOR-FILE-017": "generator-result-policy: build.verify does not preserve the reviewed generator result predicate: NativeExit",
+  "T2-GENERATOR-FILE-018": "generator-result-policy: build.verify does not preserve the reviewed generator result predicate: Schema",
+  "T2-GENERATOR-FILE-019": "generator-result-policy: build.verify does not preserve the reviewed generator result predicate: GeneratorVersion",
+  "T2-GENERATOR-FILE-020": "generator-result-policy: build.verify does not preserve the reviewed generator result predicate: Overall",
+  "T2-GENERATOR-FILE-021": "generator-result-policy: build.verify does not preserve the reviewed generator result predicate: Phase",
+  "T2-GENERATOR-FILE-022": "generator-result-policy: build.verify does not preserve the reviewed generator result predicate: Category",
+  "T2-GENERATOR-FILE-023": "generator-result-policy: build.verify does not preserve the reviewed generator result predicate: NativeOutcome",
+  "T2-GENERATOR-FILE-024": "generator-result-policy: build.verify does not preserve the reviewed generator result predicate: ResultExitCode",
+  "T2-GENERATOR-FILE-025": "generator-result-policy: build.verify changes the reviewed generator result predicate order",
+  "T2-GENERATOR-FILE-026": "generator-result-policy: build.verify does not preserve the reviewed generator result accumulator",
+  "T2-GENERATOR-FILE-027": "generator-result-policy: build.verify does not preserve the reviewed generator result bounded diagnostic renderer",
+  "T2-GENERATOR-FILE-028": "generator-result-policy: build.verify does not preserve the reviewed generator result bounded diagnostic renderer",
+  "T2-GENERATOR-FILE-029": "generator-result-policy: build.verify does not preserve the reviewed generator result bounded diagnostic renderer",
+  "T2-GENERATOR-FILE-030": "generator-result-policy: build.verify does not preserve the reviewed generator result bounded diagnostic renderer",
+  "T2-GENERATOR-FILE-031": "generator-result-policy: build.verify does not preserve the reviewed generator result bounded diagnostic renderer",
+  "T2-GENERATOR-FILE-032": "generator-result-policy: build.verify does not preserve the reviewed generator result single deciding guard",
+  "T2-GENERATOR-FILE-033": "generator-result-policy: build.verify changes the reviewed generator result accumulation or flow",
+  "T2-GENERATOR-FILE-034": "generator-result-policy: build.verify generator result contract is not reachable at the reviewed depth",
 });
 
 const PULL_REQUEST_BODY_IDENTITY_FIXTURES = Object.freeze([
