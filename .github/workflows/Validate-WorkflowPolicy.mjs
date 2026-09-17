@@ -295,7 +295,7 @@ const REVIEWED_CREDENTIAL_STEP_DIGEST = 'e94b265f97f20d46df3bafcee77f546463f650c
 // individually below, but an inserted early exit satisfies every one of them
 // while skipping the probes entirely. The same backstop the Markdown step and
 // the former push step carry applies here for the same reason.
-const REVIEWED_VERIFY_STEP_DIGEST = '192f5e3b6352afd1b015113295e4ee81235659f7110a40301ff1e7840dfca42b';
+const REVIEWED_VERIFY_STEP_DIGEST = '531e76010e7e076192cef993cb399f77be2ba9cee0da073b5ec9c7b015f6793c';
 
 // Both jobs that run repository-controlled code now acquire their own revision
 // instead of using an action to do it, so neither contains a process holding
@@ -1892,7 +1892,7 @@ const GENERATOR_RESULT_CHECKS = Object.freeze([
   }),
   Object.freeze({
     label: 'GeneratorVersion',
-    predicate: "$objGeneratorResult.GeneratorVersion -is [string] -and $objGeneratorResult.GeneratorVersion -ceq '1.0.20260818.2'",
+    predicate: "$objGeneratorResult.GeneratorVersion -ceq '1.0.20260818.2' -and $objGeneratorResult.GeneratorVersion -is [string]",
     actual: '$objGeneratorResult.GeneratorVersion',
   }),
   Object.freeze({
@@ -4479,7 +4479,7 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T2-GENERATOR-FILE-016', 'generator result contract diagnostic guard is disabled', 'build', (source) => replaceOnce(source, '          if ($listGeneratorContractViolations.Count -ne 0) {', '          if ($false) {')],
   ['T2-GENERATOR-FILE-017', 'native exit scalar type check is removed', 'build', (source) => replaceOnce(source, "$intGeneratorExit -is [int] -and $intGeneratorExit -eq 0", '$intGeneratorExit -eq 0')],
   ['T2-GENERATOR-FILE-018', 'schema scalar type check is removed', 'build', (source) => replaceOnce(source, '$objGeneratorResult.Schema -is [string] -and $objGeneratorResult.Schema -ceq', '$objGeneratorResult.Schema -ceq')],
-  ['T2-GENERATOR-FILE-019', 'generator version scalar type check is removed', 'build', (source) => replaceOnce(source, '$objGeneratorResult.GeneratorVersion -is [string] -and $objGeneratorResult.GeneratorVersion -ceq', '$objGeneratorResult.GeneratorVersion -ceq')],
+  ['T2-GENERATOR-FILE-019', 'generator version scalar type check is removed', 'build', (source) => replaceOnce(source, " -and $objGeneratorResult.GeneratorVersion -is [string]; 'Actual' = $objGeneratorResult.GeneratorVersion }", "; 'Actual' = $objGeneratorResult.GeneratorVersion }")],
   ['T2-GENERATOR-FILE-020', 'overall scalar type check is removed', 'build', (source) => replaceOnce(source, '$objGeneratorResult.Overall -is [string] -and $objGeneratorResult.Overall -in', '$objGeneratorResult.Overall -in')],
   ['T2-GENERATOR-FILE-021', 'phase scalar type check is removed', 'build', (source) => replaceOnce(source, '$objGeneratorResult.Phase -is [string] -and $objGeneratorResult.Phase -ceq', '$objGeneratorResult.Phase -ceq')],
   ['T2-GENERATOR-FILE-022', 'category scalar type check is removed', 'build', (source) => replaceOnce(source, '$objGeneratorResult.Category -is [string] -and $objGeneratorResult.Category -ceq', '$objGeneratorResult.Category -ceq')],
@@ -4487,8 +4487,8 @@ const FIXTURE_INVENTORY = Object.freeze([
   ['T2-GENERATOR-FILE-024', 'result exit scalar type check is removed', 'build', (source) => replaceOnce(source, '($objGeneratorResult.ExitCode -is [int] -or $objGeneratorResult.ExitCode -is [long]) -and $objGeneratorResult.ExitCode -eq 0', '$objGeneratorResult.ExitCode -eq 0')],
   ['T2-GENERATOR-FILE-025', 'generator result predicate order changes', 'build', (source) => replaceOnce(
     source,
-    "              [ordered]@{ 'Name' = 'Schema'; 'Valid' = $objGeneratorResult.Schema -is [string] -and $objGeneratorResult.Schema -ceq 'TerraformStyleGuide.GeneratorResult.v2'; 'Actual' = $objGeneratorResult.Schema }\n              [ordered]@{ 'Name' = 'GeneratorVersion'; 'Valid' = $objGeneratorResult.GeneratorVersion -is [string] -and $objGeneratorResult.GeneratorVersion -ceq '1.0.20260818.2'; 'Actual' = $objGeneratorResult.GeneratorVersion }",
-    "              [ordered]@{ 'Name' = 'GeneratorVersion'; 'Valid' = $objGeneratorResult.GeneratorVersion -is [string] -and $objGeneratorResult.GeneratorVersion -ceq '1.0.20260818.2'; 'Actual' = $objGeneratorResult.GeneratorVersion }\n              [ordered]@{ 'Name' = 'Schema'; 'Valid' = $objGeneratorResult.Schema -is [string] -and $objGeneratorResult.Schema -ceq 'TerraformStyleGuide.GeneratorResult.v2'; 'Actual' = $objGeneratorResult.Schema }",
+    "              [ordered]@{ 'Name' = 'Schema'; 'Valid' = $objGeneratorResult.Schema -is [string] -and $objGeneratorResult.Schema -ceq 'TerraformStyleGuide.GeneratorResult.v2'; 'Actual' = $objGeneratorResult.Schema }\n              [ordered]@{ 'Name' = 'GeneratorVersion'; 'Valid' = $objGeneratorResult.GeneratorVersion -ceq '1.0.20260818.2' -and $objGeneratorResult.GeneratorVersion -is [string]; 'Actual' = $objGeneratorResult.GeneratorVersion }",
+    "              [ordered]@{ 'Name' = 'GeneratorVersion'; 'Valid' = $objGeneratorResult.GeneratorVersion -ceq '1.0.20260818.2' -and $objGeneratorResult.GeneratorVersion -is [string]; 'Actual' = $objGeneratorResult.GeneratorVersion }\n              [ordered]@{ 'Name' = 'Schema'; 'Valid' = $objGeneratorResult.Schema -is [string] -and $objGeneratorResult.Schema -ceq 'TerraformStyleGuide.GeneratorResult.v2'; 'Actual' = $objGeneratorResult.Schema }",
   )],
   ['T2-GENERATOR-FILE-026', 'generator result accumulator type is widened', 'build', (source) => replaceOnce(source, '$listGeneratorContractViolations = [System.Collections.Generic.List[string]]::new()', '$listGeneratorContractViolations = @()')],
   ['T2-GENERATOR-FILE-027', 'generator result accumulation condition is disabled', 'build', (source) => replaceOnce(source, '          if (-not $hashtableGeneratorContractCheck.Valid) {', '          if ($false) {')],
