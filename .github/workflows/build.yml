@@ -624,14 +624,14 @@ jobs:
           if ($arrGeneratorResult.Count -ne 1) { throw 'generator: unexpected output shape' }
           $objGeneratorResult = $arrGeneratorResult[0] | ConvertFrom-Json
           $arrGeneratorContractChecks = @(
-              [ordered]@{ 'Name' = 'NativeExit'; 'Valid' = $intGeneratorExit -eq 0; 'Actual' = $intGeneratorExit }
-              [ordered]@{ 'Name' = 'Schema'; 'Valid' = $objGeneratorResult.Schema -ceq 'TerraformStyleGuide.GeneratorResult.v2'; 'Actual' = $objGeneratorResult.Schema }
-              [ordered]@{ 'Name' = 'GeneratorVersion'; 'Valid' = $objGeneratorResult.GeneratorVersion -ceq '1.0.20260818.2'; 'Actual' = $objGeneratorResult.GeneratorVersion }
-              [ordered]@{ 'Name' = 'Overall'; 'Valid' = $objGeneratorResult.Overall -in @('Success', 'NoChange'); 'Actual' = $objGeneratorResult.Overall }
-              [ordered]@{ 'Name' = 'Phase'; 'Valid' = $objGeneratorResult.Phase -ceq 'complete'; 'Actual' = $objGeneratorResult.Phase }
-              [ordered]@{ 'Name' = 'Category'; 'Valid' = $objGeneratorResult.Category -ceq 'none'; 'Actual' = $objGeneratorResult.Category }
-              [ordered]@{ 'Name' = 'NativeOutcome'; 'Valid' = $objGeneratorResult.NativeOutcome -ceq 'Success'; 'Actual' = $objGeneratorResult.NativeOutcome }
-              [ordered]@{ 'Name' = 'ResultExitCode'; 'Valid' = $objGeneratorResult.ExitCode -eq 0; 'Actual' = $objGeneratorResult.ExitCode }
+              [ordered]@{ 'Name' = 'NativeExit'; 'Valid' = $intGeneratorExit -is [int] -and $intGeneratorExit -eq 0; 'Actual' = $intGeneratorExit }
+              [ordered]@{ 'Name' = 'Schema'; 'Valid' = $objGeneratorResult.Schema -is [string] -and $objGeneratorResult.Schema -ceq 'TerraformStyleGuide.GeneratorResult.v2'; 'Actual' = $objGeneratorResult.Schema }
+              [ordered]@{ 'Name' = 'GeneratorVersion'; 'Valid' = $objGeneratorResult.GeneratorVersion -ceq '1.0.20260818.2' -and $objGeneratorResult.GeneratorVersion -is [string]; 'Actual' = $objGeneratorResult.GeneratorVersion }
+              [ordered]@{ 'Name' = 'Overall'; 'Valid' = $objGeneratorResult.Overall -is [string] -and $objGeneratorResult.Overall -in @('Success', 'NoChange'); 'Actual' = $objGeneratorResult.Overall }
+              [ordered]@{ 'Name' = 'Phase'; 'Valid' = $objGeneratorResult.Phase -is [string] -and $objGeneratorResult.Phase -ceq 'complete'; 'Actual' = $objGeneratorResult.Phase }
+              [ordered]@{ 'Name' = 'Category'; 'Valid' = $objGeneratorResult.Category -is [string] -and $objGeneratorResult.Category -ceq 'none'; 'Actual' = $objGeneratorResult.Category }
+              [ordered]@{ 'Name' = 'NativeOutcome'; 'Valid' = $objGeneratorResult.NativeOutcome -is [string] -and $objGeneratorResult.NativeOutcome -ceq 'Success'; 'Actual' = $objGeneratorResult.NativeOutcome }
+              [ordered]@{ 'Name' = 'ResultExitCode'; 'Valid' = ($objGeneratorResult.ExitCode -is [int] -or $objGeneratorResult.ExitCode -is [long]) -and $objGeneratorResult.ExitCode -eq 0; 'Actual' = $objGeneratorResult.ExitCode }
           )
           $listGeneratorContractViolations = [System.Collections.Generic.List[string]]::new()
           foreach ($hashtableGeneratorContractCheck in $arrGeneratorContractChecks) {
