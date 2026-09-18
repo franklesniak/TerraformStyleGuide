@@ -1,0 +1,778 @@
+{
+  "schema": "TerraformStyleGuide.WorkflowPolicyContract.v1",
+  "contractVersion": 1,
+  "limits": {
+    "maximumWorkflowBytes": 131072,
+    "maximumJsonBytes": 524288,
+    "maximumNodes": 5000,
+    "maximumDepth": 32,
+    "maximumCaseNodes": 16384
+  },
+  "supplyFreeze": {
+    "schema": "TerraformStyleGuide.FrozenSupplyProfile.v1",
+    "reviewedCommit": "e5064a672c10f4fad90f36e82af33ff8fc230b5f",
+    "baseline": {
+      "packageJson": {
+        "blob": "103075d0d14f61b49d29cf2ed8dc8a7804fe092e",
+        "length": 1070,
+        "sha256": "c6db6befda88e58aa5568f52f44ca934af5751e545dba0644297b9fb15577e0d"
+      },
+      "packageLockJson": {
+        "blob": "92a2f83a2d2d6904521800108ad0e1b1436909e2",
+        "length": 66725,
+        "sha256": "84cbe61e33e4c66b653efd2bfbe3f80b0061368a64ad80ef0de4898da28d887d"
+      }
+    },
+    "reviewedWorkingBytes": {
+      "packageJson": {
+        "length": 1070,
+        "sha256": "c6db6befda88e58aa5568f52f44ca934af5751e545dba0644297b9fb15577e0d"
+      },
+      "packageLockJson": {
+        "length": 66725,
+        "sha256": "84cbe61e33e4c66b653efd2bfbe3f80b0061368a64ad80ef0de4898da28d887d"
+      }
+    },
+    "producer": {
+      "profilePurpose": "reviewed-runtime-requirement-not-historical-lock-production",
+      "nodeVersion": "24.18.1",
+      "npmVersion": "11.16.0",
+      "linuxArchive": "https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz",
+      "linuxArchiveSha256": "d6c664df3f3f61458e8c277585571328522d705166723a7c7823a9253a4d15a0"
+    },
+    "yaml": {
+      "version": "2.9.0",
+      "tarball": "https://registry.npmjs.org/yaml/-/yaml-2.9.0.tgz",
+      "integrity": "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==",
+      "enginesNode": ">= 14.6"
+    },
+    "dependencyPolicy": {
+      "scripts": {
+        "lint:md": "cd ../.. && node .github/workflows/lint-nested-markdown.js --outer",
+        "lint:md:nested": "node lint-nested-markdown.js",
+        "prepare": "cd ../.. && husky"
+      },
+      "devDependencies": {
+        "glob": "^10.3.10",
+        "husky": "^9.1.7",
+        "markdown-it": "14.3.0",
+        "markdownlint": "0.41.1",
+        "markdownlint-cli2": "0.23.2",
+        "yaml": "2.9.0"
+      },
+      "overrides": {
+        "markdownlint-cli2@0.23.2": {
+          "smol-toml": "1.7.1"
+        }
+      },
+      "securityPatch": {
+        "packagePath": "node_modules/smol-toml",
+        "version": "1.7.1",
+        "resolved": "https://registry.npmjs.org/smol-toml/-/smol-toml-1.7.1.tgz",
+        "integrity": "sha512-PPlsspAZ4jbMBu5DMFhfUGDQLu/vrL4SyBROVS37x8ynnVmFIs1VPBz1Co8Xks3TvpIaZXmU85y4DrQ+UyVFoQ==",
+        "parentPath": "node_modules/markdownlint-cli2",
+        "parentDeclaredVersion": "1.7.0"
+      }
+    },
+    "provenance": {
+      "historicalRecord": "../../docs/T1-SUPPLY-FREEZE-v1.md",
+      "historicalRecordIsCurrentGraphMeasurement": false,
+      "advisoryDispositionGranted": false,
+      "unresolvedAdvisoryConsumerIssues": [
+        22,
+        24
+      ]
+    }
+  },
+  "scriptVersions": {
+    "generator": {
+      "path": "Generate-StyleGuideArtifacts.ps1",
+      "version": "1.0.20260918.0",
+      "sha256": "abf858f75627e81ce09900e565a1e9449ec317a6b34493f80db4fb6c04e0993c"
+    },
+    "pathVerifier": {
+      "path": "Test-ExactGitPathSet.ps1",
+      "version": "1.0.20260918.0",
+      "sha256": "c0b8970b2f45fbdddaf4753c5d7f0f4c43b559dd4cbb4fdb78b632add16aecb9"
+    }
+  },
+  "caseCatalog": {
+    "path": "workflow-policy-cases.json",
+    "sha256": "8b170db614037c5acc3610ccf10004762fc248787b138053de962885dcd66774"
+  },
+  "validatorIdentity": {
+    "path": "Validate-WorkflowPolicy.mjs",
+    "sha256": "854f3a80d461608ba9f4579337aba0b0c8eba8713901cf395eda1a9160e343e1"
+  },
+  "actions": {
+    "checkout": {
+      "repository": "actions/checkout",
+      "sha": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+      "release": "v7.0.1",
+      "manifestUrl": "https://raw.githubusercontent.com/actions/checkout/3d3c42e5aac5ba805825da76410c181273ba90b1/action.yml",
+      "manifestLength": 5144,
+      "manifestSha256": "d59219cb79590abdb877deaa14e3b65a00c05318bf5a6f3b989b9162b5d08c35",
+      "runsUsing": "node24",
+      "inputs": {
+        "repository": {
+          "default": "${{ github.repository }}",
+          "required": null,
+          "disposition": "Authored"
+        },
+        "ref": {
+          "default": null,
+          "required": null,
+          "disposition": "Authored"
+        },
+        "token": {
+          "default": "${{ github.token }}",
+          "required": null,
+          "disposition": "Authored"
+        },
+        "ssh-key": {
+          "default": null,
+          "required": null,
+          "disposition": "NotApplicable"
+        },
+        "ssh-known-hosts": {
+          "default": null,
+          "required": null,
+          "disposition": "NotApplicable"
+        },
+        "ssh-strict": {
+          "default": true,
+          "required": null,
+          "disposition": "NotApplicable"
+        },
+        "ssh-user": {
+          "default": "git",
+          "required": null,
+          "disposition": "NotApplicable"
+        },
+        "persist-credentials": {
+          "default": true,
+          "required": null,
+          "disposition": "Authored"
+        },
+        "path": {
+          "default": null,
+          "required": null,
+          "disposition": "NotApplicable"
+        },
+        "clean": {
+          "default": true,
+          "required": null,
+          "disposition": "Authored"
+        },
+        "filter": {
+          "default": null,
+          "required": null,
+          "disposition": "NotApplicable"
+        },
+        "sparse-checkout": {
+          "default": null,
+          "required": null,
+          "disposition": "NotApplicable"
+        },
+        "sparse-checkout-cone-mode": {
+          "default": true,
+          "required": null,
+          "disposition": "NotApplicable"
+        },
+        "fetch-depth": {
+          "default": 1,
+          "required": null,
+          "disposition": "Authored"
+        },
+        "fetch-tags": {
+          "default": false,
+          "required": null,
+          "disposition": "Authored"
+        },
+        "show-progress": {
+          "default": true,
+          "required": null,
+          "disposition": "Authored"
+        },
+        "lfs": {
+          "default": false,
+          "required": null,
+          "disposition": "Authored"
+        },
+        "submodules": {
+          "default": false,
+          "required": null,
+          "disposition": "Authored"
+        },
+        "set-safe-directory": {
+          "default": true,
+          "required": null,
+          "disposition": "Authored"
+        },
+        "github-server-url": {
+          "default": null,
+          "required": false,
+          "disposition": "ReviewedDefault"
+        },
+        "allow-unsafe-pr-checkout": {
+          "default": false,
+          "required": null,
+          "disposition": "Authored"
+        }
+      }
+    },
+    "setupNode": {
+      "repository": "actions/setup-node",
+      "sha": "820762786026740c76f36085b0efc47a31fe5020",
+      "release": "v7.0.0",
+      "manifestUrl": "https://raw.githubusercontent.com/actions/setup-node/820762786026740c76f36085b0efc47a31fe5020/action.yml",
+      "manifestLength": 2991,
+      "manifestSha256": "5d765941ab5d8bef27f08e81b0b041cdb2df2050ea0261dc925d157a2bafbd2b",
+      "runsUsing": "node24",
+      "inputs": {
+        "node-version": {
+          "default": null,
+          "required": null,
+          "disposition": "Authored"
+        },
+        "node-version-file": {
+          "default": null,
+          "required": null,
+          "disposition": "NotApplicable"
+        },
+        "architecture": {
+          "default": null,
+          "required": null,
+          "disposition": "ReviewedDefault"
+        },
+        "check-latest": {
+          "default": false,
+          "required": null,
+          "disposition": "Authored"
+        },
+        "registry-url": {
+          "default": null,
+          "required": null,
+          "disposition": "NotApplicable"
+        },
+        "scope": {
+          "default": null,
+          "required": null,
+          "disposition": "NotApplicable"
+        },
+        "token": {
+          "default": "${{ github.server_url == 'https://github.com' && github.token || '' }}",
+          "required": null,
+          "disposition": "Authored"
+        },
+        "cache": {
+          "default": null,
+          "required": null,
+          "disposition": "NotApplicable"
+        },
+        "package-manager-cache": {
+          "default": true,
+          "required": null,
+          "disposition": "Authored"
+        },
+        "cache-dependency-path": {
+          "default": null,
+          "required": null,
+          "disposition": "NotApplicable"
+        },
+        "mirror": {
+          "default": null,
+          "required": null,
+          "disposition": "NotApplicable"
+        },
+        "mirror-token": {
+          "default": null,
+          "required": null,
+          "disposition": "NotApplicable"
+        }
+      }
+    },
+    "uploadArtifact": {
+      "repository": "actions/upload-artifact",
+      "sha": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      "release": "v7.0.1",
+      "manifestUrl": "https://raw.githubusercontent.com/actions/upload-artifact/043fb46d1a93c77aae656e7c1c64a875d1fc6a0a/action.yml",
+      "manifestLength": 3603,
+      "manifestSha256": "c5979822866a72362e609844b6ebe77d4b7e759af68cc1c2c425dcf51481fab4",
+      "runsUsing": "node24",
+      "inputs": {
+        "name": {
+          "default": "artifact",
+          "required": null,
+          "disposition": "Authored"
+        },
+        "path": {
+          "default": null,
+          "required": true,
+          "disposition": "Authored"
+        },
+        "if-no-files-found": {
+          "default": "warn",
+          "required": null,
+          "disposition": "Authored"
+        },
+        "retention-days": {
+          "default": null,
+          "required": null,
+          "disposition": "Authored"
+        },
+        "compression-level": {
+          "default": "6",
+          "required": null,
+          "disposition": "Authored"
+        },
+        "overwrite": {
+          "default": "false",
+          "required": null,
+          "disposition": "Authored"
+        },
+        "include-hidden-files": {
+          "default": "false",
+          "required": null,
+          "disposition": "Authored"
+        },
+        "archive": {
+          "default": "true",
+          "required": null,
+          "disposition": "Authored"
+        }
+      }
+    }
+  },
+  "workflowPolicy": {
+    "generatorResultPolicy": {
+      "labels": [
+        "NativeExit",
+        "Schema",
+        "GeneratorVersion",
+        "Overall",
+        "Phase",
+        "Category",
+        "NativeOutcome",
+        "ResultExitCode"
+      ],
+      "prefix": "Artifact generation failed result checks: ",
+      "separator": ", ",
+      "suffix": ".",
+      "maximumAsciiBytes": 136,
+      "actualValues": false
+    },
+    "events": {
+      "push": {
+        "branches": [
+          "main"
+        ]
+      },
+      "pull_request": {
+        "branches": [
+          "main"
+        ]
+      }
+    },
+    "workflowPermissions": {},
+    "workflows": {
+      "build.yml": {
+        "name": "Build Style Guide Artifacts",
+        "jobs": {
+          "verify": {
+            "runsOn": "ubuntu-24.04",
+            "timeoutMinutes": 30,
+            "permissions": {},
+            "steps": [
+              {
+                "kind": "run",
+                "role": "build.verify.acquire",
+                "name": "Acquire triggering revision without an action",
+                "id": "acquire",
+                "shell": "pwsh",
+                "runSha256": "923869e2ce8f875534d243df62d0fb24d9786e2122dbbc768e83c46fb1997ccb"
+              },
+              {
+                "kind": "run",
+                "role": "build.verify.verify-checkout-credentials",
+                "name": "Verify checkout credential cleanup",
+                "id": "verify-checkout-credentials",
+                "shell": "pwsh",
+                "runSha256": "38463e3cd1d85c185b6f042eb4260638a89e1835c1637cc9208b390dc7be1469"
+              },
+              {
+                "kind": "run",
+                "role": "build.verify.generate-and-verify",
+                "name": "Generate and verify style guide artifacts",
+                "id": "generate-and-verify",
+                "shell": "pwsh",
+                "runSha256": "a6576f7e1b7c5e7e93171abea110358269df2f06657abaad5c747fb3c536cc7e"
+              }
+            ]
+          },
+          "publish": {
+            "runsOn": "ubuntu-24.04",
+            "timeoutMinutes": 10,
+            "permissions": {
+              "contents": "read"
+            },
+            "needs": "verify",
+            "steps": [
+              {
+                "kind": "action",
+                "role": "build.publish.checkout",
+                "name": "Checkout repository",
+                "id": "checkout",
+                "action": "checkout"
+              },
+              {
+                "kind": "action",
+                "role": "build.publish.upload-generated",
+                "name": "Publish committed style guide artifacts",
+                "id": "upload-generated",
+                "action": "uploadArtifact"
+              }
+            ]
+          }
+        }
+      },
+      "markdownlint.yml": {
+        "name": "Markdown Lint",
+        "jobs": {
+          "policy": {
+            "runsOn": "ubuntu-24.04",
+            "timeoutMinutes": 30,
+            "permissions": {},
+            "steps": [
+              {
+                "kind": "run",
+                "role": "markdownlint.policy.acquire",
+                "name": "Acquire triggering revision and pinned toolchain without an action",
+                "id": "acquire",
+                "shell": "pwsh",
+                "runSha256": "16b68140e7411057eacfa912b6a25d9fa05e49eda62e05c5b301d1580d13728f"
+              },
+              {
+                "kind": "run",
+                "role": "markdownlint.policy.verify-checkout-credentials",
+                "name": "Verify checkout credential cleanup",
+                "id": "verify-checkout-credentials",
+                "shell": "pwsh",
+                "runSha256": "38463e3cd1d85c185b6f042eb4260638a89e1835c1637cc9208b390dc7be1469"
+              },
+              {
+                "kind": "run",
+                "role": "markdownlint.policy.validate",
+                "name": "Install without executing packages and validate workflow policy",
+                "id": "validate",
+                "shell": "pwsh",
+                "workingDirectory": ".github/workflows",
+                "runSha256": "fbb620467b2a3aac9b16b232bb8890661516f84a1a979a6885b0f67531992b0e"
+              }
+            ]
+          },
+          "markdownlint": {
+            "runsOn": "ubuntu-24.04",
+            "timeoutMinutes": 30,
+            "permissions": {},
+            "steps": [
+              {
+                "kind": "run",
+                "role": "markdownlint.markdownlint.acquire",
+                "name": "Acquire triggering revision and pinned toolchain without an action",
+                "id": "acquire",
+                "shell": "pwsh",
+                "runSha256": "16b68140e7411057eacfa912b6a25d9fa05e49eda62e05c5b301d1580d13728f"
+              },
+              {
+                "kind": "run",
+                "role": "markdownlint.markdownlint.verify-checkout-credentials",
+                "name": "Verify checkout credential cleanup",
+                "id": "verify-checkout-credentials",
+                "shell": "pwsh",
+                "runSha256": "38463e3cd1d85c185b6f042eb4260638a89e1835c1637cc9208b390dc7be1469"
+              },
+              {
+                "kind": "run",
+                "role": "markdownlint.markdownlint.lint",
+                "name": "Install and lint both Markdown surfaces",
+                "id": "lint",
+                "shell": "pwsh",
+                "workingDirectory": ".github/workflows",
+                "runSha256": "191a3c9cba7ea8e9c9f88734cae4a2965a06c6a5f2e746fa78a63da3137996db"
+              }
+            ]
+          }
+        }
+      },
+      "pull-request-body-identity.yml": {
+        "name": "Pull Request Body Identity",
+        "events": {
+          "pull_request_target": {
+            "branches": [
+              "main"
+            ],
+            "types": [
+              "edited",
+              "opened",
+              "reopened",
+              "synchronize"
+            ]
+          }
+        },
+        "workflowPermissions": {},
+        "jobs": {
+          "verify_identity": {
+            "runsOn": "ubuntu-24.04",
+            "permissions": {},
+            "steps": [
+              {
+                "kind": "run",
+                "role": "pull_request_body_identity.verify_identity.acquire",
+                "name": "Acquire exact pull request head and verified Node.js",
+                "id": "acquire",
+                "shell": "pwsh",
+                "runSha256": "fee95022828376d3c7893bb04d21d8c8d5448d33929c2c3fac0c896237c617dc"
+              },
+              {
+                "kind": "run",
+                "role": "pull_request_body_identity.verify_identity.test_pull_request_body_identity",
+                "name": "Test pull request body identity command",
+                "id": "test_pull_request_body_identity",
+                "shell": "pwsh",
+                "runSha256": "1da1e1bc600de17e14d8813b0bcd64579369ef93ba6fabcacfe69da22eed0172"
+              },
+              {
+                "kind": "run",
+                "role": "pull_request_body_identity.verify_identity.verify_pull_request_body_identity",
+                "name": "Verify pull request body identity",
+                "id": "verify_pull_request_body_identity",
+                "shell": "pwsh",
+                "runSha256": "fe37f056e253ac3fb5d0a40ccda11e40788b8f6477945293a7a38c0f5c255c25"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "actionInputs": {
+      "checkout": {
+        "repository": "${{ github.repository }}",
+        "ref": "${{ github.sha }}",
+        "token": "${{ github.token }}",
+        "persist-credentials": false,
+        "clean": true,
+        "fetch-depth": 1,
+        "fetch-tags": false,
+        "show-progress": true,
+        "lfs": false,
+        "submodules": false,
+        "set-safe-directory": true,
+        "allow-unsafe-pr-checkout": false
+      },
+      "setupNode": {
+        "node-version": "24.18.1",
+        "check-latest": false,
+        "token": "${{ github.token }}",
+        "package-manager-cache": false
+      },
+      "uploadArtifact": {
+        "name": "style-guide-artifacts",
+        "path": "copilot-instructions.md\nterraform.instructions.md\nSTYLE_GUIDE_CHAT.md\nSTYLE_GUIDE_FULL.md\n",
+        "if-no-files-found": "error",
+        "retention-days": 7,
+        "compression-level": 0,
+        "overwrite": false,
+        "include-hidden-files": false,
+        "archive": true
+      }
+    },
+    "forbiddenRunPatterns": [
+      "git\\s+add(?:\\s|$)",
+      "git\\s+commit(?:\\s|$)",
+      "git\\s+push(?:\\s|$)",
+      "contents:\\s*write",
+      "actions/cache",
+      "actions/download-artifact",
+      "GIT_CONFIG_VALUE",
+      "http\\.extraheader=(?!\\s|$)"
+    ]
+  },
+  "markdownPolicy": {
+    "schema": "TerraformStyleGuide.MarkdownEntryPointPolicy.v1",
+    "extensions": [
+      "md",
+      "mdc"
+    ],
+    "entryPoints": {
+      "rootPackageJson": {
+        "path": "../../package.json",
+        "length": 1086,
+        "sha256": "ca77a11a7bd4ae55842ef0f1b8c4b9c0d32e3d6b8fa202455a12e354bf2d696b",
+        "lintScript": "npm --prefix .github/workflows run lint:md"
+      },
+      "workflowPackageJson": {
+        "path": "package.json",
+        "length": 1070,
+        "sha256": "c6db6befda88e58aa5568f52f44ca934af5751e545dba0644297b9fb15577e0d",
+        "lintScript": "cd ../.. && node .github/workflows/lint-nested-markdown.js --outer"
+      },
+      "nestedLinter": {
+        "path": "lint-nested-markdown.js",
+        "length": 16481,
+        "sha256": "5f3bbefdd02af786bd39ae6a31685a4daf073981c2c072a51b590c75a6626205",
+        "glob": "**/*.{md,mdc}",
+        "includeDotDirectories": true,
+        "ignoredDirectoryNames": [
+          "node_modules",
+          ".git",
+          ".venv"
+        ],
+        "retainedDotDirectoryNames": [
+          ".github",
+          ".cursor"
+        ]
+      },
+      "stagedSelector": {
+        "path": "lint-staged-markdown.mjs",
+        "length": 5968,
+        "sha256": "6e8ac89afb17dd36f1edcf9b59ddfb066706fc6686be22e007c540ae20c810c2",
+        "pathspecs": [
+          "*.md",
+          "*.mdc"
+        ]
+      },
+      "preCommit": {
+        "path": "../../.pre-commit-config.yaml",
+        "length": 5415,
+        "sha256": "0e9da6a7c4bd0d89c83fd3041e67921e3bc08d159f4b6cd36b1b2e9f0b63a37b",
+        "extensions": [
+          "md",
+          "mdc"
+        ],
+        "linebreakArgument": "--markdown-linebreak-ext=md,mdc"
+      }
+    }
+  },
+  "dependabot": {
+    "version": 2,
+    "updates": [
+      {
+        "package-ecosystem": "github-actions",
+        "directory": "/",
+        "schedule": {
+          "interval": "weekly"
+        }
+      }
+    ]
+  },
+  "reciprocalFoundation": {
+    "schema": "PSStyleGuide.ReciprocalFoundation.v1",
+    "psRepository": "https://github.com/franklesniak/PSStyleGuide",
+    "psCommit": "afda7c5dd65bc7a14d742d01650a87443068851b",
+    "psNormativeLocator": "https://github.com/franklesniak/PSStyleGuide/issues/145",
+    "psNormativeSha256": "7844d3bf0079a7aebc8f3adbfaa0e3038a51a61f5474838d6f7a5881a784bce5",
+    "terraformRepository": "https://github.com/franklesniak/TerraformStyleGuide",
+    "terraformCommit": "e5064a672c10f4fad90f36e82af33ff8fc230b5f",
+    "terraformNormativeLocator": "https://github.com/franklesniak/TerraformStyleGuide/issues/20",
+    "terraformNormativeSha256": "f6922023544eb15fe6138462dd574e27f717c417105d80b535be46736a6b1a1d",
+    "rows": [
+      {
+        "id": "GF-PARAMETERS",
+        "status": "same",
+        "observed": "Both production generators retain a fixed repository root and four-path output map without caller-selected source or destination authority.",
+        "rationale": "The shared parameter boundary is preserved; this row does not grant any new caller override."
+      },
+      {
+        "id": "GF-DESTINATION",
+        "status": "intentional difference",
+        "observed": "Terraform retains terraform.instructions.md and Terraform artifact identifiers; the common path-safety function now uses the canonical character-array syntax.",
+        "rationale": "Only repository-specific destination leaves differ. Ordinary-file, containment, alias and replacement checks remain mandatory."
+      },
+      {
+        "id": "GF-CONTENT",
+        "status": "intentional difference",
+        "observed": "Terraform retains explicit RATIONALE markers and its own payload grammar; PS expands its rationale-anchor and heading grammar.",
+        "rationale": "The distinct source grammars require distinct payload bodies. Generated Terraform bytes are unchanged; missing-marker refusal and invariant indexing have separate native mutation evidence."
+      },
+      {
+        "id": "GF-SERIALIZATION",
+        "status": "same",
+        "observed": "Both normalize final carriage returns, encode BOM-less UTF-8 and verify complete payload bytes.",
+        "rationale": "The unchanged common serialization boundary remains symmetric; language-specific payload content is not a serialization exception."
+      },
+      {
+        "id": "GF-WRITE",
+        "status": "same",
+        "observed": "The common write function now matches after domain and help-version substitutions: CreateNew, durable Flush, candidate verification and atomic Replace or non-overwriting Move.",
+        "rationale": "Common race-proof comments and suppression syntax converge without relaxing final identity, pre-publication cleanup or post-publication truth. No cross-file atomicity is claimed."
+      },
+      {
+        "id": "GF-FAILURE",
+        "status": "intentional difference",
+        "observed": "The current canonical build requires one literal JSON object, typed scalar fields, all eight result/native predicates and fixed diagnostics.",
+        "rationale": "The installed Terraform reader requires the real GeneratorVersion hashtable comparison. Its scalar guard, all eight failure checks and literal diagnostics remain operative. Maintainer franklesniak owns re-evaluation at Task114 or the first reader change, whichever occurs first."
+      },
+      {
+        "id": "GF-HOSTS",
+        "status": "same",
+        "observed": "The unchanged identity primitives cover Windows handles and GNU/BSD stat dispatch with unknown-host refusal.",
+        "rationale": "The required Windows5.1, PowerShell7 Windows and Linux host contract is shared. Current-host execution availability is recorded separately; this row is not an assertion that every host cell has run."
+      },
+      {
+        "id": "GF-VERSION",
+        "status": "intentional difference",
+        "observed": "The timeless four-component grammar, canonical parser tests and independently bound generator/helper versions are retained.",
+        "rationale": "Common version-test syntax converges; Terraform versions advance coherently to1.0.20260918.0 without transferring arbitrary caller authority. The installed reader requires EXPECTED_VERSION; production validation requires agreement with the external contract. Maintainer franklesniak owns re-evaluation at Task114 or the first reader change."
+      },
+      {
+        "id": "GF-NODE-LOCK",
+        "status": "intentional difference",
+        "observed": "Both use the reviewed Node24.18.1/npm11.16.0 runtime and exact Linux archive digest. Terraform retains its existing package/lock bytes, newer lint graph and smol-toml1.7.1 override.",
+        "rationale": "The exact closed Terraform profile is current frozen-byte policy, not proof of historical lock production or a transfer of PS149 approval. Historical TF recorder output and issues22/24 remain unchanged and undisposed. The installed reader requires the existing package-digest object in multiline single-quoted form, with unchanged values and consumers. Maintainer franklesniak owns re-evaluation at Task114 or the first reader change."
+      },
+      {
+        "id": "GF-YAML",
+        "status": "same",
+        "observed": "Both use yaml2.9.0 with one strict YAML1.2 core document, closed inert external contract/catalog data and finite parser-tree, input, node and depth bounds.",
+        "rationale": "The canonical finite reader and applicable case union replace the old unbounded fold. Baseline policy execution passes; separate max/max+1 evidence is recorded in validation, not inferred from this row."
+      },
+      {
+        "id": "GF-ACTION-PINS",
+        "status": "same",
+        "observed": "Checkout, setup-node metadata and upload-artifact retain the same reviewed full SHAs and node24 action runtimes; code jobs call no action.",
+        "rationale": "The three immutable manifests and all41 input/default fields were reviewed at the pinned comparison. Retained setup-node metadata does not introduce an action invocation."
+      },
+      {
+        "id": "GF-ACTION-INPUTS",
+        "status": "intentional difference",
+        "observed": "Common authored publisher inputs now match, including show-progress=true, compression-level=0 and archive=true; Terraform keeps its stable artifact name and Terraform paths.",
+        "rationale": "Only actual artifact identity and payload leaves differ. No omitted default or common formatting difference is justified merely by historical implementation."
+      },
+      {
+        "id": "GF-GIT",
+        "status": "intentional difference",
+        "observed": "Both code-job acquisition roles use exact anonymous repository identity, external-config exclusion and fixed native commands; both now use the reusable exact-path helper.",
+        "rationale": "Terraform retains stronger module-qualified generator Git lookup and its installed depth-one identity acquisition. The protected identity reader is unchanged; its installed source-form constraint is met by the bounded operative compatibility forms."
+      },
+      {
+        "id": "GF-GRAPH",
+        "status": "intentional difference",
+        "observed": "Both build/Markdown graphs have action-free code jobs with empty permissions, fixed PowerShell, four scrubbed channels and a separate success-dependent action-only publisher; Terraform retains required verify/policy/markdownlint names.",
+        "rationale": "No Git writer or temporary push child remains. Stable check/artifact role names are intentional domain mappings, not permission to weaken graph or native-status checks. Ten informational messages use Write-Information -InformationAction Continue under the owner-authorized temporary common-source departure for issue48. Maintainer franklesniak must explicitly disposition this difference at Task114; it is not a permanent Terraform exception or a final convergence claim."
+      },
+      {
+        "id": "GF-CREDENTIALS",
+        "status": "same",
+        "observed": "All three code jobs require exact anonymous acquisition, token absence, external-config/hook neutrality and explicit cleanup; only the isolated publisher uses checkout actions.",
+        "rationale": "The common credential boundary is now role-equivalent. No push credential, reusable secret or write-enabled repository-code job is introduced."
+      },
+      {
+        "id": "GF-EVIDENCE",
+        "status": "intentional difference",
+        "observed": "The current native policy CLI passes477 applicable PS cases plus5 distinct TF patch cases,2 actual TF tuple cases and5 compatibility/logging regressions; three PS generator mutations and one actual TF refusal mutation pass.",
+        "rationale": "PS authorizer cases027/028 and generator004 are explicitly inapplicable, not silently equivalent. TF-only trust/domain and frozen-graph properties remain. Final-byte validation and the mandatory Task114 disposition are recorded separately. The bounded installed-reader forms and temporary ten-call logging difference do not establish final common-source convergence."
+      }
+    ]
+  }
+}
