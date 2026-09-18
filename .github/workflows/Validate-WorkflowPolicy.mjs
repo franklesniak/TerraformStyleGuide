@@ -107,7 +107,7 @@ const WORKFLOW_ISOLATION_POLICY_VERSION = 1;
 const RESULT_SCHEMA = 'TerraformStyleGuide.WorkflowPolicyResult.v1';
 const PREFLIGHT_SCHEMA = 'TerraformStyleGuide.WorkflowPreflightResult.v1';
 const PREFLIGHT_ARGUMENTS = ['--preflight'];
-const EXPECTED_CONTRACT_CANONICAL_SHA256 = 'db2e00f7f1f6c3a8aba01ac4b29d2d81e4582ff62a0dc356455c80a13b529402';
+const EXPECTED_CONTRACT_CANONICAL_SHA256 = 'd58cf4a39cf75834f4b492e9c7c5e6b126f3b08a278206546b0c8b80dc9ae329';
 const MINIMUM_CASE_COUNT = 99;
 const REQUIRED_IDENTITY_CASE_COUNT = 42;
 const CASE_CATALOG_FILE_NAME = 'workflow-policy-cases.json';
@@ -125,7 +125,15 @@ const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 // accepted path remains an exact contract literal and every component must be
 // an ordinary directory or file.
 const POLICY_ROOT = path.resolve(SCRIPT_DIRECTORY, '../..');
-const REQUIRED_ARGUMENTS = ['build.yml', 'markdownlint.yml'];
+const REQUIRED_ARGUMENTS = Object.freeze(['build.yml', 'markdownlint.yml']);
+const REPOSITORY_ROOT_ARGUMENTS = Object.freeze([
+  '.github/workflows/build.yml',
+  '.github/workflows/markdownlint.yml',
+]);
+const INVOCATION_PROFILES = Object.freeze([
+  Object.freeze({ directory: SCRIPT_DIRECTORY, arguments: REQUIRED_ARGUMENTS }),
+  Object.freeze({ directory: POLICY_ROOT, arguments: REPOSITORY_ROOT_ARGUMENTS }),
+]);
 const WORKFLOW_FILE_NAMES = [...REQUIRED_ARGUMENTS, IDENTITY_WORKFLOW_FILE_NAME];
 const REQUIRED_MARKDOWN_EXTENSIONS = ['md', 'mdc'];
 const REQUIRED_IGNORED_MARKDOWN_DIRECTORIES = ['node_modules', '.git', '.venv'];
@@ -3186,9 +3194,10 @@ function prepareInputCase(testCase, contract) {
   const payloadKeys = {
     'text-bytes': ['hex'], 'script-version': ['text'], 'package-object': ['target', 'operation'],
     'package-text': ['operation'], 'root-package': ['operation'], 'producer-contract': ['operation'],
-    cli: ['args'], 'lint-asset': ['target', 'text'], 'npm-config': ['presence'], 'parser-tree': ['nodes'],
+    cli: ['args', 'workingDirectory'], 'lint-asset': ['target', 'text'], 'npm-config': ['presence'], 'parser-tree': ['nodes'],
   };
-  expectExactKeys(testCase, ['id', 'semanticKey', 'sourceCase', 'domain', 'expected', 'expectedCategory',
+  expectExactKeys(testCase, ['id', 'semanticKey', 'sourceCase', 'domain', 'expected',
+    ...(testCase.expected === false || testCase.expectedCategory !== undefined ? ['expectedCategory'] : []),
     ...(testCase.expectedReason === undefined ? [] : ['expectedReason']), ...payloadKeys[testCase.domain]], 'case-catalog');
   const checkText = text => {
     if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > 262144) fail('case-operation');
@@ -3231,7 +3240,14 @@ function prepareInputCase(testCase, contract) {
   if (testCase.domain === 'cli') {
     if (!Array.isArray(testCase.args) || testCase.args.length > 8
       || testCase.args.some(arg => typeof arg !== 'string' || arg.length > 128)) fail('case-operation');
-    return testCase.args;
+    const workingDirectories = {
+      'workflow-directory': SCRIPT_DIRECTORY,
+      'repository-root': POLICY_ROOT,
+      'unrelated-directory': path.dirname(POLICY_ROOT),
+    };
+    if (typeof testCase.workingDirectory !== 'string'
+      || !Object.hasOwn(workingDirectories, testCase.workingDirectory)) fail('case-operation');
+    return { args: testCase.args, workingDirectory: workingDirectories[testCase.workingDirectory] };
   }
   if (testCase.domain === 'lint-asset') {
     if (!['lint-config', 'nested-linter'].includes(testCase.target)) fail('case-operation');
@@ -3280,7 +3296,7 @@ function validateInputCase(testCase, prepared, contract) {
       validatePackageBytePair(prepared.manifestBytes, prepared.lockBytes, contract); break;
     case 'root-package': validateRootToolchain(prepared); break;
     case 'producer-contract': validateProducerToolchain(prepared); break;
-    case 'cli': validateArguments(prepared); break;
+    case 'cli': validateArguments(prepared.args, prepared.workingDirectory); break;
     case 'lint-asset': validateLintAsset(testCase.target, prepared); break;
     case 'npm-config': validateNpmConfigPresence(prepared); break;
     case 'parser-tree': validateParserTreeFixture(prepared); break;
@@ -3536,10 +3552,40 @@ function testOrdinaryCasePreparation(catalog, workflows, dependabot, contract) {
   reject(append({ ...negative, operation: {
     type: 'set', path: '/name', value: workflows['build.yml'].value.name,
   } }), 'case-result', true);
+
+  const validCliCase = catalog.cases.find(testCase => testCase.id === 'TF-P1-WFPOL-449');
+  if (validCliCase === undefined) fail('ordinary-case-self-test');
+  const expectCliRejection = (operation, expectedCategory) => {
+    try {
+      operation();
+    } catch (error) {
+      if (error instanceof PolicyError && error.category === expectedCategory) return;
+      throw error;
+    }
+    fail('ordinary-case-self-test');
+  };
+  expectCliRejection(() => prepareInputCase({ ...validCliCase, workingDirectory: ['repository-root'] }, contract), 'case-operation');
+  expectCliRejection(() => prepareInputCase({ ...validCliCase, workingDirectory: 'unknown-directory' }, contract), 'case-operation');
+  const negativeCliSource = catalog.cases.find(testCase => testCase.id === 'PS-P1-WFPOL-427');
+  if (negativeCliSource === undefined) fail('ordinary-case-self-test');
+  const negativeCliCase = clone(negativeCliSource);
+  delete negativeCliCase.expectedCategory;
+  expectCliRejection(() => prepareInputCase(negativeCliCase, contract), 'case-catalog');
+  expectCliRejection(() => runCatalogCase({ ...validCliCase, expectedCategory: 'arguments' },
+    workflows, dependabot, contract), 'case-category');
 }
 
-function validateArguments(args = process.argv.slice(2)) {
-  if (canonicalJson(args) !== canonicalJson(REQUIRED_ARGUMENTS)) {
+function directoryIdentity(directory) {
+  const resolved = path.resolve(directory);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function validateArguments(args = process.argv.slice(2), workingDirectory = process.cwd()) {
+  const directory = directoryIdentity(workingDirectory);
+  const matched = INVOCATION_PROFILES.some(profile =>
+    directory === directoryIdentity(profile.directory)
+    && canonicalJson(args) === canonicalJson(profile.arguments));
+  if (!matched) {
     fail('arguments');
   }
 }
@@ -3582,10 +3628,7 @@ async function main() {
 
   const workflows = {};
   for (const fileName of WORKFLOW_FILE_NAMES) {
-    const filePath = path.resolve(process.cwd(), fileName);
-    if (filePath !== path.join(SCRIPT_DIRECTORY, fileName)) {
-      fail('workflow-path');
-    }
+    const filePath = path.join(SCRIPT_DIRECTORY, fileName);
     workflows[fileName] = parseStrictYaml(
       readOrdinaryFile(filePath, contract.limits.maximumWorkflowBytes, 'workflow-file'),
       contract.limits,

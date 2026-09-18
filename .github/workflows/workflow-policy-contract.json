@@ -98,11 +98,11 @@
   },
   "caseCatalog": {
     "path": "workflow-policy-cases.json",
-    "sha256": "8b170db614037c5acc3610ccf10004762fc248787b138053de962885dcd66774"
+    "sha256": "981122c11f729df05ab421dfa8709fe671aaa7711e1eaf23f408f590dc6b326c"
   },
   "validatorIdentity": {
     "path": "Validate-WorkflowPolicy.mjs",
-    "sha256": "854f3a80d461608ba9f4579337aba0b0c8eba8713901cf395eda1a9160e343e1"
+    "sha256": "d4b7ea331908c258d56a26208d6f791234a8de07f26c9d8b8d0c3e0ccae44522"
   },
   "actions": {
     "checkout": {
@@ -770,8 +770,8 @@
       {
         "id": "GF-EVIDENCE",
         "status": "intentional difference",
-        "observed": "The current native policy CLI passes477 applicable PS cases plus5 distinct TF patch cases,2 actual TF tuple cases and5 compatibility/logging regressions; three PS generator mutations and one actual TF refusal mutation pass.",
-        "rationale": "PS authorizer cases027/028 and generator004 are explicitly inapplicable, not silently equivalent. TF-only trust/domain and frozen-graph properties remain. Final-byte validation and the mandatory Task114 disposition are recorded separately. The bounded installed-reader forms and temporary ten-call logging difference do not establish final common-source convergence."
+        "observed": "The current native policy CLI passes477 applicable PS cases plus5 distinct TF patch cases,2 actual TF tuple cases,5 compatibility/logging regressions and6 exact Terraform invocation-profile cases; three PS generator mutations and one actual TF refusal mutation pass.",
+        "rationale": "PS authorizer cases027/028 and generator004 are explicitly inapplicable, not silently equivalent. TF-only trust/domain and frozen-graph properties remain. The exact repository-root validator profile preserves Terraform's governed caller contract while the workflow-directory profile remains equal to the common source. Maintainer franklesniak owns re-evaluation at Task114 or the first validator invocation-contract change, whichever occurs first. Final-byte validation and the mandatory Task114 disposition are recorded separately. The bounded installed-reader forms, invocation profile and temporary ten-call logging difference do not establish final common-source convergence."
       }
     ]
   }

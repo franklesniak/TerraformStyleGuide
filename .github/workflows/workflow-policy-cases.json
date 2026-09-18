@@ -6725,6 +6725,7 @@
       "sourceCase": "T1-CLI-001",
       "domain": "cli",
       "args": [],
+      "workingDirectory": "workflow-directory",
       "expectedCategory": "arguments",
       "expected": false
     },
@@ -6736,6 +6737,7 @@
       "args": [
         "preflight"
       ],
+      "workingDirectory": "workflow-directory",
       "expectedCategory": "arguments",
       "expected": false
     },
@@ -6748,6 +6750,7 @@
         "--preflight",
         "build.yml"
       ],
+      "workingDirectory": "workflow-directory",
       "expectedCategory": "arguments",
       "expected": false
     },
@@ -6761,6 +6764,7 @@
         "markdownlint.yml",
         "extra.yml"
       ],
+      "workingDirectory": "workflow-directory",
       "expectedCategory": "arguments",
       "expected": false
     },
@@ -7007,6 +7011,82 @@
       },
       "expected": false,
       "expectedCategory": "generator-result-predicate-GeneratorVersion"
+    },
+    {
+      "id": "TF-P1-WFPOL-448",
+      "semanticKey": "tf-cli-workflow-directory-profile",
+      "sourceCase": "TF-F110-CLI-001",
+      "domain": "cli",
+      "args": [
+        "build.yml",
+        "markdownlint.yml"
+      ],
+      "workingDirectory": "workflow-directory",
+      "expected": true
+    },
+    {
+      "id": "TF-P1-WFPOL-449",
+      "semanticKey": "tf-cli-repository-root-profile",
+      "sourceCase": "TF-F110-CLI-002",
+      "domain": "cli",
+      "args": [
+        ".github/workflows/build.yml",
+        ".github/workflows/markdownlint.yml"
+      ],
+      "workingDirectory": "repository-root",
+      "expected": true
+    },
+    {
+      "id": "TF-P1-WFPOL-450",
+      "semanticKey": "tf-cli-root-tuple-from-workflow-directory",
+      "sourceCase": "TF-F110-CLI-003",
+      "domain": "cli",
+      "args": [
+        ".github/workflows/build.yml",
+        ".github/workflows/markdownlint.yml"
+      ],
+      "workingDirectory": "workflow-directory",
+      "expectedCategory": "arguments",
+      "expected": false
+    },
+    {
+      "id": "TF-P1-WFPOL-451",
+      "semanticKey": "tf-cli-workflow-tuple-from-repository-root",
+      "sourceCase": "TF-F110-CLI-004",
+      "domain": "cli",
+      "args": [
+        "build.yml",
+        "markdownlint.yml"
+      ],
+      "workingDirectory": "repository-root",
+      "expectedCategory": "arguments",
+      "expected": false
+    },
+    {
+      "id": "TF-P1-WFPOL-452",
+      "semanticKey": "tf-cli-root-near-miss-spelling",
+      "sourceCase": "TF-F110-CLI-005",
+      "domain": "cli",
+      "args": [
+        "./.github/workflows/build.yml",
+        ".github/workflows/markdownlint.yml"
+      ],
+      "workingDirectory": "repository-root",
+      "expectedCategory": "arguments",
+      "expected": false
+    },
+    {
+      "id": "TF-P1-WFPOL-453",
+      "semanticKey": "tf-cli-root-tuple-from-unrelated-directory",
+      "sourceCase": "TF-F110-CLI-006",
+      "domain": "cli",
+      "args": [
+        ".github/workflows/build.yml",
+        ".github/workflows/markdownlint.yml"
+      ],
+      "workingDirectory": "unrelated-directory",
+      "expectedCategory": "arguments",
+      "expected": false
     }
   ]
 }
