@@ -10,13 +10,13 @@ fixed destination. Serialization is UTF-8 without a BOM and normalizes CRLF
 and lone CR to LF at the final payload boundary.
 
 .NOTES
-Version: 1.0.20260818.2
+Version: 1.0.20260918.0
 #>
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:strGeneratorVersion = '1.0.20260818.2'
+$script:strGeneratorVersion = '1.0.20260918.0'
 $script:strGeneratorResultSchema = 'TerraformStyleGuide.GeneratorResult.v2'
 $script:objUtf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
 $script:objUtf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -192,7 +192,7 @@ function Test-ScriptVersionParser {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 1.0.20260918.0
     #
     # This function declares no parameters.
     param ()
@@ -208,9 +208,9 @@ function Test-ScriptVersionParser {
         "<#`n.NOTES`nVersion: 1.0.20000229.-1`n#>`nfunction Test-Fixture {}`n",
         "<#`n.NOTES`n#>`nfunction Test-Fixture {`n<#`n.NOTES`nVersion: 1.0.20000229.0`n#>`n}`n"
     )
-    $null = Get-ScriptVersionRecord -ScriptText $strValid -ExpectedVersion '1.0.20000229.0'
+    [void](Get-ScriptVersionRecord -ScriptText $strValid -ExpectedVersion '1.0.20000229.0')
     try {
-        $null = Get-ScriptVersionRecord -ScriptText $strValid -ExpectedVersion '1.0.20000229.1'
+        [void](Get-ScriptVersionRecord -ScriptText $strValid -ExpectedVersion '1.0.20000229.1')
         throw 'version-fixture-failure'
     } catch {
         if ($_.Exception.Message -cne 'unexpected-version') {
@@ -219,7 +219,7 @@ function Test-ScriptVersionParser {
     }
     foreach ($strFixture in $arrInvalid) {
         try {
-            $null = Get-ScriptVersionRecord -ScriptText $strFixture -ExpectedVersion '1.0.20000229.0'
+            [void](Get-ScriptVersionRecord -ScriptText $strFixture -ExpectedVersion '1.0.20000229.0')
             throw 'version-fixture-failure'
         } catch {
             if ($_.Exception.Message -cne 'invalid-version') {
@@ -427,7 +427,7 @@ function Test-PathTextIsSafe {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 1.0.20260918.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -449,7 +449,7 @@ function Test-PathTextIsSafe {
         }
     }
 
-    if ($RawPath.IndexOfAny('*?[]'.ToCharArray()) -ge 0 -or $RawPath -match '^[^\\/]+::') {
+    if ($RawPath.IndexOfAny([char[]]'*?[]') -ge 0 -or $RawPath -match '^[^\\/]+::') {
         return $false
     }
 
@@ -1987,7 +1987,7 @@ function Write-StyleGuideArtifact {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 1.0.20260918.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -2063,7 +2063,7 @@ function Write-StyleGuideArtifact {
             if ((Get-OrdinaryDestinationState -LiteralPath $strDestinationPath) -cne $hashtableRecord.OriginalState) {
                 throw 'destination-state-drift'
             }
-            $null = Assert-OrdinaryAbsolutePath -LiteralPath $strDestinationPath -ExpectedLeafType File
+            [void](Assert-OrdinaryAbsolutePath -LiteralPath $strDestinationPath -ExpectedLeafType File)
             if ((Get-OrdinaryFileIdentity -LiteralPath $strDestinationPath) -cne
                 $hashtableRecord.OriginalOrdinaryIdentity -or
                 (New-Object System.IO.FileInfo($strDestinationPath)).Length -ne $hashtableRecord.OriginalLength -or
@@ -2163,13 +2163,13 @@ function Write-StyleGuideArtifact {
         }
 
         $strPhase = 'revalidate-publication'
-        $null = Assert-OrdinaryAbsolutePath -LiteralPath $strParentPath -ExpectedLeafType Directory
+        [void](Assert-OrdinaryAbsolutePath -LiteralPath $strParentPath -ExpectedLeafType Directory)
         $strCurrentDestinationState = Get-OrdinaryDestinationState -LiteralPath $strDestinationPath
         if ($strCurrentDestinationState -cne $hashtableRecord.OriginalState) {
             throw 'destination-state-drift'
         }
         if ($strCurrentDestinationState -eq 'Existing') {
-            $null = Assert-OrdinaryAbsolutePath -LiteralPath $strDestinationPath -ExpectedLeafType File
+            [void](Assert-OrdinaryAbsolutePath -LiteralPath $strDestinationPath -ExpectedLeafType File)
             if ((Get-OrdinaryFileIdentity -LiteralPath $strDestinationPath) -cne
                 $hashtableRecord.OriginalOrdinaryIdentity -or
                 (New-Object System.IO.FileInfo($strDestinationPath)).Length -ne $hashtableRecord.OriginalLength -or
@@ -2177,7 +2177,7 @@ function Write-StyleGuideArtifact {
                 throw 'destination-content-drift'
             }
         }
-        $null = Assert-OrdinaryAbsolutePath -LiteralPath $strTemporaryPath -ExpectedLeafType File
+        [void](Assert-OrdinaryAbsolutePath -LiteralPath $strTemporaryPath -ExpectedLeafType File)
         if ((Get-OrdinaryFileIdentity -LiteralPath $strTemporaryPath) -cne $strCandidateIdentity -or
             (Get-FileSha256Hex -LiteralPath $strTemporaryPath) -cne $hashtableRecord.CandidateSha256) {
             throw 'candidate-content-drift'
@@ -2187,18 +2187,19 @@ function Write-StyleGuideArtifact {
         # above re-proves the candidate identity and bytes, but File.Replace and
         # File.Move resolve the source by PATH. Between that final proof and the
         # rename below, a second writer with write access to the parent directory
-        # could rename the verified candidate away and place a different file at the
-        # same temporary path; the path-based rename would then publish the
-        # substituted file. No portable mechanism closes this: .NET exposes no
-        # handle-bound rename, POSIX rename is not fd-bound and does not honor a
-        # share mode, and a delete-denying handle held across the call would instead
-        # block the very rename this code must perform. The residual is bounded and
-        # never yields a false success -- the verify-publication phase below binds
-        # the final object to the candidate identity and bytes. It reports
-        # ReplacementStateUncertain on any mismatch, so a substitution fails closed
-        # with truthful evidence. This window requires a concurrent second writer
-        # racing a sub-second interval,
-        # which the single-actor CI trust root (docs/decisions/0001) does not have,
+        # could rename the verified candidate away and place a different object at
+        # the same temporary path, with either the same or different bytes; the
+        # path-based rename would then publish that substituted object. No portable
+        # mechanism closes this: .NET exposes no handle-bound rename, POSIX rename
+        # is not fd-bound and does not honor a share mode, and a delete-denying handle
+        # held across the call would instead block the very rename this code must
+        # perform. The residual is bounded and never yields a false success -- the
+        # verify-publication phase below binds the final object to the candidate
+        # identity and verifies its bytes. It reports a final-candidate-identity-mismatch
+        # or final-byte-drift under ReplacementStateUncertain, so a substitution fails
+        # closed with truthful evidence. The window requires a concurrent second
+        # writer racing a sub-second interval, which the single-actor CI trust root
+        # (docs/decisions/0001) does not have,
         # and such a writer already has directory write access and so gains nothing
         # beyond a truthfully reported failure it could cause by writing directly.
         $strPhase = 'publish-destination'
@@ -2224,16 +2225,16 @@ function Write-StyleGuideArtifact {
         if ($hashtableRecord.FinalState -cne 'Existing') {
             throw 'final-state-drift'
         }
-        $null = Assert-OrdinaryAbsolutePath -LiteralPath $strDestinationPath -ExpectedLeafType File
+        [void](Assert-OrdinaryAbsolutePath -LiteralPath $strDestinationPath -ExpectedLeafType File)
         # Bind the measured bytes to a single destination identity across the read.
-        # A second writer that replaces the destination between the byte read and the
-        # identity read would otherwise pair the correct candidate bytes with the
-        # replacement's identity, and every comparison below would still pass. Capture
-        # the identity before and after the read and require them to match; a change
-        # across the read fails closed. Publication already returned, so the catch
-        # reports ReplacementStateUncertain. A change before the byte read alters the
-        # bytes and is caught below as final-byte-drift; a change strictly after the
-        # second identity read is the accepted publication residual documented above.
+        # A second writer that replaces the destination during the read window could
+        # otherwise let the identity and byte measurements describe different objects.
+        # Capture the identity before and after the read and require them to match; a
+        # change across the read fails closed. Publication already returned, so the catch
+        # reports ReplacementStateUncertain. A change before the byte read can alter
+        # identity, bytes, or both and is caught below as final-candidate-identity-mismatch
+        # or final-byte-drift; a change strictly after the second identity read is the
+        # accepted publication residual documented above.
         $strFinalIdentityBeforeRead = Get-OrdinaryFileIdentity -LiteralPath $strDestinationPath
         $arrFinalBytes = [System.IO.File]::ReadAllBytes($strDestinationPath)
         $hashtableRecord.FinalLength = $arrFinalBytes.Length
@@ -2289,7 +2290,7 @@ function Write-StyleGuideArtifact {
             } elseif ($boolCandidatePresent) {
                 if ($boolTemporaryIdentityProven) {
                     try {
-                        $null = Assert-OrdinaryAbsolutePath -LiteralPath $strTemporaryPath -ExpectedLeafType File
+                        [void](Assert-OrdinaryAbsolutePath -LiteralPath $strTemporaryPath -ExpectedLeafType File)
                         if ((Get-OrdinaryFileIdentity -LiteralPath $strTemporaryPath) -cne $strCandidateIdentity) {
                             throw 'candidate-identity-drift'
                         }

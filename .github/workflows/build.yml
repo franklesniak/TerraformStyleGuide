@@ -1,55 +1,16 @@
 name: Build Style Guide Artifacts
-
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   pull_request:
-    branches: [main]
-
-permissions:
-  contents: read
-
+    branches:
+      - main
+permissions: {}
 jobs:
-  # This job runs repository-controlled code, so it uses no actions at all and
-  # holds no token scopes at all. Both halves are load-bearing, and the second
-  # is not sufficient on its own.
-  #
-  # permissions: {} governs the repository token. It does not govern
-  # ACTIONS_RUNTIME_TOKEN, which is the credential for the artifact and cache
-  # services. The runner sets that variable from the job's system connection,
-  # not from the permissions map: NodeScriptActionHandler.RunAsync assigns
-  # Environment["ACTIONS_RUNTIME_TOKEN"] unconditionally, before it decides
-  # whether it is running the action's pre, main, or post script. So every
-  # JavaScript action in a job -- including a post step that post-if defaults
-  # to always() -- runs as a process holding a credential this job cannot
-  # revoke, and actions/checkout's post step runs after the generator step has
-  # ended.
-  #
-  # A descendant the generator detached is still alive then, runs as the same
-  # user, and can read /proc/<pid>/environ of that process; ptrace(2) classes
-  # that read as PTRACE_MODE_READ, which the Yama LSM does not restrict at any
-  # ptrace_scope setting. It can also simply overwrite the action's own
-  # dist/index.js under _actions before the post step starts, because a SHA pin
-  # fixes what was downloaded and not what is on disk when the post step runs.
-  # GitHub's own guidance is that jobs "can interact with (and compromise)"
-  # each other by exactly this class of mechanism, so intra-runner isolation is
-  # not a boundary to build on.
-  #
-  # None of that can be defended from inside a step, and the credential cannot
-  # be scoped away. So the job simply contains nothing that receives it: no
-  # uses:, therefore no JavaScript action, therefore no process in this job
-  # ever holds the runtime token. The same removal closes the step
-  # communication channel for free -- with no post step there is nothing left
-  # in the job to consume a poisoned $GITHUB_ENV.
-  #
-  # The cost is that the checkout is done here rather than by the pinned
-  # action. The repository is public, so the fetch is anonymous and no
-  # credential is created at all, which is strictly less than the action needs;
-  # if the repository ever becomes private this fails loudly at the fetch
-  # rather than quietly restoring a credential. publish still uses the pinned
-  # action, because it runs no repository code.
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions: {}
     steps:
       - name: Acquire triggering revision without an action
@@ -57,6 +18,16 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+
+          # Do not load user/system Git credentials or hooks during anonymous acquisition.
+          $env:GIT_CONFIG_NOSYSTEM = '1'
+          $env:GIT_CONFIG_GLOBAL = '/dev/null'
+          $env:GIT_TERMINAL_PROMPT = '0'
+          if (-not [string]::IsNullOrEmpty($env:GITHUB_TOKEN) -or
+              -not [string]::IsNullOrEmpty($env:GH_TOKEN) -or
+              -not [string]::IsNullOrEmpty($env:ACTIONS_RUNTIME_TOKEN)) {
+              throw 'credential-policy: a token was projected into a code job'
+          }
           # git reports absent state with a non-zero status in places this step
           # accepts, so native-command error mapping is disabled the same way
           # the other governed steps disable it and each status is classified
@@ -75,8 +46,8 @@ jobs:
           if ($strServerUrl -cne 'https://github.com') {
               throw 'acquire: the runner named an unexpected server'
           }
-          if ($strRepository -cnotmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {
-              throw 'acquire: the triggering repository is not a plain owner/name pair'
+          if ($strRepository -cne 'franklesniak/TerraformStyleGuide') {
+              throw 'acquire: the triggering repository is not the expected repository'
           }
           # A full 40-hex commit is required rather than a ref. A ref would let
           # the fetch resolve to whatever the ref points at when the fetch runs,
@@ -105,28 +76,37 @@ jobs:
           if ([string]::IsNullOrEmpty($strResolvedGit)) { throw 'acquire: Git was not resolved as an application' }
           New-Variable -Name strGitPath -Value $strResolvedGit -Option Constant
 
-          & $strGitPath init --quiet .
+          & $strGitPath -c core.hooksPath=/dev/null init --quiet .
           if ($LASTEXITCODE -ne 0) { throw "acquire: git init exited $LASTEXITCODE" }
           & $strGitPath remote add origin "$strServerUrl/$strRepository"
           if ($LASTEXITCODE -ne 0) { throw "acquire: git remote add exited $LASTEXITCODE" }
           # Fetching the commit itself, not a ref that names it. No credential
           # is supplied and none is configured, so nothing is persisted for the
           # next step to have to clean up.
-          & $strGitPath fetch --depth 1 --no-tags --no-recurse-submodules origin $strSha
+          & $strGitPath -c credential.helper= -c http.extraheader= -c core.hooksPath=/dev/null fetch --depth 1 --no-tags --no-recurse-submodules origin $strSha
           if ($LASTEXITCODE -ne 0) { throw "acquire: git fetch exited $LASTEXITCODE" }
-          & $strGitPath checkout --quiet --detach FETCH_HEAD
+          & $strGitPath -c core.hooksPath=/dev/null checkout --quiet --detach FETCH_HEAD
           if ($LASTEXITCODE -ne 0) { throw "acquire: git checkout exited $LASTEXITCODE" }
           $strHead = (& $strGitPath rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0 -or $strHead -cne $strSha) {
               throw 'acquire: the checked out revision is not the triggering revision'
           }
-          Write-Host "acquire: anonymous shallow checkout of $strSha"
-
+          Write-Information "acquire: anonymous shallow checkout of $strSha" -InformationAction Continue
       - name: Verify checkout credential cleanup
         id: verify-checkout-credentials
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+
+          # Do not load user/system Git credentials or hooks during anonymous acquisition.
+          $env:GIT_CONFIG_NOSYSTEM = '1'
+          $env:GIT_CONFIG_GLOBAL = '/dev/null'
+          $env:GIT_TERMINAL_PROMPT = '0'
+          if (-not [string]::IsNullOrEmpty($env:GITHUB_TOKEN) -or
+              -not [string]::IsNullOrEmpty($env:GH_TOKEN) -or
+              -not [string]::IsNullOrEmpty($env:ACTIONS_RUNTIME_TOKEN)) {
+              throw 'credential-policy: a token was projected into a code job'
+          }
           # git config exits 1 when a queried key is absent, which is the secure
           # expected state this step asserts. If the runner enables native-command
           # error mapping, that accepted status would terminate the step before the
@@ -145,7 +125,7 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or $arrRemoteUrls.Count -ne 1) {
               throw 'credential-policy: unable to resolve exactly one origin URL'
           }
-          if ($arrRemoteUrls[0] -notmatch '^https://github\.com/[^/@]+/[^/@]+(?:\.git)?$') {
+          if ($arrRemoteUrls[0] -cne 'https://github.com/franklesniak/TerraformStyleGuide') {
               throw 'credential-policy: origin is not a credential-free GitHub HTTPS URL'
           }
           $arrHelpers = @(& $strGitPath config --local --get-all credential.helper)
@@ -161,11 +141,29 @@ jobs:
               throw 'credential-policy: persisted HTTP authorization is configured'
           }
 
-      - name: Generate and verify committed artifacts
+          $arrEffectiveConfig = @(& $strGitPath config --show-scope --name-only --list)
+          $intEffectiveConfigExit = $LASTEXITCODE
+          if ($intEffectiveConfigExit -ne 0 -or @($arrEffectiveConfig | Where-Object { $_ -cmatch '^(system|global)\s' }).Count -ne 0) {
+              throw 'credential-policy: external Git configuration was not excluded'
+          }
+      - name: Generate and verify style guide artifacts
         id: generate-and-verify
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
+              $PSNativeCommandUseErrorActionPreference = $false
+          }
+
+          # Do not load user/system Git credentials or hooks during anonymous acquisition.
+          $env:GIT_CONFIG_NOSYSTEM = '1'
+          $env:GIT_CONFIG_GLOBAL = '/dev/null'
+          $env:GIT_TERMINAL_PROMPT = '0'
+          if (-not [string]::IsNullOrEmpty($env:GITHUB_TOKEN) -or
+              -not [string]::IsNullOrEmpty($env:GH_TOKEN) -or
+              -not [string]::IsNullOrEmpty($env:ACTIONS_RUNTIME_TOKEN)) {
+              throw 'credential-policy: a token was projected into a code job'
+          }
           $arrArtifacts = @(
               'STYLE_GUIDE_CHAT.md'
               'STYLE_GUIDE_FULL.md'
@@ -481,24 +479,10 @@ jobs:
           }
           $strControlSurfaceBefore = Get-GitControlSurfaceDigest
 
-          # GitHub documents that the step writing these files "does not have
-          # access to the new value, but all subsequent steps in a job will have
-          # access". This is the last authored step, which is why publishing
-          # moved to a job that runs no repository code -- but it is not the
-          # last thing that executes. actions/checkout registers a post action
-          # and post-if defaults to always(), so a Node process runs at the end
-          # of this job holding the checkout inputs, and a descendant that
-          # writes these files after this step exits reaches it. That is why
-          # this job carries no token scopes: the channel cannot be closed from
-          # inside the step, so the credential on the other end of it is made
-          # worthless instead.
-          #
-          # The assertion below is a floor, not a ceiling. It catches a
-          # generator that writes during its own run, and it is why appending
-          # an authored step here would be unsafe -- the validator asserts the
-          # step order for that reason. It cannot catch a write that happens
-          # after the step ends, and it does not claim to.
-          New-Variable -Name arrChannelPaths -Value @($env:GITHUB_ENV, $env:GITHUB_PATH) -Option Constant
+          # No later authored step or action receives repository-code job state.
+          # The final channel check detects writes during this step, not after exit.
+          # Publication uses another runner and independently fetches committed bytes.
+          New-Variable -Name arrChannelPaths -Value @($env:GITHUB_ENV, $env:GITHUB_PATH, $env:GITHUB_OUTPUT, $env:GITHUB_STEP_SUMMARY) -Option Constant
 
           # Every Git probe below reports on state the generator can move. It can
           # stage and commit its own output, which advances HEAD and empties the
@@ -619,56 +603,103 @@ jobs:
           # then be reading what it chose. A process boundary removes the class
           # rather than naming its members: a child process cannot reach this
           # session's functions, variables, or environment.
-          $arrGeneratorResult = @(& pwsh -NoProfile -NonInteractive -File ./.github/workflows/Generate-StyleGuideArtifacts.ps1)
+          try {
+              $strPowerShellPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+          } catch {
+              # Any MainModule resolution failure falls through to the deterministic guard below.
+              $strPowerShellPath = $null
+          }
+          if ([string]::IsNullOrEmpty($strPowerShellPath) -or
+              -not [System.IO.File]::Exists($strPowerShellPath)) {
+              throw 'The current PowerShell executable could not be resolved.'
+          }
+          $arrResult = @(& $strPowerShellPath `
+              -NoLogo `
+              -NoProfile `
+              -NonInteractive `
+              -File './.github/workflows/Generate-StyleGuideArtifacts.ps1')
           $intGeneratorExit = $LASTEXITCODE
-          if ($arrGeneratorResult.Count -ne 1) { throw 'generator: unexpected output shape' }
-          $objGeneratorResult = $arrGeneratorResult[0] | ConvertFrom-Json
-          $arrGeneratorContractChecks = @(
-              [ordered]@{ 'Name' = 'NativeExit'; 'Valid' = $intGeneratorExit -is [int] -and $intGeneratorExit -eq 0; 'Actual' = $intGeneratorExit }
-              [ordered]@{ 'Name' = 'Schema'; 'Valid' = $objGeneratorResult.Schema -is [string] -and $objGeneratorResult.Schema -ceq 'TerraformStyleGuide.GeneratorResult.v2'; 'Actual' = $objGeneratorResult.Schema }
-              [ordered]@{ 'Name' = 'GeneratorVersion'; 'Valid' = $objGeneratorResult.GeneratorVersion -ceq '1.0.20260818.2' -and $objGeneratorResult.GeneratorVersion -is [string]; 'Actual' = $objGeneratorResult.GeneratorVersion }
-              [ordered]@{ 'Name' = 'Overall'; 'Valid' = $objGeneratorResult.Overall -is [string] -and $objGeneratorResult.Overall -in @('Success', 'NoChange'); 'Actual' = $objGeneratorResult.Overall }
-              [ordered]@{ 'Name' = 'Phase'; 'Valid' = $objGeneratorResult.Phase -is [string] -and $objGeneratorResult.Phase -ceq 'complete'; 'Actual' = $objGeneratorResult.Phase }
-              [ordered]@{ 'Name' = 'Category'; 'Valid' = $objGeneratorResult.Category -is [string] -and $objGeneratorResult.Category -ceq 'none'; 'Actual' = $objGeneratorResult.Category }
-              [ordered]@{ 'Name' = 'NativeOutcome'; 'Valid' = $objGeneratorResult.NativeOutcome -is [string] -and $objGeneratorResult.NativeOutcome -ceq 'Success'; 'Actual' = $objGeneratorResult.NativeOutcome }
-              [ordered]@{ 'Name' = 'ResultExitCode'; 'Valid' = ($objGeneratorResult.ExitCode -is [int] -or $objGeneratorResult.ExitCode -is [long]) -and $objGeneratorResult.ExitCode -eq 0; 'Actual' = $objGeneratorResult.ExitCode }
-          )
-          $listGeneratorContractViolations = [System.Collections.Generic.List[string]]::new()
-          foreach ($hashtableGeneratorContractCheck in $arrGeneratorContractChecks) {
-              if (-not $hashtableGeneratorContractCheck.Valid) {
-                  $strGeneratorContractActual = if ($null -eq $hashtableGeneratorContractCheck.Actual) {
-                      '<null>'
-                  } else {
-                      [string]$hashtableGeneratorContractCheck.Actual
-                  }
-                  $strGeneratorContractActual = $strGeneratorContractActual -replace '[^\x20-\x7E]', '?'
-                  if ($strGeneratorContractActual.Length -gt 64) {
-                      $strGeneratorContractActual = $strGeneratorContractActual.Substring(0, 64) + '...'
-                  }
-                  $listGeneratorContractViolations.Add(
-                      "$($hashtableGeneratorContractCheck.Name)=$strGeneratorContractActual"
-                  )
-              }
+          if ($arrResult.Count -ne 1) {
+              throw 'The generator returned an unexpected output shape.'
           }
-          if ($listGeneratorContractViolations.Count -ne 0) {
-              throw "generator: result contract violation: $($listGeneratorContractViolations -join '; ')"
+          # BEGIN P1 GENERATOR RESULT
+          try {
+              $objResult = $arrResult[0] | ConvertFrom-Json -NoEnumerate -ErrorAction Stop
+          } catch {
+              throw 'The generator returned invalid JSON.'
           }
+          if ($null -eq $objResult -or $objResult.GetType() -ne [System.Management.Automation.PSCustomObject]) {
+              throw 'The generator returned a non-object JSON result.'
+          }
+          # Only fixed labels enter this list; result values must never reach the diagnostic.
+          $listFailedChecks = [System.Collections.Generic.List[string]]::new()
+          if ($intGeneratorExit -isnot [int] -or $intGeneratorExit -ne 0) {
+              [void]($listFailedChecks.Add('NativeExit'))
+          }
+          if ($objResult.Schema -isnot [string] -or $objResult.Schema -cne 'TerraformStyleGuide.GeneratorResult.v2') {
+              [void]($listFailedChecks.Add('Schema'))
+          }
+          $objGeneratorResult = $objResult
+          $hashtableGeneratorVersionCheck = @{ 'Name' = 'GeneratorVersion'; 'Valid' = $objGeneratorResult.GeneratorVersion -ceq '1.0.20260918.0' }
+          if ($objGeneratorResult.GeneratorVersion -isnot [string] -or -not $hashtableGeneratorVersionCheck.Valid) {
+              [void]($listFailedChecks.Add('GeneratorVersion'))
+          }
+          if ($objResult.Overall -isnot [string] -or $objResult.Overall -notin @('Success', 'NoChange')) {
+              [void]($listFailedChecks.Add('Overall'))
+          }
+          if ($objResult.Phase -isnot [string] -or $objResult.Phase -cne 'complete') {
+              [void]($listFailedChecks.Add('Phase'))
+          }
+          if ($objResult.Category -isnot [string] -or $objResult.Category -cne 'none') {
+              [void]($listFailedChecks.Add('Category'))
+          }
+          if ($objResult.NativeOutcome -isnot [string] -or $objResult.NativeOutcome -cne 'Success') {
+              [void]($listFailedChecks.Add('NativeOutcome'))
+          }
+          if (($objResult.ExitCode -isnot [int] -and $objResult.ExitCode -isnot [long]) -or $objResult.ExitCode -ne 0) {
+              [void]($listFailedChecks.Add('ResultExitCode'))
+          }
+          if ($listFailedChecks.Count -ne 0) {
+              throw ('Artifact generation failed result checks: {0}.' -f ($listFailedChecks -join ', '))
+          }
+          # END P1 GENERATOR RESULT
           $arrExpectedArtifactRecords = @(
               @('copilot', 'copilot-instructions.md'),
               @('terraform-instructions', 'terraform.instructions.md'),
               @('chat', 'STYLE_GUIDE_CHAT.md'),
               @('full', 'STYLE_GUIDE_FULL.md')
           )
-          if ($objGeneratorResult.Artifacts.Count -ne $arrExpectedArtifactRecords.Count) {
+          if ($objResult.Artifacts.Count -ne $arrExpectedArtifactRecords.Count) {
               throw 'generator: unexpected artifact record count'
           }
           for ($intArtifactIndex = 0; $intArtifactIndex -lt $arrExpectedArtifactRecords.Count; $intArtifactIndex++) {
-              $objArtifactRecord = $objGeneratorResult.Artifacts[$intArtifactIndex]
-              if ($objArtifactRecord.ArtifactId -cne $arrExpectedArtifactRecords[$intArtifactIndex][0] -or
+              $objArtifactRecord = $objResult.Artifacts[$intArtifactIndex]
+              if ($objArtifactRecord.ArtifactId -isnot [string] -or
+                  $objArtifactRecord.ArtifactId -cne $arrExpectedArtifactRecords[$intArtifactIndex][0] -or
+                  $objArtifactRecord.Path -isnot [string] -or
                   $objArtifactRecord.Path -cne $arrExpectedArtifactRecords[$intArtifactIndex][1] -or
+                  $objArtifactRecord.Status -isnot [string] -or
                   $objArtifactRecord.Status -notin @('Success', 'NoChange')) {
-                  throw "generator: invalid artifact record at index $intArtifactIndex"
+                  throw 'generator: invalid artifact record'
               }
+          }
+
+          # Preserve the v2 exact-path verifier as an additional independent check.
+          $strVerifierCommand = '& ''./.github/workflows/Test-ExactGitPathSet.ps1'' -RepositoryRoot $env:GITHUB_WORKSPACE -GitExecutablePath ''/usr/bin/git'' -ExpectedPath @() -Mode Both -RequireCleanWorkingAgainstIndex'
+          $strEncodedVerifierCommand = [System.Convert]::ToBase64String(
+              [System.Text.Encoding]::Unicode.GetBytes($strVerifierCommand)
+          )
+          $arrPathSetResult = @(& $strPowerShellPath -NoLogo -NoProfile -NonInteractive -EncodedCommand $strEncodedVerifierCommand)
+          $intPathSetExit = $LASTEXITCODE
+          if ($arrPathSetResult.Count -ne 1) { throw 'Exact-path verification returned an invalid shape.' }
+          try { $objPathSetResult = $arrPathSetResult[0] | ConvertFrom-Json -NoEnumerate -ErrorAction Stop }
+          catch { throw 'Exact-path verification returned invalid JSON.' }
+          if ($null -eq $objPathSetResult -or $objPathSetResult.GetType() -ne [System.Management.Automation.PSCustomObject] -or
+              $intPathSetExit -isnot [int] -or $intPathSetExit -ne 0 -or
+              $objPathSetResult.Schema -isnot [string] -or $objPathSetResult.Schema -cne 'TerraformStyleGuide.ExactGitPathSetResult.v2' -or
+              $objPathSetResult.VerifierVersion -isnot [string] -or $objPathSetResult.VerifierVersion -cne '1.0.20260918.0' -or
+              $objPathSetResult.Success -isnot [bool] -or -not $objPathSetResult.Success) {
+              throw 'Exact-path verification did not confirm a clean worktree and index.'
           }
 
           if ((Get-GitControlSurfaceDigest) -cne $strControlSurfaceBefore) {
@@ -706,8 +737,8 @@ jobs:
           $objWorking = Invoke-GitRaw @('diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--')
           $objStaged = Invoke-GitRaw @('diff', '--cached', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--')
           $objUntracked = Invoke-GitRaw @('ls-files', '--others', '--exclude-standard', '-z', '--')
-          foreach ($objResult in @($objWorking, $objStaged, $objUntracked)) {
-              if ($objResult.ExitCode -ne 0) { throw "native-tool: Git path query failed with exit $($objResult.ExitCode)" }
+          foreach ($objGitResult in @($objWorking, $objStaged, $objUntracked)) {
+              if ($objGitResult.ExitCode -ne 0) { throw "native-tool: Git path query failed with exit $($objGitResult.ExitCode)" }
           }
           $null = Assert-AllowedPathSet (ConvertFrom-NulPathRecordStream $objWorking.Bytes) $arrArtifacts 'working'
           $arrStagedPaths = @(Assert-AllowedPathSet (ConvertFrom-NulPathRecordStream $objStaged.Bytes) @() 'staged')
@@ -718,42 +749,20 @@ jobs:
           if ($objDiff.ExitCode -ne 0 -and $objDiff.ExitCode -ne 1) {
               throw "native-tool: git diff failed with exit $($objDiff.ExitCode)"
           }
-          # Status 1 means the committed artifacts differ from what the generator
-          # produces. While a promotion writer existed, recording that and
-          # continuing was coherent: the writer committed the regenerated bytes,
-          # and failing here would have skipped it, blocking the very promotion
-          # that resolved the drift. Nothing commits them now. Tolerating status 1
-          # would leave the repository permanently stale behind a green check,
-          # which is worse than having no check at all -- it reports that the
-          # committed artifacts were verified when they were only inspected.
+          # Status 1 means committed artifacts differ from generator output.
+          # This read-only workflow has no writer to repair that drift; it must fail.
           if ($objDiff.ExitCode -eq 1) {
               throw 'generated-artifacts: committed artifacts do not match generator output. Run ./.github/workflows/Generate-StyleGuideArtifacts.ps1 and commit the four regenerated files.'
           }
           Write-Information 'generated-artifacts: committed bytes match generator output' -InformationAction Continue
-
-  # Publishing lives in its own job because the generator's descendants outlive
-  # the generator. The process boundary makes the call synchronous, not the work:
-  # a detached grandchild that waits for this step to exit sees a verification
-  # that already passed and a worktree it can still write. setsid(2) states that
-  # a process calling it "will be the only process in the new process group and
-  # in the new session", so killing the generator's process group does not reach
-  # a descendant that opts out of it, and the runner's own orphan sweep happens
-  # at the end of the job -- after every step that would consume the bytes.
-  #
-  # So nothing that runs the generator publishes anything. This job runs no
-  # repository code at all: two pinned actions, no run: script anywhere, which
-  # the validator enforces rather than trusts. It gets the artifacts the only
-  # way they cannot be tampered with -- a fresh checkout of the triggering
-  # revision, on a different machine, from an immutable commit. needs: verify
-  # means it only runs once verify proved those committed bytes equal generator
-  # output, so what is published is exactly what was verified.
   publish:
-    needs: verify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: read
+    needs: verify
     steps:
-      - name: Check out triggering revision
+      - name: Checkout repository
         id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -761,16 +770,15 @@ jobs:
           ref: ${{ github.sha }}
           token: ${{ github.token }}
           persist-credentials: false
+          clean: true
           fetch-depth: 1
           fetch-tags: false
-          show-progress: false
+          show-progress: true
           lfs: false
           submodules: false
-          clean: true
           set-safe-directory: true
           allow-unsafe-pr-checkout: false
-
-      - name: Upload verified generated artifacts
+      - name: Publish committed style guide artifacts
         id: upload-generated
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -782,6 +790,7 @@ jobs:
             STYLE_GUIDE_FULL.md
           if-no-files-found: error
           retention-days: 7
-          compression-level: 6
+          compression-level: 0
           overwrite: false
           include-hidden-files: false
+          archive: true
