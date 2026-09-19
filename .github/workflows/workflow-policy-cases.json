@@ -4327,7 +4327,7 @@
       },
       "expected": false,
       "expectedCategory": "acquire-policy",
-      "expectedReason": "build.verify.acquire no longer asserts a plain owner/name repository"
+      "expectedReason": "build.verify.acquire no longer asserts the exact expected repository and its diagnostic"
     },
     {
       "id": "PS-P1-WFPOL-257",
@@ -7086,6 +7086,86 @@
       ],
       "workingDirectory": "unrelated-directory",
       "expectedCategory": "arguments",
+      "expected": false
+    },
+    {
+      "id": "TF-P1-WFPOL-454",
+      "semanticKey": "tf-build-exact-repository-diagnostic",
+      "sourceCase": "TF-F110-DIAG-001",
+      "domain": "workflow",
+      "workflow": "build.yml",
+      "operation": {
+        "type": "replace",
+        "path": "/jobs/verify/steps/0/run",
+        "from": "throw 'acquire: the triggering repository is not the expected repository'",
+        "to": "throw 'acquire: the triggering repository is not a plain owner/name pair'"
+      },
+      "expectedCategory": "acquire-policy",
+      "expectedReason": "build.verify.acquire no longer asserts the exact expected repository and its diagnostic",
+      "expected": false
+    },
+    {
+      "id": "TF-P1-WFPOL-455",
+      "semanticKey": "tf-policy-exact-repository-guard",
+      "sourceCase": "TF-F110-DIAG-002",
+      "domain": "workflow",
+      "workflow": "markdownlint.yml",
+      "operation": {
+        "type": "replace",
+        "path": "/jobs/policy/steps/0/run",
+        "from": "if ($strRepository -cne 'franklesniak/TerraformStyleGuide') {",
+        "to": "if ([string]::IsNullOrEmpty($strRepository)) {"
+      },
+      "expectedCategory": "acquire-policy",
+      "expectedReason": "markdown.policy.acquire no longer asserts the exact expected repository and its diagnostic",
+      "expected": false
+    },
+    {
+      "id": "TF-P1-WFPOL-456",
+      "semanticKey": "tf-policy-exact-repository-diagnostic",
+      "sourceCase": "TF-F110-DIAG-003",
+      "domain": "workflow",
+      "workflow": "markdownlint.yml",
+      "operation": {
+        "type": "replace",
+        "path": "/jobs/policy/steps/0/run",
+        "from": "throw 'acquire: the triggering repository is not the expected repository'",
+        "to": "throw 'acquire: the triggering repository is not a plain owner/name pair'"
+      },
+      "expectedCategory": "acquire-policy",
+      "expectedReason": "markdown.policy.acquire no longer asserts the exact expected repository and its diagnostic",
+      "expected": false
+    },
+    {
+      "id": "TF-P1-WFPOL-457",
+      "semanticKey": "tf-markdownlint-exact-repository-guard",
+      "sourceCase": "TF-F110-DIAG-004",
+      "domain": "workflow",
+      "workflow": "markdownlint.yml",
+      "operation": {
+        "type": "replace",
+        "path": "/jobs/markdownlint/steps/0/run",
+        "from": "if ($strRepository -cne 'franklesniak/TerraformStyleGuide') {",
+        "to": "if ([string]::IsNullOrEmpty($strRepository)) {"
+      },
+      "expectedCategory": "acquire-policy",
+      "expectedReason": "markdown.markdownlint.acquire no longer asserts the exact expected repository and its diagnostic",
+      "expected": false
+    },
+    {
+      "id": "TF-P1-WFPOL-458",
+      "semanticKey": "tf-markdownlint-exact-repository-diagnostic",
+      "sourceCase": "TF-F110-DIAG-005",
+      "domain": "workflow",
+      "workflow": "markdownlint.yml",
+      "operation": {
+        "type": "replace",
+        "path": "/jobs/markdownlint/steps/0/run",
+        "from": "throw 'acquire: the triggering repository is not the expected repository'",
+        "to": "throw 'acquire: the triggering repository is not a plain owner/name pair'"
+      },
+      "expectedCategory": "acquire-policy",
+      "expectedReason": "markdown.markdownlint.acquire no longer asserts the exact expected repository and its diagnostic",
       "expected": false
     }
   ]

@@ -107,7 +107,7 @@ const WORKFLOW_ISOLATION_POLICY_VERSION = 1;
 const RESULT_SCHEMA = 'TerraformStyleGuide.WorkflowPolicyResult.v1';
 const PREFLIGHT_SCHEMA = 'TerraformStyleGuide.WorkflowPreflightResult.v1';
 const PREFLIGHT_ARGUMENTS = ['--preflight'];
-const EXPECTED_CONTRACT_CANONICAL_SHA256 = 'd58cf4a39cf75834f4b492e9c7c5e6b126f3b08a278206546b0c8b80dc9ae329';
+const EXPECTED_CONTRACT_CANONICAL_SHA256 = '2eda1cf8935ab4249be48eba70dea0d710e7a206e881e27fdd08473072e74a4d';
 const MINIMUM_CASE_COUNT = 99;
 const REQUIRED_IDENTITY_CASE_COUNT = 42;
 const CASE_CATALOG_FILE_NAME = 'workflow-policy-cases.json';
@@ -1141,8 +1141,6 @@ function validateAcquireStep(step, label, expected) {
       '}'],
     ['the server the runner named',
       "if ($strServerUrl -cne 'https://github.com') {"],
-    ['a plain owner/name repository',
-      "if ($strRepository -cne 'franklesniak/TerraformStyleGuide') {"],
     ['a full commit hash rather than a ref',
       "if ($strSha -cnotmatch '^[0-9a-f]{40}$') {"],
     ['an empty workspace before fetching',
@@ -1157,6 +1155,19 @@ function validateAcquireStep(step, label, expected) {
     if (!step.run.includes(sequence)) {
       reject('acquire-policy', `${label} no longer asserts ${requirement}`);
     }
+  }
+  const repositoryGuard =
+    "if ($strRepository -cne 'franklesniak/TerraformStyleGuide') {\n" +
+    "    throw 'acquire: the triggering repository is not the expected repository'\n" +
+    '}';
+  const repositoryGuardIndex = step.run.indexOf(repositoryGuard);
+  if (
+    repositoryGuardIndex < 0 ||
+    step.run.indexOf(repositoryGuard, repositoryGuardIndex + 1) >= 0 ||
+    powerShellBraceDepthAt(step.run, repositoryGuardIndex) !== 0
+  ) {
+    reject('acquire-policy',
+      `${label} no longer asserts the exact expected repository and its diagnostic`);
   }
   const credentialGuard = "$env:GIT_CONFIG_NOSYSTEM = '1'\n$env:GIT_CONFIG_GLOBAL = '/dev/null'\n$env:GIT_TERMINAL_PROMPT = '0'\nif (-not [string]::IsNullOrEmpty($env:GITHUB_TOKEN) -or\n    -not [string]::IsNullOrEmpty($env:GH_TOKEN) -or\n    -not [string]::IsNullOrEmpty($env:ACTIONS_RUNTIME_TOKEN)) {\n    throw 'credential-policy: a token was projected into a code job'\n}\n";
   if (step.run.split(credentialGuard).length !== 2) reject('acquire-policy', `${label} lacks the fixed credential absence guard`);

@@ -98,11 +98,11 @@
   },
   "caseCatalog": {
     "path": "workflow-policy-cases.json",
-    "sha256": "981122c11f729df05ab421dfa8709fe671aaa7711e1eaf23f408f590dc6b326c"
+    "sha256": "9a64645911c88aae5fcb42debfff573cb1ad6c4c9aa6b3dc164d11ac85672c57"
   },
   "validatorIdentity": {
     "path": "Validate-WorkflowPolicy.mjs",
-    "sha256": "d4b7ea331908c258d56a26208d6f791234a8de07f26c9d8b8d0c3e0ccae44522"
+    "sha256": "8a75dfa32e2a9ef4441d5048f63ca3c757afe8872f2e7f801249419c96329d6d"
   },
   "actions": {
     "checkout": {
@@ -390,7 +390,7 @@
                 "name": "Acquire triggering revision without an action",
                 "id": "acquire",
                 "shell": "pwsh",
-                "runSha256": "923869e2ce8f875534d243df62d0fb24d9786e2122dbbc768e83c46fb1997ccb"
+                "runSha256": "89830aa648f14ca4ceb863133bd8d1b309392a27b5a6312943ae42935dfb5486"
               },
               {
                 "kind": "run",
@@ -450,7 +450,7 @@
                 "name": "Acquire triggering revision and pinned toolchain without an action",
                 "id": "acquire",
                 "shell": "pwsh",
-                "runSha256": "16b68140e7411057eacfa912b6a25d9fa05e49eda62e05c5b301d1580d13728f"
+                "runSha256": "544e849f84b73cd380673d63776a8894518db7b4ac70425a6c77c4c4364f8fb8"
               },
               {
                 "kind": "run",
@@ -482,7 +482,7 @@
                 "name": "Acquire triggering revision and pinned toolchain without an action",
                 "id": "acquire",
                 "shell": "pwsh",
-                "runSha256": "16b68140e7411057eacfa912b6a25d9fa05e49eda62e05c5b301d1580d13728f"
+                "runSha256": "544e849f84b73cd380673d63776a8894518db7b4ac70425a6c77c4c4364f8fb8"
               },
               {
                 "kind": "run",
@@ -753,7 +753,7 @@
         "id": "GF-GIT",
         "status": "intentional difference",
         "observed": "Both code-job acquisition roles use exact anonymous repository identity, external-config exclusion and fixed native commands; both now use the reusable exact-path helper.",
-        "rationale": "Terraform retains stronger module-qualified generator Git lookup and its installed depth-one identity acquisition. The protected identity reader is unchanged; its installed source-form constraint is met by the bounded operative compatibility forms."
+        "rationale": "Terraform retains stronger module-qualified generator Git lookup and its installed depth-one identity acquisition. The protected identity reader is unchanged; its installed source-form constraint is met by the bounded operative compatibility forms. Three exact-repository guards use the accurate expected-repository diagnostic under the owner-authorized temporary common-source departure. Maintainer franklesniak must disposition this difference at Task114 or the first corresponding message change, whichever comes first."
       },
       {
         "id": "GF-GRAPH",
@@ -770,8 +770,8 @@
       {
         "id": "GF-EVIDENCE",
         "status": "intentional difference",
-        "observed": "The current native policy CLI passes477 applicable PS cases plus5 distinct TF patch cases,2 actual TF tuple cases,5 compatibility/logging regressions and6 exact Terraform invocation-profile cases; three PS generator mutations and one actual TF refusal mutation pass.",
-        "rationale": "PS authorizer cases027/028 and generator004 are explicitly inapplicable, not silently equivalent. TF-only trust/domain and frozen-graph properties remain. The exact repository-root validator profile preserves Terraform's governed caller contract while the workflow-directory profile remains equal to the common source. Maintainer franklesniak owns re-evaluation at Task114 or the first validator invocation-contract change, whichever occurs first. Final-byte validation and the mandatory Task114 disposition are recorded separately. The bounded installed-reader forms, invocation profile and temporary ten-call logging difference do not establish final common-source convergence."
+        "observed": "The current native policy CLI passes477 applicable PS cases plus5 distinct TF patch cases,2 actual TF tuple cases,5 compatibility/logging regressions,6 exact Terraform invocation-profile cases and5 exact-repository diagnostic regressions; three PS generator mutations and one actual TF refusal mutation pass.",
+        "rationale": "PS authorizer cases027/028 and generator004 are explicitly inapplicable, not silently equivalent. TF-only trust/domain and frozen-graph properties remain. The exact repository-root validator profile preserves Terraform's governed caller contract while the workflow-directory profile remains equal to the common source. The exact-repository property binds all three operative guards to the accurate diagnostic and rejects guard or old-message mutations. Maintainer franklesniak owns re-evaluation of the invocation profile at Task114 or the first validator invocation-contract change, and the three-message diagnostic difference at Task114 or the first corresponding message change, whichever comes first. Final-byte validation and the mandatory Task114 dispositions are recorded separately. The bounded installed-reader forms, invocation profile, temporary ten-call logging difference and temporary three-message diagnostic difference do not establish final common-source convergence."
       }
     ]
   }

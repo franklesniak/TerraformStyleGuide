@@ -47,7 +47,7 @@ jobs:
               throw 'acquire: the runner named an unexpected server'
           }
           if ($strRepository -cne 'franklesniak/TerraformStyleGuide') {
-              throw 'acquire: the triggering repository is not a plain owner/name pair'
+              throw 'acquire: the triggering repository is not the expected repository'
           }
           # A full 40-hex commit is required rather than a ref. A ref would let
           # the fetch resolve to whatever the ref points at when the fetch runs,

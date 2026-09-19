@@ -42,7 +42,7 @@ jobs:
               throw 'acquire: the runner named an unexpected server'
           }
           if ($strRepository -cne 'franklesniak/TerraformStyleGuide') {
-              throw 'acquire: the triggering repository is not a plain owner/name pair'
+              throw 'acquire: the triggering repository is not the expected repository'
           }
           if ($strSha -cnotmatch '^[0-9a-f]{40}$') {
               throw 'acquire: the triggering revision is not a full commit hash'
@@ -386,7 +386,7 @@ jobs:
               throw 'acquire: the runner named an unexpected server'
           }
           if ($strRepository -cne 'franklesniak/TerraformStyleGuide') {
-              throw 'acquire: the triggering repository is not a plain owner/name pair'
+              throw 'acquire: the triggering repository is not the expected repository'
           }
           if ($strSha -cnotmatch '^[0-9a-f]{40}$') {
               throw 'acquire: the triggering revision is not a full commit hash'
