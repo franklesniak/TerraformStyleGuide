@@ -107,7 +107,7 @@ const WORKFLOW_ISOLATION_POLICY_VERSION = 1;
 const RESULT_SCHEMA = 'TerraformStyleGuide.WorkflowPolicyResult.v1';
 const PREFLIGHT_SCHEMA = 'TerraformStyleGuide.WorkflowPreflightResult.v1';
 const PREFLIGHT_ARGUMENTS = ['--preflight'];
-const EXPECTED_CONTRACT_CANONICAL_SHA256 = '2eda1cf8935ab4249be48eba70dea0d710e7a206e881e27fdd08473072e74a4d';
+const EXPECTED_CONTRACT_CANONICAL_SHA256 = '2da788df9b62b4017505edd78ee2d931a2eaacfa5403a49015bca0dccc7aead0';
 const MINIMUM_CASE_COUNT = 99;
 const REQUIRED_IDENTITY_CASE_COUNT = 42;
 const CASE_CATALOG_FILE_NAME = 'workflow-policy-cases.json';
@@ -844,6 +844,59 @@ const MARKDOWN_STEP_KEYWORDS = Object.freeze([
   'try', 'finally', 'throw', 'break', 'continue',
 ]);
 
+const WORKFLOW_POLICY_CONTRACT_READER = Object.freeze({
+  source: [
+    'function Read-WorkflowPolicyContract {',
+    '    # .SYNOPSIS',
+    '    # Reads the closed workflow-policy contract.',
+    '    # .DESCRIPTION',
+    '    # Reads at most one byte beyond the reviewed limit, decodes strict UTF-8,',
+    '    # and returns one JSON object without exposing parser diagnostics.',
+    '    # .EXAMPLE',
+    '    # $objContract = Read-WorkflowPolicyContract',
+    '    # .INPUTS',
+    '    # None.',
+    '    # .OUTPUTS',
+    '    # System.Management.Automation.PSCustomObject.',
+    '    # .NOTES',
+    '    # PRIVATE/INTERNAL. Version: 1.0.20260919.0.',
+    '    [CmdletBinding()]',
+    '    param()',
+    '',
+    '    try {',
+    "        $objContractItem = Get-Item -LiteralPath 'workflow-policy-contract.json' -Force -ErrorAction Stop",
+    '        if ($objContractItem -isnot [System.IO.FileInfo] -or',
+    '            $null -ne $objContractItem.LinkType -or',
+    '            ($objContractItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or',
+    '            ($IsLinux -and [int]$objContractItem.UnixStat.ItemType -ne 1)) {',
+    "            throw 'contract-file'",
+    '        }',
+    "        $arrContractChunks = @(Get-Content -LiteralPath 'workflow-policy-contract.json' -AsByteStream -ReadCount 524289 -TotalCount 524289 -ErrorAction Stop)",
+    '        if ($arrContractChunks.Count -ne 1 -or',
+    '            @($arrContractChunks[0]).Count -eq 0 -or',
+    '            @($arrContractChunks[0]).Count -gt 524288) {',
+    "            throw 'contract-file'",
+    '        }',
+    '        $arrContractBytes = [byte[]]@($arrContractChunks[0])',
+    '        $objStrictUtf8 = [System.Text.UTF8Encoding]::new($false, $true)',
+    '        $strContract = $objStrictUtf8.GetString($arrContractBytes)',
+    '        if ([int]$strContract[0] -eq 0xfeff -or $strContract.Contains("`r")) {',
+    "            throw 'contract-encoding'",
+    '        }',
+    '        $objContract = $strContract | ConvertFrom-Json -NoEnumerate -Depth 32 -ErrorAction Stop',
+    '        if ($null -eq $objContract -or',
+    '            $objContract -isnot [System.Management.Automation.PSCustomObject]) {',
+    "            throw 'contract-json'",
+    '        }',
+    '        $objContract',
+    '    } catch {',
+    "        throw 'workflow-policy: invalid contract JSON'",
+    '    }',
+    '}',
+  ].join('\n'),
+  binding: '$objContract = Read-WorkflowPolicyContract\n$strExpectedValidatorHash = $objContract.validatorIdentity.sha256',
+});
+
 const MARKDOWN_COMMAND_POSITION = /(?:^[ \t]*|(?<!\$)\{[ \t]*|[;}|=(,][ \t]*|&&[ \t]*|\|\|[ \t]*)([A-Za-z_.\/\\][^\s;{}()]*)/gmu;
 
 const MARKDOWN_ENV_WRITE = /\$\{?env:([A-Za-z_][A-Za-z0-9_]*)\}?[ \t]*(?:\+|-|\*|\/|%|\?\?)?=/giu;
@@ -966,6 +1019,48 @@ function assertReviewedGuards(strCode, arrGuards, strCategory, fnMessage) {
       }
     }
   }
+}
+
+function assertWorkflowPolicyContractReader(step, label) {
+  const strSource = WORKFLOW_POLICY_CONTRACT_READER.source;
+  if (step.run.split(strSource).length !== 2) {
+    reject('markdown-policy', `${label} changes the closed bounded contract reader`);
+  }
+  const intReader = step.run.indexOf(strSource);
+  if (powerShellBraceDepthAt(step.run, intReader) !== 0) {
+    reject('markdown-policy', `${label} no longer declares the bounded contract reader at top level`);
+  }
+  const strCode = powerShellCodeProjection(step.run);
+  const arrDefinitions = [...strCode.matchAll(/\bfunction[ \t]+Read-WorkflowPolicyContract\b/giu)];
+  if (arrDefinitions.length !== 1 || arrDefinitions[0].index !== intReader) {
+    reject('markdown-policy', `${label} changes or rebinds the bounded contract reader`);
+  }
+  const arrCalls = [...strCode.matchAll(/^\$objContract = Read-WorkflowPolicyContract$/gmu)];
+  if (arrCalls.length !== 2 || step.run.split(WORKFLOW_POLICY_CONTRACT_READER.binding).length !== 3) {
+    reject('markdown-policy', `${label} must bind both validator invocations through the bounded contract reader`);
+  }
+  const arrCallOffsets = arrCalls.map((objCall) => objCall.index);
+  if (arrCallOffsets.some((intAt) => powerShellBraceDepthAt(step.run, intAt) !== 0)) {
+    reject('markdown-policy', `${label} nests a bounded contract-reader invocation`);
+  }
+  const intExpectedDigest = step.run.indexOf('$env:P1_EXPECTED_MARKDOWN_DIGEST =');
+  const intPreflight = step.run.indexOf('$arrPreflight = @(& $strNodePath ./Validate-WorkflowPolicy.mjs --preflight)');
+  const intAfterInstall = step.run.indexOf('if ($strPackageAfterInstall -cne $strPackageBefore -or $strLockAfterInstall -cne $strLockBefore) {');
+  const intPolicy = step.run.indexOf('$arrPolicy = @(& $strNodePath ./Validate-WorkflowPolicy.mjs build.yml markdownlint.yml)');
+  if (!(intExpectedDigest >= 0 &&
+        intReader + strSource.length < arrCallOffsets[0] &&
+        intExpectedDigest < arrCallOffsets[0] && arrCallOffsets[0] < intPreflight &&
+        intPreflight < intAfterInstall && intAfterInstall < arrCallOffsets[1] &&
+        arrCallOffsets[1] < intPolicy)) {
+    reject('markdown-policy', `${label} moves a bounded contract read away from its validator identity check`);
+  }
+  return { intReader, arrCallOffsets };
+}
+
+function blankPowerShellSurfaceRange(strCode, intStart, intLength) {
+  return strCode.slice(0, intStart) +
+    strCode.slice(intStart, intStart + intLength).replace(/[^\n]/gu, ' ') +
+    strCode.slice(intStart + intLength);
 }
 
 function normalizeLineContinuations(strText) {
@@ -1383,6 +1478,8 @@ function validateMarkdownGovernedStep(step, label, expected) {
   let catchView = step.run;
   const fixedCatches = ["try { $objPreflight = $arrPreflight[0] | ConvertFrom-Json -NoEnumerate -ErrorAction Stop }\ncatch { throw 'workflow-policy: invalid preflight JSON' }","try { $objPolicy = $arrPolicy[0] | ConvertFrom-Json -NoEnumerate -ErrorAction Stop }\ncatch { throw 'workflow-policy: invalid policy JSON' }"];
   if (expected.stepId === 'validate') {
+    assertWorkflowPolicyContractReader(step, label);
+    catchView = catchView.replace(WORKFLOW_POLICY_CONTRACT_READER.source, '');
     for (const fixed of fixedCatches) {
       if (catchView.split(fixed).length !== 2) reject('markdown-policy', `${label} changes a fixed result conversion guard`);
       catchView = catchView.replace(fixed, '');
@@ -1439,7 +1536,17 @@ function assertMarkdownStepInvocations(step, label, expected) {
 
 function assertMarkdownStepSurface(step, label, expected) {
   const stepCode = powerShellCodeProjection(step.run);
-  for (const command of stepCode.matchAll(MARKDOWN_COMMAND_POSITION)) {
+  let surfaceCode = stepCode;
+  if (expected.stepId === 'validate') {
+    const { intReader, arrCallOffsets } = assertWorkflowPolicyContractReader(step, label);
+    surfaceCode = blankPowerShellSurfaceRange(
+      surfaceCode, intReader, WORKFLOW_POLICY_CONTRACT_READER.source.length);
+    for (const intCall of arrCallOffsets) {
+      surfaceCode = blankPowerShellSurfaceRange(
+        surfaceCode, intCall, '$objContract = Read-WorkflowPolicyContract'.length);
+    }
+  }
+  for (const command of surfaceCode.matchAll(MARKDOWN_COMMAND_POSITION)) {
     const token = command[1];
     if (MARKDOWN_STEP_KEYWORDS.includes(token)) continue;
     if (MARKDOWN_STEP_COMMANDS.includes(token)) continue;
@@ -1462,8 +1569,11 @@ function assertMarkdownStepSurface(step, label, expected) {
   if (/GetEnvironmentVariable|SetEnvironmentVariable/iu.test(stepCode)) {
     reject('markdown-policy', `${label} resolves an environment variable through a computed name`);
   }
-  let staticCode = stepCode;
-  const typeGuards = ["$objPreflight.GetType() -ne [System.Management.Automation.PSCustomObject]","$objPolicy.GetType() -ne [System.Management.Automation.PSCustomObject]"];
+  let staticCode = surfaceCode;
+  const typeGuards = [
+    '$objPreflight.GetType() -ne [System.Management.Automation.PSCustomObject]',
+    '$objPolicy.GetType() -ne [System.Management.Automation.PSCustomObject]',
+  ];
   if (expected.stepId === 'validate') {
     for (const guard of typeGuards) {
       if (staticCode.split(guard).length !== 2) reject('markdown-policy', `${label} changes a fixed result object-type guard`);

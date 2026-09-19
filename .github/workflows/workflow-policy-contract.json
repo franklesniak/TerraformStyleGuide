@@ -98,11 +98,11 @@
   },
   "caseCatalog": {
     "path": "workflow-policy-cases.json",
-    "sha256": "9a64645911c88aae5fcb42debfff573cb1ad6c4c9aa6b3dc164d11ac85672c57"
+    "sha256": "a5407b4fd66f4c686e7dcb0dca4c52e7071073e5c39cae731f1afc7098fc5be2"
   },
   "validatorIdentity": {
     "path": "Validate-WorkflowPolicy.mjs",
-    "sha256": "8a75dfa32e2a9ef4441d5048f63ca3c757afe8872f2e7f801249419c96329d6d"
+    "sha256": "980dc86aa7b0bebcf3548023e49cbb372ea02f84eed41ee7be5ff915adb3c589"
   },
   "actions": {
     "checkout": {
@@ -467,7 +467,7 @@
                 "id": "validate",
                 "shell": "pwsh",
                 "workingDirectory": ".github/workflows",
-                "runSha256": "fbb620467b2a3aac9b16b232bb8890661516f84a1a979a6885b0f67531992b0e"
+                "runSha256": "2249b6ae6351b0b18ebb973fc7fb5927ccaa552770626d5636321ec7bc031fc4"
               }
             ]
           },
@@ -733,9 +733,9 @@
       },
       {
         "id": "GF-YAML",
-        "status": "same",
-        "observed": "Both use yaml2.9.0 with one strict YAML1.2 core document, closed inert external contract/catalog data and finite parser-tree, input, node and depth bounds.",
-        "rationale": "The canonical finite reader and applicable case union replace the old unbounded fold. Baseline policy execution passes; separate max/max+1 evidence is recorded in validation, not inferred from this row."
+        "status": "intentional difference",
+        "observed": "Both use yaml2.9.0 with one strict YAML1.2 core document, closed inert external contract/catalog data and finite Node parser-tree, input, node and depth bounds. Terraform additionally bounds both PowerShell policy-bootstrap reads with one fixed-error, strict-UTF8, regular-file helper.",
+        "rationale": "The canonical finite Node reader and applicable case union replace the old unbounded fold. The Terraform bootstrap helper is an owner-authorized temporary common-source departure: carry it through the Task113 handoff; at Task114 require the matching PS repair unless verified landed evidence shows it is already present; deliver it through Tasks115-122 and verify convergence before Task124 closure. Maintainer franklesniak must also disposition it at Task114 or the first corresponding bootstrap-reader change, whichever comes first."
       },
       {
         "id": "GF-ACTION-PINS",
@@ -770,8 +770,8 @@
       {
         "id": "GF-EVIDENCE",
         "status": "intentional difference",
-        "observed": "The current native policy CLI passes477 applicable PS cases plus5 distinct TF patch cases,2 actual TF tuple cases,5 compatibility/logging regressions,6 exact Terraform invocation-profile cases and5 exact-repository diagnostic regressions; three PS generator mutations and one actual TF refusal mutation pass.",
-        "rationale": "PS authorizer cases027/028 and generator004 are explicitly inapplicable, not silently equivalent. TF-only trust/domain and frozen-graph properties remain. The exact repository-root validator profile preserves Terraform's governed caller contract while the workflow-directory profile remains equal to the common source. The exact-repository property binds all three operative guards to the accurate diagnostic and rejects guard or old-message mutations. Maintainer franklesniak owns re-evaluation of the invocation profile at Task114 or the first validator invocation-contract change, and the three-message diagnostic difference at Task114 or the first corresponding message change, whichever comes first. Final-byte validation and the mandatory Task114 dispositions are recorded separately. The bounded installed-reader forms, invocation profile, temporary ten-call logging difference and temporary three-message diagnostic difference do not establish final common-source convergence."
+        "observed": "The current native policy CLI passes477 applicable PS cases plus5 distinct TF patch cases,2 actual TF tuple cases,5 compatibility/logging regressions,6 exact Terraform invocation-profile cases,5 exact-repository diagnostic regressions and9 bounded bootstrap-reader regressions; three PS generator mutations and one actual TF refusal mutation pass.",
+        "rationale": "PS authorizer cases027/028 and generator004 are explicitly inapplicable, not silently equivalent. TF-only trust/domain and frozen-graph properties remain. The exact repository-root validator profile preserves Terraform's governed caller contract while the workflow-directory profile remains equal to the common source. The exact-repository property binds all three operative guards to the accurate diagnostic and rejects guard or old-message mutations. The bootstrap-reader property binds one exact helper, two top-level identity-adjacent calls, the max-plus-one actual-byte cap, Linux regular-file gate and fixed diagnostic; its focused catalog rejects old-reader decoys, nested calls, duplicate helpers, case-insensitive rebinds and commands outside the helper. Maintainer franklesniak owns re-evaluation of the invocation profile at Task114 or the first validator invocation-contract change, the three-message diagnostic difference at Task114 or the first corresponding message change, and the bootstrap-reader difference at Task114 or the first corresponding reader change, whichever comes first. Final-byte validation and the mandatory Task114 dispositions are recorded separately. The bounded installed-reader forms, invocation profile, temporary ten-call logging difference, temporary three-message diagnostic difference and temporary bootstrap-reader difference do not establish final common-source convergence."
       }
     ]
   }
