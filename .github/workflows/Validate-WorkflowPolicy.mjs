@@ -101,13 +101,13 @@ function assertReviewedParserTree(root, reader) {
   if (foldParserTree(root, reader) !== REVIEWED_PARSER_TREE_SHA256) fail('parser-tree-identity');
 }
 
-const VALIDATOR_VERSION = '1.6.0';
-const EXPECTED_VERSION = '1.0.20260918.0';
+const VALIDATOR_VERSION = '1.6.1';
+const EXPECTED_VERSION = '1.0.20260920.0';
 const WORKFLOW_ISOLATION_POLICY_VERSION = 1;
 const RESULT_SCHEMA = 'TerraformStyleGuide.WorkflowPolicyResult.v1';
 const PREFLIGHT_SCHEMA = 'TerraformStyleGuide.WorkflowPreflightResult.v1';
 const PREFLIGHT_ARGUMENTS = ['--preflight'];
-const EXPECTED_CONTRACT_CANONICAL_SHA256 = '2da788df9b62b4017505edd78ee2d931a2eaacfa5403a49015bca0dccc7aead0';
+const EXPECTED_CONTRACT_CANONICAL_SHA256 = '7efb3d032300706cb8ce375b3131920789c477ece7a3be00acb31d4b60ebe4b0';
 const MINIMUM_CASE_COUNT = 99;
 const REQUIRED_IDENTITY_CASE_COUNT = 42;
 const CASE_CATALOG_FILE_NAME = 'workflow-policy-cases.json';
@@ -681,7 +681,7 @@ function validateGeneratorResultPolicy(source, contract) {
   if (source.split(conversion).length !== 2) fail('generator-result-json');
   source = source.replace(conversion, () => '$objResult = $arrResult[0] | ConvertFrom-Json\n');
   const blocks = GENERATOR_RESULT_PREDICATES.map(([label, predicate]) => (
-    (label === 'GeneratorVersion' ? "$objGeneratorResult = $objResult\n$hashtableGeneratorVersionCheck = @{ 'Name' = 'GeneratorVersion'; 'Valid' = $objGeneratorResult.GeneratorVersion -ceq '1.0.20260918.0' }\n" : '')
+    (label === 'GeneratorVersion' ? "$objGeneratorResult = $objResult\n$hashtableGeneratorVersionCheck = @{ 'Name' = 'GeneratorVersion'; 'Valid' = $objGeneratorResult.GeneratorVersion -ceq '1.0.20260920.0' }\n" : '')
     + `if (${predicate}) {\n    [void]($listFailedChecks.Add('${label}'))\n}\n`
   ));
   const positions = blocks.map((block, index) => {
@@ -2977,7 +2977,7 @@ const REVIEWED_PS_GENERATOR_HELP_VERSIONS = Object.freeze({
 });
 
 function validateGeneratorIsolationPolicy(source) {
-  if ((source.match(/^Version: [0-9]+\.[0-9]+\.[0-9]{8}\.[0-9]+$/gmu) ?? []).join('') !== 'Version: 1.0.20260918.0') reject('supply-policy', 'the generator version marker differs from the fixed Terraform source');
+  if ((source.match(/^Version: [0-9]+\.[0-9]+\.[0-9]{8}\.[0-9]+$/gmu) ?? []).join('') !== 'Version: 1.0.20260920.0') reject('supply-policy', 'the generator version marker differs from the fixed Terraform source');
   const rawGeneratorCode = powerShellCodeProjection(source);
   const generatorCode = powerShellTokenView(normalizeLineContinuations(source));
   const staticCode = powerShellTokenView(normalizeLineContinuations(source.replaceAll("[char[]]'*?[]'", "'*?[]'").replace(/^    \$strNativeOutcome = \$_\.Exception\.GetType\(\)\.FullName$/gmu, '    $strNativeOutcome = $null'))).replaceAll('[void](Get-ScriptVersionRecord ', '(Get-ScriptVersionRecord ').replaceAll('[void](Assert-OrdinaryAbsolutePath ', '(Assert-OrdinaryAbsolutePath ');
@@ -3132,7 +3132,7 @@ function validateGeneratorIsolationPolicy(source) {
     'supply-policy',
     'the generator',
   );
-  if (sha256(Buffer.from(source, 'utf8')) !== 'abf858f75627e81ce09900e565a1e9449ec317a6b34493f80db4fb6c04e0993c') {
+  if (sha256(Buffer.from(source, 'utf8')) !== '4c54355c4adea63e85805a8cf3e80530d0133dd6e109df7819457d1f643e1ff6') {
     reject('supply-policy', 'generator does not match its reviewed digest');
   }
 }

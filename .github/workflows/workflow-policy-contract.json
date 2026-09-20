@@ -87,8 +87,8 @@
   "scriptVersions": {
     "generator": {
       "path": "Generate-StyleGuideArtifacts.ps1",
-      "version": "1.0.20260918.0",
-      "sha256": "abf858f75627e81ce09900e565a1e9449ec317a6b34493f80db4fb6c04e0993c"
+      "version": "1.0.20260920.0",
+      "sha256": "4c54355c4adea63e85805a8cf3e80530d0133dd6e109df7819457d1f643e1ff6"
     },
     "pathVerifier": {
       "path": "Test-ExactGitPathSet.ps1",
@@ -98,11 +98,11 @@
   },
   "caseCatalog": {
     "path": "workflow-policy-cases.json",
-    "sha256": "a5407b4fd66f4c686e7dcb0dca4c52e7071073e5c39cae731f1afc7098fc5be2"
+    "sha256": "085a1dd0c46ba49c83ceb7432bc3a8a1db6ec30b0dc4219b6ab05f5341b70c50"
   },
   "validatorIdentity": {
     "path": "Validate-WorkflowPolicy.mjs",
-    "sha256": "980dc86aa7b0bebcf3548023e49cbb372ea02f84eed41ee7be5ff915adb3c589"
+    "sha256": "6aaf04dda00a8d685ef990f95d1976939f7b77b4b9092224fbe2dc76494354f1"
   },
   "actions": {
     "checkout": {
@@ -406,7 +406,7 @@
                 "name": "Generate and verify style guide artifacts",
                 "id": "generate-and-verify",
                 "shell": "pwsh",
-                "runSha256": "a6576f7e1b7c5e7e93171abea110358269df2f06657abaad5c747fb3c536cc7e"
+                "runSha256": "e127b0db7a7c0ab75d5d557e2b5dd04f2058cf2eaba91728744d540f7e824574"
               }
             ]
           },
