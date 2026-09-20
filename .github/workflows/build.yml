@@ -640,7 +640,7 @@ jobs:
               [void]($listFailedChecks.Add('Schema'))
           }
           $objGeneratorResult = $objResult
-          $hashtableGeneratorVersionCheck = @{ 'Name' = 'GeneratorVersion'; 'Valid' = $objGeneratorResult.GeneratorVersion -ceq '1.0.20260918.0' }
+          $hashtableGeneratorVersionCheck = @{ 'Name' = 'GeneratorVersion'; 'Valid' = $objGeneratorResult.GeneratorVersion -ceq '1.0.20260920.0' }
           if ($objGeneratorResult.GeneratorVersion -isnot [string] -or -not $hashtableGeneratorVersionCheck.Valid) {
               [void]($listFailedChecks.Add('GeneratorVersion'))
           }

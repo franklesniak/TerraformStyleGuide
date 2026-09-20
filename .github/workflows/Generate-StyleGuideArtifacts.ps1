@@ -10,13 +10,13 @@ fixed destination. Serialization is UTF-8 without a BOM and normalizes CRLF
 and lone CR to LF at the final payload boundary.
 
 .NOTES
-Version: 1.0.20260918.0
+Version: 1.0.20260920.0
 #>
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:strGeneratorVersion = '1.0.20260918.0'
+$script:strGeneratorVersion = '1.0.20260920.0'
 $script:strGeneratorResultSchema = 'TerraformStyleGuide.GeneratorResult.v2'
 $script:objUtf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
 $script:objUtf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -2424,7 +2424,7 @@ try {
     $strSelfPath = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'Generate-StyleGuideArtifacts.ps1'))
     $arrSelfBytes = [System.IO.File]::ReadAllBytes($strSelfPath)
     $strSelfText = $script:objUtf8Strict.GetString($arrSelfBytes)
-    $null = Get-ScriptVersionRecord -ScriptText $strSelfText -ExpectedVersion $script:strGeneratorVersion
+    [void](Get-ScriptVersionRecord -ScriptText $strSelfText -ExpectedVersion $script:strGeneratorVersion)
 
     $strResultPhase = 'validate-fixed-authority'
     $strWorkflowRoot = Assert-OrdinaryAbsolutePath -LiteralPath $PSScriptRoot -ExpectedLeafType Directory
@@ -2458,7 +2458,7 @@ try {
             throw "destination-containment"
         }
         $strDestinationParentPath = [System.IO.Path]::GetDirectoryName($strDestinationPath)
-        $null = Assert-OrdinaryAbsolutePath -LiteralPath $strDestinationParentPath -ExpectedLeafType Directory
+        [void](Assert-OrdinaryAbsolutePath -LiteralPath $strDestinationParentPath -ExpectedLeafType Directory)
         Assert-TrackedFile -RepositoryRoot $strRepositoryRoot -RepositoryPath $strRepositoryPath
         $strDestinationState = Get-OrdinaryDestinationState -LiteralPath $strDestinationPath
         if ($strDestinationState -eq 'Existing') {
@@ -2522,7 +2522,7 @@ try {
     if ($strResultCategory -eq 'tool-failure') {
         $strResultCategory = 'validation-failure'
     }
-    $strNativeOutcome = [string]$_.Exception.PSObject.TypeNames[0]
+    $strNativeOutcome = $_.Exception.GetType().FullName
     $intExitCode = 1
 }
 
