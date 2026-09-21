@@ -1470,14 +1470,14 @@ test('LS-PROBLEM-PRIVACY: production summary emits only allowlisted kinds and co
   }
 });
 
-test('HISTORICAL-VERIFICATION: authored JavaScript block reports success only after both TF pairs pass',
+test('HISTORICAL-VERIFICATION: authored block requires both TF pairs and the original recorder',
   { skip: process.platform !== 'linux' }, () => {
     const strMethod = readFileSync(join(workflow, '..', '..', 'docs', 'T1-SUPPLY-FREEZE-CURRENT-PROVENANCE-v1.md'), 'utf8');
     const arrVerifier = /## Verify historical Git provenance separately[\s\S]*?```bash\r?\n[\s\S]*?<<'NODE'\r?\n([\s\S]*?)\r?\nNODE\r?\n```/u.exec(strMethod);
     assert.notEqual(arrVerifier, null);
     const strVerifier = arrVerifier[1];
     const strExpectedSuccess =
-      'Current-profile and historical T1 package blob, path, length, and SHA-256 verification completed.\n';
+      'Current-profile inputs, historical T1 packages, and original recorder verification completed.\n';
     const strProjectRoot = join(workflow, '..', '..');
     const temporary = mkdtempSync(join(tmpdir(), 'historical-verification-'));
     const strFixtureRepository = join(temporary, 'repository');
@@ -1495,7 +1495,10 @@ test('HISTORICAL-VERIFICATION: authored JavaScript block reports success only af
     });
     assert.equal(objInit.status, 0, objInit.stderr);
     const objHistoricalPack = spawnSync('git', ['pack-objects', '--revs', '--stdout'], {
-      cwd: strProjectRoot, input: 'e5064a672c10f4fad90f36e82af33ff8fc230b5f\n143f54e52075a1ae1e999a6e242073e3d8d4a46b\n',
+      cwd: strProjectRoot,
+      input: 'e5064a672c10f4fad90f36e82af33ff8fc230b5f\n'
+        + '143f54e52075a1ae1e999a6e242073e3d8d4a46b\n'
+        + 'aae05282b57f093cec8b63e59138db72c982f10e\n',
       encoding: null, env: objSetupEnvironment, maxBuffer: 128 * 1024 * 1024,
     });
     assert.equal(objHistoricalPack.status, 0, objHistoricalPack.stderr.toString());
@@ -1588,15 +1591,19 @@ test('HISTORICAL-VERIFICATION: authored JavaScript block reports success only af
       assert.notEqual(objHashFailure.status, 0);
       assert.equal(objHashFailure.stdout, '');
 
-      // TF has a current profile and a separate historical T1 record. Exercise
-      // missing commit objects and incorrect object identities in each pair.
-      // The authored verifier must not print success after only the first pair.
+      // TF has a current profile, a separate historical T1 package record, and
+      // an original recorder from an earlier commit. Exercise missing commits
+      // and incorrect object identities in all three groups. The authored
+      // verifier must not print success after only the first two groups.
       for (const strIdentity of [
         'e5064a672c10f4fad90f36e82af33ff8fc230b5f',
         '143f54e52075a1ae1e999a6e242073e3d8d4a46b',
+        'aae05282b57f093cec8b63e59138db72c982f10e',
         '103075d0d14f61b49d29cf2ed8dc8a7804fe092e',
         '5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca',
         '277f7168ab3a4f1f7a2565de13191d64b1572e7cb92b67b0972b3242bd4de062',
+        '05778c0eda0273a9217f7dc953795c2240473a14',
+        '30384451d56d0c77f6bdb7c7bae4792a2434388e67de70c5501774b0feeecd25',
       ]) {
         assert.equal(strVerifier.split(strIdentity).length - 1, 1);
         const objCandidate = structuredClone(objContract);
@@ -1610,6 +1617,12 @@ test('HISTORICAL-VERIFICATION: authored JavaScript block reports success only af
         assert.equal(objFailure.stdout, '');
       }
 
+      const objRecorderLengthFailure = invokeVerifier(objContract, {}, [],
+        strVerifier.replace('345232', '345233'));
+      assert.notEqual(objRecorderLengthFailure.status, 0);
+      assert.equal(objRecorderLengthFailure.signal, null);
+      assert.equal(objRecorderLengthFailure.stdout, '');
+
       const objGitPath = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' });
       assert.equal(objGitPath.status, 0, objGitPath.stderr);
       const strWrapperDirectory = join(temporary, 'native-failure-bin');
@@ -1622,7 +1635,7 @@ const { spawnSync } = require('node:child_process');
 const countPath = ${JSON.stringify(strCountPath)};
 const count = fs.existsSync(countPath) ? Number(fs.readFileSync(countPath, 'utf8')) + 1 : 1;
 fs.writeFileSync(countPath, String(count));
-if (count === 4) {
+if (count === 13) {
   process.stderr.write('TASK130_F24_INJECTED_NATIVE_STATUS_73\\n');
   process.exit(73);
 }
@@ -1636,11 +1649,11 @@ process.exit(result.status ?? 74);
       });
       assert.notEqual(objNativeFailure.status, 0);
       assert.equal(objNativeFailure.stdout, '');
-      assert.equal(readFileSync(strCountPath, 'utf8'), '4');
+      assert.equal(readFileSync(strCountPath, 'utf8'), '13');
       assert.match(objNativeFailure.stderr, /TASK130_F24_INJECTED_NATIVE_STATUS_73/);
       writeFileSync(strCountPath, '0');
       writeFileSync(strWrapperPath,
-        readFileSync(strWrapperPath, 'utf8').replace('count === 4', 'count === 9'));
+        readFileSync(strWrapperPath, 'utf8').replace('count === 13', 'count === 9'));
       const objHistoricalNativeFailure = invokeVerifier(objContract, {
         PATH: `${strWrapperDirectory}${delimiter}${process.env.PATH}`,
       });
