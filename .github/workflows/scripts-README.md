@@ -6,7 +6,7 @@
 
 - **Status:** Active
 - **Owner:** Repository maintainer (@franklesniak)
-- **Last Updated:** 2026-09-12
+- **Last Updated:** 2026-09-21
 - **Scope:** Repository-owned scripts in `.github/workflows` and their supported local entry points.
 - **Related:** [Markdown lint implementation](MARKDOWN-LINTING-IMPLEMENTATION.md)
 
@@ -15,7 +15,7 @@
 | Script | Purpose | Supported command |
 | --- | --- | --- |
 | `Generate-StyleGuideArtifacts.ps1` | Regenerates consumer style-guide artifacts from the normative and rationale sources. | `pwsh -NoLogo -NoProfile -File .github/workflows/Generate-StyleGuideArtifacts.ps1` |
-| `Get-SupplyFreezeDigest.mjs` | Computes the reviewed workflow supply-freeze digest. | `node .github/workflows/Get-SupplyFreezeDigest.mjs` |
+| `Get-SupplyFreezeDigest.mjs` | Computes the reviewed workflow supply-freeze digest. | See [Prepare and record on Linux/x64](../../docs/T1-SUPPLY-FREEZE-CURRENT-PROVENANCE-v1.md#prepare-and-record-on-linuxx64); bare invocation is unsupported. |
 | `lint-nested-markdown.js` | Recursively lints `markdown` and `md` fenced content in repository `.md` and `.mdc` files. | `npm run lint:md:nested` |
 | `lint-staged-markdown.mjs` | Selects and lints outer and nested staged `.md` and `.mdc` content without replacing worktree files. | `node .github/workflows/lint-staged-markdown.mjs` |
 | `Sync-PullRequestBodyIdentity.mjs` | Derives, checks, or updates the deterministic pull-request body identity block and runs its dependency-free case suite. | `node .github/workflows/Sync-PullRequestBodyIdentity.mjs --self-test`; use `--generate`, `--check-event EVENT`, or `--update --repository OWNER/REPO --pull-request NUMBER` for the other modes. Update mode reads its token only from the `GITHUB_TOKEN` environment variable. |
