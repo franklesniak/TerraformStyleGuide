@@ -5,9 +5,15 @@
 
 - **Status:** Active
 - **Owner:** TerraformStyleGuide Repository Maintainers
-- **Last Updated:** 2026-09-11
-- **Scope:** Defines the reproducible supply-input freeze for the T1 merge and the exact evidence that later work must compare.
-- **Related:** [Decision records](decisions/)
+- **Last Updated:** 2026-09-21
+- **Scope:** Retains the historical T1 supply-input assertions and links the separate current-profile observation and Git provenance method for issue 52.
+- **Related:** [Issue 52](https://github.com/franklesniak/TerraformStyleGuide/issues/52), [policy contract](../.github/workflows/workflow-policy-contract.json), [recorder](../.github/workflows/Get-SupplyFreezeDigest.mjs), [focused tests](../.github/workflows/Get-SupplyFreezeDigest.test.mjs), [Decision records](decisions/)
+
+## Reading this record
+
+The retained T1 assertions below describe the historical record, including its original recorder identity and blocked advisory row. They are not measurements of the current dependency graph. The current `TerraformStyleGuide.FrozenSupplyProfile.v1` explicitly records `historicalRecordIsCurrentGraphMeasurement=false` and `advisoryDispositionGranted=false`. Issues 22 and 24 retain their separate consumer and policy requirements.
+
+For the current recorder, use [Meaning of a current run](T1-SUPPLY-FREEZE-CURRENT-PROVENANCE-v1.md#meaning-of-a-current-run), [Prepare and record](T1-SUPPLY-FREEZE-CURRENT-PROVENANCE-v1.md#prepare-and-record-on-linuxx64), and [Verify historical Git provenance separately](T1-SUPPLY-FREEZE-CURRENT-PROVENANCE-v1.md#verify-historical-git-provenance-separately). The historical instructions and diagnostic explanations below apply only to the original immutable recorder. New observations do not replace any historical row, approve an advisory, or prove historical execution.
 
 ## Status
 
@@ -446,12 +452,13 @@ environment chooses the interpreter, and the record has no way to say which one 
 
 ## How to reproduce
 
-The script is **not** present at the recorded T1 merge commit — it is added by the change that
-introduces this document. Reproduce from a revision that contains it, which carries the same
-`package.json` and `package-lock.json` blobs:
+This is the retained **historical** procedure for the original PR 27 recorder, not the current-profile recorder. The original script is absent from the recorded T1 merge commit. Its immutable source is commit `aae05282b57f093cec8b63e59138db72c982f10e`, recorder blob `05778c0eda0273a9217f7dc953795c2240473a14`. Use an isolated historical checkout only after explicit object acquisition and [Git provenance verification](T1-SUPPLY-FREEZE-CURRENT-PROVENANCE-v1.md#verify-historical-git-provenance-separately). Preserve the historical script identity in the table; the current recorder has a separate identity. The original recorder refuses current manifests with exit 4; this historical refusal is not erased by a successful current observation.
+
+The following archived commands describe the original environment and behavior. They are not the current read-only procedure or proof of historical network-response reproduction. Apply the current caller startup protocol before any Node process. For current inputs, use [Prepare and record](T1-SUPPLY-FREEZE-CURRENT-PROVENANCE-v1.md#prepare-and-record-on-linuxx64) instead:
 
 ```bash
-git checkout main            # or any revision containing Get-SupplyFreezeDigest.mjs
+git worktree add --detach ../TerraformStyleGuide-historical-t1 aae05282b57f093cec8b63e59138db72c982f10e
+cd ../TerraformStyleGuide-historical-t1
 
 # <rev>:<path> is always resolved from the repository root, never the current
 # directory, so this runs before the cd and keeps the path unambiguous.
