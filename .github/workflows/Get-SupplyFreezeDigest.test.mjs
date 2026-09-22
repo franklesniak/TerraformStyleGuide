@@ -995,10 +995,12 @@ test('CACHE-MOUNT-TOPOLOGY: visible backing coordinates reject protected aliases
   const objFunctions = new Function('pathPosix',
     `${strTopologySource}; return { parseMountInfo, cacheMountAliasesProtected };`)(pathPosix);
   const parse = (...arrLines) => objFunctions.parseMountInfo(`${arrLines.join('\n')}\n`);
-  const strRoot = '1 1 8:1 / / rw - ext4 /dev/root rw';
+  const strRoot = '1 0 8:1 / / rw - ext4 /dev/root rw';
 
   assert.equal(objFunctions.cacheMountAliasesProtected('/tmp/cache', ['/repo'],
     parse(strRoot)), false);
+  assert.equal(objFunctions.cacheMountAliasesProtected('/tmp/cache', ['/repo'],
+    parse('0 0 8:1 / / rw - ext4 /dev/root rw')), false);
   assert.equal(objFunctions.cacheMountAliasesProtected('/cache', ['/repo'], parse(
     strRoot,
     '2 1 8:1 /repo/empty /cache rw - none /repo/empty rw')), true);
@@ -1027,6 +1029,13 @@ test('CACHE-MOUNT-TOPOLOGY: visible backing coordinates reject protected aliases
     strRoot,
     '2 1 8:1 /hidden /cache/sub rw - none /hidden rw',
     '3 1 9:1 / /cache rw - tmpfs tmpfs rw')), /hidden mount is ambiguous/);
+  assert.equal(objFunctions.cacheMountAliasesProtected('/cache', ['/repo/child'], parse(
+    strRoot,
+    '2 1 8:2 /lower /repo rw - none /lower rw',
+    '3 2 8:2 /upper /repo rw - none /upper rw',
+    '4 3 9:1 /child /repo/child rw - none /child rw')), false);
+  assert.throws(() => objFunctions.cacheMountAliasesProtected('/cache', ['/repo'], parse(
+    '2 2 8:1 /repo /repo rw - none /repo rw')), /path has no visible mount/);
 
   const arrEscaped = parse(strRoot,
     '2 1 8:1 /repo\\040space /cache\\040space rw - none /repo\\040space rw');
@@ -1036,20 +1045,24 @@ test('CACHE-MOUNT-TOPOLOGY: visible backing coordinates reject protected aliases
     /invalid mountinfo path escape/);
   assert.throws(() => parse('2 1 08:1 / / rw - ext4 /dev/root rw'),
     /invalid mountinfo fields/);
+  assert.throws(() => parse('00 0 8:1 / / rw - ext4 /dev/root rw'),
+    /invalid mountinfo fields/);
+  assert.throws(() => parse(
+    '0 0 8:1 / / rw - ext4 /dev/root rw',
+    '0 0 8:1 /nested /nested rw - none /nested rw'), /invalid mountinfo ids/);
   assert.throws(() => parse('2 1 8:1 / / rw - '), /invalid mountinfo fields/);
   assert.throws(() => parse(
     '1 2 8:1 / / rw - ext4 /dev/root rw',
     '2 1 8:1 /nested /nested rw - none /nested rw'), /mountinfo parent cycle/);
+  assert.throws(() => parse(
+    '0 1 8:1 / / rw - ext4 /dev/root rw',
+    '1 0 8:1 /nested /nested rw - none /nested rw'), /mountinfo parent cycle/);
 
-  const strDescendantBlock = `    const objMountPoints = new Map();
-    for (const objMount of arrMounts) {
-      if (objMount.mountPoint !== strProtectedRoot
-        && mountPathContains(strProtectedRoot, objMount.mountPoint)) {
-        objMountPoints.set(objMount.mountPoint, true);
+  const strDescendantBlock = `    for (const strMountPoint of objMountIndex.byMountPoint.keys()) {
+      if (strMountPoint !== strProtectedRoot
+        && mountPathContains(strProtectedRoot, strMountPoint)) {
+        arrProtected.push(mountCoordinateForPath(strMountPoint, objMountIndex));
       }
-    }
-    for (const strMountPoint of objMountPoints.keys()) {
-      arrProtected.push(mountCoordinateForPath(strMountPoint, arrMounts));
     }
 `;
   const strWithoutDescendants = strTopologySource.replace(strDescendantBlock, '');
@@ -1072,6 +1085,42 @@ test('CACHE-MOUNT-TOPOLOGY: visible backing coordinates reject protected aliases
   assert.equal(objWithoutOverlap.cacheMountAliasesProtected('/cache', ['/repo'], parse(
     strRoot,
     '2 1 8:1 /repo/empty /cache rw - none /repo/empty rw')), false);
+
+  let intMapGets = 0;
+  class ObservedMap extends Map {
+    get(value) {
+      intMapGets += 1;
+      return super.get(value);
+    }
+  }
+  const observedFunctions = new Function('pathPosix', 'Map',
+    `${strTopologySource}; return { parseMountInfo, cacheMountAliasesProtected };`)(
+    pathPosix, ObservedMap);
+  const arrScaleLines = ['1 0 8:1 / / rw - ext4 /dev/root rw'];
+  for (let intIndex = 0; intIndex < 512; intIndex += 1) {
+    arrScaleLines.push(`${intIndex + 2} ${intIndex + 1} 8:2 /d${intIndex} /repo/m${intIndex} rw - none none rw`);
+  }
+  const arrScaleMounts = observedFunctions.parseMountInfo(`${arrScaleLines.join('\n')}\n`);
+  intMapGets = 0;
+  assert.equal(observedFunctions.cacheMountAliasesProtected('/cache', ['/repo'],
+    arrScaleMounts), false);
+  const intLinearMapGetLimit = arrScaleMounts.length * 20;
+  assert.ok(intMapGets <= intLinearMapGetLimit,
+    `indexed topology used ${intMapGets} map reads for ${arrScaleMounts.length} entries`);
+
+  const strRepeatedIndex = strTopologySource.replace(
+    'mountCoordinateForPath(strMountPoint, objMountIndex)',
+    'mountCoordinateForPath(strMountPoint, indexMountInfo(arrMounts))');
+  assert.notEqual(strRepeatedIndex, strTopologySource);
+  const repeatedFunctions = new Function('pathPosix', 'Map',
+    `${strRepeatedIndex}; return { parseMountInfo, cacheMountAliasesProtected };`)(
+    pathPosix, ObservedMap);
+  const arrRepeatedMounts = repeatedFunctions.parseMountInfo(`${arrScaleLines.join('\n')}\n`);
+  intMapGets = 0;
+  assert.equal(repeatedFunctions.cacheMountAliasesProtected('/cache', ['/repo'],
+    arrRepeatedMounts), false);
+  assert.ok(intMapGets > intLinearMapGetLimit,
+    'rebuilding the index per protected descendant must exceed the operation bound');
 });
 
 test('CACHE-MOUNTINFO-READ: production reader is bounded, exact, and closes once', () => {
@@ -1182,9 +1231,22 @@ runNpm(['audit', '--json'], {}, 5);
   assert.doesNotMatch(objResult.stderr, /outside the accepted native 0\/1 outcomes|Error:| at /);
 });
 
-test('CACHE-MOUNT-GUARD-CALL: whole process refuses a forced alias before npm',
+test('CACHE-MOUNT-GUARD-CALL: whole process classifies alias and coordinate refusals before npm',
   { skip: process.platform !== 'linux' || process.arch !== 'x64' }, () => {
-    const strCall = `    if (cacheMountAliasesProtected(strResolved,
+    const strCall = `    let boolMountAliasesProtected;
+    try {
+      const arrMounts = parseMountInfo(readMountInfoOrRefuse());
+      boolMountAliasesProtected = cacheMountAliasesProtected(strResolved,
+        [strRepository, strPhysicalRepository, strDistribution], arrMounts);
+    } catch { refuseCacheMountTopology(); }
+    if (boolMountAliasesProtected) {
+      refuseCacheMountTopology();
+    }
+`;
+    const strMisclassifiedCall = `    let arrMounts;
+    try { arrMounts = parseMountInfo(readMountInfoOrRefuse()); }
+    catch { refuseCacheMountTopology(); }
+    if (cacheMountAliasesProtected(strResolved,
       [strRepository, strPhysicalRepository, strDistribution], arrMounts)) {
       refuseCacheMountTopology();
     }
@@ -1200,7 +1262,8 @@ test('CACHE-MOUNT-GUARD-CALL: whole process refuses a forced alias before npm',
     const marker = join(temporary, 'npm-started');
     mkdirSync(workflow, { recursive: true });
     const strInstrumented = source
-      .replace(strFunction, `${strFunction}  if (process.env.TASK139_FORCE_CACHE_ALIAS === '1') return true;\n`)
+      .replace(strFunction, `${strFunction}  if (process.env.TASK139_FORCE_CACHE_ERROR === '1') throw new Error('forced topology error');
+  if (process.env.TASK139_FORCE_CACHE_ALIAS === '1') return true;\n`)
       .replace(strChildImport, `import { spawnSync as spawnSyncNative } from 'node:child_process';
 import { writeFileSync as writeTask139Marker } from 'node:fs';
 const spawnSync = (...arrArguments) => {
@@ -1208,7 +1271,7 @@ const spawnSync = (...arrArguments) => {
   return spawnSyncNative(...arrArguments);
 };`);
     assert.notEqual(strInstrumented, source);
-    const invoke = (strCandidate, arrFlags) => {
+    const invoke = (strCandidate, arrFlags, strMode = 'alias') => {
       const recorder = join(workflow, 'Get-SupplyFreezeDigest.mjs');
       writeFileSync(recorder, strCandidate);
       chmodSync(recorder, 0o644);
@@ -1216,17 +1279,22 @@ const spawnSync = (...arrArguments) => {
       return { result: spawnSync(process.execPath, [recorder, '--json',
         `--cache-directory=${cache}`, ...arrFlags], {
         encoding: 'utf8', maxBuffer: 16 * 1024 * 1024,
-        env: { ...process.env, TASK139_FORCE_CACHE_ALIAS: '1', TASK139_NPM_MARKER: marker },
+        env: { ...process.env,
+          TASK139_FORCE_CACHE_ALIAS: strMode === 'alias' ? '1' : '0',
+          TASK139_FORCE_CACHE_ERROR: strMode === 'error' ? '1' : '0',
+          TASK139_NPM_MARKER: marker },
       }), cache };
     };
     try {
-      for (const arrFlags of [[], ['--any-toolchain', '--no-audit']]) {
-        const objRun = invoke(strInstrumented, arrFlags);
-        assert.equal(objRun.result.status, 16, objRun.result.stderr);
-        assert.equal(objRun.result.stdout, '');
-        assert.match(objRun.result.stderr, /mount topology.*aliases a protected surface/);
-        assert.equal(existsSync(marker), false);
-        assert.deepEqual(readdirSync(objRun.cache), []);
+      for (const strMode of ['alias', 'error']) {
+        for (const arrFlags of [[], ['--any-toolchain', '--no-audit']]) {
+          const objRun = invoke(strInstrumented, arrFlags, strMode);
+          assert.equal(objRun.result.status, 16, objRun.result.stderr);
+          assert.equal(objRun.result.stdout, '');
+          assert.match(objRun.result.stderr, /mount topology.*aliases a protected surface/);
+          assert.equal(existsSync(marker), false);
+          assert.deepEqual(readdirSync(objRun.cache), []);
+        }
       }
       const strWithoutCall = strInstrumented.replace(strCall, '');
       assert.notEqual(strWithoutCall, strInstrumented);
@@ -1234,6 +1302,15 @@ const spawnSync = (...arrArguments) => {
       assert.notEqual(objMutant.result.status, 16,
         'removing the production guard call must defeat the exit-16 expectation');
       assert.equal(existsSync(marker), false);
+      const strMisclassified = strInstrumented.replace(strCall, strMisclassifiedCall);
+      assert.notEqual(strMisclassified, strInstrumented);
+      const objClassificationMutant = invoke(strMisclassified,
+        ['--any-toolchain', '--no-audit'], 'error');
+      assert.equal(objClassificationMutant.result.status, 16,
+        objClassificationMutant.result.stderr);
+      assert.match(objClassificationMutant.result.stderr,
+        /--cache-directory requires one existing empty private external directory/);
+      assert.doesNotMatch(objClassificationMutant.result.stderr, /mount topology/);
     } finally {
       rmSync(temporary, { recursive: true, force: true });
     }
@@ -1470,12 +1547,221 @@ test('LS-PROBLEM-PRIVACY: production summary emits only allowlisted kinds and co
   }
 });
 
+function historicalMethodBlocks() {
+  const strMethod = readFileSync(join(workflow, '..', '..', 'docs', 'T1-SUPPLY-FREEZE-CURRENT-PROVENANCE-v1.md'), 'utf8');
+  const extract = (strHeading) => {
+    const intStart = strMethod.indexOf(`### ${strHeading}\n`);
+    assert.ok(intStart >= 0);
+    const arrBlock = /```bash\n([\s\S]*?)\n```/u.exec(strMethod.slice(intStart));
+    assert.notEqual(arrBlock, null);
+    const arrPayload = /<<'NODE'\n([\s\S]*?)\nNODE$/u.exec(arrBlock[1]);
+    assert.notEqual(arrPayload, null);
+    return { shell: arrBlock[1], payload: arrPayload[1] };
+  };
+  const acquisition = extract('Acquire and verify');
+  const offline = extract('Verify offline');
+  assert.equal(acquisition.payload, offline.payload,
+    'both authored recipes must retain the same complete verifier');
+  return { acquisition, offline };
+}
+
+test('HISTORICAL-RECIPE-IDENTITY: paired and offline verifiers have identical payloads', () => {
+  historicalMethodBlocks();
+});
+
+test('HISTORICAL-ACQUISITION: exact authored shell gates verification on native fetch success',
+  { skip: process.platform !== 'linux' }, () => {
+    const { acquisition, offline } = historicalMethodBlocks();
+    const arrCommits = ['e5064a672c10f4fad90f36e82af33ff8fc230b5f',
+      '143f54e52075a1ae1e999a6e242073e3d8d4a46b',
+      'aae05282b57f093cec8b63e59138db72c982f10e'];
+    const arrBlobs = ['103075d0d14f61b49d29cf2ed8dc8a7804fe092e',
+      '92a2f83a2d2d6904521800108ad0e1b1436909e2',
+      '2b88a0ac85d3a8b7286040e6b1f6c4ddb4d3bce1',
+      '5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca',
+      '05778c0eda0273a9217f7dc953795c2240473a14'];
+    const strProject = join(workflow, '..', '..');
+    const temporary = mkdtempSync(join(tmpdir(), 't1-historical-acquisition-'));
+    const objEnvironment = { ...process.env, NODE_DISABLE_COMPILE_CACHE: '1',
+      GIT_NO_LAZY_FETCH: '1', GIT_NO_REPLACE_OBJECTS: '1', GIT_OPTIONAL_LOCKS: '0',
+      GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
+    for (const strKey of Object.keys(objEnvironment)) {
+      if (strKey.startsWith('GIT_') && !['GIT_NO_LAZY_FETCH', 'GIT_NO_REPLACE_OBJECTS',
+        'GIT_OPTIONAL_LOCKS', 'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM'].includes(strKey)) {
+        delete objEnvironment[strKey];
+      }
+    }
+    for (const strKey of ['NODE_OPTIONS', 'NODE_COMPILE_CACHE', 'NODE_V8_COVERAGE',
+      'NODE_REDIRECT_WARNINGS', 'NODE_DEBUG', 'NODE_DEBUG_NATIVE']) delete objEnvironment[strKey];
+    const objGitPath = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8', env: objEnvironment });
+    assert.equal(objGitPath.status, 0, objGitPath.stderr);
+    const strGit = objGitPath.stdout.trim();
+    const strCanonicalRemote = 'https://github.com/franklesniak/TerraformStyleGuide.git';
+    const git = (cwd, args, input) => spawnSync(strGit, args, {
+      cwd, input, env: objEnvironment, maxBuffer: 128 * 1024 * 1024,
+    });
+    const requireSuccess = (objResult) => {
+      assert.equal(objResult.status, 0, objResult.stderr.toString());
+      assert.equal(objResult.signal, null);
+      return objResult.stdout;
+    };
+    try {
+      const bufComplete = requireSuccess(git(strProject, ['pack-objects', '--revs', '--stdout'], `${arrCommits.join('\n')}\n`));
+      const bufTreeIds = requireSuccess(git(strProject,
+        ['rev-list', '--objects', '--filter=blob:none', '--no-object-names', ...arrCommits]));
+      const bufTrees = requireSuccess(git(strProject, ['pack-objects', '--stdout'], bufTreeIds));
+      const objMissingGroups = new Map([
+        ['missing-current', arrBlobs.slice(0, 2)],
+        ['missing-historical', arrBlobs.slice(2, 4)],
+        ['missing-recorder', arrBlobs.slice(4)],
+      ]);
+      const arrAllObjectIds = requireSuccess(git(strProject,
+        ['rev-list', '--objects', '--no-object-names', ...arrCommits])).toString().trim().split('\n');
+      const objGroupPacks = new Map([...objMissingGroups].map(([strGroup, arrMissing]) => [
+        strGroup, requireSuccess(git(strProject, ['pack-objects', '--no-reuse-delta', '--stdout'],
+          `${arrAllObjectIds.filter((strId) => !arrMissing.includes(strId)).join('\n')}\n`)),
+      ]));
+      const strRewriteProbe = join(temporary, 'rewrite-probe');
+      mkdirSync(strRewriteProbe);
+      requireSuccess(git(strRewriteProbe, ['init', '-q']));
+      requireSuccess(git(strRewriteProbe,
+        ['config', 'url.file:///task137-counterpart-synthetic-source/.insteadOf', strCanonicalRemote]));
+      assert.equal(requireSuccess(git(strRewriteProbe,
+        ['ls-remote', '--get-url', strCanonicalRemote])).toString().trim(),
+      'file:///task137-counterpart-synthetic-source/');
+      const strPack = join(temporary, 'complete.pack');
+      writeFileSync(strPack, bufComplete);
+      const objContract = JSON.parse(readFileSync(join(workflow, 'workflow-policy-contract.json')));
+      const run = (strName, strInitial, intFetchStatus, strShell, boolBadHash = false,
+        strEffectiveUrl = strCanonicalRemote, intPreflightStatus = 0) => {
+        const strRepository = join(temporary, strName);
+        const strBin = join(temporary, `${strName}-bin`);
+        const strLog = join(temporary, `${strName}-calls.jsonl`);
+        mkdirSync(strRepository);
+        mkdirSync(strBin);
+        requireSuccess(git(strRepository, ['init', '-q']));
+        if (strInitial !== 'absent') {
+          const bufInitial = objGroupPacks.get(strInitial)
+            ?? (strInitial === 'complete' ? bufComplete : bufTrees);
+          requireSuccess(git(strRepository, ['index-pack', '--stdin'], bufInitial));
+          for (const strCommit of arrCommits) requireSuccess(git(strRepository, ['cat-file', '-e', `${strCommit}^{commit}`]));
+        } else for (const strCommit of arrCommits) assert.notEqual(git(strRepository, ['cat-file', '-e', `${strCommit}^{commit}`]).status, 0);
+        for (const strBlob of arrBlobs) {
+          const boolPresent = strInitial === 'complete'
+            || (objMissingGroups.has(strInitial) && !objMissingGroups.get(strInitial).includes(strBlob));
+          assert.equal(git(strRepository, ['cat-file', '-e', strBlob]).status === 0, boolPresent);
+        }
+        const strContractDirectory = join(strRepository, '.github', 'workflows');
+        mkdirSync(strContractDirectory, { recursive: true });
+        const objCandidate = structuredClone(objContract);
+        if (boolBadHash) objCandidate.supplyFreeze.baseline.packageLockJson.sha256 = '0'.repeat(64);
+        writeFileSync(join(strContractDirectory, 'workflow-policy-contract.json'), JSON.stringify(objCandidate));
+        // A transport fixture supplies real pinned objects without network. Every
+        // verifier Git child still executes the real Git binary with its closed env.
+        const strShim = join(strBin, 'git');
+        writeFileSync(strShim, `#!${process.execPath}
+import assert from 'node:assert/strict';
+import { appendFileSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+const args = process.argv.slice(2);
+appendFileSync(${JSON.stringify(strLog)}, JSON.stringify(args) + '\\n');
+if (args[0] === 'ls-remote') {
+  assert.deepEqual(args, ['ls-remote', '--get-url', ${JSON.stringify(strCanonicalRemote)}]);
+  process.stdout.write(${JSON.stringify(`${strEffectiveUrl}\n`)});
+  process.exit(${intPreflightStatus});
+}
+if (args[0] === 'fetch') {
+  assert.deepEqual(args, ['fetch', '--no-tags', '--refetch',
+    ${JSON.stringify(strCanonicalRemote)}, ...${JSON.stringify(arrCommits)}]);
+  if (${intFetchStatus} !== 0) process.exit(${intFetchStatus});
+  const result = spawnSync(${JSON.stringify(strGit)}, ['index-pack', '--stdin'],
+    { input: readFileSync(${JSON.stringify(strPack)}), env: process.env });
+  process.exit(result.status ?? 74);
+}
+assert.equal(process.env.GIT_NO_LAZY_FETCH, '1');
+assert.equal(process.env.GIT_NO_REPLACE_OBJECTS, '1');
+assert.equal(process.env.GIT_OPTIONAL_LOCKS, '0');
+assert.equal(process.env.GIT_CONFIG_NOSYSTEM, '1');
+const result = spawnSync(${JSON.stringify(strGit)}, args, { stdio: 'inherit', env: process.env });
+process.exit(result.status ?? 74);
+`);
+        chmodSync(strShim, 0o755);
+        const objResult = spawnSync('bash', ['--noprofile', '--norc', '-c', strShell], {
+          cwd: strRepository, encoding: 'utf8',
+          env: { ...objEnvironment, strNode: process.execPath, PATH: `${strBin}${delimiter}${process.env.PATH}` },
+          timeout: 30000, maxBuffer: 1024 * 1024,
+        });
+        assert.equal(objResult.signal, null);
+        assert.equal(objResult.error, undefined);
+        const calls = existsSync(strLog) ? readFileSync(strLog, 'utf8').trim().split('\n').map(JSON.parse) : [];
+        return { result: objResult, calls, repository: strRepository };
+      };
+      const strSuccess = 'Current-profile inputs, historical T1 packages, and original recorder verification completed.\n';
+      for (const strInitial of ['absent', 'trees', 'complete', ...objMissingGroups.keys()]) {
+        const objRun = run(`acquire-${strInitial}`, strInitial, 0, acquisition.shell);
+        assert.equal(objRun.result.status, 0, objRun.result.stderr);
+        assert.equal(objRun.result.stdout, strSuccess);
+        assert.equal(objRun.calls.filter((args) => args[0] === 'fetch').length, 1);
+        assert.equal(objRun.calls.length, 15);
+        for (const strBlob of arrBlobs) requireSuccess(git(objRun.repository, ['cat-file', '-e', strBlob]));
+      }
+      for (const strInitial of ['absent', 'trees', 'complete']) {
+        const objRun = run(`fetch-fails-${strInitial}`, strInitial, 73, acquisition.shell);
+        assert.equal(objRun.result.status, 73, objRun.result.stderr);
+        assert.equal(objRun.result.stdout, '');
+        assert.equal(objRun.calls.length, 2, 'failed fetch must not start verification');
+      }
+      const objRewrite = run('rewritten-url', 'complete', 0, acquisition.shell, false,
+        'file:///task137-counterpart-synthetic-source/');
+      assert.notEqual(objRewrite.result.status, 0);
+      assert.equal(objRewrite.result.stdout, '');
+      assert.deepEqual(objRewrite.calls.map((args) => args[0]), ['ls-remote']);
+      const objPreflightFailure = run('effective-url-fails', 'complete', 0,
+        acquisition.shell, false, strCanonicalRemote, 72);
+      assert.equal(objPreflightFailure.result.status, 72, objPreflightFailure.result.stderr);
+      assert.equal(objPreflightFailure.result.stdout, '');
+      assert.deepEqual(objPreflightFailure.calls.map((args) => args[0]), ['ls-remote']);
+      const objLateFailure = run('late-verification-fails', 'absent', 0, acquisition.shell, true);
+      assert.notEqual(objLateFailure.result.status, 0);
+      assert.equal(objLateFailure.result.stdout, '');
+      assert.equal(objLateFailure.calls.length, 7);
+      const objOffline = run('offline-complete', 'complete', 73, offline.shell);
+      assert.equal(objOffline.result.status, 0, objOffline.result.stderr);
+      assert.equal(objOffline.result.stdout, strSuccess);
+      assert.equal(objOffline.calls.length, 13);
+      assert.equal(objOffline.calls.some((args) => args[0] === 'fetch'), false);
+      for (const strInitial of ['absent', 'trees', ...objMissingGroups.keys()]) {
+        const objRun = run(`offline-${strInitial}`, strInitial, 73, offline.shell);
+        assert.notEqual(objRun.result.status, 0);
+        assert.equal(objRun.result.stdout, '');
+        assert.equal(objRun.calls.some((args) => args[0] === 'fetch'), false);
+      }
+      const strMutant = acquisition.shell.replace(
+        `  ${arrCommits.at(-1)} && \\\n`, `  ${arrCommits.at(-1)};\n`);
+      assert.notEqual(strMutant, acquisition.shell);
+      const objMutant = run('ungated-mutant', 'complete', 73, strMutant);
+      assert.equal(objMutant.result.status, 0, objMutant.result.stderr);
+      assert.equal(objMutant.result.stdout, strSuccess);
+      assert.ok(objMutant.calls.length > 1,
+        'removing the connector must defeat the failed-acquisition expectation');
+      const strPreflightLine =
+        'test "$strEffectiveRemote" = "$strCanonicalRemote" && \\\n';
+      const strPreflightMutant = acquisition.shell.replace(strPreflightLine, ': && \\\n');
+      assert.notEqual(strPreflightMutant, acquisition.shell);
+      const objPreflightMutant = run('rewritten-url-mutant', 'complete', 0,
+        strPreflightMutant, false, 'file:///task137-counterpart-synthetic-source/');
+      assert.equal(objPreflightMutant.result.status, 0, objPreflightMutant.result.stderr);
+      assert.equal(objPreflightMutant.result.stdout, strSuccess);
+      assert.ok(objPreflightMutant.calls.some((args) => args[0] === 'fetch'),
+        'removing the effective-URL check must allow the rewritten acquisition');
+    } finally {
+      rmSync(temporary, { recursive: true, force: true });
+    }
+  });
+
 test('HISTORICAL-VERIFICATION: authored block requires both TF pairs and the original recorder',
   { skip: process.platform !== 'linux' }, () => {
-    const strMethod = readFileSync(join(workflow, '..', '..', 'docs', 'T1-SUPPLY-FREEZE-CURRENT-PROVENANCE-v1.md'), 'utf8');
-    const arrVerifier = /## Verify historical Git provenance separately[\s\S]*?```bash\r?\n[\s\S]*?<<'NODE'\r?\n([\s\S]*?)\r?\nNODE\r?\n```/u.exec(strMethod);
-    assert.notEqual(arrVerifier, null);
-    const strVerifier = arrVerifier[1];
+    const strVerifier = historicalMethodBlocks().offline.payload;
     const strExpectedSuccess =
       'Current-profile inputs, historical T1 packages, and original recorder verification completed.\n';
     const strProjectRoot = join(workflow, '..', '..');
@@ -1662,6 +1948,34 @@ process.exit(result.status ?? 74);
       assert.equal(objHistoricalNativeFailure.stdout, '');
       assert.equal(readFileSync(strCountPath, 'utf8'), '9');
       assert.match(objHistoricalNativeFailure.stderr, /TASK130_F24_INJECTED_NATIVE_STATUS_73/);
+
+      for (const [strCase, intCall, strAction] of [
+        ['wrong-path-blob', 12, "process.stdout.write('0'.repeat(40) + '\\n'); process.exit(0);"],
+        ['final-native-read', 13, 'process.exit(73);'],
+      ]) {
+        const strCaseDirectory = join(temporary, strCase);
+        const strCaseCounter = join(temporary, `${strCase}-count`);
+        mkdirSync(strCaseDirectory);
+        const strCaseWrapper = join(strCaseDirectory, 'git');
+        writeFileSync(strCaseWrapper, `#!${process.execPath}
+const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
+const counter = ${JSON.stringify(strCaseCounter)};
+const count = fs.existsSync(counter) ? Number(fs.readFileSync(counter, 'utf8')) + 1 : 1;
+fs.writeFileSync(counter, String(count));
+if (count === ${intCall}) { ${strAction} }
+const result = spawnSync(${JSON.stringify(objGitPath.stdout.trim())}, process.argv.slice(2),
+  { stdio: 'inherit', env: process.env });
+process.exit(result.status ?? 74);
+`);
+        chmodSync(strCaseWrapper, 0o755);
+        const objFailure = invokeVerifier(objContract, {
+          PATH: `${strCaseDirectory}${delimiter}${process.env.PATH}`,
+        });
+        assert.notEqual(objFailure.status, 0, strCase);
+        assert.equal(objFailure.stdout, '');
+        assert.equal(readFileSync(strCaseCounter, 'utf8'), String(intCall));
+      }
     } finally {
       rmSync(temporary, { recursive: true, force: true });
     }
