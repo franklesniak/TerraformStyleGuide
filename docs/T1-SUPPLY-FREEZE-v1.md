@@ -5,9 +5,15 @@
 
 - **Status:** Active
 - **Owner:** TerraformStyleGuide Repository Maintainers
-- **Last Updated:** 2026-09-11
-- **Scope:** Defines the reproducible supply-input freeze for the T1 merge and the exact evidence that later work must compare.
-- **Related:** [Decision records](decisions/)
+- **Last Updated:** 2026-09-21
+- **Scope:** Retains the historical T1 supply-input assertions and links the separate current-profile observation and Git provenance method for issue 52.
+- **Related:** [Issue 52](https://github.com/franklesniak/TerraformStyleGuide/issues/52), [policy contract](../.github/workflows/workflow-policy-contract.json), [recorder](../.github/workflows/Get-SupplyFreezeDigest.mjs), [focused tests](../.github/workflows/Get-SupplyFreezeDigest.test.mjs), [Decision records](decisions/)
+
+## Reading this record
+
+The retained T1 assertions below describe the historical record, including its original recorder identity and blocked advisory row. They are not measurements of the current dependency graph. The current `TerraformStyleGuide.FrozenSupplyProfile.v1` explicitly records `historicalRecordIsCurrentGraphMeasurement=false` and `advisoryDispositionGranted=false`. Issues 22 and 24 retain their separate consumer and policy requirements.
+
+For the current recorder, use [Meaning of a current run](T1-SUPPLY-FREEZE-CURRENT-PROVENANCE-v1.md#meaning-of-a-current-run), [Prepare and record](T1-SUPPLY-FREEZE-CURRENT-PROVENANCE-v1.md#prepare-and-record-on-linuxx64), and [Verify historical Git provenance separately](T1-SUPPLY-FREEZE-CURRENT-PROVENANCE-v1.md#verify-historical-git-provenance-separately). The historical instructions and diagnostic explanations below apply only to the original immutable recorder. New observations do not replace any historical row, approve an advisory, or prove historical execution.
 
 ## Status
 
@@ -446,15 +452,31 @@ environment chooses the interpreter, and the record has no way to say which one 
 
 ## How to reproduce
 
-The script is **not** present at the recorded T1 merge commit — it is added by the change that
-introduces this document. Reproduce from a revision that contains it, which carries the same
-`package.json` and `package-lock.json` blobs:
+This is the retained **historical** procedure for the original PR 27 recorder, not the current-profile recorder. The original script is absent from the recorded T1 merge commit. Its immutable source is commit `aae05282b57f093cec8b63e59138db72c982f10e`, recorder blob `05778c0eda0273a9217f7dc953795c2240473a14`. Use an isolated historical checkout only after explicit object acquisition and [Git provenance verification](T1-SUPPLY-FREEZE-CURRENT-PROVENANCE-v1.md#verify-historical-git-provenance-separately). Preserve the historical script identity in the table; the current recorder has a separate identity. The original recorder refuses current manifests with exit 4; this historical refusal is not erased by a successful current observation.
+
+The following archived commands describe the original environment and behavior. They are not the current read-only procedure or proof of historical network-response reproduction. Apply the current caller startup protocol before any Node process. For current inputs, use [Prepare and record](T1-SUPPLY-FREEZE-CURRENT-PROVENANCE-v1.md#prepare-and-record-on-linuxx64) instead:
 
 ```bash
-git checkout main            # or any revision containing Get-SupplyFreezeDigest.mjs
+strHistoricalRecorderCommit='aae05282b57f093cec8b63e59138db72c982f10e'
+unset strHistoricalT1Checkout strHistoricalT1ConfigReady
+historicalT1Prepared() {
+  [ -n "${strHistoricalT1Checkout:-}" ] \
+    && [ "$(pwd -P 2>/dev/null)" = "$strHistoricalT1Checkout" ] \
+    && [ "$(git rev-parse HEAD 2>/dev/null)" = "$strHistoricalRecorderCommit" ] \
+    && [ -x "${strNode:-}" ] \
+    && [ -d "${strWork:-}" ] \
+    && [ -n "${strReviewedScript:-}" ]
+}
 
-# <rev>:<path> is always resolved from the repository root, never the current
-# directory, so this runs before the cd and keeps the path unambiguous.
+if git worktree add --detach ../TerraformStyleGuide-historical-t1 "$strHistoricalRecorderCommit" \
+  && cd ../TerraformStyleGuide-historical-t1 \
+  && test "$(git rev-parse HEAD)" = "$strHistoricalRecorderCommit" \
+  && cd .github/workflows \
+  && strHistoricalT1Checkout="$(pwd -P)" \
+  && test -n "$strHistoricalT1Checkout"; then
+
+# <rev>:<path> is always resolved from the repository root, regardless of the
+# current directory, so the path remains unambiguous.
 #
 # `git rev-parse` PRINTS a blob id and exits 0 whatever that id turns out to be,
 # so a bare invocation with "must equal the recorded blob" beside it is a check
@@ -490,20 +512,19 @@ strReviewedLockBlob='PASTE the `package-lock.json` blob row here'
 #
 # sha256sum without -c only PRINTS; it cannot fail, so the archive is verified with
 # -c INSIDE the chain, before it is extracted -- see Trust boundary.
-unset strNode
-test "$(git rev-parse HEAD:.github/workflows/package.json)" = "$strReviewedPackageBlob" \
-  && test "$(git rev-parse HEAD:.github/workflows/package-lock.json)" = "$strReviewedLockBlob" \
-  && strWork="$(mktemp -d)" \
-  && curl -fsSLo "$strWork/node24.tar.xz" \
-    https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz \
-  && echo 'd6c664df3f3f61458e8c277585571328522d705166723a7c7823a9253a4d15a0  '"$strWork/node24.tar.xz" \
-    | sha256sum -c - \
-  && mkdir "$strWork/node24" \
-  && tar -xJf "$strWork/node24.tar.xz" -C "$strWork/node24" --strip-components=1 \
-  && strNode="$strWork/node24/bin/node"   # absolute, and npm is the one beside it
+  unset strNode
+  test "$(git rev-parse HEAD:.github/workflows/package.json)" = "$strReviewedPackageBlob" \
+    && test "$(git rev-parse HEAD:.github/workflows/package-lock.json)" = "$strReviewedLockBlob" \
+    && strWork="$(mktemp -d)" \
+    && curl -fsSLo "$strWork/node24.tar.xz" \
+      https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz \
+    && echo 'd6c664df3f3f61458e8c277585571328522d705166723a7c7823a9253a4d15a0  '"$strWork/node24.tar.xz" \
+      | sha256sum -c - \
+    && mkdir "$strWork/node24" \
+    && tar -xJf "$strWork/node24.tar.xz" -C "$strWork/node24" --strip-components=1 \
+    && strNode="$strWork/node24/bin/node"   # absolute, and npm is the one beside it
 
-cd .github/workflows
-umask 0022                   # the recorded tree was installed under this
+  umask 0022                   # the recorded tree was installed under this
 # Verify the recorder BEFORE running it. The script reports its own SHA-256, but
 # that is the script telling you about itself -- worthless if the file has been
 # modified. This checks it from outside, and `&&`-chains the run behind it so a
@@ -513,7 +534,7 @@ umask 0022                   # the recorded tree was installed under this
 # deliberately NOT repeated here: this document holds every digest exactly once,
 # because a hand-copied digest has nothing deriving it and rots silently -- which
 # has already happened twice in this pull request's own description.
-strReviewedScript='PASTE the Freeze script SHA-256 row here'
+  strReviewedScript='PASTE the Freeze script SHA-256 row here'
 
 # `npm ci` is the FIRST link of the chain, not a separate statement before it.
 # Standing alone it was the one command in this block whose failure did not stop
@@ -521,12 +542,27 @@ strReviewedScript='PASTE the Freeze script SHA-256 row here'
 # tree on disk, and the recorder then folds it and prints a confident digest --
 # a failed reproduction reporting success over stale bytes. Every step from the
 # install to the record is now one `&&` sequence, so the first failure ends it.
-env -u NODE_OPTIONS -u NPM_CONFIG_WORKSPACE -u npm_config_workspace \
-  "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund --workspaces=false \
-  && echo "$strReviewedScript  Get-SupplyFreezeDigest.mjs" \
-    | sha256sum -c - \
-  && env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs --json
+  env -u NODE_OPTIONS -u NODE_COMPILE_CACHE -u NODE_V8_COVERAGE \
+    -u NODE_REDIRECT_WARNINGS -u NODE_DEBUG -u NODE_DEBUG_NATIVE \
+    -u NPM_CONFIG_WORKSPACE -u npm_config_workspace NODE_DISABLE_COMPILE_CACHE=1 \
+    "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund --workspaces=false \
+    && echo "$strReviewedScript  Get-SupplyFreezeDigest.mjs" \
+      | sha256sum -c - \
+    && env -u NODE_OPTIONS -u NODE_COMPILE_CACHE -u NODE_V8_COVERAGE \
+      -u NODE_REDIRECT_WARNINGS -u NODE_DEBUG -u NODE_DEBUG_NATIVE \
+      NODE_DISABLE_COMPILE_CACHE=1 "$strNode" Get-SupplyFreezeDigest.mjs --json
+else
+  unset strHistoricalT1Checkout
+  echo 'Historical checkout preparation failed; aborting the reproduction procedure' >&2
+  false
+fi
 ```
+
+Run this block and either isolation block below in the same shell. A failed worktree creation,
+checkout transition, exact-commit check, or workflow-directory transition returns nonzero before
+the dependent preparation starts. A successful transition retains the physical checkout marker,
+verified tool paths, and recorder digest in the current shell. Therefore an ordinary `npm ci`
+failure remains visible while leaving the verified state available to an isolation retry.
 
 **The order of those last two commands is the point.** An earlier revision of this block ran the
 recorder first and left the script's digest to be compared afterwards, from
@@ -617,29 +653,43 @@ the earlier "full modes are machine state" exemption did not survive being measu
 To sidestep ambient configuration files:
 
 ```bash
-strIsolationDirectory="$(mktemp -d)"
-# mktemp failing would leave $strIsolationDirectory empty and send the redirections
-# below to /npm-user-empty and /npm-global-empty -- root-level files a privileged
-# reader would create or truncate. Require a real directory before writing anything.
-if [ -z "$strIsolationDirectory" ] || [ ! -d "$strIsolationDirectory" ]; then
-  echo 'mktemp -d did not create a directory; aborting the isolation recipe' >&2
+unset strHistoricalT1ConfigReady
+if ! historicalT1Prepared; then
+  echo 'Historical checkout preparation is unavailable; aborting the isolation recipe' >&2
+  false
 else
-  : > "$strIsolationDirectory/npm-user-empty"
-  : > "$strIsolationDirectory/npm-global-empty"
-  # Both casings, or the ambient lowercase wins and the isolation does nothing.
-  unset npm_config_userconfig npm_config_globalconfig
-  export NPM_CONFIG_USERCONFIG="$strIsolationDirectory/npm-user-empty"
-  export NPM_CONFIG_GLOBALCONFIG="$strIsolationDirectory/npm-global-empty"
-  # `&&`, for the same reason the main reproduction block gives: npm ci is the FIRST
-  # LINK of the chain, not a separate statement before it. Unchained, an install that
-  # fails before replacing an old node_modules leaves the recorder to run anyway and
-  # record the stale tree from a prior run -- the isolation workaround then appears to
-  # succeed while describing a tree this recipe never installed.
-  env -u NODE_OPTIONS -u NPM_CONFIG_WORKSPACE -u npm_config_workspace \
-    "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund --workspaces=false \
-    && echo "$strReviewedScript  Get-SupplyFreezeDigest.mjs" \
-      | sha256sum -c - \
-    && env -u NODE_OPTIONS "$strNode" Get-SupplyFreezeDigest.mjs --json
+  strIsolationDirectory="$(mktemp -d)"
+  # mktemp failing would leave $strIsolationDirectory empty and send the redirections
+  # below to /npm-user-empty and /npm-global-empty -- root-level files a privileged
+  # reader would create or truncate. Require a real directory before writing anything.
+  if [ -z "$strIsolationDirectory" ] || [ ! -d "$strIsolationDirectory" ]; then
+    echo 'mktemp -d did not create a directory; aborting the isolation recipe' >&2
+    false
+  elif : > "$strIsolationDirectory/npm-user-empty" \
+    && : > "$strIsolationDirectory/npm-global-empty"; then
+    # Both casings, or the ambient lowercase wins and the isolation does nothing.
+    unset npm_config_userconfig npm_config_globalconfig
+    export NPM_CONFIG_USERCONFIG="$strIsolationDirectory/npm-user-empty"
+    export NPM_CONFIG_GLOBALCONFIG="$strIsolationDirectory/npm-global-empty"
+    strHistoricalT1ConfigReady="$strIsolationDirectory"
+    # `&&`, for the same reason the main reproduction block gives: npm ci is the FIRST
+    # LINK of the chain, not a separate statement before it. Unchained, an install that
+    # fails before replacing an old node_modules leaves the recorder to run anyway and
+    # record the stale tree from a prior run -- the isolation workaround then appears to
+    # succeed while describing a tree this recipe never installed.
+    env -u NODE_OPTIONS -u NODE_COMPILE_CACHE -u NODE_V8_COVERAGE \
+      -u NODE_REDIRECT_WARNINGS -u NODE_DEBUG -u NODE_DEBUG_NATIVE \
+      -u NPM_CONFIG_WORKSPACE -u npm_config_workspace NODE_DISABLE_COMPILE_CACHE=1 \
+      "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund --workspaces=false \
+      && echo "$strReviewedScript  Get-SupplyFreezeDigest.mjs" \
+        | sha256sum -c - \
+      && env -u NODE_OPTIONS -u NODE_COMPILE_CACHE -u NODE_V8_COVERAGE \
+        -u NODE_REDIRECT_WARNINGS -u NODE_DEBUG -u NODE_DEBUG_NATIVE \
+        NODE_DISABLE_COMPILE_CACHE=1 "$strNode" Get-SupplyFreezeDigest.mjs --json
+  else
+    echo 'Isolation configuration files could not be prepared; aborting the isolation recipe' >&2
+    false
+  fi
 fi
 ```
 
@@ -652,6 +702,9 @@ primary `npm ci` failed — often before that check could run — so omitting it
 unreviewed recorder on exactly the path a failing primary run sends people down. `$strReviewedScript`
 is the value pasted once in the main block above; these recipes already depend on `$strNode` and
 `$strWork` from that same block.
+The first isolation block also retains `strHistoricalT1ConfigReady` only after both empty
+configuration files and their exported paths are prepared; the environment-isolation block checks
+that marker and both files before it runs.
 
 **Both casings must be handled, and setting only the upper one is not isolation.** npm's
 configuration documentation states that `npm_config_*` environment variables are case-insensitive
@@ -700,14 +753,30 @@ environment were clean.
 that matters:
 
 ```bash
-env -u NODE_OPTIONS -u npm_config_bin_links -u NPM_CONFIG_BIN_LINKS \
-  -u NPM_CONFIG_WORKSPACE -u npm_config_workspace \
-  "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund --workspaces=false \
-  && echo "$strReviewedScript  Get-SupplyFreezeDigest.mjs" \
-    | sha256sum -c - \
-  && env -u NODE_OPTIONS -u npm_config_bin_links -u NPM_CONFIG_BIN_LINKS \
-  -u NPM_CONFIG_WORKSPACE -u npm_config_workspace \
-    "$strNode" Get-SupplyFreezeDigest.mjs --json
+if ! historicalT1Prepared \
+  || [ -z "${strHistoricalT1ConfigReady:-}" ] \
+  || [ "$strHistoricalT1ConfigReady" != "${strIsolationDirectory:-}" ] \
+  || [ ! -d "$strHistoricalT1ConfigReady" ] \
+  || [ ! -f "$strHistoricalT1ConfigReady/npm-user-empty" ] \
+  || [ ! -f "$strHistoricalT1ConfigReady/npm-global-empty" ] \
+  || [ "${NPM_CONFIG_USERCONFIG:-}" != "$strHistoricalT1ConfigReady/npm-user-empty" ] \
+  || [ "${NPM_CONFIG_GLOBALCONFIG:-}" != "$strHistoricalT1ConfigReady/npm-global-empty" ]; then
+  echo 'Historical checkout and configuration isolation are unavailable; aborting the environment-isolation recipe' >&2
+  false
+else
+  env -u NODE_OPTIONS -u NODE_COMPILE_CACHE -u NODE_V8_COVERAGE \
+    -u NODE_REDIRECT_WARNINGS -u NODE_DEBUG -u NODE_DEBUG_NATIVE \
+    -u npm_config_bin_links -u NPM_CONFIG_BIN_LINKS \
+    -u NPM_CONFIG_WORKSPACE -u npm_config_workspace NODE_DISABLE_COMPILE_CACHE=1 \
+    "$strNode" "$strWork/node24/bin/npm" ci --ignore-scripts --no-audit --no-fund --workspaces=false \
+    && echo "$strReviewedScript  Get-SupplyFreezeDigest.mjs" \
+      | sha256sum -c - \
+    && env -u NODE_OPTIONS -u NODE_COMPILE_CACHE -u NODE_V8_COVERAGE \
+      -u NODE_REDIRECT_WARNINGS -u NODE_DEBUG -u NODE_DEBUG_NATIVE \
+      -u npm_config_bin_links -u NPM_CONFIG_BIN_LINKS \
+      -u NPM_CONFIG_WORKSPACE -u npm_config_workspace \
+      NODE_DISABLE_COMPILE_CACHE=1 "$strNode" Get-SupplyFreezeDigest.mjs --json
+fi
 ```
 
 **Both commands carry the scrub, and an earlier revision showed it on only the first.** The
