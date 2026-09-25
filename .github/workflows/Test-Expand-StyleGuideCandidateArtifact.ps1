@@ -33,7 +33,7 @@ envelope on the success stream. Fixed safe failure diagnostics use stderr.
 The invoking runner captures the actual native process exit code.
 
 .NOTES
-Version: 1.0.20260924.0
+Version: 1.0.20260924.1
 #>
 
 [CmdletBinding(PositionalBinding = $false)]
@@ -55,11 +55,11 @@ param (
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:versionCandidateHarness = [System.Version]'1.0.20260924.0'
+$script:versionCandidateHarness = [System.Version]'1.0.20260924.1'
 $script:objCandidateHelperPathClaim = $HelperPath
 $script:objCandidateContextManagerPathClaim = $ContextManagerPath
-$script:strCandidateExpectedHelperVersion = '1.0.20260924.0'
-$script:strCandidateExpectedContextVersion = '1.0.20260924.0'
+$script:strCandidateExpectedHelperVersion = '1.0.20260924.1'
+$script:strCandidateExpectedContextVersion = '1.0.20260924.1'
 $script:strCandidateCatalogVersion = '1.0.20260805.1'
 # The documented ceiling on what an authenticated native query may return, the
 # buffer each pipe is read into, and how long a killed child is given to let its
@@ -132,7 +132,7 @@ $script:arrTerraformProductionSubreason = [string[]]@(
     'trusted-missing', 'trusted-not-directory', 'directory-missing', 'not-directory',
     'parent-missing', 'parent-not-directory', 'root-reparse', 'ancestor-reparse',
     'component-reparse', 'negative-length', 'inconsistent-length',
-    'pre-journal-populated', 'entry-unreadable', 'archive-missing'
+    'pre-journal-populated', 'entry-unreadable', 'archive-missing', 'utf8'
 )
 $script:arrTerraformContextDiagnostic = [string[]]@('cleanup-entry-missing', 'cleanup-entry-unreadable')
 $script:hashtableTerraformSubreasonFamily = @{
@@ -1526,6 +1526,441 @@ $script:scriptBlockAssertResourceGuardsWired = {
     }
 }
 
+$script:scriptBlockAssertUtf8DecoderWired = {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$LiteralPath
+    )
+
+    $objParseErrors = $null
+    $objScriptAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        $LiteralPath,
+        [ref]$null,
+        [ref]$objParseErrors
+    )
+    if ($null -eq $objScriptAst -or @($objParseErrors).Count -ne 0) {
+        & $script:scriptBlockStopHarness `
+            -Code 'catalog-invalid' -Detail 'utf8-decoder-parse'
+    }
+    $arrValidatorAssignment = @($objScriptAst.FindAll(
+            {
+                param ($SyntaxNode)
+                $SyntaxNode -is
+                    [System.Management.Automation.Language.AssignmentStatementAst] -and
+                $SyntaxNode.Left -is
+                    [System.Management.Automation.Language.VariableExpressionAst] -and
+                $SyntaxNode.Left.VariablePath.UserPath -ceq
+                    'script:scriptBlockReadCandidateHelperValidatedFile'
+            },
+            $true
+        ))
+    if ($arrValidatorAssignment.Count -ne 1) {
+        & $script:scriptBlockStopHarness `
+            -Code 'catalog-invalid' -Detail 'utf8-decoder-validator-count'
+    }
+    $arrValidatorLiteral = @($arrValidatorAssignment[0].Right.FindAll(
+            {
+                param ($SyntaxNode)
+                $SyntaxNode -is
+                    [System.Management.Automation.Language.ScriptBlockExpressionAst]
+            },
+            $true
+        ))
+    if ($arrValidatorLiteral.Count -ne 1) {
+        & $script:scriptBlockStopHarness `
+            -Code 'catalog-invalid' -Detail 'utf8-decoder-validator-shape'
+    }
+    $objValidatorLiteral = $arrValidatorLiteral[0]
+    $objValidatorAst = $objValidatorLiteral.ScriptBlock
+    $strValidator = $objValidatorLiteral.Extent.Text
+
+    # The decoder and each receiver originate inside the per-file validator.
+    # Pinning both definition and use here prevents a broadened method allow-list
+    # from admitting a caller- or module-shared decoder with mutable cross-file
+    # state.
+    foreach ($strVariableName in @(
+            'objUtf8Encoding',
+            'objUtf8Decoder',
+            'arrCharacterBuffer',
+            'uintDecodedByteCount'
+        )) {
+        $arrAssignment = @($objValidatorAst.FindAll(
+                {
+                    param ($SyntaxNode)
+                    $SyntaxNode -is
+                        [System.Management.Automation.Language.AssignmentStatementAst] -and
+                    $SyntaxNode.Operator -eq
+                        [System.Management.Automation.Language.TokenKind]::Equals -and
+                    $SyntaxNode.Left -is
+                        [System.Management.Automation.Language.VariableExpressionAst] -and
+                    $SyntaxNode.Left.VariablePath.UserPath -ceq $strVariableName
+                },
+                $true
+            ))
+        if ($arrAssignment.Count -ne 1) {
+            & $script:scriptBlockStopHarness `
+                -Code 'catalog-invalid' `
+                -Detail ('utf8-decoder-local-' + $strVariableName)
+        }
+    }
+
+    $hashtableAssignmentSource = @{
+        objUtf8Encoding = 'New-ObjectSystem.Text.UTF8Encoding($false,$true)'
+        objUtf8Decoder = '$objUtf8Encoding.GetDecoder()'
+        arrCharacterBuffer = 'New-Objectchar[]($objUtf8Encoding.GetMaxCharCount($arrBuffer.Length))'
+        uintDecodedByteCount = '[uint64]0'
+    }
+    foreach ($strVariableName in $hashtableAssignmentSource.Keys) {
+        $objAssignment = @($objValidatorAst.FindAll(
+                {
+                    param ($SyntaxNode)
+                    $SyntaxNode -is
+                        [System.Management.Automation.Language.AssignmentStatementAst] -and
+                    $SyntaxNode.Operator -eq
+                        [System.Management.Automation.Language.TokenKind]::Equals -and
+                    $SyntaxNode.Left -is
+                        [System.Management.Automation.Language.VariableExpressionAst] -and
+                    $SyntaxNode.Left.VariablePath.UserPath -ceq $strVariableName
+                },
+                $true
+            ))[0]
+        if (($objAssignment.Right.Extent.Text -replace '\s', '') -cne
+            $hashtableAssignmentSource[$strVariableName]) {
+            & $script:scriptBlockStopHarness `
+                -Code 'catalog-invalid' `
+                -Detail ('utf8-decoder-provenance-' + $strVariableName)
+        }
+    }
+
+    if (@([regex]::Matches(
+                $strValidator,
+                '(?m)^\s*\$objUtf8Encoding = New-Object System\.Text\.UTF8Encoding\(\$false, \$true\)\s*$'
+            )).Count -ne 1 -or
+        @([regex]::Matches(
+                $strValidator,
+                '(?m)^\s*\$uintDecodedByteCount \+= \[uint64\]\$intRead\s*$'
+            )).Count -ne 1 -or
+        @([regex]::Matches(
+                $strValidator,
+                'catch \[System\.Text\.DecoderFallbackException\]'
+            )).Count -ne 2) {
+        & $script:scriptBlockStopHarness `
+            -Code 'catalog-invalid' -Detail 'utf8-decoder-strict-progress'
+    }
+
+    foreach ($objMemberCall in @($objScriptAst.FindAll(
+                {
+                    param ($SyntaxNode)
+                    $SyntaxNode -is
+                        [System.Management.Automation.Language.InvokeMemberExpressionAst]
+                },
+                $true
+            ))) {
+        if ($objMemberCall.Member -isnot
+            [System.Management.Automation.Language.StringConstantExpressionAst] -or
+            [string]$objMemberCall.Member.Value -cnotin @(
+                'GetDecoder', 'GetMaxCharCount', 'GetChars'
+            )) {
+            continue
+        }
+        if ($objMemberCall.Extent.StartOffset -lt
+                $objValidatorLiteral.Extent.StartOffset -or
+            $objMemberCall.Extent.EndOffset -gt
+                $objValidatorLiteral.Extent.EndOffset) {
+            & $script:scriptBlockStopHarness `
+                -Code 'catalog-invalid' -Detail 'utf8-decoder-member-scope'
+        }
+    }
+
+    $intGetDecoder = 0
+    $intGetMaxCharCount = 0
+    $intChunkDecode = 0
+    $intFinalFlush = 0
+    foreach ($objMemberCall in @($objValidatorAst.FindAll(
+                {
+                    param ($SyntaxNode)
+                    $SyntaxNode -is
+                        [System.Management.Automation.Language.InvokeMemberExpressionAst]
+                },
+                $true
+            ))) {
+        if ($objMemberCall.Member -isnot
+            [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            continue
+        }
+        $strMemberName = [string]$objMemberCall.Member.Value
+        $strReceiver = [string]$objMemberCall.Expression.Extent.Text
+        $arrArgument = @($objMemberCall.Arguments | Where-Object { $null -ne $_ })
+        if ($strMemberName -ceq 'GetDecoder') {
+            if ($strReceiver -cne '$objUtf8Encoding' -or
+                $arrArgument.Count -ne 0) {
+                & $script:scriptBlockStopHarness `
+                    -Code 'catalog-invalid' -Detail 'utf8-decoder-construction'
+            }
+            $intGetDecoder++
+        } elseif ($strMemberName -ceq 'GetMaxCharCount') {
+            if ($strReceiver -cne '$objUtf8Encoding' -or
+                $arrArgument.Count -ne 1 -or
+                $arrArgument[0].Extent.Text -cne '$arrBuffer.Length') {
+                & $script:scriptBlockStopHarness `
+                    -Code 'catalog-invalid' -Detail 'utf8-decoder-character-buffer'
+            }
+            $intGetMaxCharCount++
+        } elseif ($strMemberName -ceq 'GetChars') {
+            if ($strReceiver -cne '$objUtf8Decoder' -or
+                $arrArgument.Count -ne 6 -or
+                $arrArgument[1].Extent.Text -cne '0' -or
+                $arrArgument[3].Extent.Text -cne '$arrCharacterBuffer' -or
+                $arrArgument[4].Extent.Text -cne '0') {
+                & $script:scriptBlockStopHarness `
+                    -Code 'catalog-invalid' -Detail 'utf8-decoder-call-shape'
+            }
+            if ($arrArgument[0].Extent.Text -ceq '$arrBuffer' -and
+                $arrArgument[2].Extent.Text -ceq '$intRead' -and
+                $arrArgument[5].Extent.Text -ceq '$false') {
+                $intChunkDecode++
+            } elseif ($arrArgument[0].Extent.Text -ceq '$arrEmptyBuffer' -and
+                $arrArgument[2].Extent.Text -ceq '0' -and
+                $arrArgument[5].Extent.Text -ceq '$true') {
+                $intFinalFlush++
+            } else {
+                & $script:scriptBlockStopHarness `
+                    -Code 'catalog-invalid' -Detail 'utf8-decoder-call-source'
+            }
+        }
+    }
+    if ($intGetDecoder -ne 1 -or $intGetMaxCharCount -ne 1 -or
+        $intChunkDecode -ne 1 -or $intFinalFlush -ne 1) {
+        & $script:scriptBlockStopHarness `
+            -Code 'catalog-invalid' -Detail 'utf8-decoder-call-count'
+    }
+
+    $intCarriageReturn = $strValidator.IndexOf(
+        "-Subreason 'cr'", [System.StringComparison]::Ordinal)
+    $arrLength = @([regex]::Matches(
+            $strValidator,
+            [regex]::Escape("-Subreason 'length'")
+        ) | ForEach-Object { $_.Index })
+    $intBom = $strValidator.IndexOf(
+        "-Subreason 'bom'", [System.StringComparison]::Ordinal)
+    $intSha256 = $strValidator.IndexOf(
+        "-Subreason 'sha256'", [System.StringComparison]::Ordinal)
+    $intUtf8 = $strValidator.IndexOf(
+        "-Subreason 'utf8'", [System.StringComparison]::Ordinal)
+    if ($arrLength.Count -ne 3 -or
+        $arrLength[0] -lt 0 -or
+        $arrLength[1] -le $arrLength[0] -or
+        $intCarriageReturn -le $arrLength[1] -or
+        $arrLength[2] -le $intCarriageReturn -or
+        $intBom -le $arrLength[2] -or
+        $intSha256 -le $intBom -or $intUtf8 -le $intSha256 -or
+        $strValidator.LastIndexOf(
+            "-Subreason 'utf8'", [System.StringComparison]::Ordinal) -ne
+            $intUtf8) {
+        & $script:scriptBlockStopHarness `
+            -Code 'catalog-invalid' -Detail 'utf8-decoder-diagnostic-precedence'
+    }
+}
+
+$script:scriptBlockAssertUtf8DecoderMutants = {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$LiteralPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RunRoot
+    )
+
+    $strSource = [System.IO.File]::ReadAllText($LiteralPath)
+    $arrMutation = @(
+        @{
+            Name = 'replacement-fallback'
+            Old = 'New-Object System.Text.UTF8Encoding($false, $true)'
+            New = 'New-Object System.Text.UTF8Encoding($false, $false)'
+            Count = 1
+            Detail = 'utf8-decoder-provenance-objUtf8Encoding'
+        },
+        @{
+            Name = 'decoder-arguments'
+            Old = '$objUtf8Encoding.GetDecoder()'
+            New = '$objUtf8Encoding.GetDecoder($false)'
+            Count = 1
+            Detail = 'utf8-decoder-provenance-objUtf8Decoder'
+        },
+        @{
+            Name = 'character-buffer-capacity'
+            Old = '$objUtf8Encoding.GetMaxCharCount($arrBuffer.Length)'
+            New = '$objUtf8Encoding.GetMaxCharCount(1)'
+            Count = 1
+            Detail = 'utf8-decoder-provenance-arrCharacterBuffer'
+        },
+        @{
+            Name = 'stateful-consumer'
+            Old = '$objUtf8Decoder.GetChars('
+            New = '$objUtf8Decoder.GetCharCount('
+            Count = 2
+            Detail = 'utf8-decoder-call-count'
+        },
+        @{
+            Name = 'byte-progress'
+            Old = '$uintDecodedByteCount += [uint64]$intRead'
+            New = '$uintDecodedByteCount += [uint64]0'
+            Count = 1
+            Detail = 'utf8-decoder-strict-progress'
+        },
+        @{
+            Name = 'chunk-flush'
+            Old = "`$intRead,`n                                `$arrCharacterBuffer,`n                                0,`n                                `$false"
+            New = "`$intRead,`n                                `$arrCharacterBuffer,`n                                0,`n                                `$true"
+            Count = 1
+            Detail = 'utf8-decoder-call-source'
+        },
+        @{
+            Name = 'final-flush'
+            Old = "`$arrEmptyBuffer,`n                            0,`n                            0,`n                            `$arrCharacterBuffer,`n                            0,`n                            `$true"
+            New = "`$arrEmptyBuffer,`n                            0,`n                            0,`n                            `$arrCharacterBuffer,`n                            0,`n                            `$false"
+            Count = 1
+            Detail = 'utf8-decoder-call-source'
+        },
+        @{
+            Name = 'diagnostic-precedence'
+            Old = "-Subreason 'utf8'"
+            New = "-Subreason 'sha256'"
+            Count = 1
+            Detail = 'utf8-decoder-diagnostic-precedence'
+        },
+        @{
+            Name = 'decoder-constructor-hoisted'
+            Old = '$objUtf8Decoder = $objUtf8Encoding.GetDecoder()'
+            New = '$objUtf8Decoder = $script:objUtf8Decoder'
+            Count = 1
+            Detail = 'utf8-decoder-provenance-objUtf8Decoder'
+        },
+        @{
+            Name = 'member-outside-validator'
+            Old = '$script:scriptBlockReadCandidateHelperValidatedFile = {'
+            New = "`$null = `$script:objUtf8Decoder.GetDecoder()`n`n`$script:scriptBlockReadCandidateHelperValidatedFile = {"
+            Count = 1
+            Detail = 'utf8-decoder-member-scope'
+        }
+    )
+    foreach ($hashtableMutation in $arrMutation) {
+        $intOccurrence = $strSource.Split(
+            [string[]]@([string]$hashtableMutation.Old),
+            [System.StringSplitOptions]::None
+        ).Count - 1
+        if ($intOccurrence -ne [int]$hashtableMutation.Count) {
+            & $script:scriptBlockStopHarness `
+                -Code 'catalog-invalid' `
+                -Detail ('utf8-mutant-anchor-' + [string]$hashtableMutation.Name)
+        }
+        $strMutantPath = [System.IO.Path]::Combine(
+            $RunRoot,
+            'utf8-mutant-' + [string]$hashtableMutation.Name + '.ps1'
+        )
+        try {
+            $strMutant = $strSource.Replace(
+                [string]$hashtableMutation.Old,
+                [string]$hashtableMutation.New
+            )
+            [System.IO.File]::WriteAllText(
+                $strMutantPath,
+                $strMutant,
+                (New-Object System.Text.UTF8Encoding($false))
+            )
+            $objRefusal = $null
+            try {
+                & $script:scriptBlockAssertUtf8DecoderWired `
+                    -LiteralPath $strMutantPath
+            } catch {
+                $objRefusal = $_
+            }
+            if ($null -eq $objRefusal -or
+                $objRefusal.Exception.Data['TerraformStyleGuideHarnessCode'] -cne
+                    'catalog-invalid' -or
+                $objRefusal.Exception.Data['TerraformStyleGuideSubreason'] -cne
+                    [string]$hashtableMutation.Detail) {
+                & $script:scriptBlockStopHarness `
+                    -Code 'catalog-invalid' `
+                    -Detail ('utf8-mutant-refusal-' + [string]$hashtableMutation.Name)
+            }
+        } finally {
+            if ([System.IO.File]::Exists($strMutantPath)) {
+                [System.IO.File]::Delete($strMutantPath)
+            }
+        }
+    }
+}
+
+$script:scriptBlockAssertUtf8DecoderStateIsolated = {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$RunRoot
+    )
+
+    $strFixtureRoot = [System.IO.Path]::Combine($RunRoot, 'utf8-decoder-state')
+    [void][System.IO.Directory]::CreateDirectory($strFixtureRoot)
+    try {
+        $strTruncatedPath = [System.IO.Path]::Combine($strFixtureRoot, 'truncated.md')
+        $strValidPath = [System.IO.Path]::Combine($strFixtureRoot, 'valid.md')
+        $arrTruncated = [byte[]](0x78, 0xE2, 0x82)
+        $arrValid = [byte[]](0xF0, 0x9F, 0x98, 0x80, 0x0A)
+        [System.IO.File]::WriteAllBytes($strTruncatedPath, $arrTruncated)
+        [System.IO.File]::WriteAllBytes($strValidPath, $arrValid)
+        $strTruncatedHash = & $script:scriptBlockGetByteArraySha256 -Bytes $arrTruncated
+        $strValidHash = & $script:scriptBlockGetByteArraySha256 -Bytes $arrValid
+        $objModule = @(Microsoft.PowerShell.Core\Get-Module `
+                -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_1 `
+                -All)
+        if ($objModule.Count -ne 1) {
+            & $script:scriptBlockStopHarness `
+                -Code 'catalog-invalid' -Detail 'utf8-state-module-cardinality'
+        }
+        $objObservation = & $objModule[0] {
+            param (
+                [string]$TruncatedPath,
+                [string]$TruncatedHash,
+                [string]$ValidPath,
+                [string]$ValidHash
+            )
+
+            $strFirstSubreason = 'none'
+            try {
+                [void](& $script:scriptBlockReadCandidateHelperValidatedFile `
+                        -LiteralPath $TruncatedPath `
+                        -ExpectedLength ([uint64]3) `
+                        -ExpectedSha256 $TruncatedHash)
+            } catch {
+                $strFirstSubreason = [string]$_.Exception.Data[
+                    'TerraformStyleGuideSubreason'
+                ]
+            }
+            $boolSecondAccepted = $true
+            try {
+                [void](& $script:scriptBlockReadCandidateHelperValidatedFile `
+                        -LiteralPath $ValidPath `
+                        -ExpectedLength ([uint64]5) `
+                        -ExpectedSha256 $ValidHash)
+            } catch {
+                $boolSecondAccepted = $false
+            }
+            [pscustomobject]@{
+                FirstSubreason = $strFirstSubreason
+                SecondAccepted = $boolSecondAccepted
+            }
+        } $strTruncatedPath $strTruncatedHash $strValidPath $strValidHash
+        if ($objObservation.FirstSubreason -cne 'utf8' -or
+            $objObservation.SecondAccepted -cne $true) {
+            & $script:scriptBlockStopHarness `
+                -Code 'catalog-invalid' -Detail 'utf8-state-isolation'
+        }
+    } finally {
+        & $script:scriptBlockRemoveTestTree `
+            -LiteralPath $strFixtureRoot `
+            -ApprovedParent $RunRoot
+    }
+}
+
 $script:scriptBlockTerraformSourceExpansionWorker = {
     param ([string]$Roles, [string]$FixtureRoot, [string]$ArchivePath)
 
@@ -1881,8 +2316,8 @@ $script:scriptBlockGetTerraformPrivatePredicates = {
     # predicates. No callable is resolved by a caller-supplied function name.
     $hashtableModule = @{}
     foreach ($hashtableRole in @(
-        @{ Name = 'helper'; Path = $HelperLiteralPath; Module = 'TerraformStyleGuideCandidateArtifact_1_0_20260924_0'; Variable = 'scriptBlockCandidateModuleDefinition' },
-        @{ Name = 'context'; Path = $ContextLiteralPath; Module = 'TerraformStyleGuideCandidateContext_1_0_20260924_0'; Variable = 'scriptBlockContextModuleDefinition' }
+        @{ Name = 'helper'; Path = $HelperLiteralPath; Module = 'TerraformStyleGuideCandidateArtifact_1_0_20260924_1'; Variable = 'scriptBlockCandidateModuleDefinition' },
+        @{ Name = 'context'; Path = $ContextLiteralPath; Module = 'TerraformStyleGuideCandidateContext_1_0_20260924_1'; Variable = 'scriptBlockContextModuleDefinition' }
     )) {
         $arrErrors = $null
         $objAst = [Management.Automation.Language.Parser]::ParseFile($hashtableRole.Path, [ref]$null, [ref]$arrErrors)
@@ -3088,6 +3523,8 @@ $script:hashtableCandidateHelperMemberReceiver = @{
     'Exists' = @{ Static = [string[]]@('System.IO.File'); Instance = $false }
     'Flush' = @{ Static = [string[]]@(); Instance = $true }
     'GetAttributes' = @{ Static = [string[]]@('System.IO.File'); Instance = $false }
+    'GetChars' = @{ Static = [string[]]@(); Instance = $true }
+    'GetDecoder' = @{ Static = [string[]]@(); Instance = $true }
     'GetBaseException' = @{ Static = [string[]]@(); Instance = $true }
     'GetDirectoryName' = @{ Static = [string[]]@('System.IO.Path'); Instance = $false }
     'GetEnumerator' = @{ Static = [string[]]@(); Instance = $true }
@@ -3095,6 +3532,7 @@ $script:hashtableCandidateHelperMemberReceiver = @{
     'GetFullPath' = @{ Static = [string[]]@('System.IO.Path'); Instance = $false }
     'GetPathRoot' = @{ Static = [string[]]@('System.IO.Path'); Instance = $false }
     'GetInvalidFileNameChars' = @{ Static = [string[]]@('System.IO.Path'); Instance = $false }
+    'GetMaxCharCount' = @{ Static = [string[]]@(); Instance = $true }
     'GetType' = @{ Static = [string[]]@(); Instance = $true }
     'GetUnresolvedProviderPathFromPSPath' = @{ Static = [string[]]@(); Instance = $true }
     'IndexOf' = @{ Static = [string[]]@(); Instance = $true }
@@ -3207,8 +3645,9 @@ $script:arrCandidateHelperPermittedMember = [string[]]@(
     'Add', 'Append', 'Combine', 'ComputeHash', 'Contains', 'ContainsKey',
     'ContainsWildcardCharacters', 'Copy', 'Create', 'CreateDirectory',
     'Delete', 'Dispose', 'EnumerateFileSystemEntries', 'Equals', 'Exists',
-    'Flush', 'GetAttributes', 'GetEnumerator', 'GetFileName', 'GetFullPath', 'GetPathRoot',
-    'GetInvalidFileNameChars', 'GetType', 'IndexOf', 'IndexOfAny', 'Insert', 'LastIndexOfAny',
+    'Flush', 'GetAttributes', 'GetChars', 'GetDecoder', 'GetEnumerator', 'GetFileName',
+    'GetFullPath', 'GetPathRoot', 'GetInvalidFileNameChars', 'GetMaxCharCount', 'GetType',
+    'IndexOf', 'IndexOfAny', 'Insert', 'LastIndexOfAny',
     'IsControl', 'IsLetter', 'IsNullOrWhiteSpace', 'IsPathRooted', 'Min',
     'MoveNext', 'NewGuid', 'Open', 'Read', 'ReadAllLines', 'ReferenceEquals',
     'Split',
@@ -3411,8 +3850,8 @@ $script:scriptBlockGetModuleBridgeAllowance = {
         & $script:scriptBlockStopHarness -Code 'catalog-invalid' -Detail 'module-bridge-tail'
     }
     $strTailHash = if ($Role -ceq 'helper') {
-        '90f9bdca08a1d8645b99e4a628b73354032d0a265fb53651f3f54cfabd7dcbc4'
-    } else { '5be227f6a24b69161448455549b36639bcf62d30b207767f4cc289fe9b29eaab' }
+        'd988127157b1f760e3bb2826caf825ae250b019eef7b1955397b299ca5c7927c'
+    } else { 'a300d33fb72743edb3bb6322bf785d287167951c7330e5ce87ab4a68864d0b39' }
     $intTailStart = $arrTail[0].Extent.StartOffset
     if ((& $scriptBlockGetBridgeHash -Text $Ast.Extent.Text.Substring($intTailStart)) -cne $strTailHash) {
         & $script:scriptBlockStopHarness -Code 'catalog-invalid' -Detail 'module-bridge-tail-changed'
@@ -3469,7 +3908,7 @@ $script:scriptBlockGetModuleBridgeAllowance = {
         $intBindingEnd = $arrBinding[0].Extent.EndOffset
         if ($intBootstrapEnd -le $intBootstrapStart -or
             (& $scriptBlockGetBridgeHash -Text $Ast.Extent.Text.Substring($intBootstrapStart, $intBootstrapEnd - $intBootstrapStart)) -cne
-                'd9eb7ed11bf4ff7360ca9c806978b9fa5feb093a10258864ab9691f01dc739ed' -or
+                'd1c489cea7177304d0b1c688ed4442e4e99d79f8a7605608a2850b28fdc6f0b9' -or
             (& $scriptBlockGetBridgeHash -Text $arrBinding[0].Extent.Text) -cne
                 '335f6cdde736a251fb7df243b378e35e9c62b295d805cf877072c6bc5591ae1d') {
             & $script:scriptBlockStopHarness -Code 'catalog-invalid' -Detail 'module-bridge-bootstrap-changed'
@@ -8615,7 +9054,7 @@ $script:scriptBlockAssertTerraformVersionLayoutControls = {
         if ((& $script:scriptBlockGetScriptVersionRecord -ScriptText $objRole.Source -ExpectedVersion $objRole.Expected).ToString() -cne $objRole.Expected) { throw 'version-layout-positive-control' }
         $strMarker = 'Version: ' + $objRole.Expected
         $arrMutants = @(
-            [pscustomobject]@{ Source = $objRole.Source.Replace($strMarker, 'Version: 1.0.20260924.1'); Code = 'unexpected-version'; Reason = 'binding' },
+            [pscustomobject]@{ Source = $objRole.Source.Replace($strMarker, 'Version: 1.0.20260924.2'); Code = 'unexpected-version'; Reason = 'binding' },
             [pscustomobject]@{ Source = $objRole.Source.Replace($strMarker, $strMarker + "`n" + $strMarker); Code = 'invalid-version'; Reason = 'marker-count' },
             [pscustomobject]@{ Source = $objRole.Source.Replace($strMarker, 'Version: malformed'); Code = 'invalid-version'; Reason = 'marker-grammar' },
             [pscustomobject]@{ Source = [regex]::Replace($objRole.Source, '(?m)^    function', '  function'); Code = 'invalid-version'; Reason = 'function' }
@@ -9171,10 +9610,10 @@ $script:scriptBlockAssertExactPropertyNames = {
 }
 
 # Terraform catalog schema and byte identities.
-$script:intTerraformCandidateCaseCount = 442
-$script:strTerraformCandidateAllocationSha256 = '7d7905e2ae76781e0a68e0ab6c6a896b01a7c79550e1ddbc3736e97df5dc0fc1'
-$script:strTerraformCandidateCanonicalSha256 = '1c0dbbbb469c7292113983ea1776c957db25f11b2b5be0bdd1670f9012999a82'
-$script:strTerraformCandidateCatalogFileSha256 = 'e4d99beda8c2d612d166372b416be7354882f2359c2a90e2c1a5bfa028c3ffba'
+$script:intTerraformCandidateCaseCount = 456
+$script:strTerraformCandidateAllocationSha256 = '56b7d15c4fb6ebb7ccd7f0342bf78b6c10ea263f2c4c796b0c6d5cec5ac7289f'
+$script:strTerraformCandidateCanonicalSha256 = '61907a9065fb9cf5754b8c397b31bc316891100c20be078d29dd87a276122970'
+$script:strTerraformCandidateCatalogFileSha256 = 'f2abd3c9a4960b467179f53ae8b6ab2f63b68f0358f0fc2391002ba7a1c4c1fa'
 $script:scriptBlockConvertToCanonicalCatalogJson = {
     param (
         [AllowNull()]
@@ -10595,6 +11034,91 @@ $script:scriptBlockNewZipFixture = {
         'output.bytes.cr' {
             $arrSpecifications[0].Length = [uint64]3
             $arrSpecifications[0].Prefix = [byte[]](0x78, 0x0D, 0x0A)
+        }
+        'output.bytes.utf8-invalid-leading' {
+            $arrSpecifications[0].Length = [uint64]2
+            $arrSpecifications[0].Prefix = [byte[]](0xFF, 0x0A)
+        }
+        'output.bytes.utf8-invalid-continuation' {
+            $arrSpecifications[0].Length = [uint64]3
+            $arrSpecifications[0].Prefix = [byte[]](0xC2, 0x20, 0x0A)
+        }
+        'output.bytes.utf8-overlong' {
+            $arrSpecifications[0].Length = [uint64]3
+            $arrSpecifications[0].Prefix = [byte[]](0xC0, 0xAF, 0x0A)
+        }
+        'output.bytes.utf8-surrogate' {
+            $arrSpecifications[0].Length = [uint64]4
+            $arrSpecifications[0].Prefix = [byte[]](0xED, 0xA0, 0x80, 0x0A)
+        }
+        'output.bytes.utf8-out-of-range' {
+            $arrSpecifications[0].Length = [uint64]5
+            $arrSpecifications[0].Prefix = [byte[]](0xF4, 0x90, 0x80, 0x80, 0x0A)
+        }
+        'output.bytes.utf8-truncated-final' {
+            $arrSpecifications[0].Length = [uint64]3
+            $arrSpecifications[0].Prefix = [byte[]](0x78, 0xE2, 0x82)
+        }
+        'output.bytes.utf8-valid-two-byte' {
+            $arrSpecifications[0].Length = [uint64]3
+            $arrSpecifications[0].Prefix = [byte[]](0xC2, 0xA2, 0x0A)
+        }
+        'output.bytes.utf8-valid-three-byte' {
+            $arrSpecifications[0].Length = [uint64]4
+            $arrSpecifications[0].Prefix = [byte[]](0xE2, 0x82, 0xAC, 0x0A)
+        }
+        'output.bytes.utf8-valid-four-byte' {
+            $arrSpecifications[0].Length = [uint64]5
+            $arrSpecifications[0].Prefix = [byte[]](0xF0, 0x9F, 0x98, 0x80, 0x0A)
+        }
+        'output.bytes.utf8-valid-boundary' {
+            $arrBoundary = New-Object byte[] 131073
+            for ($intBoundary = 0; $intBoundary -lt 65533; $intBoundary++) {
+                $arrBoundary[$intBoundary] = [byte]0x61
+            }
+            $arrBoundary[65533] = [byte]0xF0
+            $arrBoundary[65534] = [byte]0x9F
+            $arrBoundary[65535] = [byte]0x98
+            $arrBoundary[65536] = [byte]0x80
+            for ($intBoundary = 65537; $intBoundary -lt 131072; $intBoundary++) {
+                $arrBoundary[$intBoundary] = [byte]0x61
+            }
+            $arrBoundary[131072] = [byte]0x0A
+            $arrSpecifications[0].Length = [uint64]$arrBoundary.Length
+            $arrSpecifications[0].Prefix = $arrBoundary
+        }
+        'output.bytes.utf8-empty' {
+            $arrSpecifications[0].Length = [uint64]0
+            $arrSpecifications[0].Prefix = $null
+        }
+        'output.bytes.utf8-later-file-invalid-continuation' {
+            $arrSpecifications[0].Length = [uint64]4
+            $arrSpecifications[0].Prefix = [byte[]](0xE2, 0x82, 0xAC, 0x0A)
+            $arrSpecifications[1].Length = [uint64]2
+            $arrSpecifications[1].Prefix = [byte[]](0x80, 0x0A)
+        }
+        'output.bytes.utf8-valid-two-byte-boundary' {
+            $arrBoundary = New-Object byte[] 65538
+            for ($intBoundary = 0; $intBoundary -lt 65535; $intBoundary++) {
+                $arrBoundary[$intBoundary] = [byte]0x61
+            }
+            $arrBoundary[65535] = [byte]0xC2
+            $arrBoundary[65536] = [byte]0xA2
+            $arrBoundary[65537] = [byte]0x0A
+            $arrSpecifications[0].Length = [uint64]$arrBoundary.Length
+            $arrSpecifications[0].Prefix = $arrBoundary
+        }
+        'output.bytes.utf8-valid-three-byte-boundary' {
+            $arrBoundary = New-Object byte[] 65538
+            for ($intBoundary = 0; $intBoundary -lt 65534; $intBoundary++) {
+                $arrBoundary[$intBoundary] = [byte]0x61
+            }
+            $arrBoundary[65534] = [byte]0xE2
+            $arrBoundary[65535] = [byte]0x82
+            $arrBoundary[65536] = [byte]0xAC
+            $arrBoundary[65537] = [byte]0x0A
+            $arrSpecifications[0].Length = [uint64]$arrBoundary.Length
+            $arrSpecifications[0].Prefix = $arrBoundary
         }
         'resource.entry.below' {
             $arrSpecifications = & $script:scriptBlockSetResourceLengths -Specifications $arrSpecifications `
@@ -13358,6 +13882,20 @@ $script:hashtableTerraformArchiveRecipes = @{
     'T1A-M-14' = 'manifest.entry.raw-empty-name'
     'T1A-B-01' = 'output.bytes.bom'
     'T1A-B-02' = 'output.bytes.cr'
+    'T1A-B-03' = 'output.bytes.utf8-invalid-leading'
+    'T1A-B-04' = 'output.bytes.utf8-invalid-continuation'
+    'T1A-B-05' = 'output.bytes.utf8-overlong'
+    'T1A-B-06' = 'output.bytes.utf8-surrogate'
+    'T1A-B-07' = 'output.bytes.utf8-out-of-range'
+    'T1A-B-08' = 'output.bytes.utf8-truncated-final'
+    'T1A-B-09' = 'output.bytes.utf8-valid-two-byte'
+    'T1A-B-10' = 'output.bytes.utf8-valid-three-byte'
+    'T1A-B-11' = 'output.bytes.utf8-valid-four-byte'
+    'T1A-B-12' = 'output.bytes.utf8-valid-boundary'
+    'T1A-B-13' = 'output.bytes.utf8-empty'
+    'T1A-B-14' = 'output.bytes.utf8-later-file-invalid-continuation'
+    'T1A-B-15' = 'output.bytes.utf8-valid-two-byte-boundary'
+    'T1A-B-16' = 'output.bytes.utf8-valid-three-byte-boundary'
     'T1A-R-04' = 'archive.raw-resource'
     'T1A-R-08' = 'archive.raw-resource'
     'T1A-R-11' = 'archive.raw-resource'
@@ -13907,7 +14445,7 @@ $script:scriptBlockInvokeTerraformProductionGuardCase = {
     $objContext = $null
     try {
         $objContext = New-StyleGuideCandidateInvocationContext -TrustedTemporaryRoot $hashtableLayout.Trusted
-        $objModule = Microsoft.PowerShell.Core\Get-Module -Name 'TerraformStyleGuideCandidateArtifact_1_0_20260924_0'
+        $objModule = Microsoft.PowerShell.Core\Get-Module -Name 'TerraformStyleGuideCandidateArtifact_1_0_20260924_1'
         if (@($objModule).Count -ne 1) { throw 'guard-module-cardinality' }
         $objFailure = $null
         $objPredicate = $null
@@ -14084,7 +14622,7 @@ $script:scriptBlockInvokeTerraformContextCleanupCase = {
 
 $script:scriptBlockInvokeTerraformTerminalCandidateProbe = {
     param ([object]$State)
-        $objModule = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_0 -All
+        $objModule = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_1 -All
         return & $objModule {
             param ([object]$State)
             $hashtableCounts = @{ Provider = 0; Path = 0; Filesystem = 0; Native = 0 }
@@ -14355,7 +14893,7 @@ $script:scriptBlockInvokeTerraformNotCreatedCandidateCase = {
         $strCandidate = $objContext.CandidateDirectoryPath
         if ($Case.Id -ceq 'T1A-K-11') { [System.IO.File]::WriteAllBytes($strCandidate, [byte[]]@(110, 111, 116, 45, 111, 119, 110, 101, 100)) }
         elseif ($Case.Id -cne 'T1A-K-10') { throw 'not-created-case-id' }
-        $objModule = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_0 -All
+        $objModule = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_1 -All
         $objCandidate = & $objModule {
             param ([string]$Trusted, [string]$Parent, [string]$Path)
             $objIssued = & $script:scriptBlockNewCandidateOwnershipState -TrustedRoot $Trusted -CandidateParent $Parent -CandidatePath $Path
@@ -14514,7 +15052,7 @@ $script:scriptBlockGetTerraformDerivedFixtureState = {
     param ([string]$Roles, [ValidateSet('helper', 'context')][string]$Role)
 
     $strFile = if ($Role -ceq 'helper') { 'Expand-StyleGuideCandidateArtifact.ps1' } else { 'Manage-StyleGuideCandidateInvocationContext.ps1' }
-    $strName = if ($Role -ceq 'helper') { 'TerraformStyleGuideCandidateArtifact_1_0_20260924_0' } else { 'TerraformStyleGuideCandidateContext_1_0_20260924_0' }
+    $strName = if ($Role -ceq 'helper') { 'TerraformStyleGuideCandidateArtifact_1_0_20260924_1' } else { 'TerraformStyleGuideCandidateContext_1_0_20260924_1' }
     $strVariable = if ($Role -ceq 'helper') { 'scriptBlockCandidateModuleDefinition' } else { 'scriptBlockContextModuleDefinition' }
     $arrErrors = $null
     $objAst = [Management.Automation.Language.Parser]::ParseFile([IO.Path]::Combine($Roles, $strFile), [ref]$null, [ref]$arrErrors)
@@ -15030,7 +15568,7 @@ if ($hashtableTask184FixtureState.Fail) {
 
 $script:scriptBlockInvokeTerraformTerminalContextProbe = {
     param ([object]$State)
-        $objModule = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateContext_1_0_20260924_0 -All
+        $objModule = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateContext_1_0_20260924_1 -All
         return & $objModule {
             param ([object]$State)
             $hashtableCounts = @{ Provider = 0; Path = 0; Filesystem = 0; Native = 0 }
@@ -15511,8 +16049,8 @@ public static class TerraformCandidateH01Trace {
         if ($arrErrors.Count -ne 0) { throw 'h01-derived-parse' }
     }
     . ([System.IO.Path]::Combine($Roles, 'Manage-StyleGuideCandidateInvocationContext.ps1'))
-    $objHelper = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_0 -All
-    $objManager = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateContext_1_0_20260924_0 -All
+    $objHelper = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_1 -All
+    $objManager = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateContext_1_0_20260924_1 -All
     if (@($objHelper).Count -ne 1 -or @($objManager).Count -ne 1) { throw 'h01-module-count' }
     $listRecords = New-Object 'System.Collections.Generic.List[pscustomobject]'
     foreach ($strRole in @('helper', 'manager')) {
@@ -16355,7 +16893,7 @@ $script:scriptBlockAssertPublicCapabilityCaptureExecutes = {
         # Positional binding is disabled; all internal callers use parameter
         # names. This internal-caller contract is subject to change.
         #
-        # Version: 1.0.20260924.0
+        # Version: 1.0.20260924.1
         [CmdletBinding(PositionalBinding = $false)]
         [OutputType([pscustomobject])]
         param (
@@ -16573,7 +17111,7 @@ $script:scriptBlockAssertPublicCapabilityCaptureExecutes = {
     $objCandidateControls = Assert-TerraformPublicCapabilityCapture -State $objCandidateState -Cleanup {
         param ($Value)
         Remove-StyleGuideCandidateInvocationState -CandidateOwnershipState $Value
-    } -Module (Microsoft.PowerShell.Core\Get-Module -All TerraformStyleGuideCandidateArtifact_1_0_20260924_0)
+    } -Module (Microsoft.PowerShell.Core\Get-Module -All TerraformStyleGuideCandidateArtifact_1_0_20260924_1)
     $objInvocationContext = Remove-StyleGuideCandidateInvocationContext -Context $objInvocationContext -OwnedPaths ([object[]]@($strArchivePath)) -CandidateOwnershipState $objCandidateState
     if ($objInvocationContext.LifecycleState -cne 'Disposed') { throw 'context-control' }
     $hashtableCallbackState.intTask184GetTypeCalls = 0
@@ -16642,7 +17180,7 @@ $script:scriptBlockAssertPublicCapabilityCaptureExecutes = {
     $objContextControls = Assert-TerraformPublicCapabilityCapture -State $objInvocationContext -Cleanup {
         param ($Value)
         Remove-StyleGuideCandidateInvocationContext -Context $Value
-    } -Module (Microsoft.PowerShell.Core\Get-Module -All TerraformStyleGuideCandidateContext_1_0_20260924_0)
+    } -Module (Microsoft.PowerShell.Core\Get-Module -All TerraformStyleGuideCandidateContext_1_0_20260924_1)
     [IO.Directory]::Delete($strCheckoutRoot, $false)
     [IO.Directory]::Delete($strTrustedRoot, $false)
     [IO.Directory]::Delete($strFixtureRoot, $false)
@@ -17677,7 +18215,7 @@ function Invoke-StyleGuideCandidateHarness {
     # This function consumes only the fixed script parameters and repository
     # paths established by the enclosing trusted harness.
     #
-    # Version: 1.0.20260924.0
+    # Version: 1.0.20260924.1
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param ()
@@ -17865,6 +18403,7 @@ function Invoke-StyleGuideCandidateHarness {
                 $script:strCandidateExpectedContextVersion
         })
     [void](& $script:scriptBlockAssertResourceGuardsWired -LiteralPath $strHelperLiteralPath)
+    [void](& $script:scriptBlockAssertUtf8DecoderWired -LiteralPath $strHelperLiteralPath)
     [void](& $script:scriptBlockAssertContextReadsAreCaptured `
         -LiteralPath $strHelperLiteralPath -ContextLiteralPath $strContextLiteralPath)
     $arrContextLoadOutput = @(. $strContextLiteralPath)
@@ -17939,6 +18478,13 @@ function Invoke-StyleGuideCandidateHarness {
     $boolRootDisposed = $false
     try {
         $script:strTerraformHarnessStage = 'source-assertions'
+        & $script:scriptBlockAssertUtf8DecoderMutants `
+            -LiteralPath $strHelperLiteralPath `
+            -RunRoot $strRunRoot
+        & $scriptBlockCheckSourceIdentity
+        & $script:scriptBlockAssertUtf8DecoderStateIsolated `
+            -RunRoot $strRunRoot
+        & $scriptBlockCheckSourceIdentity
         & $script:scriptBlockAssertTerraformCatalogMutationsRejected -LiteralPath $strCatalogPath -RunRoot $strRunRoot
         & $script:scriptBlockAssertCatalogMutationsRejected -Catalog $objSourceCatalog -RunRoot $strRunRoot
         & $script:scriptBlockAssertUnauthorizedSkipsRejected -Catalog $objSourceCatalog -OperatingSystem $strOperatingSystem -PowerShellEdition $strPowerShellEdition -PowerShellVersion $versionPowerShell

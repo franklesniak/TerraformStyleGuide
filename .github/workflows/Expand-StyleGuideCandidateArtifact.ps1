@@ -50,7 +50,7 @@ None. You can't pipe objects to this script.
 CandidateOwnershipState contains the issued mutable ownership object.
 
 .NOTES
-Version: 1.0.20260924.0
+Version: 1.0.20260924.1
 #>
 
 [CmdletBinding(PositionalBinding = $false)]
@@ -115,8 +115,8 @@ $boolCandidateHelperWasDotSourced = $MyInvocation.InvocationName -eq '.'
 # Normal script invocations and a previously imported cleanup callable must use
 # the same state. No caller-owned object or same-named verifier is an authority.
 $scriptBlockCandidateModuleDefinition = {
-    $script:versionCandidateHelper = [System.Version]'1.0.20260924.0'
-    $script:versionCandidateExpectedContext = [System.Version]'1.0.20260924.0'
+    $script:versionCandidateHelper = [System.Version]'1.0.20260924.1'
+    $script:versionCandidateExpectedContext = [System.Version]'1.0.20260924.1'
     $script:strCandidateHelperContextTypeName = 'TerraformStyleGuide.PrivateCandidateEnvelope.v1'
     $script:strCandidateHelperRecordTypeName = 'TerraformStyleGuide.PrivateCandidateEvidence.v1'
     $script:strCandidateHelperCleanupTypeName = 'TerraformStyleGuide.PrivateCandidateCleanupResult.v1'
@@ -327,7 +327,7 @@ $scriptBlockCandidateModuleDefinition = {
                 'mismatch', 'missing-entry', 'mount', 'none',
                 'nonordinary', 'nonordinary-directory', 'overlap', 'primary-and-cleanup',
                 'private-root-binding', 'private-root-unavailable', 'provider',
-                'relationship', 'root-cardinality', 'sha256', 'stream',
+                'relationship', 'root-cardinality', 'sha256', 'stream', 'utf8',
                 'succeeded', 'total-limit', 'zip-open', 'zip64-locator',
                 'checkout-missing', 'checkout-not-directory', 'trusted-missing',
                 'trusted-not-directory', 'directory-missing', 'not-directory',
@@ -2937,7 +2937,7 @@ $scriptBlockCandidateModuleDefinition = {
         # [pscustomobject] The same authenticated candidate ownership object.
         #
         # .NOTES
-        # Version: 1.0.20260924.0
+        # Version: 1.0.20260924.1
         # All parameters require names; positional binding is disabled.
         [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute(
             'PSUseShouldProcessForStateChangingFunctions', '',
@@ -3478,6 +3478,14 @@ $scriptBlockCandidateModuleDefinition = {
             # was absent.
             $objSha256 = [System.Security.Cryptography.SHA256]::Create()
             $arrBuffer = New-Object byte[] $script:intCandidateHelperBufferSize
+            $objUtf8Encoding = New-Object System.Text.UTF8Encoding($false, $true)
+            $objUtf8Decoder = $objUtf8Encoding.GetDecoder()
+            $arrCharacterBuffer = New-Object char[] (
+                $objUtf8Encoding.GetMaxCharCount($arrBuffer.Length)
+            )
+            $arrEmptyBuffer = New-Object byte[] 0
+            $boolUtf8Valid = $true
+            $uintDecodedByteCount = [uint64]0
             $listPrefix = New-Object 'System.Collections.Generic.List[byte]'
             try {
                 $uintRemaining = $ExpectedLength
@@ -3503,6 +3511,25 @@ $scriptBlockCandidateModuleDefinition = {
                         }
                     }
                     [void]$objSha256.TransformBlock($arrBuffer, 0, $intRead, $null, 0)
+                    if ($boolUtf8Valid) {
+                        try {
+                            $intCharactersUsed = $objUtf8Decoder.GetChars(
+                                $arrBuffer,
+                                0,
+                                $intRead,
+                                $arrCharacterBuffer,
+                                0,
+                                $false
+                            )
+                            if ($intCharactersUsed -lt 0 -or
+                                $intCharactersUsed -gt $arrCharacterBuffer.Length) {
+                                throw 'utf8-decoder-invalid-progress'
+                            }
+                            $uintDecodedByteCount += [uint64]$intRead
+                        } catch [System.Text.DecoderFallbackException] {
+                            $boolUtf8Valid = $false
+                        }
+                    }
                     $uintRemaining -= [uint64]$intRead
                 }
                 # One byte past the validated end: a file with more to give is not
@@ -3511,10 +3538,29 @@ $scriptBlockCandidateModuleDefinition = {
                     & $script:scriptBlockStopCandidateHelperOperation `
                         -Code 'post-extraction-invalid' -Phase 'post-extraction' -Subreason 'length'
                 }
-                [void]$objSha256.TransformFinalBlock((New-Object byte[] 0), 0, 0)
+                [void]$objSha256.TransformFinalBlock($arrEmptyBuffer, 0, 0)
                 $strActualSha256 = (
                     [System.BitConverter]::ToString($objSha256.Hash) -replace '-', ''
                 ).ToLowerInvariant()
+                if ($boolUtf8Valid) {
+                    try {
+                        $intCharactersUsed = $objUtf8Decoder.GetChars(
+                            $arrEmptyBuffer,
+                            0,
+                            0,
+                            $arrCharacterBuffer,
+                            0,
+                            $true
+                        )
+                        if ($uintDecodedByteCount -ne $ExpectedLength -or
+                            $intCharactersUsed -lt 0 -or
+                            $intCharactersUsed -gt $arrCharacterBuffer.Length) {
+                            throw 'utf8-decoder-final-flush-incomplete'
+                        }
+                    } catch [System.Text.DecoderFallbackException] {
+                        $boolUtf8Valid = $false
+                    }
+                }
             } finally {
                 $objSha256.Dispose()
             }
@@ -3526,6 +3572,10 @@ $scriptBlockCandidateModuleDefinition = {
             if ($strActualSha256 -cne $ExpectedSha256) {
                 & $script:scriptBlockStopCandidateHelperOperation `
                     -Code 'post-extraction-invalid' -Phase 'post-extraction' -Subreason 'sha256'
+            }
+            if (-not $boolUtf8Valid) {
+                & $script:scriptBlockStopCandidateHelperOperation `
+                    -Code 'post-extraction-invalid' -Phase 'post-extraction' -Subreason 'utf8'
             }
         } finally {
             $objStream.Dispose()
@@ -4661,7 +4711,7 @@ $scriptBlockCandidateModuleDefinition = {
 
     Microsoft.PowerShell.Core\Export-ModuleMember -Function Remove-StyleGuideCandidateInvocationState
 }
-$strCandidateModuleName = 'TerraformStyleGuideCandidateArtifact_1_0_20260924_0'
+$strCandidateModuleName = 'TerraformStyleGuideCandidateArtifact_1_0_20260924_1'
 $arrCandidateModules = @(Microsoft.PowerShell.Core\Get-Module -Name $strCandidateModuleName -All)
 if ($arrCandidateModules.Count -gt 1) {
     throw 'candidate-module-ambiguous'
