@@ -33,7 +33,7 @@ envelope on the success stream. Fixed safe failure diagnostics use stderr.
 The invoking runner captures the actual native process exit code.
 
 .NOTES
-Version: 1.0.20260924.1
+Version: 1.0.20260924.2
 #>
 
 [CmdletBinding(PositionalBinding = $false)]
@@ -55,11 +55,11 @@ param (
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:versionCandidateHarness = [System.Version]'1.0.20260924.1'
+$script:versionCandidateHarness = [System.Version]'1.0.20260924.2'
 $script:objCandidateHelperPathClaim = $HelperPath
 $script:objCandidateContextManagerPathClaim = $ContextManagerPath
-$script:strCandidateExpectedHelperVersion = '1.0.20260924.1'
-$script:strCandidateExpectedContextVersion = '1.0.20260924.1'
+$script:strCandidateExpectedHelperVersion = '1.0.20260924.2'
+$script:strCandidateExpectedContextVersion = '1.0.20260924.2'
 $script:strCandidateCatalogVersion = '1.0.20260805.1'
 # The documented ceiling on what an authenticated native query may return, the
 # buffer each pipe is read into, and how long a killed child is given to let its
@@ -1910,7 +1910,7 @@ $script:scriptBlockAssertUtf8DecoderStateIsolated = {
         $strTruncatedHash = & $script:scriptBlockGetByteArraySha256 -Bytes $arrTruncated
         $strValidHash = & $script:scriptBlockGetByteArraySha256 -Bytes $arrValid
         $objModule = @(Microsoft.PowerShell.Core\Get-Module `
-                -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_1 `
+                -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_2 `
                 -All)
         if ($objModule.Count -ne 1) {
             & $script:scriptBlockStopHarness `
@@ -2316,8 +2316,8 @@ $script:scriptBlockGetTerraformPrivatePredicates = {
     # predicates. No callable is resolved by a caller-supplied function name.
     $hashtableModule = @{}
     foreach ($hashtableRole in @(
-        @{ Name = 'helper'; Path = $HelperLiteralPath; Module = 'TerraformStyleGuideCandidateArtifact_1_0_20260924_1'; Variable = 'scriptBlockCandidateModuleDefinition' },
-        @{ Name = 'context'; Path = $ContextLiteralPath; Module = 'TerraformStyleGuideCandidateContext_1_0_20260924_1'; Variable = 'scriptBlockContextModuleDefinition' }
+        @{ Name = 'helper'; Path = $HelperLiteralPath; Module = 'TerraformStyleGuideCandidateArtifact_1_0_20260924_2'; Variable = 'scriptBlockCandidateModuleDefinition' },
+        @{ Name = 'context'; Path = $ContextLiteralPath; Module = 'TerraformStyleGuideCandidateContext_1_0_20260924_2'; Variable = 'scriptBlockContextModuleDefinition' }
     )) {
         $arrErrors = $null
         $objAst = [Management.Automation.Language.Parser]::ParseFile($hashtableRole.Path, [ref]$null, [ref]$arrErrors)
@@ -3326,7 +3326,7 @@ $script:scriptBlockAssertEnumerationBoundsDeclared = {
 # on the list fails, which closes Get-Item, Resolve-Path, and every spelling
 # nobody has thought of yet in one rule rather than one row per name. That is
 # affordable here only because the surface is genuinely small -- measured at
-# eight distinct commands in the helper and seven in the context manager, in
+# nine distinct commands in the helper and seven in the context manager, in
 # scripts that reach for .NET rather than cmdlets -- and it is deliberately NOT
 # extended to member names, where the surface is 48 and 37 and a pin would fail
 # the suite the first time somebody wrote .Trim(). Refusing legitimate work is
@@ -3357,6 +3357,7 @@ $script:strCandidateContextNativeResolver = 'scriptBlockResolveCandidateNativePa
 $script:arrCandidateHelperPermittedCommand = [string[]]@(
     'Add-Type',
     'Get-Command',
+    'Microsoft.PowerShell.Utility\Get-FileHash',
     'New-Object',
     'Remove-StyleGuideCandidateInvocationContext',
     'Remove-StyleGuideCandidateInvocationState',
@@ -3803,6 +3804,605 @@ $script:scriptBlockAssertTerraformZipGetterMutants = {
     } finally { & $script:scriptBlockRemoveTestTree -LiteralPath $strMutantRoot -ApprovedParent $RunRoot }
 }
 
+$script:scriptBlockGetTerraformArchiveHashAllowance = {
+    param (
+        [System.Management.Automation.Language.ScriptBlockAst]$Ast,
+        [ValidateSet('helper', 'context')]
+        [string]$Role
+    )
+
+    $scriptBlockGetVariableAssignment = {
+        param ([string]$Name)
+
+        $strAssignmentName = $Name
+        return @($Ast.FindAll({
+                    param ($Node)
+                    if ($Node -isnot
+                        [System.Management.Automation.Language.AssignmentStatementAst] -or
+                        $Node.Left -isnot
+                            [System.Management.Automation.Language.VariableExpressionAst]) {
+                        return $false
+                    }
+                    $strPath = [string]$Node.Left.VariablePath.UserPath
+                    return ($strPath -ceq $strAssignmentName -or
+                        $strPath -cmatch (':' + [regex]::Escape($strAssignmentName) + '\z'))
+                }, $true))
+    }
+    $scriptBlockCollapseSource = {
+        param ([string]$Source)
+
+        return (($Source -replace '\s+', ' ').Trim())
+    }
+    $arrHashCommand = @($Ast.FindAll({
+                param ($Node)
+                if ($Node -isnot [System.Management.Automation.Language.CommandAst]) {
+                    return $false
+                }
+                $strName = [string]$Node.GetCommandName()
+                return ($strName -ceq 'Get-FileHash' -or
+                    $strName.EndsWith('\Get-FileHash', [System.StringComparison]::Ordinal))
+            }, $true))
+    if ($Role -ceq 'context') {
+        if ($arrHashCommand.Count -ne 0) { throw 'archive-hash-context-command' }
+        return -1
+    }
+    if ($Role -cne 'helper' -or $arrHashCommand.Count -ne 1) {
+        throw 'archive-hash-command-cardinality'
+    }
+    $objHashCommand = $arrHashCommand[0]
+    $arrElement = @($objHashCommand.CommandElements)
+    if ($objHashCommand.GetCommandName() -cne 'Microsoft.PowerShell.Utility\Get-FileHash' -or
+        $objHashCommand.InvocationOperator -ne [System.Management.Automation.Language.TokenKind]::Unknown -or
+        @($objHashCommand.Redirections).Count -ne 0 -or $arrElement.Count -ne 7 -or
+        $arrElement[1] -isnot [System.Management.Automation.Language.CommandParameterAst] -or
+        $arrElement[1].ParameterName -cne 'InputStream' -or
+        $arrElement[2] -isnot [System.Management.Automation.Language.VariableExpressionAst] -or
+        $arrElement[2].VariablePath.UserPath -cne 'objArchiveBuffer' -or
+        $arrElement[2].Splatted -or
+        $arrElement[3] -isnot [System.Management.Automation.Language.CommandParameterAst] -or
+        $arrElement[3].ParameterName -cne 'Algorithm' -or
+        $arrElement[4] -isnot [System.Management.Automation.Language.StringConstantExpressionAst] -or
+        [string]$arrElement[4].Value -cne 'SHA256' -or
+        $arrElement[5] -isnot [System.Management.Automation.Language.CommandParameterAst] -or
+        $arrElement[5].ParameterName -cne 'ErrorAction' -or
+        $arrElement[6] -isnot [System.Management.Automation.Language.StringConstantExpressionAst] -or
+        [string]$arrElement[6].Value -cne 'Stop') {
+        throw 'archive-hash-command-shape'
+    }
+    $objHashAssignment = $objHashCommand.Parent.Parent.Parent.Parent.Parent
+    if ($objHashCommand.Parent -isnot [System.Management.Automation.Language.PipelineAst] -or
+        @($objHashCommand.Parent.PipelineElements).Count -ne 1 -or
+        $objHashCommand.Parent.Parent -isnot
+            [System.Management.Automation.Language.StatementBlockAst] -or
+        $objHashCommand.Parent.Parent.Statements.Count -ne 1 -or
+        $objHashCommand.Parent.Parent.Parent -isnot
+            [System.Management.Automation.Language.ArrayExpressionAst] -or
+        $objHashCommand.Parent.Parent.Parent.Parent -isnot
+            [System.Management.Automation.Language.CommandExpressionAst] -or
+        $objHashAssignment -isnot
+            [System.Management.Automation.Language.AssignmentStatementAst] -or
+        $objHashAssignment.Left -isnot
+            [System.Management.Automation.Language.VariableExpressionAst] -or
+        $objHashAssignment.Left.VariablePath.UserPath -cne 'arrArchiveHash') {
+        throw 'archive-hash-result-binding'
+    }
+    $objHashBlock = $objHashAssignment.Parent
+    $objOuterTry = $objHashBlock.Parent
+    if ($objHashBlock -isnot [System.Management.Automation.Language.StatementBlockAst] -or
+        $objOuterTry -isnot [System.Management.Automation.Language.TryStatementAst] -or
+        -not [object]::ReferenceEquals($objOuterTry.Body, $objHashBlock)) {
+        throw 'archive-hash-enclosing-block'
+    }
+    $arrExpansion = @($Ast.FindAll({
+                param ($Node)
+                $Node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                $Node.Left -is [System.Management.Automation.Language.VariableExpressionAst] -and
+                $Node.Left.VariablePath.UserPath -ceq
+                    'script:scriptBlockInvokeCandidateArtifactExpansion'
+            }, $true))
+    if ($arrExpansion.Count -ne 1) { throw 'archive-hash-expansion-count' }
+    $arrExpansionLiteral = @($arrExpansion[0].Right.FindAll({
+                param ($Node)
+                $Node -is [System.Management.Automation.Language.ScriptBlockExpressionAst]
+            }, $false))
+    if ($arrExpansionLiteral.Count -ne 1) { throw 'archive-hash-expansion-body' }
+    $objExpansionBlock = $arrExpansionLiteral[0].ScriptBlock.EndBlock
+    if (-not [object]::ReferenceEquals($objOuterTry.Parent, $objExpansionBlock)) {
+        throw 'archive-hash-expansion-placement'
+    }
+
+    $arrByteAssignment = @(& $scriptBlockGetVariableAssignment 'arrArchiveByte')
+    if ($arrByteAssignment.Count -ne 1 -or
+        -not [object]::ReferenceEquals($arrByteAssignment[0].Parent, $objHashBlock) -or
+        (& $scriptBlockCollapseSource $arrByteAssignment[0].Extent.Text) -cne
+            '$arrArchiveByte = New-Object byte[] ([int]$uintArchiveByteCount)') {
+        throw 'archive-hash-byte-provenance'
+    }
+    $arrBufferAssignment = @(& $scriptBlockGetVariableAssignment 'objArchiveBuffer')
+    $arrBufferInitial = @($arrBufferAssignment | Where-Object {
+            $_.Right.Extent.Text -ceq '$null' -and
+            [object]::ReferenceEquals($_.Parent, $objExpansionBlock)
+        })
+    $arrBufferCreation = @($arrBufferAssignment | Where-Object {
+            (& $scriptBlockCollapseSource $_.Extent.Text) -ceq
+                '$objArchiveBuffer = New-Object System.IO.MemoryStream(, $arrArchiveByte)' -and
+            [object]::ReferenceEquals($_.Parent, $objHashBlock)
+        })
+    if ($arrBufferAssignment.Count -ne 2 -or $arrBufferInitial.Count -ne 1 -or
+        $arrBufferCreation.Count -ne 1) {
+        throw 'archive-hash-buffer-provenance'
+    }
+    $arrResultAssignment = @(& $scriptBlockGetVariableAssignment 'arrArchiveHash')
+    if ($arrResultAssignment.Count -ne 1 -or
+        -not [object]::ReferenceEquals($arrResultAssignment[0], $objHashAssignment)) {
+        throw 'archive-hash-result-reassignment'
+    }
+
+    $arrShapeGuard = @($Ast.FindAll({
+                param ($Node)
+                $Node -is [System.Management.Automation.Language.IfStatementAst] -and
+                $Node.Extent.Text -cmatch '\$arrArchiveHash\.Count'
+            }, $true))
+    $strExpectedCondition = @'
+$arrArchiveHash.Count -ne 1 -or
+                $arrArchiveHash[0].Algorithm -isnot [string] -or
+                $arrArchiveHash[0].Hash -isnot [string] -or
+                $arrArchiveHash[0].Algorithm -cne 'SHA256' -or
+                $arrArchiveHash[0].Hash -cnotmatch '\A[0-9A-Fa-f]{64}\z'
+'@
+    $strExpectedBody = @'
+{
+                & $script:scriptBlockStopCandidateHelperOperation `
+                    -Code 'archive-invalid' -Phase 'digest' -Subreason 'hash-shape'
+            }
+'@
+    if ($arrShapeGuard.Count -ne 1 -or $arrShapeGuard[0].Clauses.Count -ne 1 -or
+        $null -ne $arrShapeGuard[0].ElseClause -or
+        -not [object]::ReferenceEquals($arrShapeGuard[0].Parent, $objHashBlock) -or
+        (& $scriptBlockCollapseSource $arrShapeGuard[0].Clauses[0].Item1.Extent.Text) -cne
+            (& $scriptBlockCollapseSource $strExpectedCondition) -or
+        (& $scriptBlockCollapseSource $arrShapeGuard[0].Clauses[0].Item2.Extent.Text) -cne
+            (& $scriptBlockCollapseSource $strExpectedBody)) {
+        throw 'archive-hash-result-guard'
+    }
+    $arrDigestAssignment = @(& $scriptBlockGetVariableAssignment 'strActualDigest')
+    if ($arrDigestAssignment.Count -ne 1 -or
+        -not [object]::ReferenceEquals($arrDigestAssignment[0].Parent, $objHashBlock) -or
+        $arrDigestAssignment[0].Right.Extent.Text -cne
+            '$arrArchiveHash[0].Hash.ToLowerInvariant()') {
+        throw 'archive-hash-digest-binding'
+    }
+    $arrMismatchGuard = @($Ast.FindAll({
+                param ($Node)
+                $Node -is [System.Management.Automation.Language.IfStatementAst] -and
+                $Node.Extent.Text -cmatch "-Subreason 'mismatch'"
+            }, $true))
+    if ($arrMismatchGuard.Count -ne 1 -or
+        -not [object]::ReferenceEquals($arrMismatchGuard[0].Parent, $objHashBlock)) {
+        throw 'archive-hash-mismatch-guard'
+    }
+    $arrRewind = @($Ast.FindAll({
+                param ($Node)
+                $Node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                $Node.Left -is [System.Management.Automation.Language.MemberExpressionAst] -and
+                $Node.Left.Expression -is
+                    [System.Management.Automation.Language.VariableExpressionAst] -and
+                $Node.Left.Expression.VariablePath.UserPath -ceq 'objArchiveBuffer' -and
+                $Node.Left.Member -is
+                    [System.Management.Automation.Language.StringConstantExpressionAst] -and
+                [string]$Node.Left.Member.Value -ceq 'Position'
+            }, $true))
+    if ($arrRewind.Count -ne 1 -or
+        -not [object]::ReferenceEquals($arrRewind[0].Parent, $objHashBlock) -or
+        (& $scriptBlockCollapseSource $arrRewind[0].Extent.Text) -cne
+            '$objArchiveBuffer.Position = 0') {
+        throw 'archive-hash-rewind'
+    }
+    $arrZipAssignment = @($Ast.FindAll({
+                param ($Node)
+                $Node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                $Node.Left -is [System.Management.Automation.Language.VariableExpressionAst] -and
+                $Node.Left.VariablePath.UserPath -ceq 'objZipArchive' -and
+                $Node.Right -is [System.Management.Automation.Language.PipelineAst]
+            }, $true))
+    if ($arrZipAssignment.Count -ne 1 -or
+        -not [object]::ReferenceEquals($arrZipAssignment[0].Parent, $objHashBlock)) {
+        throw 'archive-hash-zip-binding'
+    }
+
+    $arrStreamAssignment = @(& $scriptBlockGetVariableAssignment 'objArchiveStream')
+    $arrStreamInitial = @($arrStreamAssignment | Where-Object {
+            $_.Right.Extent.Text -ceq '$null' -and
+            [object]::ReferenceEquals($_.Parent, $objExpansionBlock)
+        })
+    $arrStreamClosed = @($arrStreamAssignment | Where-Object {
+            $_.Right.Extent.Text -ceq '$null' -and
+            [object]::ReferenceEquals($_.Parent, $objHashBlock)
+        })
+    $arrStreamOpen = @($arrStreamAssignment | Where-Object {
+            $_.Right.Extent.Text -cmatch '\ANew-Object\s+System\.IO\.FileStream\('
+        })
+    if ($arrStreamAssignment.Count -ne 3 -or $arrStreamInitial.Count -ne 1 -or
+        $arrStreamClosed.Count -ne 1 -or $arrStreamOpen.Count -ne 1) {
+        throw 'archive-hash-stream-provenance'
+    }
+    $arrArchivePathOpen = @($Ast.FindAll({
+                param ($Node)
+                if ($Node -isnot [System.Management.Automation.Language.CommandAst] -or
+                    $Node.GetCommandName() -cne 'New-Object' -or
+                    @($Node.CommandElements).Count -lt 2 -or
+                    $Node.CommandElements[1].Extent.Text -cne 'System.IO.FileStream') {
+                    return $false
+                }
+                return ($null -ne $Node.Find({
+                            param ($Inner)
+                            $Inner -is
+                                [System.Management.Automation.Language.VariableExpressionAst] -and
+                            $Inner.VariablePath.UserPath -ceq 'strArchivePath'
+                        }, $true))
+            }, $true))
+    if ($arrArchivePathOpen.Count -ne 1 -or
+        -not [object]::ReferenceEquals(
+            $arrArchivePathOpen[0].Parent.Parent,
+            $arrStreamOpen[0])) {
+        throw 'archive-hash-stream-open'
+    }
+    $arrArchiveRead = @($Ast.FindAll({
+                param ($Node)
+                if ($Node -isnot
+                    [System.Management.Automation.Language.InvokeMemberExpressionAst] -or
+                    $Node.Member -isnot
+                        [System.Management.Automation.Language.StringConstantExpressionAst] -or
+                    [string]$Node.Member.Value -cne 'Read') {
+                    return $false
+                }
+                $boolArchiveReceiver = $Node.Expression -is
+                    [System.Management.Automation.Language.VariableExpressionAst] -and
+                    $Node.Expression.VariablePath.UserPath -ceq 'objArchiveStream'
+                $boolArchiveBuffer = $null -ne $Node.Find({
+                        param ($Inner)
+                        $Inner -is
+                            [System.Management.Automation.Language.VariableExpressionAst] -and
+                        $Inner.VariablePath.UserPath -ceq 'arrArchiveByte'
+                    }, $true)
+                return ($boolArchiveReceiver -or $boolArchiveBuffer)
+            }, $true))
+    if ($arrArchiveRead.Count -ne 1 -or
+        $arrArchiveRead[0].Expression.VariablePath.UserPath -cne 'objArchiveStream' -or
+        @($arrArchiveRead[0].Arguments).Count -ne 3 -or
+        $arrArchiveRead[0].Arguments[0].Extent.Text -cne '$arrArchiveByte' -or
+        $arrArchiveRead[0].Arguments[1].Extent.Text -cne '$intArchiveFilled' -or
+        (& $scriptBlockCollapseSource $arrArchiveRead[0].Arguments[2].Extent.Text) -cne
+            '$arrArchiveByte.Length - $intArchiveFilled') {
+        throw 'archive-hash-stream-read'
+    }
+    $objReadLoop = $arrArchiveRead[0]
+    while ($null -ne $objReadLoop -and
+        $objReadLoop -isnot [System.Management.Automation.Language.WhileStatementAst]) {
+        $objReadLoop = $objReadLoop.Parent
+    }
+    if ($null -eq $objReadLoop -or
+        (& $scriptBlockCollapseSource $objReadLoop.Condition.Extent.Text) -cne
+            '$intArchiveFilled -lt $arrArchiveByte.Length') {
+        throw 'archive-hash-stream-read-loop'
+    }
+    $arrStreamDispose = @($Ast.FindAll({
+                param ($Node)
+                $Node -is
+                    [System.Management.Automation.Language.InvokeMemberExpressionAst] -and
+                $Node.Expression -is
+                    [System.Management.Automation.Language.VariableExpressionAst] -and
+                $Node.Expression.VariablePath.UserPath -ceq 'objArchiveStream' -and
+                $Node.Member -is
+                    [System.Management.Automation.Language.StringConstantExpressionAst] -and
+                [string]$Node.Member.Value -ceq 'Dispose' -and
+                ($null -eq $Node.Arguments -or $Node.Arguments.Count -eq 0)
+            }, $true))
+    $arrStreamPreHashDispose = @($arrStreamDispose | Where-Object {
+            [object]::ReferenceEquals($_.Parent.Parent.Parent, $objHashBlock)
+        })
+    if ($arrStreamDispose.Count -ne 2 -or $arrStreamPreHashDispose.Count -ne 1) {
+        throw 'archive-hash-stream-disposal'
+    }
+
+    $objZipCommand = $arrZipAssignment[0].Right.PipelineElements[0]
+    if ($objZipCommand -isnot [System.Management.Automation.Language.CommandAst] -or
+        @($objZipCommand.CommandElements).Count -ne 3 -or
+        $objZipCommand.CommandElements[2] -isnot
+            [System.Management.Automation.Language.VariableExpressionAst]) {
+        throw 'archive-hash-zip-command'
+    }
+    $arrBufferSourceReference = @($arrBufferCreation[0].Right.FindAll({
+                param ($Node)
+                $Node -is [System.Management.Automation.Language.VariableExpressionAst] -and
+                $Node.VariablePath.UserPath -ceq 'arrArchiveByte'
+            }, $true))
+    $intRetainedStart = $arrBufferCreation[0].Right.Extent.StartOffset
+    $intRetainedEnd = $arrZipAssignment[0].Extent.EndOffset
+    $arrLengthObservation = @($Ast.FindAll({
+                param ($Node)
+                $Node -is [System.Management.Automation.Language.MemberExpressionAst] -and
+                $Node.Expression -is
+                    [System.Management.Automation.Language.VariableExpressionAst] -and
+                $Node.Expression.VariablePath.UserPath -ceq 'arrArchiveByte' -and
+                $Node.Member -is
+                    [System.Management.Automation.Language.StringConstantExpressionAst] -and
+                [string]$Node.Member.Value -ceq 'Length' -and
+                $Node.Extent.StartOffset -ge $intRetainedStart -and
+                $Node.Extent.EndOffset -le $intRetainedEnd
+            }, $true))
+    $arrRetainedArrayUse = @($Ast.FindAll({
+                param ($Node)
+                $Node -is [System.Management.Automation.Language.VariableExpressionAst] -and
+                $Node.VariablePath.UserPath -ceq 'arrArchiveByte' -and
+                $Node.Extent.StartOffset -ge $intRetainedStart -and
+                $Node.Extent.EndOffset -le $intRetainedEnd
+            }, $true))
+    if ($arrBufferSourceReference.Count -ne 1 -or
+        $arrLengthObservation.Count -ne 1 -or $arrRetainedArrayUse.Count -ne 2 -or
+        @($arrRetainedArrayUse | Where-Object {
+                [object]::ReferenceEquals($_, $arrBufferSourceReference[0]) -or
+                [object]::ReferenceEquals($_, $arrLengthObservation[0].Expression)
+            }).Count -ne 2) {
+        throw 'archive-hash-retained-array-use'
+    }
+    $arrRetainedBufferUse = @($Ast.FindAll({
+                param ($Node)
+                $Node -is [System.Management.Automation.Language.VariableExpressionAst] -and
+                $Node.VariablePath.UserPath -ceq 'objArchiveBuffer' -and
+                $Node.Extent.StartOffset -ge $intRetainedStart -and
+                $Node.Extent.EndOffset -le $intRetainedEnd
+            }, $true))
+    if ($arrRetainedBufferUse.Count -ne 3 -or
+        @($arrRetainedBufferUse | Where-Object {
+                [object]::ReferenceEquals($_, $arrElement[2]) -or
+                [object]::ReferenceEquals($_, $arrRewind[0].Left.Expression) -or
+                [object]::ReferenceEquals($_, $objZipCommand.CommandElements[2])
+            }).Count -ne 3) {
+        throw 'archive-hash-retained-buffer-use'
+    }
+
+    $arrOrderedNode = @(
+        $arrByteAssignment[0],
+        $objReadLoop,
+        $arrStreamPreHashDispose[0],
+        $arrStreamClosed[0],
+        $arrBufferCreation[0],
+        $objHashAssignment,
+        $arrShapeGuard[0],
+        $arrDigestAssignment[0],
+        $arrMismatchGuard[0],
+        $arrRewind[0],
+        $arrZipAssignment[0]
+    )
+    for ($intNode = 1; $intNode -lt $arrOrderedNode.Count; $intNode++) {
+        if ($arrOrderedNode[$intNode - 1].Extent.EndOffset -ge
+            $arrOrderedNode[$intNode].Extent.StartOffset) {
+            throw 'archive-hash-operation-order'
+        }
+    }
+    return [int]$objHashCommand.Extent.StartOffset
+}
+
+$script:scriptBlockAssertTerraformArchiveHashMutants = {
+    param (
+        [string]$RunRoot,
+        [string]$HelperLiteralPath,
+        [string]$ContextLiteralPath,
+        [switch]$EmitObservations
+    )
+
+    $strMutantRoot = [System.IO.Path]::Combine($RunRoot, 'archive-hash-mutants')
+    if ([System.IO.Directory]::Exists($strMutantRoot)) {
+        throw 'archive-hash-mutant-root-occupied'
+    }
+    [void][System.IO.Directory]::CreateDirectory($strMutantRoot)
+    try {
+        $strSource = [System.IO.File]::ReadAllText($HelperLiteralPath)
+        $strContext = [System.IO.File]::ReadAllText($ContextLiteralPath)
+        $arrControlError = $null
+        $objControlAst = [System.Management.Automation.Language.Parser]::ParseInput(
+            $strSource, [ref]$null, [ref]$arrControlError)
+        if (@($arrControlError).Count -ne 0 -or
+            (& $script:scriptBlockGetTerraformArchiveHashAllowance `
+                -Ast $objControlAst -Role helper) -lt 0) {
+            throw 'archive-hash-mutant-control'
+        }
+        $arrContextError = $null
+        $objContextAst = [System.Management.Automation.Language.Parser]::ParseInput(
+            $strContext, [ref]$null, [ref]$arrContextError)
+        if (@($arrContextError).Count -ne 0 -or
+            (& $script:scriptBlockGetTerraformArchiveHashAllowance `
+                -Ast $objContextAst -Role context) -ne -1) {
+            throw 'archive-hash-mutant-context-control'
+        }
+
+        $strMemoryCreation =
+            '$objArchiveBuffer = New-Object System.IO.MemoryStream(, $arrArchiveByte)'
+        $strHashCommand = 'Microsoft.PowerShell.Utility\Get-FileHash `' + "`n" +
+            '                    -InputStream $objArchiveBuffer `' + "`n" +
+            '                    -Algorithm SHA256 `' + "`n" +
+            '                    -ErrorAction Stop'
+        $strRewind = '$objArchiveBuffer.Position = 0'
+        $strZipOpen = '$objZipArchive = & $script:scriptBlockOpenCandidateHelperValidatedArchive `' +
+            "`n" + '                -Buffer $objArchiveBuffer'
+        $strStreamRelease = '$objArchiveStream.Dispose()' + "`n" +
+            '            $objArchiveStream = $null'
+        $strPostHashSite = '                    -ErrorAction Stop' + "`n" +
+            '            )'
+        $strDigestMismatch =
+            'if (-not [System.String]::Equals(' + "`n" +
+            '                    $strActualDigest,' + "`n" +
+            '                    $strExpectedDigest,' + "`n" +
+            '                    [System.StringComparison]::OrdinalIgnoreCase' + "`n" +
+            '                )) {'
+        $intZip = $strSource.IndexOf($strZipOpen, [System.StringComparison]::Ordinal)
+        $intMismatch = $strSource.IndexOf(
+            $strDigestMismatch, [System.StringComparison]::Ordinal)
+        if ($intZip -lt 0 -or $intMismatch -lt 0 -or
+            $strSource.IndexOf(
+                $strZipOpen, $intZip + $strZipOpen.Length,
+                [System.StringComparison]::Ordinal) -ge 0 -or
+            $strSource.IndexOf(
+                $strDigestMismatch, $intMismatch + $strDigestMismatch.Length,
+                [System.StringComparison]::Ordinal) -ge 0) {
+            throw 'archive-hash-mutant-site'
+        }
+        $strZipBeforeMismatch = $strSource.Remove($intZip, $strZipOpen.Length)
+        $strZipBeforeMismatch = $strZipBeforeMismatch.Insert(
+            $intMismatch, $strZipOpen + "`n            ")
+        $strRewindAfterZip = $strSource.Replace($strRewind, '')
+        $intRewindZip = $strRewindAfterZip.IndexOf(
+            $strZipOpen, [System.StringComparison]::Ordinal)
+        $strRewindAfterZip = $strRewindAfterZip.Insert(
+            $intRewindZip + $strZipOpen.Length,
+            "`n            " + $strRewind)
+        $strDisposeAfterHash = $strSource.Replace($strStreamRelease, '')
+        $strDisposeAfterHash = $strDisposeAfterHash.Replace(
+            $strPostHashSite,
+            $strPostHashSite + "`n            " + $strStreamRelease)
+
+        $arrMutant = @(
+            @{ Id = 'unqualified-command'; Source = $strSource.Replace(
+                    'Microsoft.PowerShell.Utility\Get-FileHash', 'Get-FileHash') },
+            @{ Id = 'wrong-module'; Source = $strSource.Replace(
+                    'Microsoft.PowerShell.Utility\Get-FileHash',
+                    'Microsoft.PowerShell.Management\Get-FileHash') },
+            @{ Id = 'path-parameter'; Source = $strSource.Replace(
+                    '-InputStream $objArchiveBuffer', '-Path $strArchivePath') },
+            @{ Id = 'live-file-stream'; Source = $strSource.Replace(
+                    '-InputStream $objArchiveBuffer', '-InputStream $objArchiveStream') },
+            @{ Id = 'splatted-input'; Source = $strSource.Replace(
+                    '-InputStream $objArchiveBuffer', '-InputStream @objArchiveBuffer') },
+            @{ Id = 'wrong-algorithm'; Source = $strSource.Replace(
+                    '-Algorithm SHA256', '-Algorithm SHA1') },
+            @{ Id = 'error-action-removed'; Source = $strSource.Replace(
+                    (' ' + [char]96 + "`n" + '                    -ErrorAction Stop'),
+                    '') },
+            @{ Id = 'duplicate-command'; Source = $strSource.Replace(
+                    $strHashCommand, $strHashCommand + "`n                " +
+                        $strHashCommand.TrimStart()) },
+            @{ Id = 'buffer-rebound'; Source = $strSource.Replace(
+                    $strMemoryCreation,
+                    $strMemoryCreation + "`n            `$objArchiveBuffer = `$null") },
+            @{ Id = 'wrong-byte-array'; Source = $strSource.Replace(
+                    $strMemoryCreation,
+                    '$objArchiveBuffer = New-Object System.IO.MemoryStream(, $arrOtherByte)') },
+            @{ Id = 'zero-result-guard'; Source = $strSource.Replace(
+                    '$arrArchiveHash.Count -ne 1', '$arrArchiveHash.Count -ne 0') },
+            @{ Id = 'duplicate-result-guard'; Source = $strSource.Replace(
+                    '$arrArchiveHash.Count -ne 1', '$arrArchiveHash.Count -ne 2') },
+            @{ Id = 'algorithm-type-guard-removed'; Source = $strSource.Replace(
+                    '$arrArchiveHash[0].Algorithm -isnot [string] -or', '$false -or') },
+            @{ Id = 'hash-type-guard-removed'; Source = $strSource.Replace(
+                    '$arrArchiveHash[0].Hash -isnot [string] -or', '$false -or') },
+            @{ Id = 'trailing-newline-grammar'; Source = $strSource.Replace(
+                    "'\A[0-9A-Fa-f]{64}\z'", "'\A[0-9A-Fa-f]{64}$'") },
+            @{ Id = 'malformed-hash-grammar'; Source = $strSource.Replace(
+                    "'\A[0-9A-Fa-f]{64}\z'", "'\A[0-9A-Fa-f]{1,64}\z'") },
+            @{ Id = 'wrong-digest-result'; Source = $strSource.Replace(
+                    '$arrArchiveHash[0].Hash.ToLowerInvariant()',
+                    '$arrArchiveHash[1].Hash.ToLowerInvariant()') },
+            @{ Id = 'rewind-removed'; Source = $strSource.Replace(
+                    $strRewind, '[void]$objArchiveBuffer') },
+            @{ Id = 'wrong-rewind-buffer'; Source = $strSource.Replace(
+                    $strRewind, '$objOtherBuffer.Position = 0') },
+            @{ Id = 'rewind-after-zip'; Source = $strRewindAfterZip },
+            @{ Id = 'zip-before-mismatch'; Source = $strZipBeforeMismatch },
+            @{ Id = 'second-file-open'; Source = $strSource.Replace(
+                    $strMemoryCreation,
+                    $strMemoryCreation + "`n            if (`$false) {" +
+                        "`n                `$objOtherArchive = New-Object System.IO.FileStream(" +
+                        "`n                    `$strArchivePath," +
+                        "`n                    [System.IO.FileMode]::Open," +
+                        "`n                    [System.IO.FileAccess]::Read," +
+                        "`n                    [System.IO.FileShare]::Read" +
+                        "`n                )" + "`n            }") },
+            @{ Id = 'second-archive-read'; Source = $strSource.Replace(
+                    $strMemoryCreation,
+                    $strMemoryCreation + "`n            if (`$false) {" +
+                        "`n                `$null = `$objArchiveStream.Read(`$arrArchiveByte, 0, 0)" +
+                        "`n            }") },
+            @{ Id = 'dispose-after-hash'; Source = $strDisposeAfterHash },
+            @{ Id = 'buffer-setlength'; Source = $strSource.Replace(
+                    $strPostHashSite,
+                    $strPostHashSite +
+                        "`n            `$objArchiveBuffer.SetLength(0)") },
+            @{ Id = 'buffer-writebyte'; Source = $strSource.Replace(
+                    $strPostHashSite,
+                    $strPostHashSite +
+                        "`n            `$objArchiveBuffer.WriteByte(0)") },
+            @{ Id = 'buffer-alias-mutation'; Source = $strSource.Replace(
+                    $strPostHashSite,
+                    $strPostHashSite +
+                        "`n            `$objArchiveAlias = `$objArchiveBuffer" +
+                        "`n            `$objArchiveAlias.WriteByte(0)") },
+            @{ Id = 'stream-computehash'; SurfaceOnly = $true; Source = $strSource.Replace(
+                    $strMemoryCreation,
+                    $strMemoryCreation + "`n            if (`$false) {" +
+                        "`n                `$null = `$objArchiveSha256.ComputeHash(`$objHashSource)" +
+                        "`n            }") }
+        )
+        foreach ($hashtableMutant in $arrMutant) {
+            if ([string]$hashtableMutant.Source -ceq $strSource) {
+                throw ('archive-hash-mutant-no-change-' + $hashtableMutant.Id)
+            }
+            $arrMutantError = $null
+            $objMutantAst = [System.Management.Automation.Language.Parser]::ParseInput(
+                [string]$hashtableMutant.Source,
+                [ref]$null,
+                [ref]$arrMutantError
+            )
+            if (@($arrMutantError).Count -ne 0) {
+                throw ('archive-hash-mutant-parse-' + $hashtableMutant.Id)
+            }
+            $boolDirectRejected = $false
+            try {
+                $null = & $script:scriptBlockGetTerraformArchiveHashAllowance `
+                    -Ast $objMutantAst -Role helper
+            } catch {
+                $boolDirectRejected = $_.Exception.Message -cmatch '^archive-hash-'
+            }
+            $boolSurfaceOnly = $hashtableMutant.ContainsKey('SurfaceOnly') -and
+                [bool]$hashtableMutant.SurfaceOnly
+            if ($boolSurfaceOnly -eq $boolDirectRejected) {
+                throw ('archive-hash-mutant-direct-verdict-' + $hashtableMutant.Id)
+            }
+            $strMutantPath = [System.IO.Path]::Combine(
+                $strMutantRoot, [string]$hashtableMutant.Id + '.ps1')
+            [System.IO.File]::WriteAllText(
+                $strMutantPath,
+                [string]$hashtableMutant.Source,
+                [System.Text.UTF8Encoding]::new($false)
+            )
+            $boolSurfaceRejected = $false
+            try {
+                & $script:scriptBlockAssertEnumerationPrimitiveExclusive `
+                    -HelperLiteralPath $strMutantPath `
+                    -ContextLiteralPath $ContextLiteralPath
+            } catch {
+                $boolSurfaceRejected = $_.Exception.Message -cmatch
+                    '^(archive-hash-|TerraformStyleGuide\.CandidateHarness\.v1\|)'
+            }
+            if (-not $boolSurfaceRejected) {
+                throw ('archive-hash-mutant-surface-accepted-' + $hashtableMutant.Id)
+            }
+            if ($EmitObservations) {
+                [pscustomobject]@{
+                    Scope = 'archive-hash-mutation'
+                    Id = [string]$hashtableMutant.Id
+                    DirectRejected = $boolDirectRejected
+                    SurfaceRejected = $boolSurfaceRejected
+                }
+            }
+        }
+    } finally {
+        & $script:scriptBlockRemoveTestTree `
+            -LiteralPath $strMutantRoot `
+            -ApprovedParent $RunRoot
+    }
+}
+
 
 $script:scriptBlockGetModuleBridgeAllowance = {
     param (
@@ -3850,8 +4450,8 @@ $script:scriptBlockGetModuleBridgeAllowance = {
         & $script:scriptBlockStopHarness -Code 'catalog-invalid' -Detail 'module-bridge-tail'
     }
     $strTailHash = if ($Role -ceq 'helper') {
-        'd988127157b1f760e3bb2826caf825ae250b019eef7b1955397b299ca5c7927c'
-    } else { 'a300d33fb72743edb3bb6322bf785d287167951c7330e5ce87ab4a68864d0b39' }
+        'e12fe67b6c5fc52fc765da9dab73f557f089e7aa467c6dad849a16f390bc7391'
+    } else { 'f7d951c98aeeff3d4d8069df1534780f78581e2b09ab41857eb0bd12c3b682c7' }
     $intTailStart = $arrTail[0].Extent.StartOffset
     if ((& $scriptBlockGetBridgeHash -Text $Ast.Extent.Text.Substring($intTailStart)) -cne $strTailHash) {
         & $script:scriptBlockStopHarness -Code 'catalog-invalid' -Detail 'module-bridge-tail-changed'
@@ -3908,7 +4508,7 @@ $script:scriptBlockGetModuleBridgeAllowance = {
         $intBindingEnd = $arrBinding[0].Extent.EndOffset
         if ($intBootstrapEnd -le $intBootstrapStart -or
             (& $scriptBlockGetBridgeHash -Text $Ast.Extent.Text.Substring($intBootstrapStart, $intBootstrapEnd - $intBootstrapStart)) -cne
-                'd1c489cea7177304d0b1c688ed4442e4e99d79f8a7605608a2850b28fdc6f0b9' -or
+                '411134ad48830d225fd835105f4dc56f4ead7e21f68b8a4dc968969731760407' -or
             (& $scriptBlockGetBridgeHash -Text $arrBinding[0].Extent.Text) -cne
                 '335f6cdde736a251fb7df243b378e35e9c62b295d805cf877072c6bc5591ae1d') {
             & $script:scriptBlockStopHarness -Code 'catalog-invalid' -Detail 'module-bridge-bootstrap-changed'
@@ -4034,6 +4634,9 @@ $script:scriptBlockAssertEnumerationPrimitiveExclusive = {
         # pass through the closed name/receiver tables below.
         $intZipGetter = & $script:scriptBlockGetTerraformZipGetterAllowance -Ast $objAst -Role $strRole
         if ($intZipGetter -ge 0) { $hashtableFixedClrCall[[string]$intZipGetter] = $true }
+        [void](& $script:scriptBlockGetTerraformArchiveHashAllowance `
+                -Ast $objAst `
+                -Role $strRole)
         $objModuleBridgeAllowance = & $script:scriptBlockGetModuleBridgeAllowance -Ast $objAst -Role $strRole
         # The variables this file actually defines as script blocks. An earlier
         # revision matched the NAME instead -- anything starting 'scriptBlock' --
@@ -9054,7 +9657,7 @@ $script:scriptBlockAssertTerraformVersionLayoutControls = {
         if ((& $script:scriptBlockGetScriptVersionRecord -ScriptText $objRole.Source -ExpectedVersion $objRole.Expected).ToString() -cne $objRole.Expected) { throw 'version-layout-positive-control' }
         $strMarker = 'Version: ' + $objRole.Expected
         $arrMutants = @(
-            [pscustomobject]@{ Source = $objRole.Source.Replace($strMarker, 'Version: 1.0.20260924.2'); Code = 'unexpected-version'; Reason = 'binding' },
+            [pscustomobject]@{ Source = $objRole.Source.Replace($strMarker, 'Version: 1.0.20260924.3'); Code = 'unexpected-version'; Reason = 'binding' },
             [pscustomobject]@{ Source = $objRole.Source.Replace($strMarker, $strMarker + "`n" + $strMarker); Code = 'invalid-version'; Reason = 'marker-count' },
             [pscustomobject]@{ Source = $objRole.Source.Replace($strMarker, 'Version: malformed'); Code = 'invalid-version'; Reason = 'marker-grammar' },
             [pscustomobject]@{ Source = [regex]::Replace($objRole.Source, '(?m)^    function', '  function'); Code = 'invalid-version'; Reason = 'function' }
@@ -14445,7 +15048,7 @@ $script:scriptBlockInvokeTerraformProductionGuardCase = {
     $objContext = $null
     try {
         $objContext = New-StyleGuideCandidateInvocationContext -TrustedTemporaryRoot $hashtableLayout.Trusted
-        $objModule = Microsoft.PowerShell.Core\Get-Module -Name 'TerraformStyleGuideCandidateArtifact_1_0_20260924_1'
+        $objModule = Microsoft.PowerShell.Core\Get-Module -Name 'TerraformStyleGuideCandidateArtifact_1_0_20260924_2'
         if (@($objModule).Count -ne 1) { throw 'guard-module-cardinality' }
         $objFailure = $null
         $objPredicate = $null
@@ -14622,7 +15225,7 @@ $script:scriptBlockInvokeTerraformContextCleanupCase = {
 
 $script:scriptBlockInvokeTerraformTerminalCandidateProbe = {
     param ([object]$State)
-        $objModule = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_1 -All
+        $objModule = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_2 -All
         return & $objModule {
             param ([object]$State)
             $hashtableCounts = @{ Provider = 0; Path = 0; Filesystem = 0; Native = 0 }
@@ -14893,7 +15496,7 @@ $script:scriptBlockInvokeTerraformNotCreatedCandidateCase = {
         $strCandidate = $objContext.CandidateDirectoryPath
         if ($Case.Id -ceq 'T1A-K-11') { [System.IO.File]::WriteAllBytes($strCandidate, [byte[]]@(110, 111, 116, 45, 111, 119, 110, 101, 100)) }
         elseif ($Case.Id -cne 'T1A-K-10') { throw 'not-created-case-id' }
-        $objModule = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_1 -All
+        $objModule = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_2 -All
         $objCandidate = & $objModule {
             param ([string]$Trusted, [string]$Parent, [string]$Path)
             $objIssued = & $script:scriptBlockNewCandidateOwnershipState -TrustedRoot $Trusted -CandidateParent $Parent -CandidatePath $Path
@@ -15052,7 +15655,7 @@ $script:scriptBlockGetTerraformDerivedFixtureState = {
     param ([string]$Roles, [ValidateSet('helper', 'context')][string]$Role)
 
     $strFile = if ($Role -ceq 'helper') { 'Expand-StyleGuideCandidateArtifact.ps1' } else { 'Manage-StyleGuideCandidateInvocationContext.ps1' }
-    $strName = if ($Role -ceq 'helper') { 'TerraformStyleGuideCandidateArtifact_1_0_20260924_1' } else { 'TerraformStyleGuideCandidateContext_1_0_20260924_1' }
+    $strName = if ($Role -ceq 'helper') { 'TerraformStyleGuideCandidateArtifact_1_0_20260924_2' } else { 'TerraformStyleGuideCandidateContext_1_0_20260924_2' }
     $strVariable = if ($Role -ceq 'helper') { 'scriptBlockCandidateModuleDefinition' } else { 'scriptBlockContextModuleDefinition' }
     $arrErrors = $null
     $objAst = [Management.Automation.Language.Parser]::ParseFile([IO.Path]::Combine($Roles, $strFile), [ref]$null, [ref]$arrErrors)
@@ -15568,7 +16171,7 @@ if ($hashtableTask184FixtureState.Fail) {
 
 $script:scriptBlockInvokeTerraformTerminalContextProbe = {
     param ([object]$State)
-        $objModule = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateContext_1_0_20260924_1 -All
+        $objModule = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateContext_1_0_20260924_2 -All
         return & $objModule {
             param ([object]$State)
             $hashtableCounts = @{ Provider = 0; Path = 0; Filesystem = 0; Native = 0 }
@@ -16049,8 +16652,8 @@ public static class TerraformCandidateH01Trace {
         if ($arrErrors.Count -ne 0) { throw 'h01-derived-parse' }
     }
     . ([System.IO.Path]::Combine($Roles, 'Manage-StyleGuideCandidateInvocationContext.ps1'))
-    $objHelper = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_1 -All
-    $objManager = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateContext_1_0_20260924_1 -All
+    $objHelper = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_2 -All
+    $objManager = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateContext_1_0_20260924_2 -All
     if (@($objHelper).Count -ne 1 -or @($objManager).Count -ne 1) { throw 'h01-module-count' }
     $listRecords = New-Object 'System.Collections.Generic.List[pscustomobject]'
     foreach ($strRole in @('helper', 'manager')) {
@@ -16893,7 +17496,7 @@ $script:scriptBlockAssertPublicCapabilityCaptureExecutes = {
         # Positional binding is disabled; all internal callers use parameter
         # names. This internal-caller contract is subject to change.
         #
-        # Version: 1.0.20260924.1
+        # Version: 1.0.20260924.2
         [CmdletBinding(PositionalBinding = $false)]
         [OutputType([pscustomobject])]
         param (
@@ -17111,7 +17714,7 @@ $script:scriptBlockAssertPublicCapabilityCaptureExecutes = {
     $objCandidateControls = Assert-TerraformPublicCapabilityCapture -State $objCandidateState -Cleanup {
         param ($Value)
         Remove-StyleGuideCandidateInvocationState -CandidateOwnershipState $Value
-    } -Module (Microsoft.PowerShell.Core\Get-Module -All TerraformStyleGuideCandidateArtifact_1_0_20260924_1)
+    } -Module (Microsoft.PowerShell.Core\Get-Module -All TerraformStyleGuideCandidateArtifact_1_0_20260924_2)
     $objInvocationContext = Remove-StyleGuideCandidateInvocationContext -Context $objInvocationContext -OwnedPaths ([object[]]@($strArchivePath)) -CandidateOwnershipState $objCandidateState
     if ($objInvocationContext.LifecycleState -cne 'Disposed') { throw 'context-control' }
     $hashtableCallbackState.intTask184GetTypeCalls = 0
@@ -17180,7 +17783,7 @@ $script:scriptBlockAssertPublicCapabilityCaptureExecutes = {
     $objContextControls = Assert-TerraformPublicCapabilityCapture -State $objInvocationContext -Cleanup {
         param ($Value)
         Remove-StyleGuideCandidateInvocationContext -Context $Value
-    } -Module (Microsoft.PowerShell.Core\Get-Module -All TerraformStyleGuideCandidateContext_1_0_20260924_1)
+    } -Module (Microsoft.PowerShell.Core\Get-Module -All TerraformStyleGuideCandidateContext_1_0_20260924_2)
     [IO.Directory]::Delete($strCheckoutRoot, $false)
     [IO.Directory]::Delete($strTrustedRoot, $false)
     [IO.Directory]::Delete($strFixtureRoot, $false)
@@ -18215,7 +18818,7 @@ function Invoke-StyleGuideCandidateHarness {
     # This function consumes only the fixed script parameters and repository
     # paths established by the enclosing trusted harness.
     #
-    # Version: 1.0.20260924.1
+    # Version: 1.0.20260924.2
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param ()
@@ -18507,6 +19110,11 @@ function Invoke-StyleGuideCandidateHarness {
         & $scriptBlockCheckSourceIdentity
         & $script:scriptBlockAssertArchiveLengthReadOnce `
             -HelperLiteralPath $strHelperLiteralPath
+        & $scriptBlockCheckSourceIdentity
+        & $script:scriptBlockAssertTerraformArchiveHashMutants `
+            -RunRoot $strRunRoot `
+            -HelperLiteralPath $strHelperLiteralPath `
+            -ContextLiteralPath $strContextLiteralPath
         & $scriptBlockCheckSourceIdentity
         & $script:scriptBlockAssertStaticMembersResolve `
             -HelperLiteralPath $strHelperLiteralPath `

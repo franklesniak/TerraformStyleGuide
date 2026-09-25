@@ -24,7 +24,7 @@ loaded and bound as the candidate ownership authority; issuance checks and
 source lifecycle procedures remain private.
 
 .NOTES
-Version: 1.0.20260924.1
+Version: 1.0.20260924.2
 #>
 
 [CmdletBinding(PositionalBinding = $false)]
@@ -33,7 +33,7 @@ param ()
 
 $scriptBlockContextModuleDefinition = {
     param ([string]$ManagerDirectory)
-    $versionCandidateContext = [System.Version]'1.0.20260924.1'
+    $versionCandidateContext = [System.Version]'1.0.20260924.2'
     $strCandidateContextTypeName = 'TerraformStyleGuide.PrivateInvocationContext.v1'
     # The exact context objects this manager has issued. Membership is decided by
     # reference, so a structurally identical clone is not a member.
@@ -1885,7 +1885,7 @@ $scriptBlockContextModuleDefinition = {
         # .NOTES
         # This function supports named parameters only.
         #
-        # Version: 1.0.20260924.1
+        # Version: 1.0.20260924.2
         [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute(
             'PSUseShouldProcessForStateChangingFunctions',
             '',
@@ -2375,7 +2375,7 @@ $scriptBlockContextModuleDefinition = {
         # .NOTES
         # This function supports named parameters only.
         #
-        # Version: 1.0.20260924.1
+        # Version: 1.0.20260924.2
         [CmdletBinding(PositionalBinding = $false)]
         [OutputType([bool])]
         param (
@@ -2500,7 +2500,7 @@ $scriptBlockContextModuleDefinition = {
         # .NOTES
         # This function supports named parameters only.
         #
-        # Version: 1.0.20260924.1
+        # Version: 1.0.20260924.2
         [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute(
             'PSUseShouldProcessForStateChangingFunctions',
             '',
@@ -3090,7 +3090,7 @@ $scriptBlockContextModuleDefinition = {
     if ($null -eq $objDefinitionExpression) { throw 'helper-definition-invalid' }
     $script:strBoundHelperDefinition = $objDefinitionExpression.ScriptBlock.Extent.Text
     . $strHelperPath -CheckoutRoot $null -TrustedTemporaryRoot $null -DownloadDirectory $null -CandidateDirectory $null -ExpectedDigest $null
-    $arrHelperModules = @(Microsoft.PowerShell.Core\Get-Module -Name 'TerraformStyleGuideCandidateArtifact_1_0_20260924_1' -All)
+    $arrHelperModules = @(Microsoft.PowerShell.Core\Get-Module -Name 'TerraformStyleGuideCandidateArtifact_1_0_20260924_2' -All)
     if ($arrHelperModules.Count -ne 1 -or $arrHelperModules[0].Definition -cne $script:strBoundHelperDefinition) { throw 'helper-definition-mismatch' }
     $script:objBoundHelper = $arrHelperModules[0]
     $script:scriptBlockBoundCandidateCleanup = $script:objBoundHelper.ExportedFunctions['Remove-StyleGuideCandidateInvocationState'].ScriptBlock
@@ -3275,7 +3275,7 @@ $scriptBlockContextModuleDefinition = {
         # [pscustomobject] The issued TerraformStyleGuide.StyleGuideCandidateInvocationContext.v1 object.
         #
         # .NOTES
-        # Version: 1.0.20260924.1
+        # Version: 1.0.20260924.2
         # All parameters require names; positional binding is disabled.
         [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The closed contract provides no ShouldProcess parameters.')]
         [CmdletBinding(PositionalBinding = $false)]
@@ -3353,7 +3353,7 @@ $scriptBlockContextModuleDefinition = {
         # [pscustomobject] The identical context object, with its terminal cleanup summary.
         #
         # .NOTES
-        # Version: 1.0.20260924.1
+        # Version: 1.0.20260924.2
         # All parameters require names; positional binding is disabled.
         [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'The closed contract provides no ShouldProcess parameters.')]
         [CmdletBinding(PositionalBinding = $false)]
@@ -3501,7 +3501,7 @@ $scriptBlockContextModuleDefinition = {
 
     Microsoft.PowerShell.Core\Export-ModuleMember -Function New-StyleGuideCandidateInvocationContext, Remove-StyleGuideCandidateInvocationContext
 }
-$strContextModuleName = 'TerraformStyleGuideCandidateContext_1_0_20260924_1'
+$strContextModuleName = 'TerraformStyleGuideCandidateContext_1_0_20260924_2'
 $arrContextModules = @(Microsoft.PowerShell.Core\Get-Module -Name $strContextModuleName -All)
 if ($arrContextModules.Count -gt 1) { throw 'context-module-ambiguous' }
 if ($arrContextModules.Count -eq 1) {

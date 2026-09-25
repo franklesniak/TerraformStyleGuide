@@ -50,7 +50,7 @@ None. You can't pipe objects to this script.
 CandidateOwnershipState contains the issued mutable ownership object.
 
 .NOTES
-Version: 1.0.20260924.1
+Version: 1.0.20260924.2
 #>
 
 [CmdletBinding(PositionalBinding = $false)]
@@ -115,8 +115,8 @@ $boolCandidateHelperWasDotSourced = $MyInvocation.InvocationName -eq '.'
 # Normal script invocations and a previously imported cleanup callable must use
 # the same state. No caller-owned object or same-named verifier is an authority.
 $scriptBlockCandidateModuleDefinition = {
-    $script:versionCandidateHelper = [System.Version]'1.0.20260924.1'
-    $script:versionCandidateExpectedContext = [System.Version]'1.0.20260924.1'
+    $script:versionCandidateHelper = [System.Version]'1.0.20260924.2'
+    $script:versionCandidateExpectedContext = [System.Version]'1.0.20260924.2'
     $script:strCandidateHelperContextTypeName = 'TerraformStyleGuide.PrivateCandidateEnvelope.v1'
     $script:strCandidateHelperRecordTypeName = 'TerraformStyleGuide.PrivateCandidateEvidence.v1'
     $script:strCandidateHelperCleanupTypeName = 'TerraformStyleGuide.PrivateCandidateCleanupResult.v1'
@@ -2937,7 +2937,7 @@ $scriptBlockCandidateModuleDefinition = {
         # [pscustomobject] The same authenticated candidate ownership object.
         #
         # .NOTES
-        # Version: 1.0.20260924.1
+        # Version: 1.0.20260924.2
         # All parameters require names; positional binding is disabled.
         [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute(
             'PSUseShouldProcessForStateChangingFunctions', '',
@@ -4068,18 +4068,21 @@ $scriptBlockCandidateModuleDefinition = {
             $objArchiveStream.Dispose()
             $objArchiveStream = $null
             $objArchiveBuffer = New-Object System.IO.MemoryStream(, $arrArchiveByte)
-            $objArchiveSha256 = [System.Security.Cryptography.SHA256]::Create()
-            try {
-                $strActualDigest = ([System.BitConverter]::ToString(
-                        $objArchiveSha256.ComputeHash($arrArchiveByte, 0, $arrArchiveByte.Length)
-                    ) -replace '-', '').ToLowerInvariant()
-            } finally {
-                $objArchiveSha256.Dispose()
-            }
-            if ($strActualDigest -cnotmatch '^[0-9a-f]{64}$') {
+            $arrArchiveHash = @(
+                Microsoft.PowerShell.Utility\Get-FileHash `
+                    -InputStream $objArchiveBuffer `
+                    -Algorithm SHA256 `
+                    -ErrorAction Stop
+            )
+            if ($arrArchiveHash.Count -ne 1 -or
+                $arrArchiveHash[0].Algorithm -isnot [string] -or
+                $arrArchiveHash[0].Hash -isnot [string] -or
+                $arrArchiveHash[0].Algorithm -cne 'SHA256' -or
+                $arrArchiveHash[0].Hash -cnotmatch '\A[0-9A-Fa-f]{64}\z') {
                 & $script:scriptBlockStopCandidateHelperOperation `
                     -Code 'archive-invalid' -Phase 'digest' -Subreason 'hash-shape'
             }
+            $strActualDigest = $arrArchiveHash[0].Hash.ToLowerInvariant()
             $hashtableDiagnostics.ActualDigest = $strActualDigest
 
             $objDownloadRecord = & $script:scriptBlockNewCandidateHelperRecord `
@@ -4111,6 +4114,7 @@ $scriptBlockCandidateModuleDefinition = {
                 & $script:scriptBlockStopCandidateHelperOperation `
                     -Code 'digest-mismatch' -Phase 'digest' -Subreason 'mismatch'
             }
+            $objArchiveBuffer.Position = 0
 
             # The archive is obtained from a helper that cannot hand one back
             # without having bounded the central directory first, so the ordering
@@ -4711,7 +4715,7 @@ $scriptBlockCandidateModuleDefinition = {
 
     Microsoft.PowerShell.Core\Export-ModuleMember -Function Remove-StyleGuideCandidateInvocationState
 }
-$strCandidateModuleName = 'TerraformStyleGuideCandidateArtifact_1_0_20260924_1'
+$strCandidateModuleName = 'TerraformStyleGuideCandidateArtifact_1_0_20260924_2'
 $arrCandidateModules = @(Microsoft.PowerShell.Core\Get-Module -Name $strCandidateModuleName -All)
 if ($arrCandidateModules.Count -gt 1) {
     throw 'candidate-module-ambiguous'
