@@ -50,7 +50,7 @@ None. You can't pipe objects to this script.
 CandidateOwnershipState contains the issued mutable ownership object.
 
 .NOTES
-Version: 1.0.20260924.2
+Version: 1.0.20260925.0
 #>
 
 [CmdletBinding(PositionalBinding = $false)]
@@ -115,8 +115,8 @@ $boolCandidateHelperWasDotSourced = $MyInvocation.InvocationName -eq '.'
 # Normal script invocations and a previously imported cleanup callable must use
 # the same state. No caller-owned object or same-named verifier is an authority.
 $scriptBlockCandidateModuleDefinition = {
-    $script:versionCandidateHelper = [System.Version]'1.0.20260924.2'
-    $script:versionCandidateExpectedContext = [System.Version]'1.0.20260924.2'
+    $script:versionCandidateHelper = [System.Version]'1.0.20260925.0'
+    $script:versionCandidateExpectedContext = [System.Version]'1.0.20260925.0'
     $script:strCandidateHelperContextTypeName = 'TerraformStyleGuide.PrivateCandidateEnvelope.v1'
     $script:strCandidateHelperRecordTypeName = 'TerraformStyleGuide.PrivateCandidateEvidence.v1'
     $script:strCandidateHelperCleanupTypeName = 'TerraformStyleGuide.PrivateCandidateCleanupResult.v1'
@@ -2937,7 +2937,7 @@ $scriptBlockCandidateModuleDefinition = {
         # [pscustomobject] The same authenticated candidate ownership object.
         #
         # .NOTES
-        # Version: 1.0.20260924.2
+        # Version: 1.0.20260925.0
         # All parameters require names; positional binding is disabled.
         [System.Diagnostics.CodeAnalysis.SuppressMessageAttribute(
             'PSUseShouldProcessForStateChangingFunctions', '',
@@ -4715,7 +4715,7 @@ $scriptBlockCandidateModuleDefinition = {
 
     Microsoft.PowerShell.Core\Export-ModuleMember -Function Remove-StyleGuideCandidateInvocationState
 }
-$strCandidateModuleName = 'TerraformStyleGuideCandidateArtifact_1_0_20260924_2'
+$strCandidateModuleName = 'TerraformStyleGuideCandidateArtifact_1_0_20260925_0'
 $arrCandidateModules = @(Microsoft.PowerShell.Core\Get-Module -Name $strCandidateModuleName -All)
 if ($arrCandidateModules.Count -gt 1) {
     throw 'candidate-module-ambiguous'

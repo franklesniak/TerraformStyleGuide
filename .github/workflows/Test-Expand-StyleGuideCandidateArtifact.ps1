@@ -33,7 +33,7 @@ envelope on the success stream. Fixed safe failure diagnostics use stderr.
 The invoking runner captures the actual native process exit code.
 
 .NOTES
-Version: 1.0.20260924.2
+Version: 1.0.20260925.0
 #>
 
 [CmdletBinding(PositionalBinding = $false)]
@@ -55,11 +55,11 @@ param (
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:versionCandidateHarness = [System.Version]'1.0.20260924.2'
+$script:versionCandidateHarness = [System.Version]'1.0.20260925.0'
 $script:objCandidateHelperPathClaim = $HelperPath
 $script:objCandidateContextManagerPathClaim = $ContextManagerPath
-$script:strCandidateExpectedHelperVersion = '1.0.20260924.2'
-$script:strCandidateExpectedContextVersion = '1.0.20260924.2'
+$script:strCandidateExpectedHelperVersion = '1.0.20260925.0'
+$script:strCandidateExpectedContextVersion = '1.0.20260925.0'
 $script:strCandidateCatalogVersion = '1.0.20260805.1'
 # The documented ceiling on what an authenticated native query may return, the
 # buffer each pipe is read into, and how long a killed child is given to let its
@@ -1910,7 +1910,7 @@ $script:scriptBlockAssertUtf8DecoderStateIsolated = {
         $strTruncatedHash = & $script:scriptBlockGetByteArraySha256 -Bytes $arrTruncated
         $strValidHash = & $script:scriptBlockGetByteArraySha256 -Bytes $arrValid
         $objModule = @(Microsoft.PowerShell.Core\Get-Module `
-                -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_2 `
+                -Name TerraformStyleGuideCandidateArtifact_1_0_20260925_0 `
                 -All)
         if ($objModule.Count -ne 1) {
             & $script:scriptBlockStopHarness `
@@ -2316,8 +2316,8 @@ $script:scriptBlockGetTerraformPrivatePredicates = {
     # predicates. No callable is resolved by a caller-supplied function name.
     $hashtableModule = @{}
     foreach ($hashtableRole in @(
-        @{ Name = 'helper'; Path = $HelperLiteralPath; Module = 'TerraformStyleGuideCandidateArtifact_1_0_20260924_2'; Variable = 'scriptBlockCandidateModuleDefinition' },
-        @{ Name = 'context'; Path = $ContextLiteralPath; Module = 'TerraformStyleGuideCandidateContext_1_0_20260924_2'; Variable = 'scriptBlockContextModuleDefinition' }
+        @{ Name = 'helper'; Path = $HelperLiteralPath; Module = 'TerraformStyleGuideCandidateArtifact_1_0_20260925_0'; Variable = 'scriptBlockCandidateModuleDefinition' },
+        @{ Name = 'context'; Path = $ContextLiteralPath; Module = 'TerraformStyleGuideCandidateContext_1_0_20260925_0'; Variable = 'scriptBlockContextModuleDefinition' }
     )) {
         $arrErrors = $null
         $objAst = [Management.Automation.Language.Parser]::ParseFile($hashtableRole.Path, [ref]$null, [ref]$arrErrors)
@@ -4450,8 +4450,8 @@ $script:scriptBlockGetModuleBridgeAllowance = {
         & $script:scriptBlockStopHarness -Code 'catalog-invalid' -Detail 'module-bridge-tail'
     }
     $strTailHash = if ($Role -ceq 'helper') {
-        'e12fe67b6c5fc52fc765da9dab73f557f089e7aa467c6dad849a16f390bc7391'
-    } else { 'f7d951c98aeeff3d4d8069df1534780f78581e2b09ab41857eb0bd12c3b682c7' }
+        '5369e8e39e5cefd1e1c0e0e1b3bc6c6c6b1db509c88abf320eead524183cf585'
+    } else { 'f2f44216192a5a18dbb037770c26e9cda87b1440dd5752f26f5198727f5f9321' }
     $intTailStart = $arrTail[0].Extent.StartOffset
     if ((& $scriptBlockGetBridgeHash -Text $Ast.Extent.Text.Substring($intTailStart)) -cne $strTailHash) {
         & $script:scriptBlockStopHarness -Code 'catalog-invalid' -Detail 'module-bridge-tail-changed'
@@ -4508,7 +4508,7 @@ $script:scriptBlockGetModuleBridgeAllowance = {
         $intBindingEnd = $arrBinding[0].Extent.EndOffset
         if ($intBootstrapEnd -le $intBootstrapStart -or
             (& $scriptBlockGetBridgeHash -Text $Ast.Extent.Text.Substring($intBootstrapStart, $intBootstrapEnd - $intBootstrapStart)) -cne
-                '411134ad48830d225fd835105f4dc56f4ead7e21f68b8a4dc968969731760407' -or
+                'b93587693e47c1771ece7b2558a437fd30ee5a5bcaba1d632ec9e20077802173' -or
             (& $scriptBlockGetBridgeHash -Text $arrBinding[0].Extent.Text) -cne
                 '335f6cdde736a251fb7df243b378e35e9c62b295d805cf877072c6bc5591ae1d') {
             & $script:scriptBlockStopHarness -Code 'catalog-invalid' -Detail 'module-bridge-bootstrap-changed'
@@ -9657,7 +9657,7 @@ $script:scriptBlockAssertTerraformVersionLayoutControls = {
         if ((& $script:scriptBlockGetScriptVersionRecord -ScriptText $objRole.Source -ExpectedVersion $objRole.Expected).ToString() -cne $objRole.Expected) { throw 'version-layout-positive-control' }
         $strMarker = 'Version: ' + $objRole.Expected
         $arrMutants = @(
-            [pscustomobject]@{ Source = $objRole.Source.Replace($strMarker, 'Version: 1.0.20260924.3'); Code = 'unexpected-version'; Reason = 'binding' },
+            [pscustomobject]@{ Source = $objRole.Source.Replace($strMarker, 'Version: 1.0.20260925.1'); Code = 'unexpected-version'; Reason = 'binding' },
             [pscustomobject]@{ Source = $objRole.Source.Replace($strMarker, $strMarker + "`n" + $strMarker); Code = 'invalid-version'; Reason = 'marker-count' },
             [pscustomobject]@{ Source = $objRole.Source.Replace($strMarker, 'Version: malformed'); Code = 'invalid-version'; Reason = 'marker-grammar' },
             [pscustomobject]@{ Source = [regex]::Replace($objRole.Source, '(?m)^    function', '  function'); Code = 'invalid-version'; Reason = 'function' }
@@ -9669,6 +9669,610 @@ $script:scriptBlockAssertTerraformVersionLayoutControls = {
             catch { $objFailure = $_ }
             if ($null -eq $objFailure -or $objFailure.Exception.Data['TerraformStyleGuideHarnessCode'] -cne $objMutant.Code -or
                 $objFailure.Exception.Data['TerraformStyleGuideSubreason'] -cne $objMutant.Reason) { throw 'version-layout-mutant-refusal' }
+        }
+    }
+}
+
+
+$script:scriptBlockGetCandidateVersionProgression = {
+    param (
+        [AllowNull()]
+        [object]$Record
+    )
+
+    # This evaluator is deliberately pure. Implementation and merge validation
+    # build one record per affected script from the native merge base and the
+    # exact staged bytes. A prior pull-request head is never a baseline. The
+    # caller records the accountable implementation author and truthful UTC date;
+    # this code does not infer either value from a clock, Git metadata or a file.
+    $scriptBlockNewResult = {
+        param (
+            [bool]$Valid,
+            [bool]$Included,
+            [AllowNull()][object]$ExpectedVersion,
+            [string]$Reason
+        )
+
+        return [pscustomobject][ordered]@{
+            Schema = 'TerraformStyleGuide.CandidateVersionProgressionResult.v1'
+            Valid = $Valid
+            Included = $Included
+            ExpectedVersion = $ExpectedVersion
+            Reason = $Reason
+        }
+    }
+    $scriptBlockReject = {
+        param ([string]$Reason)
+        return (& $scriptBlockNewResult `
+                -Valid $false `
+                -Included $false `
+                -ExpectedVersion $null `
+                -Reason $Reason)
+    }
+    $scriptBlockGetCanonicalVersion = {
+        param (
+            [AllowNull()]
+            [object]$Value
+        )
+
+        if ($null -eq $Value -or $Value.GetType() -ne [System.String]) {
+            return
+        }
+        $objMatch = [regex]::Match(
+            $Value,
+            '\A(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.([0-9]{8})\.(0|[1-9][0-9]*)\z'
+        )
+        if (-not $objMatch.Success) {
+            return
+        }
+        $arrPart = [string[]]@(
+            $objMatch.Groups[1].Value,
+            $objMatch.Groups[2].Value,
+            $objMatch.Groups[3].Value,
+            $objMatch.Groups[4].Value
+        )
+        $arrInteger = New-Object 'System.Collections.Generic.List[int]'
+        foreach ($strPart in $arrPart) {
+            $intPart = 0
+            if (-not [int]::TryParse(
+                    $strPart,
+                    [System.Globalization.NumberStyles]::None,
+                    [System.Globalization.CultureInfo]::InvariantCulture,
+                    [ref]$intPart
+                )) {
+                return
+            }
+            [void]$arrInteger.Add($intPart)
+        }
+        $objDate = [datetime]::MinValue
+        if (-not [datetime]::TryParseExact(
+                $arrPart[2],
+                'yyyyMMdd',
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::None,
+                [ref]$objDate
+            )) {
+            return
+        }
+        $objVersion = New-Object System.Version(
+            $arrInteger[0],
+            $arrInteger[1],
+            $arrInteger[2],
+            $arrInteger[3]
+        )
+        if ($objVersion.ToString() -cne $Value) {
+            return
+        }
+        return $objVersion
+    }
+
+    if ($null -eq $Record -or
+        $Record.GetType() -ne [System.Management.Automation.PSCustomObject]) {
+        return (& $scriptBlockReject -Reason 'record-type')
+    }
+    $arrExpectedProperty = [string[]]@(
+        'SchemaVersion',
+        'Path',
+        'BaselineBlob',
+        'BaselineVersion',
+        'StagedBlob',
+        'StagedVersion',
+        'ChangeClass',
+        'AccountableAuthor',
+        'FinalMaterialEditUtcDate'
+    )
+    $arrActualProperty = [string[]]@($Record.PSObject.Properties.Name)
+    if ($arrActualProperty.Count -ne $arrExpectedProperty.Count) {
+        return (& $scriptBlockReject -Reason 'record-schema')
+    }
+    foreach ($strProperty in $arrExpectedProperty) {
+        if ($arrActualProperty -cnotcontains $strProperty) {
+            return (& $scriptBlockReject -Reason 'record-schema')
+        }
+    }
+    if ($null -eq $Record.SchemaVersion -or
+        $Record.SchemaVersion.GetType() -ne [uint32] -or
+        $Record.SchemaVersion -ne [uint32]1) {
+        return (& $scriptBlockReject -Reason 'schema-version')
+    }
+    if ($null -eq $Record.Path -or
+        $Record.Path.GetType() -ne [System.String]) {
+        return (& $scriptBlockReject -Reason 'path-type')
+    }
+    if ($Record.Path.Length -eq 0 -or
+        $Record.Path.Trim() -cne $Record.Path -or
+        $Record.Path -cmatch '[\x00-\x1f\x7f]') {
+        return (& $scriptBlockReject -Reason 'path-grammar')
+    }
+    if ($null -eq $Record.BaselineBlob -or
+        $Record.BaselineBlob.GetType() -ne [System.String]) {
+        return (& $scriptBlockReject -Reason 'baseline-blob-type')
+    }
+    if ($Record.BaselineBlob -cne 'absent' -and
+        $Record.BaselineBlob -cnotmatch '\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z') {
+        return (& $scriptBlockReject -Reason 'baseline-blob-grammar')
+    }
+    if ($null -eq $Record.StagedBlob -or
+        $Record.StagedBlob.GetType() -ne [System.String]) {
+        return (& $scriptBlockReject -Reason 'staged-blob-type')
+    }
+    if ($Record.StagedBlob -cnotmatch '\A(?:[0-9a-f]{40}|[0-9a-f]{64})\z') {
+        return (& $scriptBlockReject -Reason 'staged-blob-grammar')
+    }
+    if ($null -ne $Record.BaselineVersion -and
+        $Record.BaselineVersion.GetType() -ne [System.String]) {
+        return (& $scriptBlockReject -Reason 'baseline-version-type')
+    }
+    if ($null -eq $Record.StagedVersion -or
+        $Record.StagedVersion.GetType() -ne [System.String]) {
+        return (& $scriptBlockReject -Reason 'staged-version-type')
+    }
+    if ($null -eq $Record.ChangeClass -or
+        $Record.ChangeClass.GetType() -ne [System.String]) {
+        return (& $scriptBlockReject -Reason 'change-class-type')
+    }
+    if ($Record.ChangeClass -cnotin @(
+            'new',
+            'breaking',
+            'compatible-capability',
+            'correction',
+            'unchanged'
+        )) {
+        return (& $scriptBlockReject -Reason 'change-class')
+    }
+    if ($null -ne $Record.AccountableAuthor -and
+        $Record.AccountableAuthor.GetType() -ne [System.String]) {
+        return (& $scriptBlockReject -Reason 'author-type')
+    }
+    if ($null -ne $Record.FinalMaterialEditUtcDate -and
+        $Record.FinalMaterialEditUtcDate.GetType() -ne [System.String]) {
+        return (& $scriptBlockReject -Reason 'final-edit-date-type')
+    }
+
+    $objStagedVersion = & $scriptBlockGetCanonicalVersion -Value $Record.StagedVersion
+    if ($null -eq $objStagedVersion) {
+        return (& $scriptBlockReject -Reason 'staged-version')
+    }
+    $boolBaselineAbsent = $Record.BaselineBlob -ceq 'absent'
+    $objBaselineVersion = $null
+    if ($boolBaselineAbsent) {
+        if ($null -ne $Record.BaselineVersion) {
+            return (& $scriptBlockReject -Reason 'baseline-ambiguity')
+        }
+    } else {
+        $objBaselineVersion = & $scriptBlockGetCanonicalVersion `
+            -Value $Record.BaselineVersion
+        if ($null -eq $objBaselineVersion) {
+            return (& $scriptBlockReject -Reason 'baseline-ambiguity')
+        }
+    }
+
+    if ($Record.ChangeClass -ceq 'unchanged') {
+        if ($boolBaselineAbsent) {
+            return (& $scriptBlockReject -Reason 'baseline-class')
+        }
+        if ($null -ne $Record.AccountableAuthor -or
+            $null -ne $Record.FinalMaterialEditUtcDate) {
+            return (& $scriptBlockReject -Reason 'unchanged-metadata')
+        }
+        if ($Record.StagedBlob -cne $Record.BaselineBlob) {
+            return (& $scriptBlockReject -Reason 'unchanged-identity')
+        }
+        if ($Record.StagedVersion -cne $Record.BaselineVersion) {
+            return (& $scriptBlockReject -Reason 'unchanged-version')
+        }
+        return (& $scriptBlockNewResult `
+                -Valid $true `
+                -Included $false `
+                -ExpectedVersion $Record.BaselineVersion `
+                -Reason 'unchanged-excluded')
+    }
+
+    if ($boolBaselineAbsent -ne ($Record.ChangeClass -ceq 'new')) {
+        return (& $scriptBlockReject -Reason 'baseline-class')
+    }
+    if (-not $boolBaselineAbsent -and
+        $Record.StagedBlob -ceq $Record.BaselineBlob) {
+        return (& $scriptBlockReject -Reason 'source-identity')
+    }
+    if ($null -eq $Record.AccountableAuthor -or
+        $Record.AccountableAuthor.Length -eq 0 -or
+        $Record.AccountableAuthor.Trim() -cne $Record.AccountableAuthor -or
+        $Record.AccountableAuthor -cmatch '[\x00-\x1f\x7f]') {
+        return (& $scriptBlockReject -Reason 'author')
+    }
+    if ($null -eq $Record.FinalMaterialEditUtcDate -or
+        $Record.FinalMaterialEditUtcDate -cnotmatch '\A[0-9]{8}\z') {
+        return (& $scriptBlockReject -Reason 'final-edit-date')
+    }
+    $objFinalEditDate = [datetime]::MinValue
+    if (-not [datetime]::TryParseExact(
+            $Record.FinalMaterialEditUtcDate,
+            'yyyyMMdd',
+            [System.Globalization.CultureInfo]::InvariantCulture,
+            [System.Globalization.DateTimeStyles]::None,
+            [ref]$objFinalEditDate
+        )) {
+        return (& $scriptBlockReject -Reason 'final-edit-date')
+    }
+    $intFinalEditDate = [int]$Record.FinalMaterialEditUtcDate
+    if ($objStagedVersion.Build -ne $intFinalEditDate) {
+        return (& $scriptBlockReject -Reason 'build-date')
+    }
+    if (-not $boolBaselineAbsent -and
+        $intFinalEditDate -lt $objBaselineVersion.Build) {
+        return (& $scriptBlockReject -Reason 'date-decrease')
+    }
+
+    $strExpectedVersion = $null
+    if ($Record.ChangeClass -ceq 'new') {
+        $strExpectedVersion = '1.0.{0}.0' -f $intFinalEditDate
+    } elseif ($Record.ChangeClass -ceq 'breaking') {
+        if ($objBaselineVersion.Major -eq [int]::MaxValue) {
+            return (& $scriptBlockReject -Reason 'component-overflow')
+        }
+        $strExpectedVersion = '{0}.0.{1}.0' -f `
+            ($objBaselineVersion.Major + 1), $intFinalEditDate
+    } elseif ($Record.ChangeClass -ceq 'compatible-capability') {
+        if ($objBaselineVersion.Minor -eq [int]::MaxValue) {
+            return (& $scriptBlockReject -Reason 'component-overflow')
+        }
+        $strExpectedVersion = '{0}.{1}.{2}.0' -f `
+            $objBaselineVersion.Major,
+            ($objBaselineVersion.Minor + 1),
+            $intFinalEditDate
+    } else {
+        if ($intFinalEditDate -eq $objBaselineVersion.Build) {
+            if ($objBaselineVersion.Revision -eq [int]::MaxValue) {
+                return (& $scriptBlockReject -Reason 'component-overflow')
+            }
+            $intRevision = $objBaselineVersion.Revision + 1
+        } else {
+            $intRevision = 0
+        }
+        $strExpectedVersion = '{0}.{1}.{2}.{3}' -f `
+            $objBaselineVersion.Major,
+            $objBaselineVersion.Minor,
+            $intFinalEditDate,
+            $intRevision
+    }
+    if ($Record.StagedVersion -cne $strExpectedVersion) {
+        return (& $scriptBlockReject -Reason 'version-mismatch')
+    }
+    return (& $scriptBlockNewResult `
+            -Valid $true `
+            -Included $true `
+            -ExpectedVersion $strExpectedVersion `
+            -Reason 'complete')
+}
+
+$script:scriptBlockAssertCandidateVersionProgressionControls = {
+    $scriptBlockNewRecord = {
+        param (
+            [object]$BaselineBlob,
+            [AllowNull()][object]$BaselineVersion,
+            [object]$StagedBlob,
+            [object]$StagedVersion,
+            [object]$ChangeClass,
+            [AllowNull()][object]$AccountableAuthor,
+            [AllowNull()][object]$FinalMaterialEditUtcDate
+        )
+
+        return [pscustomobject][ordered]@{
+            SchemaVersion = [uint32]1
+            Path = '.github/workflows/Test-Fixture.ps1'
+            BaselineBlob = $BaselineBlob
+            BaselineVersion = $BaselineVersion
+            StagedBlob = $StagedBlob
+            StagedVersion = $StagedVersion
+            ChangeClass = $ChangeClass
+            AccountableAuthor = $AccountableAuthor
+            FinalMaterialEditUtcDate = $FinalMaterialEditUtcDate
+        }
+    }
+    $scriptBlockChangeRecord = {
+        param (
+            [object]$Source,
+            [ValidateSet('replace', 'remove', 'add')]
+            [string]$Mode,
+            [string]$Property,
+            [AllowNull()][object]$Value
+        )
+
+        $hashtableRecord = [ordered]@{}
+        foreach ($objProperty in $Source.PSObject.Properties) {
+            if ($Mode -ceq 'remove' -and $objProperty.Name -ceq $Property) {
+                continue
+            }
+            if ($Mode -ceq 'replace' -and $objProperty.Name -ceq $Property) {
+                $hashtableRecord[$objProperty.Name] = $Value
+            } else {
+                $hashtableRecord[$objProperty.Name] = $objProperty.Value
+            }
+        }
+        if ($Mode -ceq 'add') {
+            $hashtableRecord[$Property] = $Value
+        }
+        return [pscustomobject]$hashtableRecord
+    }
+
+    $strBaselineBlob = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    $strStagedBlob = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    $objNew = & $scriptBlockNewRecord `
+        -BaselineBlob 'absent' `
+        -BaselineVersion $null `
+        -StagedBlob $strStagedBlob `
+        -StagedVersion '1.0.20260925.0' `
+        -ChangeClass 'new' `
+        -AccountableAuthor 'fixture-author' `
+        -FinalMaterialEditUtcDate '20260925'
+    $objCorrectionNewDate = & $scriptBlockNewRecord `
+        -BaselineBlob $strBaselineBlob `
+        -BaselineVersion '1.0.20260924.2' `
+        -StagedBlob $strStagedBlob `
+        -StagedVersion '1.0.20260925.0' `
+        -ChangeClass 'correction' `
+        -AccountableAuthor 'fixture-author' `
+        -FinalMaterialEditUtcDate '20260925'
+    $objCorrectionSameDate = & $scriptBlockNewRecord `
+        -BaselineBlob $strBaselineBlob `
+        -BaselineVersion '1.0.20260925.2' `
+        -StagedBlob $strStagedBlob `
+        -StagedVersion '1.0.20260925.3' `
+        -ChangeClass 'correction' `
+        -AccountableAuthor 'fixture-author' `
+        -FinalMaterialEditUtcDate '20260925'
+    $objCompatible = & $scriptBlockNewRecord `
+        -BaselineBlob $strBaselineBlob `
+        -BaselineVersion '1.2.20260924.7' `
+        -StagedBlob $strStagedBlob `
+        -StagedVersion '1.3.20260925.0' `
+        -ChangeClass 'compatible-capability' `
+        -AccountableAuthor 'fixture-author' `
+        -FinalMaterialEditUtcDate '20260925'
+    $objBreaking = & $scriptBlockNewRecord `
+        -BaselineBlob $strBaselineBlob `
+        -BaselineVersion '1.9.20260924.7' `
+        -StagedBlob $strStagedBlob `
+        -StagedVersion '2.0.20260925.0' `
+        -ChangeClass 'breaking' `
+        -AccountableAuthor 'fixture-author' `
+        -FinalMaterialEditUtcDate '20260925'
+    $objUnchanged = & $scriptBlockNewRecord `
+        -BaselineBlob $strBaselineBlob `
+        -BaselineVersion '1.2.20260924.7' `
+        -StagedBlob $strBaselineBlob `
+        -StagedVersion '1.2.20260924.7' `
+        -ChangeClass 'unchanged' `
+        -AccountableAuthor $null `
+        -FinalMaterialEditUtcDate $null
+    $objOldDate = & $scriptBlockNewRecord `
+        -BaselineBlob 'absent' `
+        -BaselineVersion $null `
+        -StagedBlob $strStagedBlob `
+        -StagedVersion '1.0.20000101.0' `
+        -ChangeClass 'new' `
+        -AccountableAuthor 'fixture-author' `
+        -FinalMaterialEditUtcDate '20000101'
+    $objFutureDate = & $scriptBlockNewRecord `
+        -BaselineBlob $strBaselineBlob `
+        -BaselineVersion '1.0.20260925.0' `
+        -StagedBlob $strStagedBlob `
+        -StagedVersion '1.0.20991231.0' `
+        -ChangeClass 'correction' `
+        -AccountableAuthor 'fixture-author' `
+        -FinalMaterialEditUtcDate '20991231'
+    $arrPositive = @(
+        [pscustomobject]@{ Id = 'new-baseline-absent'; Record = $objNew; Included = $true; Expected = '1.0.20260925.0' },
+        [pscustomobject]@{ Id = 'correction-new-date-reset'; Record = $objCorrectionNewDate; Included = $true; Expected = '1.0.20260925.0' },
+        [pscustomobject]@{ Id = 'correction-same-date-increment'; Record = $objCorrectionSameDate; Included = $true; Expected = '1.0.20260925.3' },
+        [pscustomobject]@{ Id = 'compatible-capability-reset'; Record = $objCompatible; Included = $true; Expected = '1.3.20260925.0' },
+        [pscustomobject]@{ Id = 'breaking-reset'; Record = $objBreaking; Included = $true; Expected = '2.0.20260925.0' },
+        [pscustomobject]@{ Id = 'unchanged-excluded'; Record = $objUnchanged; Included = $false; Expected = '1.2.20260924.7' },
+        [pscustomobject]@{ Id = 'old-calendar-date'; Record = $objOldDate; Included = $true; Expected = '1.0.20000101.0' },
+        [pscustomobject]@{ Id = 'future-calendar-date'; Record = $objFutureDate; Included = $true; Expected = '1.0.20991231.0' }
+    )
+    if ($arrPositive.Count -ne 8) {
+        throw 'version-progression-positive-count'
+    }
+    $objSeenCase = New-Object 'System.Collections.Generic.HashSet[string]' (
+        [System.StringComparer]::Ordinal
+    )
+    foreach ($objCase in $arrPositive) {
+        if (-not $objSeenCase.Add($objCase.Id)) {
+            throw ('version-progression-duplicate-case-' + $objCase.Id)
+        }
+        $strExpectedReason = if ($objCase.Included) {
+            'complete'
+        } else {
+            'unchanged-excluded'
+        }
+        $objResult = & $script:scriptBlockGetCandidateVersionProgression `
+            -Record $objCase.Record
+        if ($objResult.GetType() -ne [System.Management.Automation.PSCustomObject] -or
+            $objResult.Schema -cne 'TerraformStyleGuide.CandidateVersionProgressionResult.v1' -or
+            $objResult.Valid.GetType() -ne [System.Boolean] -or
+            $objResult.Valid -ne $true -or
+            $objResult.Included.GetType() -ne [System.Boolean] -or
+            $objResult.Included -ne $objCase.Included -or
+            $objResult.ExpectedVersion -cne $objCase.Expected -or
+            $objResult.Reason -cne $strExpectedReason) {
+            throw ('version-progression-positive-' + $objCase.Id)
+        }
+    }
+
+    $listNegative = New-Object 'System.Collections.Generic.List[pscustomobject]'
+    $scriptBlockAddNegative = {
+        param ([string]$Id, [AllowNull()][object]$Record, [string]$Reason)
+        [void]$listNegative.Add([pscustomobject]@{
+                Id = $Id
+                Record = $Record
+                Reason = $Reason
+            })
+    }
+    & $scriptBlockAddNegative 'record-null' $null 'record-type'
+    & $scriptBlockAddNegative 'record-hashtable' ([ordered]@{}) 'record-type'
+    & $scriptBlockAddNegative 'schema-missing' `
+        (& $scriptBlockChangeRecord $objNew remove 'Path' $null) 'record-schema'
+    & $scriptBlockAddNegative 'schema-missing-change-class' `
+        (& $scriptBlockChangeRecord $objNew remove 'ChangeClass' $null) 'record-schema'
+    & $scriptBlockAddNegative 'schema-missing-author' `
+        (& $scriptBlockChangeRecord $objNew remove 'AccountableAuthor' $null) 'record-schema'
+    & $scriptBlockAddNegative 'schema-missing-final-edit-date' `
+        (& $scriptBlockChangeRecord $objNew remove 'FinalMaterialEditUtcDate' $null) 'record-schema'
+    & $scriptBlockAddNegative 'schema-extra' `
+        (& $scriptBlockChangeRecord $objNew add 'Extra' 'x') 'record-schema'
+    & $scriptBlockAddNegative 'schema-version-type' `
+        (& $scriptBlockChangeRecord $objNew replace 'SchemaVersion' ([int]1)) 'schema-version'
+    & $scriptBlockAddNegative 'schema-version-value' `
+        (& $scriptBlockChangeRecord $objNew replace 'SchemaVersion' ([uint32]2)) 'schema-version'
+    & $scriptBlockAddNegative 'path-type' `
+        (& $scriptBlockChangeRecord $objNew replace 'Path' ([string[]]@('x'))) 'path-type'
+    & $scriptBlockAddNegative 'path-control' `
+        (& $scriptBlockChangeRecord $objNew replace 'Path' "fixture`npath") 'path-grammar'
+    & $scriptBlockAddNegative 'baseline-blob-type' `
+        (& $scriptBlockChangeRecord $objNew replace 'BaselineBlob' ([int]1)) 'baseline-blob-type'
+    & $scriptBlockAddNegative 'baseline-blob-grammar' `
+        (& $scriptBlockChangeRecord $objCorrectionNewDate replace 'BaselineBlob' ('A' * 40)) 'baseline-blob-grammar'
+    & $scriptBlockAddNegative 'baseline-version-type' `
+        (& $scriptBlockChangeRecord $objCorrectionNewDate replace 'BaselineVersion' ([string[]]@('1.0.20260924.2'))) 'baseline-version-type'
+    & $scriptBlockAddNegative 'baseline-absent-with-version' `
+        (& $scriptBlockChangeRecord $objNew replace 'BaselineVersion' '1.0.20260924.2') 'baseline-ambiguity'
+    & $scriptBlockAddNegative 'baseline-present-without-version' `
+        (& $scriptBlockChangeRecord $objCorrectionNewDate replace 'BaselineVersion' $null) 'baseline-ambiguity'
+    & $scriptBlockAddNegative 'baseline-version-component-overflow' `
+        (& $scriptBlockChangeRecord $objCorrectionNewDate replace 'BaselineVersion' '2147483648.0.20260924.0') 'baseline-ambiguity'
+    & $scriptBlockAddNegative 'staged-blob-type' `
+        (& $scriptBlockChangeRecord $objNew replace 'StagedBlob' ([int]1)) 'staged-blob-type'
+    & $scriptBlockAddNegative 'staged-blob-grammar' `
+        (& $scriptBlockChangeRecord $objNew replace 'StagedBlob' 'not-an-object-id') 'staged-blob-grammar'
+    & $scriptBlockAddNegative 'staged-version-type' `
+        (& $scriptBlockChangeRecord $objNew replace 'StagedVersion' ([version]'1.0.20260925.0')) 'staged-version-type'
+    & $scriptBlockAddNegative 'staged-version-grammar' `
+        (& $scriptBlockChangeRecord $objNew replace 'StagedVersion' '1.0.20260925') 'staged-version'
+    & $scriptBlockAddNegative 'staged-version-leading-zero' `
+        (& $scriptBlockChangeRecord $objNew replace 'StagedVersion' '01.0.20260925.0') 'staged-version'
+    & $scriptBlockAddNegative 'staged-version-negative-component' `
+        (& $scriptBlockChangeRecord $objNew replace 'StagedVersion' '1.-1.20260925.0') 'staged-version'
+    & $scriptBlockAddNegative 'staged-version-date' `
+        (& $scriptBlockChangeRecord $objNew replace 'StagedVersion' '1.0.20260229.0') 'staged-version'
+    & $scriptBlockAddNegative 'staged-version-component-overflow' `
+        (& $scriptBlockChangeRecord $objNew replace 'StagedVersion' '2147483648.0.20260925.0') 'staged-version'
+    & $scriptBlockAddNegative 'change-class-type' `
+        (& $scriptBlockChangeRecord $objNew replace 'ChangeClass' ([string[]]@('new'))) 'change-class-type'
+    & $scriptBlockAddNegative 'change-class-value' `
+        (& $scriptBlockChangeRecord $objNew replace 'ChangeClass' 'feature') 'change-class'
+    & $scriptBlockAddNegative 'author-type' `
+        (& $scriptBlockChangeRecord $objNew replace 'AccountableAuthor' ([int]1)) 'author-type'
+    & $scriptBlockAddNegative 'author-missing' `
+        (& $scriptBlockChangeRecord $objNew replace 'AccountableAuthor' $null) 'author'
+    & $scriptBlockAddNegative 'author-ambiguous' `
+        (& $scriptBlockChangeRecord $objNew replace 'AccountableAuthor' ' fixture-author ') 'author'
+    & $scriptBlockAddNegative 'final-edit-date-type' `
+        (& $scriptBlockChangeRecord $objNew replace 'FinalMaterialEditUtcDate' ([int]20260925)) 'final-edit-date-type'
+    & $scriptBlockAddNegative 'final-edit-date-missing' `
+        (& $scriptBlockChangeRecord $objNew replace 'FinalMaterialEditUtcDate' $null) 'final-edit-date'
+    & $scriptBlockAddNegative 'final-edit-date-invalid' `
+        (& $scriptBlockChangeRecord $objNew replace 'FinalMaterialEditUtcDate' '20260229') 'final-edit-date'
+    & $scriptBlockAddNegative 'new-version-nonzero' `
+        (& $scriptBlockChangeRecord $objNew replace 'StagedVersion' '1.0.20260925.1') 'version-mismatch'
+    & $scriptBlockAddNegative 'new-with-baseline' `
+        (& $scriptBlockChangeRecord $objCorrectionNewDate replace 'ChangeClass' 'new') 'baseline-class'
+    & $scriptBlockAddNegative 'changed-without-baseline' `
+        (& $scriptBlockChangeRecord $objNew replace 'ChangeClass' 'correction') 'baseline-class'
+    & $scriptBlockAddNegative 'changed-blob-reused' `
+        (& $scriptBlockChangeRecord $objCorrectionNewDate replace 'StagedBlob' $strBaselineBlob) 'source-identity'
+    & $scriptBlockAddNegative 'wrong-final-edit-date' `
+        (& $scriptBlockChangeRecord $objNew replace 'FinalMaterialEditUtcDate' '20260924') 'build-date'
+    $objDateDecrease = & $scriptBlockNewRecord `
+        -BaselineBlob $strBaselineBlob -BaselineVersion '1.0.20260925.0' `
+        -StagedBlob $strStagedBlob -StagedVersion '1.0.20260924.0' `
+        -ChangeClass 'correction' -AccountableAuthor 'fixture-author' `
+        -FinalMaterialEditUtcDate '20260924'
+    & $scriptBlockAddNegative 'date-decrease' $objDateDecrease 'date-decrease'
+    $objMajorOverflow = & $scriptBlockNewRecord `
+        -BaselineBlob $strBaselineBlob -BaselineVersion '2147483647.0.20260924.0' `
+        -StagedBlob $strStagedBlob -StagedVersion '2147483647.0.20260925.0' `
+        -ChangeClass 'breaking' -AccountableAuthor 'fixture-author' `
+        -FinalMaterialEditUtcDate '20260925'
+    & $scriptBlockAddNegative 'breaking-major-overflow' $objMajorOverflow 'component-overflow'
+    $objMinorOverflow = & $scriptBlockNewRecord `
+        -BaselineBlob $strBaselineBlob -BaselineVersion '1.2147483647.20260924.0' `
+        -StagedBlob $strStagedBlob -StagedVersion '1.2147483647.20260925.0' `
+        -ChangeClass 'compatible-capability' -AccountableAuthor 'fixture-author' `
+        -FinalMaterialEditUtcDate '20260925'
+    & $scriptBlockAddNegative 'capability-minor-overflow' $objMinorOverflow 'component-overflow'
+    $objRevisionOverflow = & $scriptBlockNewRecord `
+        -BaselineBlob $strBaselineBlob -BaselineVersion '1.0.20260925.2147483647' `
+        -StagedBlob $strStagedBlob -StagedVersion '1.0.20260925.2147483647' `
+        -ChangeClass 'correction' -AccountableAuthor 'fixture-author' `
+        -FinalMaterialEditUtcDate '20260925'
+    & $scriptBlockAddNegative 'correction-revision-overflow' $objRevisionOverflow 'component-overflow'
+    & $scriptBlockAddNegative 'correction-revision-reused' `
+        (& $scriptBlockChangeRecord $objCorrectionSameDate replace 'StagedVersion' '1.0.20260925.2') 'version-mismatch'
+    & $scriptBlockAddNegative 'correction-revision-jump' `
+        (& $scriptBlockChangeRecord $objCorrectionSameDate replace 'StagedVersion' '1.0.20260925.4') 'version-mismatch'
+    & $scriptBlockAddNegative 'correction-reset-violation' `
+        (& $scriptBlockChangeRecord $objCorrectionNewDate replace 'StagedVersion' '1.0.20260925.1') 'version-mismatch'
+    & $scriptBlockAddNegative 'correction-major-change' `
+        (& $scriptBlockChangeRecord $objCorrectionNewDate replace 'StagedVersion' '2.0.20260925.0') 'version-mismatch'
+    & $scriptBlockAddNegative 'capability-minor-jump' `
+        (& $scriptBlockChangeRecord $objCompatible replace 'StagedVersion' '1.4.20260925.0') 'version-mismatch'
+    & $scriptBlockAddNegative 'capability-reset-violation' `
+        (& $scriptBlockChangeRecord $objCompatible replace 'StagedVersion' '1.3.20260925.1') 'version-mismatch'
+    & $scriptBlockAddNegative 'breaking-major-jump' `
+        (& $scriptBlockChangeRecord $objBreaking replace 'StagedVersion' '3.0.20260925.0') 'version-mismatch'
+    & $scriptBlockAddNegative 'breaking-minor-not-reset' `
+        (& $scriptBlockChangeRecord $objBreaking replace 'StagedVersion' '2.1.20260925.0') 'version-mismatch'
+    & $scriptBlockAddNegative 'breaking-revision-not-reset' `
+        (& $scriptBlockChangeRecord $objBreaking replace 'StagedVersion' '2.0.20260925.1') 'version-mismatch'
+    & $scriptBlockAddNegative 'unchanged-blob-changed' `
+        (& $scriptBlockChangeRecord $objUnchanged replace 'StagedBlob' $strStagedBlob) 'unchanged-identity'
+    & $scriptBlockAddNegative 'unchanged-version-changed' `
+        (& $scriptBlockChangeRecord $objUnchanged replace 'StagedVersion' '1.2.20260924.8') 'unchanged-version'
+    & $scriptBlockAddNegative 'unchanged-author-present' `
+        (& $scriptBlockChangeRecord $objUnchanged replace 'AccountableAuthor' 'fixture-author') 'unchanged-metadata'
+    & $scriptBlockAddNegative 'unchanged-date-present' `
+        (& $scriptBlockChangeRecord $objUnchanged replace 'FinalMaterialEditUtcDate' '20260925') 'unchanged-metadata'
+
+    if ($listNegative.Count -ne 55) {
+        throw 'version-progression-negative-count'
+    }
+    foreach ($objCase in $listNegative) {
+        if (-not $objSeenCase.Add($objCase.Id)) {
+            throw ('version-progression-duplicate-case-' + $objCase.Id)
+        }
+        $objResult = & $script:scriptBlockGetCandidateVersionProgression `
+            -Record $objCase.Record
+        if ($objResult.GetType() -ne [System.Management.Automation.PSCustomObject] -or
+            $objResult.Schema -cne 'TerraformStyleGuide.CandidateVersionProgressionResult.v1' -or
+            $objResult.Valid.GetType() -ne [System.Boolean] -or
+            $objResult.Valid -ne $false -or
+            $objResult.Included.GetType() -ne [System.Boolean] -or
+            $objResult.Included -ne $false -or
+            $null -ne $objResult.ExpectedVersion -or
+            $objResult.Reason -cne $objCase.Reason) {
+            throw ('version-progression-negative-' + $objCase.Id)
         }
     }
 }
@@ -15048,7 +15652,7 @@ $script:scriptBlockInvokeTerraformProductionGuardCase = {
     $objContext = $null
     try {
         $objContext = New-StyleGuideCandidateInvocationContext -TrustedTemporaryRoot $hashtableLayout.Trusted
-        $objModule = Microsoft.PowerShell.Core\Get-Module -Name 'TerraformStyleGuideCandidateArtifact_1_0_20260924_2'
+        $objModule = Microsoft.PowerShell.Core\Get-Module -Name 'TerraformStyleGuideCandidateArtifact_1_0_20260925_0'
         if (@($objModule).Count -ne 1) { throw 'guard-module-cardinality' }
         $objFailure = $null
         $objPredicate = $null
@@ -15225,7 +15829,7 @@ $script:scriptBlockInvokeTerraformContextCleanupCase = {
 
 $script:scriptBlockInvokeTerraformTerminalCandidateProbe = {
     param ([object]$State)
-        $objModule = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_2 -All
+        $objModule = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateArtifact_1_0_20260925_0 -All
         return & $objModule {
             param ([object]$State)
             $hashtableCounts = @{ Provider = 0; Path = 0; Filesystem = 0; Native = 0 }
@@ -15496,7 +16100,7 @@ $script:scriptBlockInvokeTerraformNotCreatedCandidateCase = {
         $strCandidate = $objContext.CandidateDirectoryPath
         if ($Case.Id -ceq 'T1A-K-11') { [System.IO.File]::WriteAllBytes($strCandidate, [byte[]]@(110, 111, 116, 45, 111, 119, 110, 101, 100)) }
         elseif ($Case.Id -cne 'T1A-K-10') { throw 'not-created-case-id' }
-        $objModule = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_2 -All
+        $objModule = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateArtifact_1_0_20260925_0 -All
         $objCandidate = & $objModule {
             param ([string]$Trusted, [string]$Parent, [string]$Path)
             $objIssued = & $script:scriptBlockNewCandidateOwnershipState -TrustedRoot $Trusted -CandidateParent $Parent -CandidatePath $Path
@@ -15655,7 +16259,7 @@ $script:scriptBlockGetTerraformDerivedFixtureState = {
     param ([string]$Roles, [ValidateSet('helper', 'context')][string]$Role)
 
     $strFile = if ($Role -ceq 'helper') { 'Expand-StyleGuideCandidateArtifact.ps1' } else { 'Manage-StyleGuideCandidateInvocationContext.ps1' }
-    $strName = if ($Role -ceq 'helper') { 'TerraformStyleGuideCandidateArtifact_1_0_20260924_2' } else { 'TerraformStyleGuideCandidateContext_1_0_20260924_2' }
+    $strName = if ($Role -ceq 'helper') { 'TerraformStyleGuideCandidateArtifact_1_0_20260925_0' } else { 'TerraformStyleGuideCandidateContext_1_0_20260925_0' }
     $strVariable = if ($Role -ceq 'helper') { 'scriptBlockCandidateModuleDefinition' } else { 'scriptBlockContextModuleDefinition' }
     $arrErrors = $null
     $objAst = [Management.Automation.Language.Parser]::ParseFile([IO.Path]::Combine($Roles, $strFile), [ref]$null, [ref]$arrErrors)
@@ -16171,7 +16775,7 @@ if ($hashtableTask184FixtureState.Fail) {
 
 $script:scriptBlockInvokeTerraformTerminalContextProbe = {
     param ([object]$State)
-        $objModule = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateContext_1_0_20260924_2 -All
+        $objModule = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateContext_1_0_20260925_0 -All
         return & $objModule {
             param ([object]$State)
             $hashtableCounts = @{ Provider = 0; Path = 0; Filesystem = 0; Native = 0 }
@@ -16652,8 +17256,8 @@ public static class TerraformCandidateH01Trace {
         if ($arrErrors.Count -ne 0) { throw 'h01-derived-parse' }
     }
     . ([System.IO.Path]::Combine($Roles, 'Manage-StyleGuideCandidateInvocationContext.ps1'))
-    $objHelper = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateArtifact_1_0_20260924_2 -All
-    $objManager = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateContext_1_0_20260924_2 -All
+    $objHelper = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateArtifact_1_0_20260925_0 -All
+    $objManager = Microsoft.PowerShell.Core\Get-Module -Name TerraformStyleGuideCandidateContext_1_0_20260925_0 -All
     if (@($objHelper).Count -ne 1 -or @($objManager).Count -ne 1) { throw 'h01-module-count' }
     $listRecords = New-Object 'System.Collections.Generic.List[pscustomobject]'
     foreach ($strRole in @('helper', 'manager')) {
@@ -17496,7 +18100,7 @@ $script:scriptBlockAssertPublicCapabilityCaptureExecutes = {
         # Positional binding is disabled; all internal callers use parameter
         # names. This internal-caller contract is subject to change.
         #
-        # Version: 1.0.20260924.2
+        # Version: 1.0.20260925.0
         [CmdletBinding(PositionalBinding = $false)]
         [OutputType([pscustomobject])]
         param (
@@ -17714,7 +18318,7 @@ $script:scriptBlockAssertPublicCapabilityCaptureExecutes = {
     $objCandidateControls = Assert-TerraformPublicCapabilityCapture -State $objCandidateState -Cleanup {
         param ($Value)
         Remove-StyleGuideCandidateInvocationState -CandidateOwnershipState $Value
-    } -Module (Microsoft.PowerShell.Core\Get-Module -All TerraformStyleGuideCandidateArtifact_1_0_20260924_2)
+    } -Module (Microsoft.PowerShell.Core\Get-Module -All TerraformStyleGuideCandidateArtifact_1_0_20260925_0)
     $objInvocationContext = Remove-StyleGuideCandidateInvocationContext -Context $objInvocationContext -OwnedPaths ([object[]]@($strArchivePath)) -CandidateOwnershipState $objCandidateState
     if ($objInvocationContext.LifecycleState -cne 'Disposed') { throw 'context-control' }
     $hashtableCallbackState.intTask184GetTypeCalls = 0
@@ -17783,7 +18387,7 @@ $script:scriptBlockAssertPublicCapabilityCaptureExecutes = {
     $objContextControls = Assert-TerraformPublicCapabilityCapture -State $objInvocationContext -Cleanup {
         param ($Value)
         Remove-StyleGuideCandidateInvocationContext -Context $Value
-    } -Module (Microsoft.PowerShell.Core\Get-Module -All TerraformStyleGuideCandidateContext_1_0_20260924_2)
+    } -Module (Microsoft.PowerShell.Core\Get-Module -All TerraformStyleGuideCandidateContext_1_0_20260925_0)
     [IO.Directory]::Delete($strCheckoutRoot, $false)
     [IO.Directory]::Delete($strTrustedRoot, $false)
     [IO.Directory]::Delete($strFixtureRoot, $false)
@@ -18818,7 +19422,7 @@ function Invoke-StyleGuideCandidateHarness {
     # This function consumes only the fixed script parameters and repository
     # paths established by the enclosing trusted harness.
     #
-    # Version: 1.0.20260924.2
+    # Version: 1.0.20260925.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param ()
@@ -19168,6 +19772,8 @@ function Invoke-StyleGuideCandidateHarness {
         & $scriptBlockCheckSourceIdentity
         & $script:scriptBlockAssertTerraformStaticAdaptationMutants -HelperLiteralPath $strHelperLiteralPath -ContextLiteralPath $strContextLiteralPath -RunRoot $strRunRoot -Catalog $objSourceCatalog
         & $script:scriptBlockAssertTerraformVersionLayoutControls -HelperSource ([System.IO.File]::ReadAllText($strHelperLiteralPath)) -ContextSource ([System.IO.File]::ReadAllText($strContextLiteralPath))
+        & $script:scriptBlockAssertCandidateVersionProgressionControls
+        & $scriptBlockCheckSourceIdentity
         [void](& $script:scriptBlockAssertTerminalCapabilityClosureMutations -Source ([System.IO.File]::ReadAllText($strHelperLiteralPath)) -Role helper)
         [void](& $script:scriptBlockAssertTerminalCapabilityClosureMutations -Source ([System.IO.File]::ReadAllText($strContextLiteralPath)) -Role context)
         & $scriptBlockCheckSourceIdentity
