@@ -57,7 +57,7 @@
 # This validator keeps explicit backtick continuations so that large
 # named-parameter mutation calls remain auditable one argument per line.
 # Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.6.20260912.0
+# Version: 1.7.20260928.0
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -114,7 +114,7 @@ $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
 $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/copilot-setup-steps.yml' =
-        'ef89f6f6265371880caad3eeb126ca33698923e8c7bc46c49ca754e6313df226'
+        '55bfea02b04d2727c3f5c37bb1fc2366be48a8689c0b4bdfec1ee3012c077319'
     '.github/workflows/package.json' =
         'c6db6befda88e58aa5568f52f44ca934af5751e545dba0644297b9fb15577e0d'
     '.github/workflows/package-lock.json' =
@@ -1762,7 +1762,7 @@ function Get-HuskySetupContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.15.20260911.0
+    # Version: 1.16.20260928.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -2082,30 +2082,12 @@ function Get-HuskySetupContractFailure {
         $objSha256.Dispose()
     }
 
-    $hashtableExpectedActionLineCount = @{
-        '        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1' = 1
-        '        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0' = 1
-        '        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0' = 1
+    if ($CopilotSetupContent -match '(?m)^\s+uses:') {
+        Write-Output 'Copilot setup must not execute an action.'
     }
-    $arrActionLines = @([regex]::Matches(
-            $CopilotSetupContent,
-            '(?m)^\s+uses:\s+[^\r\n]+\r?$'
-        ))
-    if ($arrActionLines.Count -ne 3) {
-        Write-Output 'Copilot setup must contain exactly three reviewed action executions.'
-    }
-    foreach ($objExpectedActionLineCount in
-        $hashtableExpectedActionLineCount.GetEnumerator()) {
-        if ([regex]::Matches(
-                $CopilotSetupContent,
-                '(?m)^' + [regex]::Escape($objExpectedActionLineCount.Key) + '\r?$'
-            ).Count -ne $objExpectedActionLineCount.Value) {
-            Write-Output (
-                'Copilot setup must contain the reviewed action line exactly ' +
-                "$($objExpectedActionLineCount.Value) time(s): " +
-                $objExpectedActionLineCount.Key
-            )
-        }
+    if ([regex]::Matches($CopilotSetupContent, '(?m)^permissions: \{\}$').Count -ne 1 -or
+        [regex]::Matches($CopilotSetupContent, '(?m)^    permissions: \{\}$').Count -ne 1) {
+        Write-Output 'Copilot setup must declare empty workflow and job permissions.'
     }
 
     $hashtableExpectedRootInputDigestLine = @{
@@ -2142,23 +2124,14 @@ function Get-HuskySetupContractFailure {
         Write-Output 'Copilot setup must keep both locked installs script-disabled.'
     }
 
-    $strSetupPythonLine =
-        '        uses: actions/setup-python@' +
-        '5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0'
-    if ([regex]::Matches(
-            $CopilotSetupContent,
-            '(?m)^' + [regex]::Escape($strSetupPythonLine) + '\r?$'
-        ).Count -ne 1) {
-        Write-Output 'Copilot setup must use the reviewed setup-python v7.0.0 commit once.'
-    }
     $arrRequiredPythonSetupLines = @(
-        '      # See: https://github.com/actions/setup-python/releases/latest',
-        '          python-version: "3.12"',
-        '          cache: pip',
-        '          cache-dependency-path: requirements-dev.txt',
+        "          cache_root='/opt/hostedtoolcache/Python'",
+        '            [[ "${version}" =~ ^3\.12\.[0-9]+$ ]] || continue',
+        '              -f "${candidate}.complete" && ! -L "${candidate}.complete" ]]; then',
         '          if [[ ! -f requirements-dev.txt || -L requirements-dev.txt ]]; then',
         '          python -m pip install --requirement requirements-dev.txt',
-        '          test "$(python -m pre_commit --version)" = ''pre-commit 4.6.2''',
+        '          observed_pre_commit="$(python -m pre_commit --version)"',
+        '          test "${observed_pre_commit}" = ''pre-commit 4.6.2''',
         '          python -m pip check'
     )
     foreach ($strRequiredPythonSetupLine in $arrRequiredPythonSetupLines) {
@@ -2248,11 +2221,21 @@ function Get-HuskySetupContractFailure {
         Write-Output 'Copilot must run the complete pre-commit gate directly after activation.'
     }
 
+    $strCredentialGuard = @'
+          if [[ -n "${GITHUB_TOKEN:-}" || -n "${GH_TOKEN:-}" ||
+            -n "${ACTIONS_RUNTIME_TOKEN:-}" || -n "${GIT_CONFIG_COUNT:-}" ||
+            -n "${GIT_CONFIG_PARAMETERS:-}" ]]; then
+            echo '::error::Unexpected credential or Git configuration channel.'
+            exit 1
+          fi
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+'@
     $strActivationPattern =
         '(?ms)^      - name: Activate retained pre-commit hook\r?\n' +
         '        shell: bash\r?\n' +
         '        run: \|\r?\n' +
         '          set -euo pipefail\r?\n' +
+        [regex]::Escape($strCredentialGuard) + '\r?\n' +
         '          npm --prefix \.github/workflows run prepare\r?\n' +
         '          test "\$\(git config --get core\.hooksPath\)" = ''\.husky/_''\r?\n' +
         '          test -x \.husky/_/pre-commit' +
@@ -7266,7 +7249,7 @@ function Get-PushRangeBaseFetchContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.2.20260911.0
+    # Version: 1.3.20260928.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -7297,10 +7280,6 @@ function Get-PushRangeBaseFetchContractFailure {
     }
     foreach ($objEnvironmentContract in @(
             [pscustomobject]@{
-                Pattern = '(?m)^          GITHUB_TOKEN: \$\{\{ github\.token \}\}\r?$'
-                Failure = 'The push range-base acquisition does not use the event token.'
-            },
-            [pscustomobject]@{
                 Pattern = '(?m)^          RANGE_BASE_SHA: \$\{\{ github\.event\.before \}\}\r?$'
                 Failure = 'The push range-base acquisition does not use the event before SHA.'
             }
@@ -7325,11 +7304,6 @@ function Get-PushRangeBaseFetchContractFailure {
             '          set -euo pipefail',
             '          [[ "${RANGE_BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]',
             '          test "${RANGE_BASE_SHA}" != "0000000000000000000000000000000000000000"',
-            '          authorization="$(printf ''x-access-token:%s'' "${GITHUB_TOKEN}" | base64 -w 0)"',
-            '          GIT_CONFIG_COUNT=1 \',
-            '            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \',
-            '            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \',
-            '          unset authorization',
             '          fetched_base="$(git rev-parse --verify "${RANGE_BASE_SHA}^{commit}")"',
             '          test "${fetched_base}" = "${RANGE_BASE_SHA}"',
             '          git diff --quiet --no-ext-diff',
@@ -7344,7 +7318,7 @@ function Get-PushRangeBaseFetchContractFailure {
     }
     $objFetchMatch = [regex]::Match(
         $strRun,
-        '(?ms)^            git fetch (?<Command>.+?)^          unset authorization$'
+        '(?ms)^          git fetch (?<Command>.+?)^          fetched_base='
     )
     if (-not $objFetchMatch.Success) {
         Write-Output 'Could not parse the push range-base fetch command.'
@@ -7391,13 +7365,29 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.6.20260912.0
+    # Version: 1.7.20260928.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
         [Parameter(Mandatory)]
         [string] $WorkflowContent
     )
+
+    $objSha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $strWorkflowSha256 = [System.BitConverter]::ToString(
+            $objSha256.ComputeHash([System.Text.UTF8Encoding]::new($false).GetBytes($WorkflowContent))
+        ).Replace('-', '').ToLowerInvariant()
+        if ($strWorkflowSha256 -cne 'acce29b45231508c352cf8e31ec0e9505733bf70c179d291d4f4fc120e33d522') {
+            Write-Output 'The ordinary agent workflow must match its reviewed isolation contract.'
+        }
+    } finally {
+        $objSha256.Dispose()
+    }
+    if ($WorkflowContent -match '(?m)^\s+uses:' -or
+        $WorkflowContent -match '(?m)^\s+(?:GITHUB_TOKEN|GH_TOKEN|ACTIONS_RUNTIME_TOKEN):') {
+        Write-Output 'The ordinary agent workflow must not project credentials or execute actions.'
+    }
 
     $arrExactLiterals = @(
         '  pull_request_target:',
@@ -7406,8 +7396,8 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
         '      - synchronize',
         '      - reopened',
         '      - edited',
-        '  actions: read',
-        '  pull-requests: read',
+        "permissions: {}`n`njobs:",
+        '    permissions: {}',
         '      - name: Resolve trusted workflow-run finalization time',
         '        id: resolve_run_time',
         "          RUN_HEAD_REVISION: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}",
@@ -7415,8 +7405,8 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
         "          RUN_HEAD_REF_NAME: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.ref || github.ref_name }}",
         "          RUN_HEAD_REF: `${{ github.event_name == 'pull_request_target' && format('refs/heads/{0}', github.event.pull_request.head.ref) || github.ref }}",
         "          RUN_HEAD_REPOSITORY: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}",
-        '        run: node .github/workflows/Resolve-AgentInstructionFinalizationTime.mjs',
-        '      - name: Resolve authenticated merge source',
+        '          node .github/workflows/Resolve-AgentInstructionFinalizationTime.mjs',
+        '      - name: Resolve exact public merge source',
         "          const apiRoot = apiUrl.replace(/\/+$/u, '');",
         '              `${apiRoot}/repos/${repository}/commits/${head}/pulls?per_page=100&page=${page}`',
         "            pull?.state === 'closed' &&",
@@ -7426,7 +7416,7 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
         '            pull.head.sha !== head,',
         "              throw new Error('Associated pull-request pagination exceeded 20 pages.');",
         "            throw new Error('More than one exact automated merge source matched the pushed head.');",
-        '      - name: Fetch authenticated merge source as data',
+        '      - name: Fetch exact public merge source as data',
         "        if: steps.resolve_automated_merge_source.outputs.source_revision != ''",
         '          MERGE_RESULT_SHA: ${{ github.sha }}',
         '          [[ "${MERGE_RESULT_SHA}" =~ ^[0-9a-f]{40}$ ]]',
@@ -7726,6 +7716,7 @@ $strDocsInstructionsPath = Join-Path `
     -Path $strRepositoryRootPath `
     -ChildPath '.github/instructions/docs.instructions.md'
 $arrAgentSetupInputSpecs = @(
+    [pscustomobject]@{ Path = '.github/workflows/agent-instructions.yml'; MaximumBytes = 65536 }
     [pscustomobject]@{ Path = 'package.json'; MaximumBytes = 16384 }
     [pscustomobject]@{ Path = '.github/workflows/package.json'; MaximumBytes = 16384 }
     [pscustomobject]@{
@@ -8435,6 +8426,8 @@ $arrRepositoryFailures += @(Get-HuskySetupContractFailure `
             $hashtableAgentSetupInputContent['.pre-commit-config.yaml'] `
         -StagedMarkdownHelperContent `
             $hashtableAgentSetupInputContent['.github/workflows/lint-staged-markdown.mjs'])
+$arrRepositoryFailures += @(Get-AutomatedMergeSourceWorkflowContractFailure `
+        -WorkflowContent $hashtableAgentSetupInputContent['.github/workflows/agent-instructions.yml'])
 $arrRepositoryFailures += @(Get-PreCommitBootstrapContractFailure `
         -AgentsContent $strAgentsContent `
         -ClaudeContent $strClaudeContent `
@@ -9449,10 +9442,10 @@ if ($SelfTest) {
             Failure = 'authenticate root npm input before installation: package-lock.json'
         },
         [pscustomobject]@{
-            Name = 'history fetch depth drifts'
+            Name = 'anonymous history acquisition becomes shallow'
             Content = $strCopilotSetupContent.Replace(
-                '          fetch-depth: 0',
-                '          fetch-depth: 1'
+                'fetch --no-tags --no-recurse-submodules origin $strSha',
+                'fetch --depth 1 --no-tags --no-recurse-submodules origin $strSha'
             )
             Failure = '.github/workflows/copilot-setup-steps.yml text must match'
         },
@@ -9465,17 +9458,17 @@ if ($SelfTest) {
             Failure = '.github/workflows/copilot-setup-steps.yml text must match'
         },
         [pscustomobject]@{
-            Name = 'checkout action commit drifts'
+            Name = 'acquisition accepts another repository'
             Content = $strCopilotSetupContent.Replace(
-                '3d3c42e5aac5ba805825da76410c181273ba90b1',
+                'franklesniak/TerraformStyleGuide',
                 '0000000000000000000000000000000000000000'
             )
             Failure = '.github/workflows/copilot-setup-steps.yml text must match'
         },
         [pscustomobject]@{
-            Name = 'setup-node action commit drifts'
+            Name = 'Node archive digest drifts'
             Content = $strCopilotSetupContent.Replace(
-                '820762786026740c76f36085b0efc47a31fe5020',
+                'D6C664DF3F3F61458E8C277585571328522D705166723A7C7823A9253A4D15A0',
                 '0000000000000000000000000000000000000000'
             )
             Failure = '.github/workflows/copilot-setup-steps.yml text must match'
@@ -9530,25 +9523,25 @@ if ($SelfTest) {
             Failure = 'once directly after dependency verification'
         },
         [pscustomobject]@{
-            Name = 'setup-python commit drifts'
+            Name = 'Python cache authority drifts'
             Content = $strCopilotSetupContent.Replace(
-                '5fda3b95a4ea91299a34e894583c3862153e4b97',
+                '/opt/hostedtoolcache/Python',
                 '0000000000000000000000000000000000000000'
-            )
-            Failure = 'reviewed setup-python v7.0.0 commit once'
-        },
-        [pscustomobject]@{
-            Name = 'Python selector drifts'
-            Content = $strCopilotSetupContent.Replace(
-                '          python-version: "3.12"',
-                '          python-version: "3.11"'
             )
             Failure = 'locked Python setup line once'
         },
         [pscustomobject]@{
-            Name = 'Python requirements cache input is removed'
+            Name = 'Python selector drifts'
             Content = $strCopilotSetupContent.Replace(
-                '          cache-dependency-path: requirements-dev.txt' + "`n",
+                '            [[ "${version}" =~ ^3\.12\.[0-9]+$ ]] || continue',
+                '            [[ "${version}" =~ ^3\.11\.[0-9]+$ ]] || continue'
+            )
+            Failure = 'locked Python setup line once'
+        },
+        [pscustomobject]@{
+            Name = 'Python completion marker is removed'
+            Content = $strCopilotSetupContent.Replace(
+                '              -f "${candidate}.complete" && ! -L "${candidate}.complete" ]]; then' + "`n",
                 ''
             )
             Failure = 'locked Python setup line once'
@@ -14834,7 +14827,7 @@ if ($SelfTest) {
     if ($intFinalizationResolverSelfTestExit -ne 0 -or
         $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
         [string]$arrFinalizationResolverSelfTestOutput[0] -cne
-        'Finalization resolver self-tests passed: 42 fixtures.') {
+        'Finalization resolver self-tests passed: 87 fixtures.') {
         throw (
             'The finalization-time resolver self-test failed: ' +
             ($arrFinalizationResolverSelfTestOutput -join '; ')
@@ -14888,7 +14881,7 @@ if ($SelfTest) {
         },
         [pscustomobject]@{
             Name = 'force fetch enabled'
-            From = '            git fetch --no-tags --no-recurse-submodules origin \'
+            From = '          git fetch --no-tags --no-recurse-submodules origin \'
             To = '            git fetch --force --no-tags --no-recurse-submodules origin \'
         },
         [pscustomobject]@{
@@ -14932,9 +14925,9 @@ if ($SelfTest) {
             To = '          -Verbose'
         },
         [pscustomobject]@{
-            Name = 'Actions read permission removed'
-            From = '  actions: read'
-            To = '  actions: none'
+            Name = 'ordinary job permission added'
+            From = '    permissions: {}'
+            To = '    permissions: read-all'
         },
         [pscustomobject]@{
             Name = 'push base revision identity removed'
@@ -14963,7 +14956,7 @@ if ($SelfTest) {
         },
         [pscustomobject]@{
             Name = 'finalization resolver bypassed'
-            From = '        run: node .github/workflows/Resolve-AgentInstructionFinalizationTime.mjs'
+            From = '          node .github/workflows/Resolve-AgentInstructionFinalizationTime.mjs'
             To = '        run: printf ''timestamp=%s\n'' "${GITHUB_EVENT_CREATED_AT}"'
         },
         [pscustomobject]@{
@@ -15004,7 +14997,7 @@ if ($SelfTest) {
     }
     $objProposedHeadFetch = [regex]::Match(
         $strAgentWorkflowContent,
-        '(?ms)^\s+git fetch (?<Command>.+?)^\s+unset authorization$'
+        '(?ms)^          git fetch (?<Command>.+?)^          fetched_head='
     )
     if (-not $objProposedHeadFetch.Success) {
         throw 'Could not parse the proposed-head fetch command.'
@@ -15141,20 +15134,14 @@ if ($SelfTest) {
             Write-Output 'The default-branch baseline acquisition condition is not exact.'
         }
         foreach ($strRequiredLiteral in @(
-                '          GITHUB_TOKEN: ${{ github.token }}',
                 '          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}',
                 '          set -euo pipefail',
                 '          default_ref="refs/heads/${DEFAULT_BRANCH}"',
                 '          remote_ref="refs/remotes/origin/${DEFAULT_BRANCH}"',
                 '          git check-ref-format "${default_ref}"',
                 '          git check-ref-format "${remote_ref}"',
-                '          authorization="$(printf ''x-access-token:%s'' "${GITHUB_TOKEN}" | base64 -w 0)"',
-                '          GIT_CONFIG_COUNT=1 \',
-                '            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \',
-                '            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \',
-                '            git fetch --no-tags --no-recurse-submodules origin \',
+                '          git fetch --no-tags --no-recurse-submodules origin \',
                 '              "${default_ref}:${remote_ref}"',
-                '          unset authorization',
                 '          fetched_baseline="$(git rev-parse --verify "${remote_ref}^{commit}")"',
                 '          [[ "${fetched_baseline}" =~ ^[0-9a-f]{40}$ ]]',
                 '          printf ''revision=%s\n'' "${fetched_baseline}" >> "${GITHUB_OUTPUT}"',
@@ -15191,17 +15178,11 @@ if ($SelfTest) {
                 "          github.event_name == 'workflow_dispatch' &&",
                 "          steps.resolve_run_time.outputs.new_ref == 'false'",
                 '        shell: bash',
-                '          GITHUB_TOKEN: ${{ github.token }}',
                 '          RANGE_BASE_SHA: ${{ steps.resolve_run_time.outputs.base_revision }}',
                 '          set -euo pipefail',
                 '          [[ "${RANGE_BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]',
                 '          test "${RANGE_BASE_SHA}" != "0000000000000000000000000000000000000000"',
-                '          authorization="$(printf ''x-access-token:%s'' "${GITHUB_TOKEN}" | base64 -w 0)"',
-                '          GIT_CONFIG_COUNT=1 \',
-                '            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \',
-                '            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \',
-                '            git fetch --no-tags --no-recurse-submodules origin "${RANGE_BASE_SHA}"',
-                '          unset authorization',
+                '          git fetch --no-tags --no-recurse-submodules origin "${RANGE_BASE_SHA}"',
                 '          fetched_base="$(git rev-parse --verify "${RANGE_BASE_SHA}^{commit}")"',
                 '          test "${fetched_base}" = "${RANGE_BASE_SHA}"',
                 '          git diff --quiet --no-ext-diff',
