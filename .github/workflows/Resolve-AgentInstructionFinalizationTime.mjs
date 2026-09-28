@@ -1227,6 +1227,44 @@ export async function runSelfTest() {
   for (const token of ['projected-token', ' ', false, 0, {}]) {
     let requests = 0;
     await reject(
+      'request layer rejects a projected or malformed token',
+      () => readJson(
+        'https://api.github.example/api/v3/repos/owner/repository',
+        token,
+        async () => { requests += 1; return makeResponse({}); },
+        'Direct request-layer fixture',
+      ),
+      /Credential policy rejects a projected token/u,
+    );
+    assertEqual('request-layer token refusal sends no request', requests, 0);
+  }
+  for (const token of [undefined, null, '']) {
+    let requests = 0;
+    let observedHeaders;
+    const response = await readJson(
+      'https://api.github.example/api/v3/repos/owner/repository',
+      token,
+      async (_url, options) => {
+        requests += 1;
+        observedHeaders = options.headers;
+        return makeResponse({ marker: 'anonymous' });
+      },
+      'Direct anonymous request-layer fixture',
+    );
+    assertEqual('anonymous request-layer control sends one request', requests, 1);
+    assertEqual(
+      'anonymous request-layer control sends only public API headers',
+      JSON.stringify(observedHeaders),
+      JSON.stringify({
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      }),
+    );
+    assertEqual('anonymous request-layer control returns the body', response.value.marker, 'anonymous');
+  }
+  for (const token of ['projected-token', ' ', false, 0, {}]) {
+    let requests = 0;
+    await reject(
       'projected or malformed token is refused before network access',
       () => resolveFinalizationTimestamp({
         ...base,

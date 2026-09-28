@@ -114,7 +114,7 @@ $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
 $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/copilot-setup-steps.yml' =
-        '55bfea02b04d2727c3f5c37bb1fc2366be48a8689c0b4bdfec1ee3012c077319'
+        '7497736f8b3cfb8a640b6fcc8d7e7583ad3a19dd2da8de00bf9a4f5b449516ea'
     '.github/workflows/package.json' =
         'c6db6befda88e58aa5568f52f44ca934af5751e545dba0644297b9fb15577e0d'
     '.github/workflows/package-lock.json' =
@@ -1710,6 +1710,64 @@ function Assert-OversizedStreamMutationRejected {
     }
 }
 
+function Test-WorkflowCredentialProjection {
+    # .SYNOPSIS
+    # Detects credential declarations and reviewed unsafe context syntax.
+    #
+    # .DESCRIPTION
+    # Scans raw workflow text without parsing expression delimiters. This
+    # conservatively rejects matching comments and quoted text. It supplements
+    # the exact workflow digest; it does not perform credential-flow analysis.
+    #
+    # .PARAMETER WorkflowContent
+    # The complete reviewed workflow text to inspect.
+    #
+    # .EXAMPLE
+    # Test-WorkflowCredentialProjection -WorkflowContent 'ALIAS: ${{ github.token }}'
+    #
+    # # Returns true for a credential expression under an arbitrary name.
+    #
+    # .EXAMPLE
+    # Test-WorkflowCredentialProjection -WorkflowContent 'REVISION: ${{ github.sha }}'
+    #
+    # # Returns false for the public revision property.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [bool] True for a forbidden declaration or context pattern; otherwise false.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the
+    # public API surface. Parameters, return shape, and positional
+    # contract may change without notice.
+    #
+    # This function does not support positional parameters.
+    # Version: 1.0.20260928.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $WorkflowContent
+    )
+
+    $arrCredentialPatterns = @(
+        '(?m)^[ \t]+(?:GITHUB_TOKEN|GH_TOKEN|ACTIONS_RUNTIME_TOKEN)[ \t]*:',
+        '\bgithub\s*\.\s*token\b',
+        '\bgithub\s*\[',
+        '\bsecrets\b',
+        '\btojson\s*\(\s*github\s*\)'
+    )
+    foreach ($strCredentialPattern in $arrCredentialPatterns) {
+        if ($WorkflowContent -match $strCredentialPattern) {
+            return $true
+        }
+    }
+    return $false
+}
+
+
 function Get-HuskySetupContractFailure {
     # .SYNOPSIS
     # Finds failures in the locked Husky bootstrap and staged-Markdown contract.
@@ -2082,8 +2140,15 @@ function Get-HuskySetupContractFailure {
         $objSha256.Dispose()
     }
 
-    if ($CopilotSetupContent -match '(?m)^\s+uses:') {
+    if ($CopilotSetupContent -match '(?m)^[ \t]+(?:-[ \t]*)?uses[ \t]*:') {
         Write-Output 'Copilot setup must not execute an action.'
+    }
+    if (Test-WorkflowCredentialProjection -WorkflowContent $CopilotSetupContent) {
+        Write-Output 'Copilot setup must not project credentials.'
+    }
+    $strExpectedNodeDownload = '          & $strCurlPath --silent --show-error --fail --location --proto ''=https'' --proto-redir ''=https'' --tlsv1.2 --retry 3 --retry-all-errors --connect-timeout 20 --max-time 120 --retry-max-time 300 --output $strArchive $strUrl'
+    if ([regex]::Matches($CopilotSetupContent, [regex]::Escape($strExpectedNodeDownload)).Count -ne 1) {
+        Write-Output 'Copilot setup must use the bounded anonymous Node download.'
     }
     if ([regex]::Matches($CopilotSetupContent, '(?m)^permissions: \{\}$').Count -ne 1 -or
         [regex]::Matches($CopilotSetupContent, '(?m)^    permissions: \{\}$').Count -ne 1) {
@@ -2124,7 +2189,26 @@ function Get-HuskySetupContractFailure {
         Write-Output 'Copilot setup must keep both locked installs script-disabled.'
     }
 
+    $strExpectedPythonLibraryPath = @'
+          library_path="${LD_LIBRARY_PATH:-}"
+          case "${library_path}" in
+            *$'\r'*|*$'\n'*)
+              echo '::error::Python library path contains a line break.'
+              exit 1
+              ;;
+          esac
+          case ":${library_path}:" in
+            *":${selected_python}/lib:"*) ;;
+            *) library_path="${selected_python}/lib${library_path:+:${library_path}}" ;;
+          esac
+          export LD_LIBRARY_PATH="${library_path}"
+'@.TrimEnd()
+    if ([regex]::Matches($CopilotSetupContent, [regex]::Escape($strExpectedPythonLibraryPath)).Count -ne 1) {
+        Write-Output 'Copilot setup must preserve the Python library path with a line-break guard.'
+    }
+
     $arrRequiredPythonSetupLines = @(
+        '            printf ''LD_LIBRARY_PATH=%s\n'' "${LD_LIBRARY_PATH}"',
         "          cache_root='/opt/hostedtoolcache/Python'",
         '            [[ "${version}" =~ ^3\.12\.[0-9]+$ ]] || continue',
         '              -f "${candidate}.complete" && ! -L "${candidate}.complete" ]]; then',
@@ -7378,18 +7462,19 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
         $strWorkflowSha256 = [System.BitConverter]::ToString(
             $objSha256.ComputeHash([System.Text.UTF8Encoding]::new($false).GetBytes($WorkflowContent))
         ).Replace('-', '').ToLowerInvariant()
-        if ($strWorkflowSha256 -cne 'acce29b45231508c352cf8e31ec0e9505733bf70c179d291d4f4fc120e33d522') {
+        if ($strWorkflowSha256 -cne '35a2a0052ec7e95bb7c0efe1bcbea26b54ccf12388fb9e8eef78ac4f52767a46') {
             Write-Output 'The ordinary agent workflow must match its reviewed isolation contract.'
         }
     } finally {
         $objSha256.Dispose()
     }
-    if ($WorkflowContent -match '(?m)^\s+uses:' -or
-        $WorkflowContent -match '(?m)^\s+(?:GITHUB_TOKEN|GH_TOKEN|ACTIONS_RUNTIME_TOKEN):') {
+    if ($WorkflowContent -match '(?m)^[ \t]+(?:-[ \t]*)?uses[ \t]*:' -or
+        (Test-WorkflowCredentialProjection -WorkflowContent $WorkflowContent)) {
         Write-Output 'The ordinary agent workflow must not project credentials or execute actions.'
     }
 
     $arrExactLiterals = @(
+        '          & $strCurlPath --silent --show-error --fail --location --proto ''=https'' --proto-redir ''=https'' --tlsv1.2 --retry 3 --retry-all-errors --connect-timeout 20 --max-time 120 --retry-max-time 300 --output $strArchive $strUrl',
         '  pull_request_target:',
         '    types:',
         '      - opened',
@@ -9433,6 +9518,160 @@ if ($SelfTest) {
     }
 
     $arrCopilotSetupMutations = @(
+        [pscustomobject]@{
+            Name = 'Python inherited library path removed'
+            Content = $strCopilotSetupContent.Replace(
+                '          library_path="${LD_LIBRARY_PATH:-}"',
+                '          library_path=""'
+            )
+            Failure = 'Copilot setup must preserve the Python library path with a line-break guard.'
+        },
+        [pscustomobject]@{
+            Name = 'Python library path line-break guard removed'
+            Content = $strCopilotSetupContent.Replace(
+                '            *$''\r''*|*$''\n''*)',
+                '            never-match)'
+            )
+            Failure = 'Copilot setup must preserve the Python library path with a line-break guard.'
+        },
+        [pscustomobject]@{
+            Name = 'Python library path component boundary removed'
+            Content = $strCopilotSetupContent.Replace(
+                '            *":${selected_python}/lib:"*) ;;',
+                '            *"${selected_python}/lib"*) ;;'
+            )
+            Failure = 'Copilot setup must preserve the Python library path with a line-break guard.'
+        },
+        [pscustomobject]@{
+            Name = 'Python inherited library path export removed'
+            Content = $strCopilotSetupContent.Replace(
+                '            printf ''LD_LIBRARY_PATH=%s\n'' "${LD_LIBRARY_PATH}"',
+                '            printf ''LD_LIBRARY_PATH=%s/lib\n'' "${selected_python}"'
+            )
+            Failure = 'locked Python setup line once'
+        },
+        [pscustomobject]@{
+            Name = 'Node retry count removed'
+            Content = $strCopilotSetupContent.Replace('--retry 3', '--retry 0')
+            Failure = 'Copilot setup must use the bounded anonymous Node download.'
+        },
+        [pscustomobject]@{
+            Name = 'Node all-error retries removed'
+            Content = $strCopilotSetupContent.Replace('--retry-all-errors', '--retry-connrefused')
+            Failure = 'Copilot setup must use the bounded anonymous Node download.'
+        },
+        [pscustomobject]@{
+            Name = 'Node connection limit removed'
+            Content = $strCopilotSetupContent.Replace('--connect-timeout 20', '--connect-timeout 0')
+            Failure = 'Copilot setup must use the bounded anonymous Node download.'
+        },
+        [pscustomobject]@{
+            Name = 'Node transfer limit removed'
+            Content = $strCopilotSetupContent.Replace('--max-time 120', '--max-time 0')
+            Failure = 'Copilot setup must use the bounded anonymous Node download.'
+        },
+        [pscustomobject]@{
+            Name = 'Node retry window removed'
+            Content = $strCopilotSetupContent.Replace('--retry-max-time 300', '--retry-max-time 0')
+            Failure = 'Copilot setup must use the bounded anonymous Node download.'
+        },
+        [pscustomobject]@{
+            Name = 'GitHub token alias'
+            Content = $strCopilotSetupContent.Replace(
+                "    env:`n",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github.token }}' + "`n"
+            )
+            Failure = 'Copilot setup must not project credentials.'
+        },
+        [pscustomobject]@{
+            Name = 'secret token alias'
+            Content = $strCopilotSetupContent.Replace(
+                "    env:`n",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ secrets.GITHUB_TOKEN }}' + "`n"
+            )
+            Failure = 'Copilot setup must not project credentials.'
+        },
+        [pscustomobject]@{
+            Name = 'indexed GitHub token alias'
+            Content = $strCopilotSetupContent.Replace(
+                "    env:`n",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github[''token''] }}' + "`n"
+            )
+            Failure = 'Copilot setup must not project credentials.'
+        },
+        [pscustomobject]@{
+            Name = 'computed GitHub index'
+            Content = $strCopilotSetupContent.Replace(
+                "    env:`n",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github[format(''to{0}'', ''ken'')] }}' + "`n"
+            )
+            Failure = 'Copilot setup must not project credentials.'
+        },
+        [pscustomobject]@{
+            Name = 'indexed secret alias'
+            Content = $strCopilotSetupContent.Replace(
+                "    env:`n",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ secrets[''GITHUB_TOKEN''] }}' + "`n"
+            )
+            Failure = 'Copilot setup must not project credentials.'
+        },
+        [pscustomobject]@{
+            Name = 'whole GitHub context'
+            Content = $strCopilotSetupContent.Replace(
+                "    env:`n",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ toJSON(github) }}' + "`n"
+            )
+            Failure = 'Copilot setup must not project credentials.'
+        },
+        [pscustomobject]@{
+            Name = 'whole secrets context'
+            Content = $strCopilotSetupContent.Replace(
+                "    env:`n",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ toJSON(secrets) }}' + "`n"
+            )
+            Failure = 'Copilot setup must not project credentials.'
+        },
+        [pscustomobject]@{
+            Name = 'mixed-case token alias'
+            Content = $strCopilotSetupContent.Replace(
+                "    env:`n",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ GitHub.Token }}' + "`n"
+            )
+            Failure = 'Copilot setup must not project credentials.'
+        },
+        [pscustomobject]@{
+            Name = 'spaced token alias'
+            Content = $strCopilotSetupContent.Replace(
+                "    env:`n",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github . token }}' + "`n"
+            )
+            Failure = 'Copilot setup must not project credentials.'
+        },
+        [pscustomobject]@{
+            Name = 'quoted expression delimiter'
+            Content = $strCopilotSetupContent.Replace(
+                "    env:`n",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ format(''}}{0}'', github.token) }}' + "`n"
+            )
+            Failure = 'Copilot setup must not project credentials.'
+        },
+        [pscustomobject]@{
+            Name = 'named action step added'
+            Content = $strCopilotSetupContent.Replace(
+                "    steps:`n",
+                "    steps:`n      - name: Mutation action`n" +
+                    "        uses: owner/action@0123456789012345678901234567890123456789`n"
+            )
+            Failure = 'Copilot setup must not execute an action.'
+        },
+        [pscustomobject]@{
+            Name = 'compact action step added'
+            Content = $strCopilotSetupContent.Replace(
+                "    steps:`n",
+                "    steps:`n      - uses: owner/action@0123456789012345678901234567890123456789`n"
+            )
+            Failure = 'Copilot setup must not execute an action.'
+        },
         [pscustomobject]@{
             Name = 'reviewed root lock digest drifts'
             Content = $strCopilotSetupContent.Replace(
@@ -14827,7 +15066,7 @@ if ($SelfTest) {
     if ($intFinalizationResolverSelfTestExit -ne 0 -or
         $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
         [string]$arrFinalizationResolverSelfTestOutput[0] -cne
-        'Finalization resolver self-tests passed: 87 fixtures.') {
+        'Finalization resolver self-tests passed: 106 fixtures.') {
         throw (
             'The finalization-time resolver self-test failed: ' +
             ($arrFinalizationResolverSelfTestOutput -join '; ')
@@ -14845,62 +15084,191 @@ if ($SelfTest) {
     }
     $arrAutomatedMergeWorkflowMutations = @(
         [pscustomobject]@{
+            Name = 'Node retry count removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '          & $strCurlPath --silent --show-error --fail --location --proto ''=https'' --proto-redir ''=https'' --tlsv1.2 --retry 3 --retry-all-errors --connect-timeout 20 --max-time 120 --retry-max-time 300 --output $strArchive $strUrl'
+            From = '--retry 3'
+            To = '--retry 0'
+        },
+        [pscustomobject]@{
+            Name = 'Node all-error retries removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '          & $strCurlPath --silent --show-error --fail --location --proto ''=https'' --proto-redir ''=https'' --tlsv1.2 --retry 3 --retry-all-errors --connect-timeout 20 --max-time 120 --retry-max-time 300 --output $strArchive $strUrl'
+            From = '--retry-all-errors'
+            To = '--retry-connrefused'
+        },
+        [pscustomobject]@{
+            Name = 'Node connection limit removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '          & $strCurlPath --silent --show-error --fail --location --proto ''=https'' --proto-redir ''=https'' --tlsv1.2 --retry 3 --retry-all-errors --connect-timeout 20 --max-time 120 --retry-max-time 300 --output $strArchive $strUrl'
+            From = '--connect-timeout 20'
+            To = '--connect-timeout 0'
+        },
+        [pscustomobject]@{
+            Name = 'Node transfer limit removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '          & $strCurlPath --silent --show-error --fail --location --proto ''=https'' --proto-redir ''=https'' --tlsv1.2 --retry 3 --retry-all-errors --connect-timeout 20 --max-time 120 --retry-max-time 300 --output $strArchive $strUrl'
+            From = '--max-time 120'
+            To = '--max-time 0'
+        },
+        [pscustomobject]@{
+            Name = 'Node retry window removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '          & $strCurlPath --silent --show-error --fail --location --proto ''=https'' --proto-redir ''=https'' --tlsv1.2 --retry 3 --retry-all-errors --connect-timeout 20 --max-time 120 --retry-max-time 300 --output $strArchive $strUrl'
+            From = '--retry-max-time 300'
+            To = '--retry-max-time 0'
+        },
+        [pscustomobject]@{
+            Name = 'GitHub token alias'
+            Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
+            From = "    env:`n"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github.token }}' + "`n"
+        },
+        [pscustomobject]@{
+            Name = 'secret token alias'
+            Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
+            From = "    env:`n"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ secrets.GITHUB_TOKEN }}' + "`n"
+        },
+        [pscustomobject]@{
+            Name = 'indexed GitHub token alias'
+            Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
+            From = "    env:`n"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github[''token''] }}' + "`n"
+        },
+        [pscustomobject]@{
+            Name = 'computed GitHub index'
+            Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
+            From = "    env:`n"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github[format(''to{0}'', ''ken'')] }}' + "`n"
+        },
+        [pscustomobject]@{
+            Name = 'indexed secret alias'
+            Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
+            From = "    env:`n"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ secrets[''GITHUB_TOKEN''] }}' + "`n"
+        },
+        [pscustomobject]@{
+            Name = 'whole GitHub context'
+            Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
+            From = "    env:`n"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ toJSON(github) }}' + "`n"
+        },
+        [pscustomobject]@{
+            Name = 'whole secrets context'
+            Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
+            From = "    env:`n"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ toJSON(secrets) }}' + "`n"
+        },
+        [pscustomobject]@{
+            Name = 'mixed-case token alias'
+            Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
+            From = "    env:`n"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ GitHub.Token }}' + "`n"
+        },
+        [pscustomobject]@{
+            Name = 'spaced token alias'
+            Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
+            From = "    env:`n"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github . token }}' + "`n"
+        },
+        [pscustomobject]@{
+            Name = 'quoted expression delimiter'
+            Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
+            From = "    env:`n"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ format(''}}{0}'', github.token) }}' + "`n"
+        },
+        [pscustomobject]@{
+            Name = 'named action step added'
+            Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
+            From = "    steps:`n"
+            To = "    steps:`n      - name: Mutation action`n" +
+                "        uses: owner/action@0123456789012345678901234567890123456789`n"
+        },
+        [pscustomobject]@{
+            Name = 'compact action step added'
+            Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
+            From = "    steps:`n"
+            To = "    steps:`n      - uses: owner/action@0123456789012345678901234567890123456789`n"
+        },
+        [pscustomobject]@{
             Name = 'multi-parent source proof removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '          if (( ${#head_and_parents[@]} > 2 )); then'
             From = '          if (( ${#head_and_parents[@]} > 2 )); then'
             To = '          if (( ${#head_and_parents[@]} < 2 )); then'
         },
         [pscustomobject]@{
             Name = 'merge-result revision disconnected'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '          MERGE_RESULT_SHA: ${{ github.sha }}'
             From = '          MERGE_RESULT_SHA: ${{ github.sha }}'
             To = '          MERGE_RESULT_SHA: ${{ steps.resolve_automated_merge_source.outputs.source_revision }}'
         },
         [pscustomobject]@{
             Name = 'merge head identity removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '            pull?.merge_commit_sha === head &&'
             From = '            pull?.merge_commit_sha === head &&'
             To = '            pull?.merge_commit_sha !== head &&'
         },
         [pscustomobject]@{
             Name = 'Enterprise API base prefix removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '              `${apiRoot}/repos/${repository}/commits/${head}/pulls?per_page=100&page=${page}`'
             From = '              `${apiRoot}/repos/${repository}/commits/${head}/pulls?per_page=100&page=${page}`'
             To = '              `/repos/${repository}/commits/${head}/pulls?per_page=100&page=${page}`'
         },
         [pscustomobject]@{
             Name = 'unchanged source identity accepted'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '            pull.head.sha !== head,'
             From = '            pull.head.sha !== head,'
             To = '            pull.head.sha === head,'
         },
         [pscustomobject]@{
             Name = 'base repository identity removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '            pull?.base?.repo?.full_name === repository &&'
             From = '            pull?.base?.repo?.full_name === repository &&'
             To = '            pull?.base?.repo?.full_name !== repository &&'
         },
         [pscustomobject]@{
             Name = 'ambiguous result accepted'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '            throw new Error(''More than one exact automated merge source matched the pushed head.'');'
             From = "            throw new Error('More than one exact automated merge source matched the pushed head.');"
             To = '            matches.splice(1);'
         },
         [pscustomobject]@{
             Name = 'force fetch enabled'
+            Failure = 'The automated merge-source workflow contains an unsafe fallback: (?m)^\s*git fetch .*--force(?:\s|$)'
             From = '          git fetch --no-tags --no-recurse-submodules origin \'
             To = '            git fetch --force --no-tags --no-recurse-submodules origin \'
         },
         [pscustomobject]@{
             Name = 'source SHA readback removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '          test "${fetched_source}" = "${SOURCE_REVISION}"'
             From = '          test "${fetched_source}" = "${SOURCE_REVISION}"'
             To = '          test -n "${fetched_source}"'
         },
         [pscustomobject]@{
             Name = 'validator source handoff removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '          -AutomatedMergeSourceRevision'
             From = '          -AutomatedMergeSourceRevision'
             To = '          -Verbose'
         },
         [pscustomobject]@{
             Name = 'push published-endpoint selector inverted'
+            Failure = 'The event-range comparison-mode selector is not exact.'
             From = '              !github.event.created) ||'
             To = '              github.event.created) ||'
         },
         [pscustomobject]@{
             Name = 'manual published-endpoint selector removed'
+            Failure = 'The event-range comparison-mode selector is not exact.'
             From = "              (github.event_name == 'workflow_dispatch' &&`n" +
                 "              steps.resolve_run_time.outputs.new_ref == 'false')) &&"
             To = "              (github.event_name == 'pull_request_target' &&`n" +
@@ -14908,6 +15276,7 @@ if ($SelfTest) {
         },
         [pscustomobject]@{
             Name = 'manual published-endpoint new-ref state inverted'
+            Failure = 'The event-range comparison-mode selector is not exact.'
             From = "              (github.event_name == 'workflow_dispatch' &&`n" +
                 "              steps.resolve_run_time.outputs.new_ref == 'false')) &&"
             To = "              (github.event_name == 'workflow_dispatch' &&`n" +
@@ -14915,58 +15284,89 @@ if ($SelfTest) {
         },
         [pscustomobject]@{
             Name = 'manual published-endpoint new-ref guard removed'
+            Failure = 'The event-range comparison-mode selector is not exact.'
             From = "              (github.event_name == 'workflow_dispatch' &&`n" +
                 "              steps.resolve_run_time.outputs.new_ref == 'false')) &&"
             To = "              (github.event_name == 'workflow_dispatch')) &&"
         },
         [pscustomobject]@{
             Name = 'range comparison-mode handoff removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '          -RangeComparisonMode'
             From = '          -RangeComparisonMode'
             To = '          -Verbose'
         },
         [pscustomobject]@{
             Name = 'ordinary job permission added'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '    permissions: {}'
             From = '    permissions: {}'
             To = '    permissions: read-all'
         },
         [pscustomobject]@{
             Name = 'push base revision identity removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '          RUN_BASE_REVISION: ${{ github.event_name == ''push'' && github.event.before || '''' }}'
             From = "          RUN_BASE_REVISION: `${{ github.event_name == 'push' && github.event.before || '' }}"
             To = "          RUN_BASE_REVISION: ''"
         },
         [pscustomobject]@{
             Name = 'PR head revision identity removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '          RUN_HEAD_REVISION: ${{ github.event_name == ''pull_request_target'' && github.event.pull_request.head.sha || github.sha }}'
             From = "          RUN_HEAD_REVISION: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}"
             To = '          RUN_HEAD_REVISION: ${{ github.sha }}'
         },
         [pscustomobject]@{
             Name = 'PR head ref identity removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '          RUN_HEAD_REF_NAME: ${{ github.event_name == ''pull_request_target'' && github.event.pull_request.head.ref || github.ref_name }}'
             From = "          RUN_HEAD_REF_NAME: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.ref || github.ref_name }}"
             To = '          RUN_HEAD_REF_NAME: ${{ github.ref_name }}'
         },
         [pscustomobject]@{
             Name = 'PR full head ref identity removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '          RUN_HEAD_REF: ${{ github.event_name == ''pull_request_target'' && format(''refs/heads/{0}'', github.event.pull_request.head.ref) || github.ref }}'
             From = "          RUN_HEAD_REF: `${{ github.event_name == 'pull_request_target' && format('refs/heads/{0}', github.event.pull_request.head.ref) || github.ref }}"
             To = '          RUN_HEAD_REF: ${{ github.ref }}'
         },
         [pscustomobject]@{
             Name = 'PR head repository identity removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '          RUN_HEAD_REPOSITORY: ${{ github.event_name == ''pull_request_target'' && github.event.pull_request.head.repo.full_name || github.repository }}'
             From = "          RUN_HEAD_REPOSITORY: `${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}"
             To = '          RUN_HEAD_REPOSITORY: ${{ github.repository }}'
         },
         [pscustomobject]@{
             Name = 'finalization resolver bypassed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '          node .github/workflows/Resolve-AgentInstructionFinalizationTime.mjs'
             From = '          node .github/workflows/Resolve-AgentInstructionFinalizationTime.mjs'
             To = '        run: printf ''timestamp=%s\n'' "${GITHUB_EVENT_CREATED_AT}"'
         },
         [pscustomobject]@{
             Name = 'trusted finalization handoff removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '          -TrustedFinalizationTimestamp'
             From = '          -TrustedFinalizationTimestamp'
             To = '          -Verbose'
         }
     )
+    $arrUnrelatedAutomatedMergeWorkflowFailures = @(
+        'The ordinary agent workflow must match its reviewed isolation contract.',
+        'An unrelated workflow failure.'
+    )
     foreach ($objAutomatedMergeWorkflowMutation in
         $arrAutomatedMergeWorkflowMutations) {
+        if ([string]::IsNullOrWhiteSpace($objAutomatedMergeWorkflowMutation.Failure) -or
+            $arrUnrelatedAutomatedMergeWorkflowFailures -ccontains
+            $objAutomatedMergeWorkflowMutation.Failure) {
+            throw (
+                'The automated merge-source workflow mutation must require a specific failure: ' +
+                $objAutomatedMergeWorkflowMutation.Name
+            )
+        }
         if (-not $strAgentWorkflowContent.Contains(
                 $objAutomatedMergeWorkflowMutation.From,
                 [System.StringComparison]::Ordinal
@@ -14984,9 +15384,10 @@ if ($SelfTest) {
             Get-AutomatedMergeSourceWorkflowContractFailure `
                 -WorkflowContent $strMutatedAgentWorkflowContent
         )
-        if ($arrMutatedAutomatedMergeWorkflowFailures.Count -eq 0) {
+        if ($arrMutatedAutomatedMergeWorkflowFailures -cnotcontains
+            $objAutomatedMergeWorkflowMutation.Failure) {
             throw (
-                'The automated merge-source workflow mutation was accepted: ' +
+                'The automated merge-source workflow mutation did not produce its expected failure: ' +
                 $objAutomatedMergeWorkflowMutation.Name
             )
         }

@@ -343,7 +343,18 @@ jobs:
             *) exit 1 ;;
           esac
           test -f "${executable}" && test -x "${executable}"
-          export LD_LIBRARY_PATH="${selected_python}/lib"
+          library_path="${LD_LIBRARY_PATH:-}"
+          case "${library_path}" in
+            *$'\r'*|*$'\n'*)
+              echo '::error::Python library path contains a line break.'
+              exit 1
+              ;;
+          esac
+          case ":${library_path}:" in
+            *":${selected_python}/lib:"*) ;;
+            *) library_path="${selected_python}/lib${library_path:+:${library_path}}" ;;
+          esac
+          export LD_LIBRARY_PATH="${library_path}"
           observed_python="$("${executable}" -I -S -c \
             'import sys; print((sys.implementation.name, sys.version_info[:3], sys.maxsize > 2**32))')"
           test "${observed_python}" = "('cpython', (3, 12, ${version##*.}), True)"
@@ -354,7 +365,7 @@ jobs:
             printf 'Python2_ROOT_DIR=%s\n' "${selected_python}"
             printf 'Python3_ROOT_DIR=%s\n' "${selected_python}"
             printf 'PKG_CONFIG_PATH=%s/lib/pkgconfig\n' "${selected_python}"
-            printf 'LD_LIBRARY_PATH=%s/lib\n' "${selected_python}"
+            printf 'LD_LIBRARY_PATH=%s\n' "${LD_LIBRARY_PATH}"
           } >> "${GITHUB_ENV}"
 
       - name: Install locked Python validation tools
@@ -411,7 +422,7 @@ jobs:
               throw 'toolchain: fixed download/extraction tools are unavailable'
           }
           $strUrl = "https://nodejs.org/dist/v$strVersion/node-v$strVersion-linux-x64.tar.xz"
-          & $strCurlPath --silent --show-error --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --output $strArchive $strUrl
+          & $strCurlPath --silent --show-error --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 --retry-all-errors --connect-timeout 20 --max-time 120 --retry-max-time 300 --output $strArchive $strUrl
           if ($LASTEXITCODE -ne 0) { throw "toolchain: download exited $LASTEXITCODE" }
           if ((Get-FileHash -LiteralPath $strArchive -Algorithm SHA256).Hash -cne $strReviewedSha256) {
               throw 'toolchain: official Node archive does not match the reviewed digest'
