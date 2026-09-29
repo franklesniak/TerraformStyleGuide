@@ -7570,13 +7570,17 @@ function Get-PushRangeBaseFetchContractFailure {
 
 function Get-AutomatedMergeSourceWorkflowContractFailure {
     # .SYNOPSIS
-    # Validates trusted run-time and authenticated merge-source workflow contracts.
+    # Validates ordinary workflow isolation, finalization, and merge-source contracts.
     #
     # .DESCRIPTION
-    # Requires the tested finalization-time resolver, exact default-branch push
-    # scoping, associated-PR lookup, merge identity filters, non-force PR-head
-    # acquisition, SHA readback, event-specific range comparison, and validator
-    # handoff.
+    # Binds the complete workflow text to its reviewed digest and checks selected
+    # anonymous acquisition, credential isolation, runtime identity, npm
+    # configuration, timeout, retry, and diagnostic contracts. Requires exact
+    # event and pull-request base identities, the tested finalization-time
+    # resolver, default-branch push scoping, associated-PR lookup, merge identity
+    # filters, non-force source acquisition, SHA readback, range comparison, and
+    # validator handoff. Anonymous transport does not replace event-provenance
+    # and merge-identity checks.
     #
     # .PARAMETER WorkflowContent
     # The complete agent-instruction workflow YAML text to inspect.
