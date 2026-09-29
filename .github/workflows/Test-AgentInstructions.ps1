@@ -7611,7 +7611,7 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
         $strWorkflowSha256 = [System.BitConverter]::ToString(
             $objSha256.ComputeHash([System.Text.UTF8Encoding]::new($false).GetBytes($WorkflowContent))
         ).Replace('-', '').ToLowerInvariant()
-        if ($strWorkflowSha256 -cne '4e51249eff5a1db86d295cfbc4319baa0a99ed0f9d8d1c7f543a5153f562665f') {
+        if ($strWorkflowSha256 -cne 'e9bcf772750e1cc2a2f92d5e4173db73429bf9a2ae6356ae39aabde10dedea34') {
             Write-Output 'The ordinary agent workflow must match its reviewed isolation contract.'
         }
     } finally {
@@ -7750,6 +7750,59 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
                 $strExactLiteral
             )
         }
+    }
+
+    $strPullRequestBaseFetch = @'
+      - name: Fetch pull request base as data
+        if: github.event_name == 'pull_request_target'
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${GITHUB_TOKEN:-}" || -n "${GH_TOKEN:-}" ||
+            -n "${ACTIONS_RUNTIME_TOKEN:-}" || -n "${GIT_CONFIG_COUNT:-}" ||
+            -n "${GIT_CONFIG_PARAMETERS:-}" ]]; then
+            echo '::error::Unexpected credential or Git configuration channel.'
+            exit 1
+          fi
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          if [[ ! "${PR_BASE_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo '::error::Pull request base must be a full lowercase commit hash.'
+            exit 1
+          fi
+          if [[ "${PR_BASE_SHA}" == "0000000000000000000000000000000000000000" ]]; then
+            echo '::error::Pull request base must not be the zero commit hash.'
+            exit 1
+          fi
+          if ! git cat-file -e "${PR_BASE_SHA}^{commit}" 2>/dev/null; then
+            if ! git fetch --no-tags --no-recurse-submodules origin "${PR_BASE_SHA}"; then
+              echo '::error::Could not fetch the exact pull request base.'
+              exit 1
+            fi
+          fi
+          if ! fetched_base="$(git rev-parse --verify "${PR_BASE_SHA}^{commit}")"; then
+            echo '::error::Could not resolve the exact pull request base commit.'
+            exit 1
+          fi
+          if [[ "${fetched_base}" != "${PR_BASE_SHA}" ]]; then
+            echo '::error::Resolved pull request base does not match the exact event identity.'
+            exit 1
+          fi
+          if ! git diff --quiet --no-ext-diff; then
+            echo '::error::Could not confirm a clean worktree after pull request base acquisition.'
+            exit 1
+          fi
+          if ! git diff --cached --quiet --no-ext-diff; then
+            echo '::error::Could not confirm a clean index after pull request base acquisition.'
+            exit 1
+          fi
+'@.TrimEnd()
+    if ([regex]::Matches(
+            $WorkflowContent,
+            [regex]::Escape($strPullRequestBaseFetch)
+        ).Count -ne 1) {
+        Write-Output 'The exact pull-request base data-fetch contract is not exact.'
     }
 
     $strResolveCondition = @"
@@ -15490,6 +15543,114 @@ if ($SelfTest) {
         throw 'The ordinary credential fixture requires one exact job environment context.'
     }
     $arrAutomatedMergeWorkflowMutations = @(
+        [pscustomobject]@{
+            Name = 'PR base step event condition is changed'
+            From = @'
+      - name: Fetch pull request base as data
+        if: github.event_name == 'pull_request_target'
+'@
+            To = @'
+      - name: Fetch pull request base as data
+        if: github.event_name == 'push'
+'@
+            Failure = 'The exact pull-request base data-fetch contract is not exact.'
+        },
+        [pscustomobject]@{
+            Name = 'PR base event input is changed'
+            From = '          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}'
+            To = '          PR_BASE_SHA: ${{ github.sha }}'
+            Failure = 'The exact pull-request base data-fetch contract is not exact.'
+        },
+        [pscustomobject]@{
+            Name = 'PR base full SHA guard is disabled'
+            From = '          if [[ ! "${PR_BASE_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then'
+            To = '          if false; then'
+            Failure = 'The exact pull-request base data-fetch contract is not exact.'
+        },
+        [pscustomobject]@{
+            Name = 'PR base zero SHA guard is disabled'
+            From = '          if [[ "${PR_BASE_SHA}" == "0000000000000000000000000000000000000000" ]]; then'
+            To = '          if false; then'
+            Failure = 'The exact pull-request base data-fetch contract is not exact.'
+        },
+        [pscustomobject]@{
+            Name = 'PR base presence guard is disabled'
+            From = '          if ! git cat-file -e "${PR_BASE_SHA}^{commit}" 2>/dev/null; then'
+            To = '          if true; then'
+            Failure = 'The exact pull-request base data-fetch contract is not exact.'
+        },
+        [pscustomobject]@{
+            Name = 'PR base exact fetch is disabled'
+            From = '            if ! git fetch --no-tags --no-recurse-submodules origin "${PR_BASE_SHA}"; then'
+            To = '            if false; then'
+            Failure = 'The exact pull-request base data-fetch contract is not exact.'
+        },
+        [pscustomobject]@{
+            Name = 'PR base commit resolution is changed'
+            From = '          if ! fetched_base="$(git rev-parse --verify "${PR_BASE_SHA}^{commit}")"; then'
+            To = '          if ! fetched_base="$(git rev-parse --verify HEAD)"; then'
+            Failure = 'The exact pull-request base data-fetch contract is not exact.'
+        },
+        [pscustomobject]@{
+            Name = 'PR base exact identity check is disabled'
+            From = '          if [[ "${fetched_base}" != "${PR_BASE_SHA}" ]]; then'
+            To = '          if false; then'
+            Failure = 'The exact pull-request base data-fetch contract is not exact.'
+        },
+        [pscustomobject]@{
+            Name = 'PR base worktree check is disabled'
+            From = '          if ! git diff --quiet --no-ext-diff; then'
+            To = '          if false; then'
+            Failure = 'The exact pull-request base data-fetch contract is not exact.'
+        },
+        [pscustomobject]@{
+            Name = 'PR base index check is disabled'
+            From = '          if ! git diff --cached --quiet --no-ext-diff; then'
+            To = '          if false; then'
+            Failure = 'The exact pull-request base data-fetch contract is not exact.'
+        },
+        [pscustomobject]@{
+            Name = 'PR base diagnostic is removed: Pull request base must be a full lowercase commit hash.'
+            From = '            echo ''::error::Pull request base must be a full lowercase commit hash.'''
+            To = '            : # PR base diagnostic removed'
+            Failure = 'The exact pull-request base data-fetch contract is not exact.'
+        },
+        [pscustomobject]@{
+            Name = 'PR base diagnostic is removed: Pull request base must not be the zero commit hash.'
+            From = '            echo ''::error::Pull request base must not be the zero commit hash.'''
+            To = '            : # PR base diagnostic removed'
+            Failure = 'The exact pull-request base data-fetch contract is not exact.'
+        },
+        [pscustomobject]@{
+            Name = 'PR base diagnostic is removed: Could not fetch the exact pull request base.'
+            From = '              echo ''::error::Could not fetch the exact pull request base.'''
+            To = '              : # PR base diagnostic removed'
+            Failure = 'The exact pull-request base data-fetch contract is not exact.'
+        },
+        [pscustomobject]@{
+            Name = 'PR base diagnostic is removed: Could not resolve the exact pull request base commit.'
+            From = '            echo ''::error::Could not resolve the exact pull request base commit.'''
+            To = '            : # PR base diagnostic removed'
+            Failure = 'The exact pull-request base data-fetch contract is not exact.'
+        },
+        [pscustomobject]@{
+            Name = 'PR base diagnostic is removed: Resolved pull request base does not match the exact event identity.'
+            From = '            echo ''::error::Resolved pull request base does not match the exact event identity.'''
+            To = '            : # PR base diagnostic removed'
+            Failure = 'The exact pull-request base data-fetch contract is not exact.'
+        },
+        [pscustomobject]@{
+            Name = 'PR base diagnostic is removed: Could not confirm a clean worktree after pull request base acquisition.'
+            From = '            echo ''::error::Could not confirm a clean worktree after pull request base acquisition.'''
+            To = '            : # PR base diagnostic removed'
+            Failure = 'The exact pull-request base data-fetch contract is not exact.'
+        },
+        [pscustomobject]@{
+            Name = 'PR base diagnostic is removed: Could not confirm a clean index after pull request base acquisition.'
+            From = '            echo ''::error::Could not confirm a clean index after pull request base acquisition.'''
+            To = '            : # PR base diagnostic removed'
+            Failure = 'The exact pull-request base data-fetch contract is not exact.'
+        },
         [pscustomobject]@{
             Name = 'checkout status capture removed'
             From = '          $intHeadExitCode = $LASTEXITCODE'
