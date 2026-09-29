@@ -114,7 +114,7 @@ $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
 $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/copilot-setup-steps.yml' =
-        '7497736f8b3cfb8a640b6fcc8d7e7583ad3a19dd2da8de00bf9a4f5b449516ea'
+        'd229edc22a802bfabd4fa542c27caa803535772ab0d1240c4f1e83fc2831c345'
     '.github/workflows/package.json' =
         'c6db6befda88e58aa5568f52f44ca934af5751e545dba0644297b9fb15577e0d'
     '.github/workflows/package-lock.json' =
@@ -2146,6 +2146,29 @@ function Get-HuskySetupContractFailure {
     if (Test-WorkflowCredentialProjection -WorkflowContent $CopilotSetupContent) {
         Write-Output 'Copilot setup must not project credentials.'
     }
+    $strExpectedNpmConfiguration = @'
+          export npm_config_userconfig=/dev/null
+          export npm_config_globalconfig=/etc/npmrc-absent-by-policy
+          if [[ ! -c "${npm_config_userconfig}" || -s "${npm_config_userconfig}" ||
+            -e "${npm_config_globalconfig}" || -L "${npm_config_globalconfig}" ]]; then
+            echo '::error::Unexpected package-manager configuration source.'
+            exit 1
+          fi
+          printf '%s\n' 'npm_config_userconfig=/dev/null' \
+            'npm_config_globalconfig=/etc/npmrc-absent-by-policy' >> "${GITHUB_ENV}"
+'@.TrimEnd()
+    $arrNpmConfigurationBlocks = @([regex]::Matches(
+            $CopilotSetupContent, [regex]::Escape($strExpectedNpmConfiguration)
+        ))
+    $objFirstNpmInvocation = [regex]::Match(
+        $CopilotSetupContent, '(?m)^          (?:npm[ \t]|.*\$\([ \t]*npm[ \t])'
+    )
+    if ($arrNpmConfigurationBlocks.Count -ne 1 -or
+        -not $objFirstNpmInvocation.Success -or
+        $arrNpmConfigurationBlocks[0].Index -ge $objFirstNpmInvocation.Index) {
+        Write-Output 'Copilot setup must isolate npm file configuration before its first npm invocation.'
+    }
+
     $strExpectedNodeDownload = '          & $strCurlPath --silent --show-error --fail --location --proto ''=https'' --proto-redir ''=https'' --tlsv1.2 --retry 3 --retry-all-errors --connect-timeout 20 --max-time 120 --retry-max-time 300 --output $strArchive $strUrl'
     if ([regex]::Matches($CopilotSetupContent, [regex]::Escape($strExpectedNodeDownload)).Count -ne 1) {
         Write-Output 'Copilot setup must use the bounded anonymous Node download.'
@@ -2153,6 +2176,45 @@ function Get-HuskySetupContractFailure {
     if ([regex]::Matches($CopilotSetupContent, '(?m)^permissions: \{\}$').Count -ne 1 -or
         [regex]::Matches($CopilotSetupContent, '(?m)^    permissions: \{\}$').Count -ne 1) {
         Write-Output 'Copilot setup must declare empty workflow and job permissions.'
+    }
+
+    $strExpectedDefaultBranchPresence = @'
+          if [[ -z "${DEFAULT_BRANCH:-}" ]]; then
+            echo '::error::Repository default branch is missing from the event payload.'
+            exit 1
+          fi
+'@.TrimEnd()
+    if ([regex]::Matches($CopilotSetupContent, [regex]::Escape($strExpectedDefaultBranchPresence)).Count -ne 1) {
+        Write-Output 'Copilot setup must reject a missing default branch with a diagnostic.'
+    }
+
+    $strExpectedDefaultBranchValidation = @'
+          default_ref="refs/heads/${DEFAULT_BRANCH}"
+          remote_ref="refs/remotes/origin/${DEFAULT_BRANCH}"
+          if ! git check-ref-format "${default_ref}" ||
+            ! git check-ref-format "${remote_ref}"; then
+            echo '::error::Repository default branch does not form valid Git refs.'
+            exit 1
+          fi
+'@.TrimEnd()
+    if ([regex]::Matches($CopilotSetupContent, [regex]::Escape($strExpectedDefaultBranchValidation)).Count -ne 1) {
+        Write-Output 'Copilot setup must reject invalid default-branch refs with a diagnostic.'
+    }
+
+    $strExpectedCacheRootPathAssertions = @'
+          test -d "${cache_root}"
+          test ! -L "${cache_root}"
+'@.TrimEnd()
+    if ([regex]::Matches($CopilotSetupContent, [regex]::Escape($strExpectedCacheRootPathAssertions)).Count -ne 1) {
+        Write-Output 'Copilot setup must independently enforce Python cache-root path predicates.'
+    }
+
+    $strExpectedExecutablePathAssertions = @'
+          test -f "${executable}"
+          test -x "${executable}"
+'@.TrimEnd()
+    if ([regex]::Matches($CopilotSetupContent, [regex]::Escape($strExpectedExecutablePathAssertions)).Count -ne 1) {
+        Write-Output 'Copilot setup must independently enforce Python executable predicates.'
     }
 
     $hashtableExpectedRootInputDigestLine = @{
@@ -2187,6 +2249,52 @@ function Get-HuskySetupContractFailure {
     if ($arrInstallCommands.Count -ne 2 -or
         $arrScriptDisabledInstalls.Count -ne 2) {
         Write-Output 'Copilot setup must keep both locked installs script-disabled.'
+    }
+
+    $strExpectedCanonicalCache = @'
+          resolved_cache="$(realpath -e -- "${cache_root}")"
+          test "${resolved_cache}" = "${cache_root}"
+'@.TrimEnd()
+    if ([regex]::Matches($CopilotSetupContent, [regex]::Escape($strExpectedCanonicalCache)).Count -ne 1) {
+        Write-Output 'Copilot setup must preserve the canonical Python cache path.'
+    }
+
+    $strExpectedCanonicalCandidate = @'
+              resolved_candidate="$(realpath -e -- "${candidate}")"
+              test "${resolved_candidate}" = "${candidate}"
+'@.TrimEnd()
+    if ([regex]::Matches($CopilotSetupContent, [regex]::Escape($strExpectedCanonicalCandidate)).Count -ne 1) {
+        Write-Output 'Copilot setup must preserve the canonical Python candidate path.'
+    }
+
+    $strExpectedRequiredDirectories = @'
+          for required_directory in bin lib; do
+            test -d "${selected_python}/${required_directory}"
+            test ! -L "${selected_python}/${required_directory}"
+          done
+'@.TrimEnd()
+    if ([regex]::Matches($CopilotSetupContent, [regex]::Escape($strExpectedRequiredDirectories)).Count -ne 1) {
+        Write-Output 'Copilot setup must preserve the ordinary Python bin and lib directories.'
+    }
+
+    $strExpectedExecutableBoundary = @'
+          executable="$(realpath -e -- "${selected_python}/bin/python")"
+          case "${executable}" in
+            "${selected_python}/bin/"*) ;;
+            *) exit 1 ;;
+          esac
+'@.TrimEnd()
+    if ([regex]::Matches($CopilotSetupContent, [regex]::Escape($strExpectedExecutableBoundary)).Count -ne 1) {
+        Write-Output 'Copilot setup must preserve the resolved Python executable boundary.'
+    }
+
+    $strExpectedObservedIdentity = @'
+          observed_python="$("${executable}" -I -S -c \
+            'import sys; print((sys.implementation.name, sys.version_info[:3], sys.maxsize > 2**32))')"
+          test "${observed_python}" = "('cpython', (3, 12, ${version##*.}), True)"
+'@.TrimEnd()
+    if ([regex]::Matches($CopilotSetupContent, [regex]::Escape($strExpectedObservedIdentity)).Count -ne 1) {
+        Write-Output 'Copilot setup must preserve the observed CPython identity.'
     }
 
     $strExpectedPythonLibraryPath = @'
@@ -7462,12 +7570,35 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
         $strWorkflowSha256 = [System.BitConverter]::ToString(
             $objSha256.ComputeHash([System.Text.UTF8Encoding]::new($false).GetBytes($WorkflowContent))
         ).Replace('-', '').ToLowerInvariant()
-        if ($strWorkflowSha256 -cne '35a2a0052ec7e95bb7c0efe1bcbea26b54ccf12388fb9e8eef78ac4f52767a46') {
+        if ($strWorkflowSha256 -cne 'd0d4202479313f2e715eade6dc2a9ef356f3e24ab4b41e06a7e6e3d4ff62d234') {
             Write-Output 'The ordinary agent workflow must match its reviewed isolation contract.'
         }
     } finally {
         $objSha256.Dispose()
     }
+    $strExpectedNpmConfiguration = @'
+          export npm_config_userconfig=/dev/null
+          export npm_config_globalconfig=/etc/npmrc-absent-by-policy
+          if [[ ! -c "${npm_config_userconfig}" || -s "${npm_config_userconfig}" ||
+            -e "${npm_config_globalconfig}" || -L "${npm_config_globalconfig}" ]]; then
+            echo '::error::Unexpected package-manager configuration source.'
+            exit 1
+          fi
+          printf '%s\n' 'npm_config_userconfig=/dev/null' \
+            'npm_config_globalconfig=/etc/npmrc-absent-by-policy' >> "${GITHUB_ENV}"
+'@.TrimEnd()
+    $arrNpmConfigurationBlocks = @([regex]::Matches(
+            $WorkflowContent, [regex]::Escape($strExpectedNpmConfiguration)
+        ))
+    $objFirstNpmInvocation = [regex]::Match(
+        $WorkflowContent, '(?m)^          (?:npm[ \t]|.*\$\([ \t]*npm[ \t])'
+    )
+    if ($arrNpmConfigurationBlocks.Count -ne 1 -or
+        -not $objFirstNpmInvocation.Success -or
+        $arrNpmConfigurationBlocks[0].Index -ge $objFirstNpmInvocation.Index) {
+        Write-Output 'Agent workflow must isolate npm file configuration before its first npm invocation.'
+    }
+
     if ($WorkflowContent -match '(?m)^[ \t]+(?:-[ \t]*)?uses[ \t]*:' -or
         (Test-WorkflowCredentialProjection -WorkflowContent $WorkflowContent)) {
         Write-Output 'The ordinary agent workflow must not project credentials or execute actions.'
@@ -9517,7 +9648,95 @@ if ($SelfTest) {
         throw 'The staged-Markdown helper selector mutation did not fail closed.'
     }
 
+    if ([regex]::Matches(
+            $strCopilotSetupContent,
+            [regex]::Escape("    env:`n      GIT_CONFIG_NOSYSTEM:")
+        ).Count -ne 1) {
+        throw 'The Copilot credential fixture requires one exact job environment context.'
+    }
     $arrCopilotSetupMutations = @(
+        [pscustomobject]@{
+            Name = 'Python CanonicalCache guard is disabled'
+            Content = $strCopilotSetupContent.Replace(
+                '          test "${resolved_cache}" = "${cache_root}"',
+                '          : # removed Python invariant'
+            )
+            Failure = 'Copilot setup must preserve the canonical Python cache path.'
+        },
+        [pscustomobject]@{
+            Name = 'Python CanonicalCandidate guard is disabled'
+            Content = $strCopilotSetupContent.Replace(
+                '              test "${resolved_candidate}" = "${candidate}"',
+                '          : # removed Python invariant'
+            )
+            Failure = 'Copilot setup must preserve the canonical Python candidate path.'
+        },
+        [pscustomobject]@{
+            Name = 'Python RequiredDirectories guard is disabled'
+            Content = $strCopilotSetupContent.Replace(
+                '            test ! -L "${selected_python}/${required_directory}"',
+                '          : # removed Python invariant'
+            )
+            Failure = 'Copilot setup must preserve the ordinary Python bin and lib directories.'
+        },
+        [pscustomobject]@{
+            Name = 'Python ExecutableBoundary guard is disabled'
+            Content = $strCopilotSetupContent.Replace(
+                '            "${selected_python}/bin/"*) ;;',
+                '            *) ;;'
+            )
+            Failure = 'Copilot setup must preserve the resolved Python executable boundary.'
+        },
+        [pscustomobject]@{
+            Name = 'Python ObservedIdentity guard is disabled'
+            Content = $strCopilotSetupContent.Replace(
+                '          test "${observed_python}" = "(''cpython'', (3, 12, ${version##*.}), True)"',
+                '          : # removed Python invariant'
+            )
+            Failure = 'Copilot setup must preserve the observed CPython identity.'
+        },
+
+        [pscustomobject]@{
+            Name = 'npm userconfig export is weakened'
+            Content = $strCopilotSetupContent.Replace(
+                'export npm_config_userconfig=/dev/null',
+                'export npm_config_userconfig=/tmp/unreviewed-npmrc'
+            )
+            Failure = 'Copilot setup must isolate npm file configuration before its first npm invocation.'
+        },
+        [pscustomobject]@{
+            Name = 'npm globalconfig export is weakened'
+            Content = $strCopilotSetupContent.Replace(
+                'export npm_config_globalconfig=/etc/npmrc-absent-by-policy',
+                'export npm_config_globalconfig=/tmp/unreviewed-global-npmrc'
+            )
+            Failure = 'Copilot setup must isolate npm file configuration before its first npm invocation.'
+        },
+        [pscustomobject]@{
+            Name = 'npm configuration source check is weakened'
+            Content = $strCopilotSetupContent.Replace(
+                'if [[ ! -c "${npm_config_userconfig}"',
+                'if [[ false == true'
+            )
+            Failure = 'Copilot setup must isolate npm file configuration before its first npm invocation.'
+        },
+        [pscustomobject]@{
+            Name = 'npm configuration persistence is weakened'
+            Content = $strCopilotSetupContent.Replace(
+                '''npm_config_userconfig=/dev/null''',
+                '''npm_config_userconfig=/tmp/unreviewed-npmrc'''
+            )
+            Failure = 'Copilot setup must isolate npm file configuration before its first npm invocation.'
+        },
+        [pscustomobject]@{
+            Name = 'npm invocation precedes configuration producer'
+            Content = $strCopilotSetupContent.Replace(
+                '          export npm_config_userconfig=/dev/null',
+                "          npm --version`n          export npm_config_userconfig=/dev/null"
+            )
+            Failure = 'Copilot setup must isolate npm file configuration before its first npm invocation.'
+        },
+
         [pscustomobject]@{
             Name = 'Python inherited library path removed'
             Content = $strCopilotSetupContent.Replace(
@@ -9578,80 +9797,80 @@ if ($SelfTest) {
         [pscustomobject]@{
             Name = 'GitHub token alias'
             Content = $strCopilotSetupContent.Replace(
-                "    env:`n",
-                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github.token }}' + "`n"
+                "    env:`n      GIT_CONFIG_NOSYSTEM:",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github.token }}' + "`n      GIT_CONFIG_NOSYSTEM:"
             )
             Failure = 'Copilot setup must not project credentials.'
         },
         [pscustomobject]@{
             Name = 'secret token alias'
             Content = $strCopilotSetupContent.Replace(
-                "    env:`n",
-                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ secrets.GITHUB_TOKEN }}' + "`n"
+                "    env:`n      GIT_CONFIG_NOSYSTEM:",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ secrets.GITHUB_TOKEN }}' + "`n      GIT_CONFIG_NOSYSTEM:"
             )
             Failure = 'Copilot setup must not project credentials.'
         },
         [pscustomobject]@{
             Name = 'indexed GitHub token alias'
             Content = $strCopilotSetupContent.Replace(
-                "    env:`n",
-                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github[''token''] }}' + "`n"
+                "    env:`n      GIT_CONFIG_NOSYSTEM:",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github[''token''] }}' + "`n      GIT_CONFIG_NOSYSTEM:"
             )
             Failure = 'Copilot setup must not project credentials.'
         },
         [pscustomobject]@{
             Name = 'computed GitHub index'
             Content = $strCopilotSetupContent.Replace(
-                "    env:`n",
-                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github[format(''to{0}'', ''ken'')] }}' + "`n"
+                "    env:`n      GIT_CONFIG_NOSYSTEM:",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github[format(''to{0}'', ''ken'')] }}' + "`n      GIT_CONFIG_NOSYSTEM:"
             )
             Failure = 'Copilot setup must not project credentials.'
         },
         [pscustomobject]@{
             Name = 'indexed secret alias'
             Content = $strCopilotSetupContent.Replace(
-                "    env:`n",
-                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ secrets[''GITHUB_TOKEN''] }}' + "`n"
+                "    env:`n      GIT_CONFIG_NOSYSTEM:",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ secrets[''GITHUB_TOKEN''] }}' + "`n      GIT_CONFIG_NOSYSTEM:"
             )
             Failure = 'Copilot setup must not project credentials.'
         },
         [pscustomobject]@{
             Name = 'whole GitHub context'
             Content = $strCopilotSetupContent.Replace(
-                "    env:`n",
-                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ toJSON(github) }}' + "`n"
+                "    env:`n      GIT_CONFIG_NOSYSTEM:",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ toJSON(github) }}' + "`n      GIT_CONFIG_NOSYSTEM:"
             )
             Failure = 'Copilot setup must not project credentials.'
         },
         [pscustomobject]@{
             Name = 'whole secrets context'
             Content = $strCopilotSetupContent.Replace(
-                "    env:`n",
-                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ toJSON(secrets) }}' + "`n"
+                "    env:`n      GIT_CONFIG_NOSYSTEM:",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ toJSON(secrets) }}' + "`n      GIT_CONFIG_NOSYSTEM:"
             )
             Failure = 'Copilot setup must not project credentials.'
         },
         [pscustomobject]@{
             Name = 'mixed-case token alias'
             Content = $strCopilotSetupContent.Replace(
-                "    env:`n",
-                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ GitHub.Token }}' + "`n"
+                "    env:`n      GIT_CONFIG_NOSYSTEM:",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ GitHub.Token }}' + "`n      GIT_CONFIG_NOSYSTEM:"
             )
             Failure = 'Copilot setup must not project credentials.'
         },
         [pscustomobject]@{
             Name = 'spaced token alias'
             Content = $strCopilotSetupContent.Replace(
-                "    env:`n",
-                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github . token }}' + "`n"
+                "    env:`n      GIT_CONFIG_NOSYSTEM:",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github . token }}' + "`n      GIT_CONFIG_NOSYSTEM:"
             )
             Failure = 'Copilot setup must not project credentials.'
         },
         [pscustomobject]@{
             Name = 'quoted expression delimiter'
             Content = $strCopilotSetupContent.Replace(
-                "    env:`n",
-                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ format(''}}{0}'', github.token) }}' + "`n"
+                "    env:`n      GIT_CONFIG_NOSYSTEM:",
+                "    env:`n" + '      CREDENTIAL_ALIAS: ${{ format(''}}{0}'', github.token) }}' + "`n      GIT_CONFIG_NOSYSTEM:"
             )
             Failure = 'Copilot setup must not project credentials.'
         },
@@ -9687,6 +9906,54 @@ if ($SelfTest) {
                 'fetch --depth 1 --no-tags --no-recurse-submodules origin $strSha'
             )
             Failure = '.github/workflows/copilot-setup-steps.yml text must match'
+        },
+        [pscustomobject]@{
+            Name = 'missing default-branch guard is disabled'
+            Content = $strCopilotSetupContent.Replace(
+                '          if [[ -z "${DEFAULT_BRANCH:-}" ]]; then',
+                '          if false; then'
+            )
+            Failure = 'Copilot setup must reject a missing default branch with a diagnostic.'
+        },
+        [pscustomobject]@{
+            Name = 'default-branch ref guard is weakened'
+            Content = $strCopilotSetupContent.Replace(
+                '          if ! git check-ref-format "${default_ref}" ||',
+                '          if false ||'
+            )
+            Failure = 'Copilot setup must reject invalid default-branch refs with a diagnostic.'
+        },
+        [pscustomobject]@{
+            Name = 'Python cache-root path predicates assertion -d is removed'
+            Content = $strCopilotSetupContent.Replace(
+                '          test -d "${cache_root}"',
+                '          : # removed required path assertion'
+            )
+            Failure = 'Copilot setup must independently enforce Python cache-root path predicates.'
+        },
+        [pscustomobject]@{
+            Name = 'Python cache-root path predicates assertion ! is removed'
+            Content = $strCopilotSetupContent.Replace(
+                '          test ! -L "${cache_root}"',
+                '          : # removed required path assertion'
+            )
+            Failure = 'Copilot setup must independently enforce Python cache-root path predicates.'
+        },
+        [pscustomobject]@{
+            Name = 'Python executable predicates assertion -f is removed'
+            Content = $strCopilotSetupContent.Replace(
+                '          test -f "${executable}"',
+                '          : # removed required path assertion'
+            )
+            Failure = 'Copilot setup must independently enforce Python executable predicates.'
+        },
+        [pscustomobject]@{
+            Name = 'Python executable predicates assertion -x is removed'
+            Content = $strCopilotSetupContent.Replace(
+                '          test -x "${executable}"',
+                '          : # removed required path assertion'
+            )
+            Failure = 'Copilot setup must independently enforce Python executable predicates.'
         },
         [pscustomobject]@{
             Name = 'published baseline setup is removed'
@@ -9827,6 +10094,15 @@ if ($SelfTest) {
         }
     )
     foreach ($objCopilotSetupMutation in $arrCopilotSetupMutations) {
+        if ($objCopilotSetupMutation.Content.Contains('CREDENTIAL_ALIAS:') -and
+            ([regex]::Matches(
+                    $objCopilotSetupMutation.Content, '(?m)^      CREDENTIAL_ALIAS:'
+                ).Count -ne 1 -or
+                [regex]::Matches(
+                    $objCopilotSetupMutation.Content, 'CREDENTIAL_ALIAS:'
+                ).Count -ne 1)) {
+            throw 'A Copilot credential fixture must insert exactly one job-level alias.'
+        }
         $arrCopilotSetupFailures = @(Get-HuskySetupContractFailure `
                 -RootPackageContent $strRootPackageContent `
                 -WorkflowPackageContent $strWorkflowPackageContent `
@@ -15066,7 +15342,7 @@ if ($SelfTest) {
     if ($intFinalizationResolverSelfTestExit -ne 0 -or
         $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
         [string]$arrFinalizationResolverSelfTestOutput[0] -cne
-        'Finalization resolver self-tests passed: 106 fixtures.') {
+        'Finalization resolver self-tests passed: 112 fixtures.') {
         throw (
             'The finalization-time resolver self-test failed: ' +
             ($arrFinalizationResolverSelfTestOutput -join '; ')
@@ -15083,6 +15359,37 @@ if ($SelfTest) {
         )
     }
     $arrAutomatedMergeWorkflowMutations = @(
+        [pscustomobject]@{
+            Name = 'npm userconfig export is weakened'
+            From = 'export npm_config_userconfig=/dev/null'
+            To = 'export npm_config_userconfig=/tmp/unreviewed-npmrc'
+            Failure = 'Agent workflow must isolate npm file configuration before its first npm invocation.'
+        },
+        [pscustomobject]@{
+            Name = 'npm globalconfig export is weakened'
+            From = 'export npm_config_globalconfig=/etc/npmrc-absent-by-policy'
+            To = 'export npm_config_globalconfig=/tmp/unreviewed-global-npmrc'
+            Failure = 'Agent workflow must isolate npm file configuration before its first npm invocation.'
+        },
+        [pscustomobject]@{
+            Name = 'npm configuration source check is weakened'
+            From = 'if [[ ! -c "${npm_config_userconfig}"'
+            To = 'if [[ false == true'
+            Failure = 'Agent workflow must isolate npm file configuration before its first npm invocation.'
+        },
+        [pscustomobject]@{
+            Name = 'npm configuration persistence is weakened'
+            From = '''npm_config_userconfig=/dev/null'''
+            To = '''npm_config_userconfig=/tmp/unreviewed-npmrc'''
+            Failure = 'Agent workflow must isolate npm file configuration before its first npm invocation.'
+        },
+        [pscustomobject]@{
+            Name = 'npm invocation precedes configuration producer'
+            From = '          export npm_config_userconfig=/dev/null'
+            To = "          npm --version`n          export npm_config_userconfig=/dev/null"
+            Failure = 'Agent workflow must isolate npm file configuration before its first npm invocation.'
+        },
+
         [pscustomobject]@{
             Name = 'Node retry count removed'
             Failure = 'The automated merge-source workflow contract must contain exactly once: ' +

@@ -215,10 +215,17 @@ jobs:
             exit 1
           fi
           export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          if [[ -z "${DEFAULT_BRANCH:-}" ]]; then
+            echo '::error::Repository default branch is missing from the event payload.'
+            exit 1
+          fi
           default_ref="refs/heads/${DEFAULT_BRANCH}"
           remote_ref="refs/remotes/origin/${DEFAULT_BRANCH}"
-          git check-ref-format "${default_ref}"
-          git check-ref-format "${remote_ref}"
+          if ! git check-ref-format "${default_ref}" ||
+            ! git check-ref-format "${remote_ref}"; then
+            echo '::error::Repository default branch does not form valid Git refs.'
+            exit 1
+          fi
           git fetch --no-tags --no-recurse-submodules origin \
             "${default_ref}:${remote_ref}"
           git remote set-head origin --auto
@@ -316,7 +323,8 @@ jobs:
           # Preserve setup-python's installed 3.12/x64 selection and exports.
           # Missing hosted cache fails closed; no runtime download or system fallback.
           cache_root='/opt/hostedtoolcache/Python'
-          test -d "${cache_root}" && test ! -L "${cache_root}"
+          test -d "${cache_root}"
+          test ! -L "${cache_root}"
           resolved_cache="$(realpath -e -- "${cache_root}")"
           test "${resolved_cache}" = "${cache_root}"
           selected_python=''
@@ -342,7 +350,8 @@ jobs:
             "${selected_python}/bin/"*) ;;
             *) exit 1 ;;
           esac
-          test -f "${executable}" && test -x "${executable}"
+          test -f "${executable}"
+          test -x "${executable}"
           library_path="${LD_LIBRARY_PATH:-}"
           case "${library_path}" in
             *$'\r'*|*$'\n'*)
@@ -453,6 +462,15 @@ jobs:
             exit 1
           fi
           export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          export npm_config_userconfig=/dev/null
+          export npm_config_globalconfig=/etc/npmrc-absent-by-policy
+          if [[ ! -c "${npm_config_userconfig}" || -s "${npm_config_userconfig}" ||
+            -e "${npm_config_globalconfig}" || -L "${npm_config_globalconfig}" ]]; then
+            echo '::error::Unexpected package-manager configuration source.'
+            exit 1
+          fi
+          printf '%s\n' 'npm_config_userconfig=/dev/null' \
+            'npm_config_globalconfig=/etc/npmrc-absent-by-policy' >> "${GITHUB_ENV}"
           expected_node="$(node -p 'require("./package.json").engines.node')"
           expected_npm="$(node -p 'require("./package.json").engines.npm')"
           test "$(node --version)" = "v${expected_node}"

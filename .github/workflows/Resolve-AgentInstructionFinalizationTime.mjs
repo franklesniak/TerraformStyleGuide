@@ -426,7 +426,7 @@ function makeFixtureFetch({
   return async (request, options) => {
     const url = new URL(String(request));
     if (url.pathname === '/api/v3/repos/fork-owner/repository/activity') {
-      if (options?.headers?.Authorization ||
+      if (options?.headers?.Authorization !== undefined ||
           url.searchParams.get('direction') !== 'desc' ||
           url.searchParams.get('per_page') !== String(recordsPerPage) ||
           url.searchParams.get('ref') !== activityRef ||
@@ -1262,6 +1262,23 @@ export async function runSelfTest() {
     );
     assertEqual('anonymous request-layer control returns the body', response.value.marker, 'anonymous');
   }
+  const forkFixtureUrl = new URL(
+    'https://api.github.example/api/v3/repos/fork-owner/repository/activity',
+  );
+  forkFixtureUrl.searchParams.set('direction', 'desc');
+  forkFixtureUrl.searchParams.set('per_page', String(recordsPerPage));
+  forkFixtureUrl.searchParams.set('ref', 'refs/heads/topic/branch');
+  const forkFixtureFetch = makeFixtureFetch({});
+  const anonymousForkResponse = await forkFixtureFetch(forkFixtureUrl, { headers: {} });
+  assertEqual('fork fixture accepts absent Authorization', anonymousForkResponse.ok, true);
+  for (const authorization of ['', 'projected-token', null, false, 0]) {
+    await reject(
+      'fork fixture rejects every defined Authorization value',
+      () => forkFixtureFetch(forkFixtureUrl, { headers: { Authorization: authorization } }),
+      /The fork-head activity query is not exact or anonymous/u,
+    );
+  }
+
   for (const token of ['projected-token', ' ', false, 0, {}]) {
     let requests = 0;
     await reject(
