@@ -1,4 +1,4 @@
-// Resolve an authenticated finalization timestamp for agent-document metadata.
+// Resolve an exact public finalization timestamp for agent-document metadata.
 
 import { appendFileSync } from 'node:fs';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -41,19 +41,42 @@ function parseTimestamp(value, maximumTime, displayName) {
   return time;
 }
 
+export function formatRateLimitDiagnostic(response) {
+  if (response?.status !== 403 && response?.status !== 429) {
+    return '';
+  }
+  const headerSpecifications = [
+    ['x-ratelimit-remaining', 'remaining'],
+    ['x-ratelimit-reset', 'reset-epoch-seconds'],
+    ['retry-after', 'retry-after-seconds'],
+  ];
+  const values = headerSpecifications.map(([name, label]) => {
+    const value = typeof response.headers?.get === 'function'
+      ? response.headers.get(name)
+      : null;
+    const printable = typeof value === 'string' && /^[0-9]{1,16}$/u.test(value) &&
+      Number.isSafeInteger(Number(value)) ? value : 'unavailable';
+    return `${label}=${printable}`;
+  });
+  return ` Rate-limit metadata: ${values.join('; ')}.`;
+}
+
 async function readJson(url, token, fetchImplementation, displayName) {
   const headers = {
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
   };
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
+  if (token !== undefined && token !== null && token !== '') {
+    throw new Error('Credential policy rejects a projected token.');
   }
   const response = await fetchImplementation(url, {
     headers,
   });
   if (!response?.ok) {
-    throw new Error(`${displayName} failed: ${response?.status ?? 'unknown'}.`);
+    throw new Error(
+      `${displayName} failed: ${response?.status ?? 'unknown'}.` +
+      formatRateLimitDiagnostic(response),
+    );
   }
   return {
     headers: response.headers,
@@ -307,7 +330,8 @@ export async function resolveFinalizationEvidence({
       !objectIdPattern.test(runHeadRevision ?? '') || !runHeadRefName ||
       !repositoryPattern.test(runHeadRepository ?? '') ||
       /[\u0000\r\n]/u.test(runHeadRefName) ||
-      /[\u0000\r\n]/u.test(runHeadRef ?? '') || !token ||
+      /[\u0000\r\n]/u.test(runHeadRef ?? '') ||
+      (token !== undefined && token !== null && token !== '') ||
       !Number.isFinite(now) || typeof fetchImplementation !== 'function' ||
       typeof waitImplementation !== 'function') {
     throw new Error('Trusted workflow-run inputs are unavailable or invalid.');
@@ -425,7 +449,7 @@ function makeFixtureFetch({
   return async (request, options) => {
     const url = new URL(String(request));
     if (url.pathname === '/api/v3/repos/fork-owner/repository/activity') {
-      if (options?.headers?.Authorization ||
+      if (options?.headers?.Authorization !== undefined ||
           url.searchParams.get('direction') !== 'desc' ||
           url.searchParams.get('per_page') !== String(recordsPerPage) ||
           url.searchParams.get('ref') !== activityRef ||
@@ -440,12 +464,12 @@ function makeFixtureFetch({
       return forkActivityPages[page] ?? makeResponse([]);
     }
     if (url.pathname === '/api/v3/repos/owner/repository/activity') {
-      if (options?.headers?.Authorization !== 'Bearer fixture-token' ||
+      if (options?.headers?.Authorization !== undefined ||
           url.searchParams.get('direction') !== 'desc' ||
           url.searchParams.get('per_page') !== String(recordsPerPage) ||
           url.searchParams.get('ref') !== activityRef ||
           url.searchParams.has('time_period')) {
-        throw new Error('The repository activity query is not exact or authenticated.');
+        throw new Error('The repository activity query is not exact or anonymous.');
       }
       if (!repositoryActivityPages) {
         return makeResponse(repositoryActivities);
@@ -457,8 +481,8 @@ function makeFixtureFetch({
     if (!url.pathname.startsWith('/api/v3/repos/owner/repository/')) {
       throw new Error('The API base path was not preserved.');
     }
-    if (options?.headers?.Authorization !== 'Bearer fixture-token') {
-      throw new Error('A base-repository API request was not authenticated.');
+    if (options?.headers?.Authorization !== undefined) {
+      throw new Error('A base-repository API request projected authorization.');
     }
     if (url.pathname.endsWith('/actions/runs/1')) {
       return makeResponse(current);
@@ -491,7 +515,7 @@ export async function runSelfTest() {
     runHeadRefName: 'topic/branch',
     runHeadRef: 'refs/heads/topic/branch',
     runHeadRepository: 'owner/repository',
-    token: 'fixture-token',
+    token: undefined,
     now: Date.parse('2026-09-10T12:01:00Z'),
   };
   let fixtures = 0;
@@ -505,6 +529,102 @@ export async function runSelfTest() {
     fixtures += 1;
     await expectRejected(name, action, pattern);
   };
+
+  const unavailableRateLimit = ' Rate-limit metadata: remaining=unavailable; ' +
+    'reset-epoch-seconds=unavailable; retry-after-seconds=unavailable.';
+  const rateHeaderValues = {
+    'x-ratelimit-remaining': '0',
+    'x-ratelimit-reset': '1790647200',
+    'retry-after': '60',
+  };
+  for (const status of [403, 429]) {
+    const requestedHeaders = [];
+    const response = {
+      status,
+      headers: { get: (name) => {
+        requestedHeaders.push(name);
+        return rateHeaderValues[name] ?? 'unrelated header content';
+      } },
+    };
+    assertEqual(
+      'rate-limit diagnostics retain only bounded response metadata',
+      formatRateLimitDiagnostic(response),
+      ' Rate-limit metadata: remaining=0; reset-epoch-seconds=1790647200; ' +
+        'retry-after-seconds=60.',
+    );
+    assertEqual(
+      'rate-limit diagnostics read only the three allowlisted headers',
+      JSON.stringify(requestedHeaders),
+      JSON.stringify(Object.keys(rateHeaderValues)),
+    );
+  }
+  assertEqual(
+    'nonzero remaining is metadata rather than a rate-exhaustion classification',
+    formatRateLimitDiagnostic({ status: 403, headers: { get: () => '5' } }),
+    ' Rate-limit metadata: remaining=5; reset-epoch-seconds=5; retry-after-seconds=5.',
+  );
+  for (const headers of [undefined, {}, { get: null }]) {
+    assertEqual(
+      'missing rate-limit header access retains a bounded unavailable marker',
+      formatRateLimitDiagnostic({ status: 403, headers }),
+      unavailableRateLimit,
+    );
+  }
+  for (const value of [
+    null, '', '-1', '1.5', '1\r\n::error::untrusted', '12345678901234567',
+    '9007199254740992', 'not-a-number', 'Tue, 29 Sep 2026 02:00:00 GMT', 0,
+  ]) {
+    assertEqual(
+      'malformed rate-limit metadata is not echoed',
+      formatRateLimitDiagnostic({ status: 429, headers: { get: () => value } }),
+      unavailableRateLimit,
+    );
+  }
+  assertEqual(
+    'maximum safe integer rate-limit metadata remains bounded',
+    formatRateLimitDiagnostic({
+      status: 403,
+      headers: { get: () => '9007199254740991' },
+    }),
+    ' Rate-limit metadata: remaining=9007199254740991; ' +
+      'reset-epoch-seconds=9007199254740991; retry-after-seconds=9007199254740991.',
+  );
+  for (const status of [200, 401, 404, 500, undefined]) {
+    assertEqual(
+      'other statuses retain their existing diagnostics without reading headers',
+      formatRateLimitDiagnostic({
+        status,
+        headers: { get: () => { throw new Error('Unexpected header read.'); } },
+      }),
+      '',
+    );
+  }
+  for (const status of [403, 429]) {
+    let requests = 0;
+    let waits = 0;
+    let bodyReads = 0;
+    await reject(
+      'rate-limited resolver failure retains status and bounded metadata',
+      () => resolveFinalizationTimestamp({
+        ...base,
+        fetchImplementation: async () => {
+          requests += 1;
+          return {
+            ok: false,
+            status,
+            headers: { get: (name) => rateHeaderValues[name] ?? null },
+            json: async () => { bodyReads += 1; return {}; },
+          };
+        },
+        waitImplementation: async () => { waits += 1; },
+      }),
+      new RegExp(`^Workflow-run lookup failed: ${status}\\. Rate-limit metadata: ` +
+        'remaining=0; reset-epoch-seconds=1790647200; retry-after-seconds=60\\.$', 'u'),
+    );
+    assertEqual('rate-limit diagnostics make no additional request', requests, 1);
+    assertEqual('rate-limit diagnostics do not add a retry delay', waits, 0);
+    assertEqual('rate-limit diagnostics do not read the response body', bodyReads, 0);
+  }
 
   const ordinaryTimestamp = await resolveFinalizationTimestamp({
     ...base,
@@ -1185,6 +1305,169 @@ export async function runSelfTest() {
     /creation time.*invalid/u,
   );
 
+  for (const overrides of [
+    { id: 2 },
+    { run_attempt: 2 },
+    { head_repository: { full_name: 'other/repository' } },
+    { event: 'push' },
+    { workflow_id: 0 },
+    { path: '' },
+  ]) {
+    await reject(
+      'anonymous current-run identity remains exact',
+      () => resolveFinalizationTimestamp({
+        ...base,
+        fetchImplementation: makeFixtureFetch({ current: makeRun(overrides) }),
+      }),
+      /identity does not match/u,
+    );
+  }
+  assertEqual(
+    'matching rerun retains the original exact publication timestamp',
+    await resolveFinalizationTimestamp({
+      ...base,
+      runAttempt: '2',
+      fetchImplementation: makeFixtureFetch({
+        current: makeRun({ run_attempt: 2 }),
+        repositoryActivities: [makeActivity()],
+      }),
+    }),
+    '2026-09-10T10:00:00Z',
+  );
+  await reject(
+    'malformed public run body is refused',
+    () => resolveFinalizationTimestamp({
+      ...base,
+      fetchImplementation: makeFixtureFetch({ current: null }),
+    }),
+    /identity does not match/u,
+  );
+
+  for (const token of ['projected-token', ' ', false, 0, {}]) {
+    let requests = 0;
+    await reject(
+      'request layer rejects a projected or malformed token',
+      () => readJson(
+        'https://api.github.example/api/v3/repos/owner/repository',
+        token,
+        async () => { requests += 1; return makeResponse({}); },
+        'Direct request-layer fixture',
+      ),
+      /Credential policy rejects a projected token/u,
+    );
+    assertEqual('request-layer token refusal sends no request', requests, 0);
+  }
+  for (const token of [undefined, null, '']) {
+    let requests = 0;
+    let observedHeaders;
+    const response = await readJson(
+      'https://api.github.example/api/v3/repos/owner/repository',
+      token,
+      async (_url, options) => {
+        requests += 1;
+        observedHeaders = options.headers;
+        return makeResponse({ marker: 'anonymous' });
+      },
+      'Direct anonymous request-layer fixture',
+    );
+    assertEqual('anonymous request-layer control sends one request', requests, 1);
+    assertEqual(
+      'anonymous request-layer control sends only public API headers',
+      JSON.stringify(observedHeaders),
+      JSON.stringify({
+        Accept: 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      }),
+    );
+    assertEqual('anonymous request-layer control returns the body', response.value.marker, 'anonymous');
+  }
+  const forkFixtureUrl = new URL(
+    'https://api.github.example/api/v3/repos/fork-owner/repository/activity',
+  );
+  forkFixtureUrl.searchParams.set('direction', 'desc');
+  forkFixtureUrl.searchParams.set('per_page', String(recordsPerPage));
+  forkFixtureUrl.searchParams.set('ref', 'refs/heads/topic/branch');
+  const forkFixtureFetch = makeFixtureFetch({});
+  const anonymousForkResponse = await forkFixtureFetch(forkFixtureUrl, { headers: {} });
+  assertEqual('fork fixture accepts absent Authorization', anonymousForkResponse.ok, true);
+  for (const authorization of ['', 'projected-token', null, false, 0]) {
+    await reject(
+      'fork fixture rejects every defined Authorization value',
+      () => forkFixtureFetch(forkFixtureUrl, { headers: { Authorization: authorization } }),
+      /The fork-head activity query is not exact or anonymous/u,
+    );
+  }
+
+  for (const token of ['projected-token', ' ', false, 0, {}]) {
+    let requests = 0;
+    await reject(
+      'projected or malformed token is refused before network access',
+      () => resolveFinalizationTimestamp({
+        ...base,
+        token,
+        fetchImplementation: async () => { requests += 1; return makeResponse({}); },
+      }),
+      /inputs are unavailable or invalid/u,
+    );
+    assertEqual('projected token sends no request', requests, 0);
+  }
+  for (const status of [401, 403, 429, 500]) {
+    for (const failingEndpoint of ['run', 'activity']) {
+      let requests = 0;
+      let waits = 0;
+      await reject(
+        `anonymous ${failingEndpoint} HTTP${status} fails without fallback or retry`,
+        () => resolveFinalizationTimestamp({
+          ...base,
+          waitImplementation: async () => { waits += 1; },
+          fetchImplementation: async (request, options) => {
+            requests += 1;
+            if (Object.hasOwn(options.headers, 'Authorization')) {
+              throw new Error('Anonymous request included Authorization.');
+            }
+            if (failingEndpoint === 'activity' && String(request).includes('/actions/runs/')) {
+              return makeResponse(makeRun());
+            }
+            return makeResponse({}, { ok: false, status });
+          },
+        }),
+        new RegExp(`failed: ${status}`, 'u'),
+      );
+      assertEqual('HTTP failure has no publication retry', waits, 0);
+      assertEqual('HTTP failure has no token fallback', requests, failingEndpoint === 'run' ? 1 : 2);
+    }
+  }
+  let budgetRequests = 0;
+  let budgetWaits = 0;
+  await reject(
+    'public API budget can be exhausted by retained bounded publication retries',
+    () => resolveFinalizationTimestamp({
+      ...base,
+      waitImplementation: async () => { budgetWaits += 1; },
+      fetchImplementation: async (request, options) => {
+        budgetRequests += 1;
+        if (Object.hasOwn(options.headers, 'Authorization')) {
+          throw new Error('Budget fixture projected authorization.');
+        }
+        if (budgetRequests > 60) {
+          return makeResponse({}, { ok: false, status: 403 });
+        }
+        const url = new URL(request);
+        if (url.pathname.endsWith('/actions/runs/1')) {
+          return makeResponse(makeRun());
+        }
+        const cursor = Number((url.searchParams.get('after') ?? 'cursor-0').slice(7));
+        return makeResponse(
+          [makeActivity({ id: 100 + cursor, after: 'c'.repeat(40) })],
+          cursor < 19 ? { link: makeActivityNextLink('owner/repository', `cursor-${cursor + 1}`) } : {},
+        );
+      },
+    }),
+    /failed: 403/u,
+  );
+  assertEqual('budget exhaustion is terminal on the first refused request', budgetRequests, 61);
+  assertEqual('only completed missing-publication scans are retried', budgetWaits, 2);
+
   console.log(`Finalization resolver self-tests passed: ${fixtures} fixtures.`);
 }
 
@@ -1192,6 +1475,9 @@ async function main() {
   if (process.argv[2] === '--self-test') {
     await runSelfTest();
     return;
+  }
+  if (process.env.GITHUB_TOKEN || process.env.GH_TOKEN || process.env.ACTIONS_RUNTIME_TOKEN) {
+    throw new Error('Credential policy rejects a projected token.');
   }
   const output = process.env.GITHUB_OUTPUT;
   if (!output) {

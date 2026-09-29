@@ -12,10 +12,7 @@ on:
       - reopened
       - edited
 
-permissions:
-  actions: read
-  contents: read
-  pull-requests: read
+permissions: {}
 
 jobs:
   validate-agent-instructions:
@@ -24,34 +21,238 @@ jobs:
       !github.event.deleted
     name: Validate agent instructions
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
+    permissions: {}
+    env:
+      GIT_CONFIG_NOSYSTEM: "1"
+      GIT_CONFIG_GLOBAL: /dev/null
+      GIT_TERMINAL_PROMPT: "0"
     steps:
-      - name: Check out trusted validation revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ github.repository }}
-          ref: ${{ github.sha }}
-          token: ${{ github.token }}
-          persist-credentials: false
-          clean: true
-          fetch-depth: 0
-          fetch-tags: false
-          show-progress: true
-          lfs: false
-          submodules: false
-          set-safe-directory: true
-          allow-unsafe-pr-checkout: false
+      - name: Acquire triggering revision without an action
+        id: acquire
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Do not load user/system Git credentials or hooks during anonymous acquisition.
+          if (-not [string]::IsNullOrEmpty($env:GIT_CONFIG_COUNT) -or
+              -not [string]::IsNullOrEmpty($env:GIT_CONFIG_PARAMETERS)) {
+              throw 'credential-policy: external Git command configuration is not allowed'
+          }
+          $env:GIT_CONFIG_NOSYSTEM = '1'
+          $env:GIT_CONFIG_GLOBAL = '/dev/null'
+          $env:GIT_TERMINAL_PROMPT = '0'
+          if (-not [string]::IsNullOrEmpty($env:GITHUB_TOKEN) -or
+              -not [string]::IsNullOrEmpty($env:GH_TOKEN) -or
+              -not [string]::IsNullOrEmpty($env:ACTIONS_RUNTIME_TOKEN)) {
+              throw 'credential-policy: a token was projected into a code job'
+          }
+          # git reports absent state with a non-zero status in places this step
+          # accepts, so native-command error mapping is disabled the same way
+          # the other governed steps disable it and each status is classified
+          # explicitly instead.
+          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
+              $PSNativeCommandUseErrorActionPreference = $false
+          }
+
+          # Every value below is set by the runner before any repository code
+          # executes, and is read from the environment rather than expanded as
+          # a workflow expression, because no governed script step in this
+          # repository contains an expression at all.
+          $strServerUrl = $env:GITHUB_SERVER_URL
+          $strRepository = $env:GITHUB_REPOSITORY
+          $strSha = $env:GITHUB_SHA
+          if ($strServerUrl -cne 'https://github.com') {
+              throw 'acquire: the runner named an unexpected server'
+          }
+          if ($strRepository -cne 'franklesniak/TerraformStyleGuide') {
+              throw 'acquire: the triggering repository is not the expected repository'
+          }
+          # A full 40-hex commit is required rather than a ref. A ref would let
+          # the fetch resolve to whatever the ref points at when the fetch runs,
+          # which for a push to a busy branch is not necessarily the revision
+          # that triggered this run.
+          if ($strSha -cnotmatch '^[0-9a-f]{40}$') {
+              throw 'acquire: the triggering revision is not a full commit hash'
+          }
+
+          # The workspace is proven empty rather than cleaned. Cleaning would
+          # decide what to delete from state that is already present, while an
+          # emptiness assertion has no such input.
+          if (@([System.IO.Directory]::EnumerateFileSystemEntries($PWD.Path)).Count -ne 0) {
+              throw 'acquire: the workspace is not empty'
+          }
+
+          # Resolved from a fixed candidate list rather than by name. Nothing has
+          # executed in this step yet, so name resolution is not attacker-
+          # influenced here -- but PowerShell aliases curl and wget to
+          # Invoke-WebRequest on the Desktop edition, this repository already
+          # pins the Git executable this way in the verify step, and relying on
+          # an alias being absent is a property of the host rather than
+          # something this file asserts. Constant, so nothing later can rebind
+          # it.
+          $strResolvedGit = @('/usr/bin/git', '/bin/git') | Where-Object { [System.IO.File]::Exists($_) } | Select-Object -First 1
+          if ([string]::IsNullOrEmpty($strResolvedGit)) { throw 'acquire: Git was not resolved as an application' }
+          New-Variable -Name strGitPath -Value $strResolvedGit -Option Constant
+
+          & $strGitPath -c core.hooksPath=/dev/null init --quiet .
+          if ($LASTEXITCODE -ne 0) { throw "acquire: git init exited $LASTEXITCODE" }
+          & $strGitPath remote add origin "$strServerUrl/$strRepository"
+          if ($LASTEXITCODE -ne 0) { throw "acquire: git remote add exited $LASTEXITCODE" }
+          # Fetching the commit itself, not a ref that names it. No credential
+          # is supplied and none is configured, so nothing is persisted for the
+          # next step to have to clean up.
+          & $strGitPath -c credential.helper= -c http.extraheader= -c core.hooksPath=/dev/null fetch --no-tags --no-recurse-submodules origin $strSha
+          if ($LASTEXITCODE -ne 0) { throw "acquire: git fetch exited $LASTEXITCODE" }
+          & $strGitPath -c core.hooksPath=/dev/null checkout --quiet --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw "acquire: git checkout exited $LASTEXITCODE" }
+          $arrHeadOutput = @(& $strGitPath rev-parse HEAD)
+          $intHeadExitCode = $LASTEXITCODE
+          if ($intHeadExitCode -ne 0) {
+              throw "acquire: git rev-parse exited $intHeadExitCode"
+          }
+          if ($arrHeadOutput.Count -ne 1) {
+              throw 'acquire: git rev-parse must return exactly one line'
+          }
+          $strHead = $arrHeadOutput[0].Trim()
+          if ($strHead -cne $strSha) {
+              throw 'acquire: the checked out revision is not the triggering revision'
+          }
+          Write-Information "acquire: anonymous exact checkout of $strSha" -InformationAction Continue
+      - name: Verify checkout credential cleanup
+        id: verify-checkout-credentials
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Do not load user/system Git credentials or hooks during anonymous acquisition.
+          if (-not [string]::IsNullOrEmpty($env:GIT_CONFIG_COUNT) -or
+              -not [string]::IsNullOrEmpty($env:GIT_CONFIG_PARAMETERS)) {
+              throw 'credential-policy: external Git command configuration is not allowed'
+          }
+          $env:GIT_CONFIG_NOSYSTEM = '1'
+          $env:GIT_CONFIG_GLOBAL = '/dev/null'
+          $env:GIT_TERMINAL_PROMPT = '0'
+          if (-not [string]::IsNullOrEmpty($env:GITHUB_TOKEN) -or
+              -not [string]::IsNullOrEmpty($env:GH_TOKEN) -or
+              -not [string]::IsNullOrEmpty($env:ACTIONS_RUNTIME_TOKEN)) {
+              throw 'credential-policy: a token was projected into a code job'
+          }
+          # git config exits 1 when a queried key is absent, which is the secure
+          # expected state this step asserts. If the runner enables native-command
+          # error mapping, that accepted status would terminate the step before the
+          # explicit capture below runs, so it is disabled the same way
+          # markdownlint.yml disables it.
+          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
+              $PSNativeCommandUseErrorActionPreference = $false
+          }
+          # Resolved here too. Constants do not cross step boundaries, and this
+          # step asserts a credential property, so the executable it asks must
+          # not be chosen by name resolution either.
+          $strResolvedGit = @('/usr/bin/git', '/bin/git') | Where-Object { [System.IO.File]::Exists($_) } | Select-Object -First 1
+          if ([string]::IsNullOrEmpty($strResolvedGit)) { throw 'credential-policy: Git was not resolved as an application' }
+          New-Variable -Name strGitPath -Value $strResolvedGit -Option Constant
+          $arrRemoteUrls = @(& $strGitPath remote get-url --all origin)
+          if ($LASTEXITCODE -ne 0 -or $arrRemoteUrls.Count -ne 1) {
+              throw 'credential-policy: unable to resolve exactly one origin URL'
+          }
+          if ($arrRemoteUrls[0] -cne 'https://github.com/franklesniak/TerraformStyleGuide') {
+              throw 'credential-policy: origin is not a credential-free GitHub HTTPS URL'
+          }
+          $arrHelpers = @(& $strGitPath config --local --get-all credential.helper)
+          $intHelperExit = $LASTEXITCODE
+          $global:LASTEXITCODE = 0
+          if (($intHelperExit -ne 0 -and $intHelperExit -ne 1) -or $arrHelpers.Count -ne 0) {
+              throw 'credential-policy: a local credential helper is configured'
+          }
+          $arrAuthorizationKeys = @(& $strGitPath config --local --name-only --get-regexp '^http\..*\.extraheader$')
+          $intAuthorizationExit = $LASTEXITCODE
+          $global:LASTEXITCODE = 0
+          if (($intAuthorizationExit -ne 0 -and $intAuthorizationExit -ne 1) -or $arrAuthorizationKeys.Count -ne 0) {
+              throw 'credential-policy: persisted HTTP authorization is configured'
+          }
+
+          $arrEffectiveConfig = @(& $strGitPath config --show-scope --name-only --list)
+          $intEffectiveConfigExit = $LASTEXITCODE
+          if ($intEffectiveConfigExit -ne 0 -or @($arrEffectiveConfig | Where-Object { $_ -cmatch '^(system|global)\s' }).Count -ne 0) {
+              throw 'credential-policy: external Git configuration was not excluded'
+          }
 
       - name: Set up locked Node.js runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: package.json
-          package-manager-cache: false
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
+              $PSNativeCommandUseErrorActionPreference = $false
+          }
+          if (-not [string]::IsNullOrEmpty($env:GITHUB_TOKEN) -or
+              -not [string]::IsNullOrEmpty($env:GH_TOKEN) -or
+              -not [string]::IsNullOrEmpty($env:ACTIONS_RUNTIME_TOKEN)) {
+              throw 'credential-policy: a token was projected into a code job'
+          }
+          $strVersion = '24.18.1'
+          $strReviewedSha256 = 'D6C664DF3F3F61458E8C277585571328522D705166723A7C7823A9253A4D15A0'
+          $strNodeRoot = [IO.Path]::Combine($env:RUNNER_TEMP, 'agent-validation-node')
+          $strArchive = [IO.Path]::Combine($env:RUNNER_TEMP, 'agent-validation-node.tar.xz')
+          if ([IO.Path]::Exists($strNodeRoot) -or [IO.Path]::Exists($strArchive)) {
+              throw 'toolchain: runtime staging destination already exists'
+          }
+          $strCurlPath = @('/usr/bin/curl', '/bin/curl') |
+              Where-Object { [IO.File]::Exists($_) } | Select-Object -First 1
+          $strTarPath = @('/usr/bin/tar', '/bin/tar') |
+              Where-Object { [IO.File]::Exists($_) } | Select-Object -First 1
+          if ([string]::IsNullOrEmpty($strCurlPath) -or [string]::IsNullOrEmpty($strTarPath)) {
+              throw 'toolchain: fixed download/extraction tools are unavailable'
+          }
+          $strUrl = "https://nodejs.org/dist/v$strVersion/node-v$strVersion-linux-x64.tar.xz"
+          & $strCurlPath --silent --show-error --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 --retry-all-errors --connect-timeout 20 --max-time 120 --retry-max-time 300 --output $strArchive $strUrl
+          if ($LASTEXITCODE -ne 0) { throw "toolchain: download exited $LASTEXITCODE" }
+          if ((Get-FileHash -LiteralPath $strArchive -Algorithm SHA256).Hash -cne $strReviewedSha256) {
+              throw 'toolchain: official Node archive does not match the reviewed digest'
+          }
+          [void][IO.Directory]::CreateDirectory($strNodeRoot)
+          & $strTarPath -xJf $strArchive -C $strNodeRoot --strip-components=1
+          if ($LASTEXITCODE -ne 0) { throw "toolchain: extraction exited $LASTEXITCODE" }
+          $strNodePath = [IO.Path]::Combine($strNodeRoot, 'bin', 'node')
+          $strNpmPath = [IO.Path]::Combine($strNodeRoot, 'bin', 'npm')
+          if (-not [IO.File]::Exists($strNodePath) -or -not [IO.File]::Exists($strNpmPath)) {
+              throw 'toolchain: verified runtime executables are missing'
+          }
+          $arrVersionOutput = @(& $strNodePath --version)
+          $intVersionExitCode = $LASTEXITCODE
+          if ($intVersionExitCode -ne 0) {
+              throw "toolchain: runtime version command exited $intVersionExitCode"
+          }
+          if ($arrVersionOutput.Count -ne 1) {
+              throw 'toolchain: runtime version command must return exactly one line'
+          }
+          $strObservedVersion = $arrVersionOutput[0].Trim()
+          if ($strObservedVersion -cne "v$strVersion") {
+              throw 'toolchain: verified runtime executable identity is wrong'
+          }
+          [IO.File]::AppendAllText($env:GITHUB_PATH,
+              [IO.Path]::Combine($strNodeRoot, 'bin') + "`n", [Text.UTF8Encoding]::new($false))
 
       - name: Verify locked Node.js runtime
         shell: bash
         run: |
           set -euo pipefail
+          if [[ -n "${GITHUB_TOKEN:-}" || -n "${GH_TOKEN:-}" ||
+            -n "${ACTIONS_RUNTIME_TOKEN:-}" || -n "${GIT_CONFIG_COUNT:-}" ||
+            -n "${GIT_CONFIG_PARAMETERS:-}" ]]; then
+            echo '::error::Unexpected credential or Git configuration channel.'
+            exit 1
+          fi
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          export npm_config_userconfig=/dev/null
+          export npm_config_globalconfig=/etc/npmrc-absent-by-policy
+          if [[ ! -c "${npm_config_userconfig}" || -s "${npm_config_userconfig}" ||
+            -e "${npm_config_globalconfig}" || -L "${npm_config_globalconfig}" ]]; then
+            echo '::error::Unexpected package-manager configuration source.'
+            exit 1
+          fi
+          printf '%s\n' 'npm_config_userconfig=/dev/null' \
+            'npm_config_globalconfig=/etc/npmrc-absent-by-policy' >> "${GITHUB_ENV}"
           expected_node="$(node -p 'require("./package.json").engines.node')"
           expected_npm="$(node -p 'require("./package.json").engines.npm')"
           test "$(node --version)" = "v${expected_node}"
@@ -61,7 +262,6 @@ jobs:
         id: resolve_run_time
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           API_URL: ${{ github.api_url }}
           REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
@@ -72,32 +272,87 @@ jobs:
           RUN_HEAD_REF_NAME: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.ref || github.ref_name }}
           RUN_HEAD_REF: ${{ github.event_name == 'pull_request_target' && format('refs/heads/{0}', github.event.pull_request.head.ref) || github.ref }}
           RUN_HEAD_REPOSITORY: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name || github.repository }}
-        run: node .github/workflows/Resolve-AgentInstructionFinalizationTime.mjs
+        run: |
+          set -euo pipefail
+          if [[ -n "${GITHUB_TOKEN:-}" || -n "${GH_TOKEN:-}" ||
+            -n "${ACTIONS_RUNTIME_TOKEN:-}" || -n "${GIT_CONFIG_COUNT:-}" ||
+            -n "${GIT_CONFIG_PARAMETERS:-}" ]]; then
+            echo '::error::Unexpected credential or Git configuration channel.'
+            exit 1
+          fi
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          node .github/workflows/Resolve-AgentInstructionFinalizationTime.mjs
 
       - name: Fetch pull request head as data
         if: github.event_name == 'pull_request_target'
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
+          if [[ -n "${GITHUB_TOKEN:-}" || -n "${GH_TOKEN:-}" ||
+            -n "${ACTIONS_RUNTIME_TOKEN:-}" || -n "${GIT_CONFIG_COUNT:-}" ||
+            -n "${GIT_CONFIG_PARAMETERS:-}" ]]; then
+            echo '::error::Unexpected credential or Git configuration channel.'
+            exit 1
+          fi
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
           [[ "${PR_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
-          authorization="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 -w 0)"
           # An unexpected non-fast-forward local ref must fail closed.
-          GIT_CONFIG_COUNT=1 \
-            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \
-            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \
-            git fetch --no-tags --no-recurse-submodules origin \
+          git fetch --no-tags --no-recurse-submodules origin \
               "refs/pull/${PR_NUMBER}/head:refs/remotes/pull/${PR_NUMBER}/head"
-          unset authorization
           fetched_head="$(git rev-parse --verify \
             "refs/remotes/pull/${PR_NUMBER}/head^{commit}")"
           test "${fetched_head}" = "${PR_HEAD_SHA}"
           git diff --quiet --no-ext-diff
           git diff --cached --quiet --no-ext-diff
+
+      - name: Fetch pull request base as data
+        if: github.event_name == 'pull_request_target'
+        shell: bash
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${GITHUB_TOKEN:-}" || -n "${GH_TOKEN:-}" ||
+            -n "${ACTIONS_RUNTIME_TOKEN:-}" || -n "${GIT_CONFIG_COUNT:-}" ||
+            -n "${GIT_CONFIG_PARAMETERS:-}" ]]; then
+            echo '::error::Unexpected credential or Git configuration channel.'
+            exit 1
+          fi
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          if [[ ! "${PR_BASE_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo '::error::Pull request base must be a full lowercase commit hash.'
+            exit 1
+          fi
+          if [[ "${PR_BASE_SHA}" == "0000000000000000000000000000000000000000" ]]; then
+            echo '::error::Pull request base must not be the zero commit hash.'
+            exit 1
+          fi
+          if ! git cat-file -e "${PR_BASE_SHA}^{commit}" 2>/dev/null; then
+            if ! git fetch --no-tags --no-recurse-submodules origin "${PR_BASE_SHA}"; then
+              echo '::error::Could not fetch the exact pull request base.'
+              exit 1
+            fi
+          fi
+          if ! fetched_base="$(git rev-parse --verify "${PR_BASE_SHA}^{commit}")"; then
+            echo '::error::Could not resolve the exact pull request base commit.'
+            exit 1
+          fi
+          if [[ "${fetched_base}" != "${PR_BASE_SHA}" ]]; then
+            echo '::error::Resolved pull request base does not match the exact event identity.'
+            exit 1
+          fi
+          if ! git diff --quiet --no-ext-diff; then
+            echo '::error::Could not confirm a clean worktree after pull request base acquisition.'
+            exit 1
+          fi
+          if ! git diff --cached --quiet --no-ext-diff; then
+            echo '::error::Could not confirm a clean index after pull request base acquisition.'
+            exit 1
+          fi
 
       - name: Fetch existing push range base as data
         if: >-
@@ -106,24 +361,25 @@ jobs:
           !github.event.deleted
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           RANGE_BASE_SHA: ${{ github.event.before }}
         run: |
           set -euo pipefail
+          if [[ -n "${GITHUB_TOKEN:-}" || -n "${GH_TOKEN:-}" ||
+            -n "${ACTIONS_RUNTIME_TOKEN:-}" || -n "${GIT_CONFIG_COUNT:-}" ||
+            -n "${GIT_CONFIG_PARAMETERS:-}" ]]; then
+            echo '::error::Unexpected credential or Git configuration channel.'
+            exit 1
+          fi
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
           [[ "${RANGE_BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]
           test "${RANGE_BASE_SHA}" != "0000000000000000000000000000000000000000"
-          authorization="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 -w 0)"
-          GIT_CONFIG_COUNT=1 \
-            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \
-            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \
-            git fetch --no-tags --no-recurse-submodules origin "${RANGE_BASE_SHA}"
-          unset authorization
+          git fetch --no-tags --no-recurse-submodules origin "${RANGE_BASE_SHA}"
           fetched_base="$(git rev-parse --verify "${RANGE_BASE_SHA}^{commit}")"
           test "${fetched_base}" = "${RANGE_BASE_SHA}"
           git diff --quiet --no-ext-diff
           git diff --cached --quiet --no-ext-diff
 
-      - name: Resolve authenticated merge source
+      - name: Resolve exact public merge source
         id: resolve_automated_merge_source
         if: >-
           github.event_name == 'push' &&
@@ -132,16 +388,23 @@ jobs:
           !github.event.deleted
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           API_URL: ${{ github.api_url }}
           REPOSITORY: ${{ github.repository }}
           RANGE_HEAD_SHA: ${{ github.sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
+          if [[ -n "${GITHUB_TOKEN:-}" || -n "${GH_TOKEN:-}" ||
+            -n "${ACTIONS_RUNTIME_TOKEN:-}" || -n "${GIT_CONFIG_COUNT:-}" ||
+            -n "${GIT_CONFIG_PARAMETERS:-}" ]]; then
+            echo '::error::Unexpected credential or Git configuration channel.'
+            exit 1
+          fi
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
           [[ "${RANGE_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]
           node --input-type=module <<'NODE'
           import { appendFileSync } from 'node:fs';
+          import { formatRateLimitDiagnostic } from './.github/workflows/Resolve-AgentInstructionFinalizationTime.mjs';
 
           const objectId = /^[0-9a-f]{40}$/u;
           const positiveInteger = /^[1-9][0-9]*$/u;
@@ -149,10 +412,9 @@ jobs:
           const repository = process.env.REPOSITORY;
           const head = process.env.RANGE_HEAD_SHA;
           const defaultBranch = process.env.DEFAULT_BRANCH;
-          const token = process.env.GITHUB_TOKEN;
           const output = process.env.GITHUB_OUTPUT;
           if (!apiUrl || !repository || !objectId.test(head ?? '') ||
-              !defaultBranch || !token || !output) {
+              !defaultBranch || !output) {
             throw new Error('Automated merge-source inputs are unavailable or invalid.');
           }
 
@@ -165,12 +427,14 @@ jobs:
             const response = await fetch(url, {
               headers: {
                 Accept: 'application/vnd.github+json',
-                Authorization: `Bearer ${token}`,
                 'X-GitHub-Api-Version': '2022-11-28',
               },
             });
             if (!response.ok) {
-              throw new Error(`Associated pull-request lookup failed: ${response.status}.`);
+              throw new Error(
+                `Associated pull-request lookup failed: ${response.status}.` +
+                formatRateLimitDiagnostic(response),
+              );
             }
             const pageRecords = await response.json();
             if (!Array.isArray(pageRecords)) {
@@ -215,29 +479,30 @@ jobs:
           }
           NODE
 
-      - name: Fetch authenticated merge source as data
+      - name: Fetch exact public merge source as data
         if: steps.resolve_automated_merge_source.outputs.source_revision != ''
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           SOURCE_REVISION: >-
             ${{ steps.resolve_automated_merge_source.outputs.source_revision }}
           PR_NUMBER: ${{ steps.resolve_automated_merge_source.outputs.pull_number }}
           MERGE_RESULT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          if [[ -n "${GITHUB_TOKEN:-}" || -n "${GH_TOKEN:-}" ||
+            -n "${ACTIONS_RUNTIME_TOKEN:-}" || -n "${GIT_CONFIG_COUNT:-}" ||
+            -n "${GIT_CONFIG_PARAMETERS:-}" ]]; then
+            echo '::error::Unexpected credential or Git configuration channel.'
+            exit 1
+          fi
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
           [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
           [[ "${MERGE_RESULT_SHA}" =~ ^[0-9a-f]{40}$ ]]
           source_ref="refs/remotes/automated-merge/${PR_NUMBER}/head"
           git check-ref-format "${source_ref}"
-          authorization="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 -w 0)"
-          GIT_CONFIG_COUNT=1 \
-            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \
-            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \
-            git fetch --no-tags --no-recurse-submodules origin \
+          git fetch --no-tags --no-recurse-submodules origin \
               "refs/pull/${PR_NUMBER}/head:${source_ref}"
-          unset authorization
           fetched_source="$(git rev-parse --verify "${source_ref}^{commit}")"
           test "${fetched_source}" = "${SOURCE_REVISION}"
           IFS=' ' read -r -a head_and_parents <<< "$(
@@ -263,21 +528,22 @@ jobs:
           github.ref_name != github.event.repository.default_branch)
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
+          if [[ -n "${GITHUB_TOKEN:-}" || -n "${GH_TOKEN:-}" ||
+            -n "${ACTIONS_RUNTIME_TOKEN:-}" || -n "${GIT_CONFIG_COUNT:-}" ||
+            -n "${GIT_CONFIG_PARAMETERS:-}" ]]; then
+            echo '::error::Unexpected credential or Git configuration channel.'
+            exit 1
+          fi
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
           default_ref="refs/heads/${DEFAULT_BRANCH}"
           remote_ref="refs/remotes/origin/${DEFAULT_BRANCH}"
           git check-ref-format "${default_ref}"
           git check-ref-format "${remote_ref}"
-          authorization="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 -w 0)"
-          GIT_CONFIG_COUNT=1 \
-            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \
-            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \
-            git fetch --no-tags --no-recurse-submodules origin \
+          git fetch --no-tags --no-recurse-submodules origin \
               "${default_ref}:${remote_ref}"
-          unset authorization
           fetched_baseline="$(git rev-parse --verify "${remote_ref}^{commit}")"
           [[ "${fetched_baseline}" =~ ^[0-9a-f]{40}$ ]]
           printf 'revision=%s\n' "${fetched_baseline}" >> "${GITHUB_OUTPUT}"
@@ -290,18 +556,19 @@ jobs:
           steps.resolve_run_time.outputs.new_ref == 'false'
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           RANGE_BASE_SHA: ${{ steps.resolve_run_time.outputs.base_revision }}
         run: |
           set -euo pipefail
+          if [[ -n "${GITHUB_TOKEN:-}" || -n "${GH_TOKEN:-}" ||
+            -n "${ACTIONS_RUNTIME_TOKEN:-}" || -n "${GIT_CONFIG_COUNT:-}" ||
+            -n "${GIT_CONFIG_PARAMETERS:-}" ]]; then
+            echo '::error::Unexpected credential or Git configuration channel.'
+            exit 1
+          fi
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
           [[ "${RANGE_BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]
           test "${RANGE_BASE_SHA}" != "0000000000000000000000000000000000000000"
-          authorization="$(printf 'x-access-token:%s' "${GITHUB_TOKEN}" | base64 -w 0)"
-          GIT_CONFIG_COUNT=1 \
-            GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL}/.extraheader" \
-            GIT_CONFIG_VALUE_0="Authorization: Basic ${authorization}" \
-            git fetch --no-tags --no-recurse-submodules origin "${RANGE_BASE_SHA}"
-          unset authorization
+          git fetch --no-tags --no-recurse-submodules origin "${RANGE_BASE_SHA}"
           fetched_base="$(git rev-parse --verify "${RANGE_BASE_SHA}^{commit}")"
           test "${fetched_base}" = "${RANGE_BASE_SHA}"
           git diff --quiet --no-ext-diff
@@ -314,17 +581,29 @@ jobs:
           INPUT_REVISION: >-
             ${{ github.event_name == 'pull_request_target' &&
               github.event.pull_request.head.sha || github.sha }}
-        run: >-
-          node .github/workflows/Test-AgentInstructionParserManifest.mjs
-          --repository-root .
-          --trusted-revision "${TRUSTED_REVISION}"
-          --input-revision "${INPUT_REVISION}"
-          --self-test
+        run: |
+          set -euo pipefail
+          if [[ -n "${GITHUB_TOKEN:-}" || -n "${GH_TOKEN:-}" ||
+            -n "${ACTIONS_RUNTIME_TOKEN:-}" || -n "${GIT_CONFIG_COUNT:-}" ||
+            -n "${GIT_CONFIG_PARAMETERS:-}" ]]; then
+            echo '::error::Unexpected credential or Git configuration channel.'
+            exit 1
+          fi
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          node .github/workflows/Test-AgentInstructionParserManifest.mjs --repository-root . --trusted-revision "${TRUSTED_REVISION}" --input-revision "${INPUT_REVISION}" --self-test
 
       - name: Install locked Markdown parser
-        run: >-
-          npm ci --ignore-scripts --no-audit --fund=false
-          --include=dev --package-lock=true
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${GITHUB_TOKEN:-}" || -n "${GH_TOKEN:-}" ||
+            -n "${ACTIONS_RUNTIME_TOKEN:-}" || -n "${GIT_CONFIG_COUNT:-}" ||
+            -n "${GIT_CONFIG_PARAMETERS:-}" ]]; then
+            echo '::error::Unexpected credential or Git configuration channel.'
+            exit 1
+          fi
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          npm ci --ignore-scripts --no-audit --fund=false --include=dev --package-lock=true
 
       - name: Validate instruction capacity and capabilities
         shell: pwsh
@@ -373,15 +652,23 @@ jobs:
             ${{ steps.resolve_automated_merge_source.outputs.source_revision || '' }}
           AGENT_INSTRUCTION_TRUSTED_FINALIZATION_TIMESTAMP: >-
             ${{ steps.resolve_run_time.outputs.timestamp }}
-        run: >-
-          ./.github/workflows/Test-AgentInstructions.ps1 -SelfTest
-          -InputRevision $env:AGENT_INSTRUCTION_INPUT_REVISION
-          -RangeBaseRevision $env:AGENT_INSTRUCTION_RANGE_BASE
-          -RangeHeadRevision $env:AGENT_INSTRUCTION_RANGE_HEAD
-          -RangeIsNewRef:([bool]::Parse($env:AGENT_INSTRUCTION_RANGE_IS_NEW_REF))
-          -RangeComparisonMode
-          $env:AGENT_INSTRUCTION_RANGE_COMPARISON_MODE
-          -AutomatedMergeSourceRevision
-          $env:AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE
-          -TrustedFinalizationTimestamp
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not [string]::IsNullOrEmpty($env:GITHUB_TOKEN) -or
+              -not [string]::IsNullOrEmpty($env:GH_TOKEN) -or
+              -not [string]::IsNullOrEmpty($env:ACTIONS_RUNTIME_TOKEN) -or
+              -not [string]::IsNullOrEmpty($env:GIT_CONFIG_COUNT) -or
+              -not [string]::IsNullOrEmpty($env:GIT_CONFIG_PARAMETERS)) {
+              throw 'credential-policy: unexpected credential or Git configuration channel'
+          }
+          ./.github/workflows/Test-AgentInstructions.ps1 -SelfTest `
+          -InputRevision $env:AGENT_INSTRUCTION_INPUT_REVISION `
+          -RangeBaseRevision $env:AGENT_INSTRUCTION_RANGE_BASE `
+          -RangeHeadRevision $env:AGENT_INSTRUCTION_RANGE_HEAD `
+          -RangeIsNewRef:([bool]::Parse($env:AGENT_INSTRUCTION_RANGE_IS_NEW_REF)) `
+          -RangeComparisonMode `
+          $env:AGENT_INSTRUCTION_RANGE_COMPARISON_MODE `
+          -AutomatedMergeSourceRevision `
+          $env:AGENT_INSTRUCTION_AUTOMATED_MERGE_SOURCE `
+          -TrustedFinalizationTimestamp `
           $env:AGENT_INSTRUCTION_TRUSTED_FINALIZATION_TIMESTAMP
