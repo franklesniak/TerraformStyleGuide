@@ -15512,6 +15512,32 @@ if ($SelfTest) {
             )
         }
     }
+    $strFinalizationResolverImportPath = ConvertTo-Json `
+        -InputObject $strFinalizationResolverPath -Compress
+    $strFinalizationResolverImportProbe = @"
+import { pathToFileURL } from 'node:url';
+if (process.argv[1] !== undefined) {
+  throw new Error('The formatter import check must use standard input.');
+}
+const { formatRateLimitDiagnostic } = await import(
+  pathToFileURL($strFinalizationResolverImportPath).href
+);
+if (typeof formatRateLimitDiagnostic !== 'function') {
+  throw new Error('The rate-limit formatter function export is unavailable.');
+}
+console.log('Finalization resolver formatter export passed.');
+"@
+    $arrFinalizationResolverImportOutput = @(
+        $strFinalizationResolverImportProbe | & node --input-type=module 2>&1
+    )
+    $intFinalizationResolverImportExit = $LASTEXITCODE
+    $global:LASTEXITCODE = 0
+    if ($intFinalizationResolverImportExit -ne 0 -or
+        $arrFinalizationResolverImportOutput.Count -ne 1 -or
+        [string]$arrFinalizationResolverImportOutput[0] -cne
+        'Finalization resolver formatter export passed.') {
+        throw 'The finalization-time resolver formatter export check failed.'
+    }
     $arrFinalizationResolverSelfTestOutput = @(
         & node $strFinalizationResolverPath --self-test 2>&1
     )
