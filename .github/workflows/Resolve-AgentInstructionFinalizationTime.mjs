@@ -41,6 +41,26 @@ function parseTimestamp(value, maximumTime, displayName) {
   return time;
 }
 
+export function formatRateLimitDiagnostic(response) {
+  if (response?.status !== 403 && response?.status !== 429) {
+    return '';
+  }
+  const headerSpecifications = [
+    ['x-ratelimit-remaining', 'remaining'],
+    ['x-ratelimit-reset', 'reset-epoch-seconds'],
+    ['retry-after', 'retry-after-seconds'],
+  ];
+  const values = headerSpecifications.map(([name, label]) => {
+    const value = typeof response.headers?.get === 'function'
+      ? response.headers.get(name)
+      : null;
+    const printable = typeof value === 'string' && /^[0-9]{1,16}$/u.test(value) &&
+      Number.isSafeInteger(Number(value)) ? value : 'unavailable';
+    return `${label}=${printable}`;
+  });
+  return ` Rate-limit metadata: ${values.join('; ')}.`;
+}
+
 async function readJson(url, token, fetchImplementation, displayName) {
   const headers = {
     Accept: 'application/vnd.github+json',
@@ -53,7 +73,10 @@ async function readJson(url, token, fetchImplementation, displayName) {
     headers,
   });
   if (!response?.ok) {
-    throw new Error(`${displayName} failed: ${response?.status ?? 'unknown'}.`);
+    throw new Error(
+      `${displayName} failed: ${response?.status ?? 'unknown'}.` +
+      formatRateLimitDiagnostic(response),
+    );
   }
   return {
     headers: response.headers,
@@ -506,6 +529,102 @@ export async function runSelfTest() {
     fixtures += 1;
     await expectRejected(name, action, pattern);
   };
+
+  const unavailableRateLimit = ' Rate-limit metadata: remaining=unavailable; ' +
+    'reset-epoch-seconds=unavailable; retry-after-seconds=unavailable.';
+  const rateHeaderValues = {
+    'x-ratelimit-remaining': '0',
+    'x-ratelimit-reset': '1790647200',
+    'retry-after': '60',
+  };
+  for (const status of [403, 429]) {
+    const requestedHeaders = [];
+    const response = {
+      status,
+      headers: { get: (name) => {
+        requestedHeaders.push(name);
+        return rateHeaderValues[name] ?? 'unrelated header content';
+      } },
+    };
+    assertEqual(
+      'rate-limit diagnostics retain only bounded response metadata',
+      formatRateLimitDiagnostic(response),
+      ' Rate-limit metadata: remaining=0; reset-epoch-seconds=1790647200; ' +
+        'retry-after-seconds=60.',
+    );
+    assertEqual(
+      'rate-limit diagnostics read only the three allowlisted headers',
+      JSON.stringify(requestedHeaders),
+      JSON.stringify(Object.keys(rateHeaderValues)),
+    );
+  }
+  assertEqual(
+    'nonzero remaining is metadata rather than a rate-exhaustion classification',
+    formatRateLimitDiagnostic({ status: 403, headers: { get: () => '5' } }),
+    ' Rate-limit metadata: remaining=5; reset-epoch-seconds=5; retry-after-seconds=5.',
+  );
+  for (const headers of [undefined, {}, { get: null }]) {
+    assertEqual(
+      'missing rate-limit header access retains a bounded unavailable marker',
+      formatRateLimitDiagnostic({ status: 403, headers }),
+      unavailableRateLimit,
+    );
+  }
+  for (const value of [
+    null, '', '-1', '1.5', '1\r\n::error::untrusted', '12345678901234567',
+    '9007199254740992', 'not-a-number', 'Tue, 29 Sep 2026 02:00:00 GMT', 0,
+  ]) {
+    assertEqual(
+      'malformed rate-limit metadata is not echoed',
+      formatRateLimitDiagnostic({ status: 429, headers: { get: () => value } }),
+      unavailableRateLimit,
+    );
+  }
+  assertEqual(
+    'maximum safe integer rate-limit metadata remains bounded',
+    formatRateLimitDiagnostic({
+      status: 403,
+      headers: { get: () => '9007199254740991' },
+    }),
+    ' Rate-limit metadata: remaining=9007199254740991; ' +
+      'reset-epoch-seconds=9007199254740991; retry-after-seconds=9007199254740991.',
+  );
+  for (const status of [200, 401, 404, 500, undefined]) {
+    assertEqual(
+      'other statuses retain their existing diagnostics without reading headers',
+      formatRateLimitDiagnostic({
+        status,
+        headers: { get: () => { throw new Error('Unexpected header read.'); } },
+      }),
+      '',
+    );
+  }
+  for (const status of [403, 429]) {
+    let requests = 0;
+    let waits = 0;
+    let bodyReads = 0;
+    await reject(
+      'rate-limited resolver failure retains status and bounded metadata',
+      () => resolveFinalizationTimestamp({
+        ...base,
+        fetchImplementation: async () => {
+          requests += 1;
+          return {
+            ok: false,
+            status,
+            headers: { get: (name) => rateHeaderValues[name] ?? null },
+            json: async () => { bodyReads += 1; return {}; },
+          };
+        },
+        waitImplementation: async () => { waits += 1; },
+      }),
+      new RegExp(`^Workflow-run lookup failed: ${status}\\. Rate-limit metadata: ` +
+        'remaining=0; reset-epoch-seconds=1790647200; retry-after-seconds=60\\.$', 'u'),
+    );
+    assertEqual('rate-limit diagnostics make no additional request', requests, 1);
+    assertEqual('rate-limit diagnostics do not add a retry delay', waits, 0);
+    assertEqual('rate-limit diagnostics do not read the response body', bodyReads, 0);
+  }
 
   const ordinaryTimestamp = await resolveFinalizationTimestamp({
     ...base,

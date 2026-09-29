@@ -114,7 +114,7 @@ $script:objPython312CommandContext = $null
 $script:objNodeApplicationContext = $null
 $script:hashtableReviewedAgentSetupSha256 = @{
     '.github/workflows/copilot-setup-steps.yml' =
-        'd229edc22a802bfabd4fa542c27caa803535772ab0d1240c4f1e83fc2831c345'
+        '0984c193833fe6810d604b0602802110c1a6a8c57ef789f342259aa69fa82280'
     '.github/workflows/package.json' =
         'c6db6befda88e58aa5568f52f44ca934af5751e545dba0644297b9fb15577e0d'
     '.github/workflows/package-lock.json' =
@@ -2146,6 +2146,47 @@ function Get-HuskySetupContractFailure {
     if (Test-WorkflowCredentialProjection -WorkflowContent $CopilotSetupContent) {
         Write-Output 'Copilot setup must not project credentials.'
     }
+    $hashtableExpectedNativeIdentityBlocks = @{
+        checkout = @'
+          $arrHeadOutput = @(& $strGitPath rev-parse HEAD)
+          $intHeadExitCode = $LASTEXITCODE
+          if ($intHeadExitCode -ne 0) {
+              throw "acquire: git rev-parse exited $intHeadExitCode"
+          }
+          if ($arrHeadOutput.Count -ne 1) {
+              throw 'acquire: git rev-parse must return exactly one line'
+          }
+          $strHead = $arrHeadOutput[0].Trim()
+          if ($strHead -cne $strSha) {
+              throw 'acquire: the checked out revision is not the triggering revision'
+          }
+'@.TrimEnd()
+        runtime = @'
+          $arrVersionOutput = @(& $strNodePath --version)
+          $intVersionExitCode = $LASTEXITCODE
+          if ($intVersionExitCode -ne 0) {
+              throw "toolchain: runtime version command exited $intVersionExitCode"
+          }
+          if ($arrVersionOutput.Count -ne 1) {
+              throw 'toolchain: runtime version command must return exactly one line'
+          }
+          $strObservedVersion = $arrVersionOutput[0].Trim()
+          if ($strObservedVersion -cne "v$strVersion") {
+              throw 'toolchain: verified runtime executable identity is wrong'
+          }
+'@.TrimEnd()
+    }
+    foreach ($objNativeIdentityBlock in $hashtableExpectedNativeIdentityBlocks.GetEnumerator()) {
+        if ([regex]::Matches(
+                $CopilotSetupContent, [regex]::Escape($objNativeIdentityBlock.Value)
+            ).Count -ne 1) {
+            Write-Output (
+                'Copilot setup must preserve native ' + $objNativeIdentityBlock.Key +
+                ' status and single-line identity.'
+            )
+        }
+    }
+
     $strExpectedNpmConfiguration = @'
           export npm_config_userconfig=/dev/null
           export npm_config_globalconfig=/etc/npmrc-absent-by-policy
@@ -7570,12 +7611,53 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
         $strWorkflowSha256 = [System.BitConverter]::ToString(
             $objSha256.ComputeHash([System.Text.UTF8Encoding]::new($false).GetBytes($WorkflowContent))
         ).Replace('-', '').ToLowerInvariant()
-        if ($strWorkflowSha256 -cne 'd0d4202479313f2e715eade6dc2a9ef356f3e24ab4b41e06a7e6e3d4ff62d234') {
+        if ($strWorkflowSha256 -cne '4e51249eff5a1db86d295cfbc4319baa0a99ed0f9d8d1c7f543a5153f562665f') {
             Write-Output 'The ordinary agent workflow must match its reviewed isolation contract.'
         }
     } finally {
         $objSha256.Dispose()
     }
+    $hashtableExpectedNativeIdentityBlocks = @{
+        checkout = @'
+          $arrHeadOutput = @(& $strGitPath rev-parse HEAD)
+          $intHeadExitCode = $LASTEXITCODE
+          if ($intHeadExitCode -ne 0) {
+              throw "acquire: git rev-parse exited $intHeadExitCode"
+          }
+          if ($arrHeadOutput.Count -ne 1) {
+              throw 'acquire: git rev-parse must return exactly one line'
+          }
+          $strHead = $arrHeadOutput[0].Trim()
+          if ($strHead -cne $strSha) {
+              throw 'acquire: the checked out revision is not the triggering revision'
+          }
+'@.TrimEnd()
+        runtime = @'
+          $arrVersionOutput = @(& $strNodePath --version)
+          $intVersionExitCode = $LASTEXITCODE
+          if ($intVersionExitCode -ne 0) {
+              throw "toolchain: runtime version command exited $intVersionExitCode"
+          }
+          if ($arrVersionOutput.Count -ne 1) {
+              throw 'toolchain: runtime version command must return exactly one line'
+          }
+          $strObservedVersion = $arrVersionOutput[0].Trim()
+          if ($strObservedVersion -cne "v$strVersion") {
+              throw 'toolchain: verified runtime executable identity is wrong'
+          }
+'@.TrimEnd()
+    }
+    foreach ($objNativeIdentityBlock in $hashtableExpectedNativeIdentityBlocks.GetEnumerator()) {
+        if ([regex]::Matches(
+                $WorkflowContent, [regex]::Escape($objNativeIdentityBlock.Value)
+            ).Count -ne 1) {
+            Write-Output (
+                'Agent workflow must preserve native ' + $objNativeIdentityBlock.Key +
+                ' status and single-line identity.'
+            )
+        }
+    }
+
     $strExpectedNpmConfiguration = @'
           export npm_config_userconfig=/dev/null
           export npm_config_globalconfig=/etc/npmrc-absent-by-policy
@@ -7605,6 +7687,9 @@ function Get-AutomatedMergeSourceWorkflowContractFailure {
     }
 
     $arrExactLiterals = @(
+        '    timeout-minutes: 15',
+        '          import { formatRateLimitDiagnostic } from ''./.github/workflows/Resolve-AgentInstructionFinalizationTime.mjs'';',
+        '                formatRateLimitDiagnostic(response),',
         '          & $strCurlPath --silent --show-error --fail --location --proto ''=https'' --proto-redir ''=https'' --tlsv1.2 --retry 3 --retry-all-errors --connect-timeout 20 --max-time 120 --retry-max-time 300 --output $strArchive $strUrl',
         '  pull_request_target:',
         '    types:',
@@ -9655,6 +9740,46 @@ if ($SelfTest) {
         throw 'The Copilot credential fixture requires one exact job environment context.'
     }
     $arrCopilotSetupMutations = @(
+        [pscustomobject]@{
+            Name = 'checkout status capture removed'
+            Content = $strCopilotSetupContent.Replace('          $intHeadExitCode = $LASTEXITCODE', '          # native exit capture removed')
+            Failure = 'Copilot setup must preserve native checkout status and single-line identity.'
+        },
+        [pscustomobject]@{
+            Name = 'checkout status guard disabled'
+            Content = $strCopilotSetupContent.Replace('          if ($intHeadExitCode -ne 0) {', '          if ($false) {')
+            Failure = 'Copilot setup must preserve native checkout status and single-line identity.'
+        },
+        [pscustomobject]@{
+            Name = 'checkout cardinality guard disabled'
+            Content = $strCopilotSetupContent.Replace('          if ($arrHeadOutput.Count -ne 1) {', '          if ($false) {')
+            Failure = 'Copilot setup must preserve native checkout status and single-line identity.'
+        },
+        [pscustomobject]@{
+            Name = 'checkout identity guard disabled'
+            Content = $strCopilotSetupContent.Replace('          if ($strHead -cne $strSha) {', '          if ($false) {')
+            Failure = 'Copilot setup must preserve native checkout status and single-line identity.'
+        },
+        [pscustomobject]@{
+            Name = 'runtime status capture removed'
+            Content = $strCopilotSetupContent.Replace('          $intVersionExitCode = $LASTEXITCODE', '          # native exit capture removed')
+            Failure = 'Copilot setup must preserve native runtime status and single-line identity.'
+        },
+        [pscustomobject]@{
+            Name = 'runtime status guard disabled'
+            Content = $strCopilotSetupContent.Replace('          if ($intVersionExitCode -ne 0) {', '          if ($false) {')
+            Failure = 'Copilot setup must preserve native runtime status and single-line identity.'
+        },
+        [pscustomobject]@{
+            Name = 'runtime cardinality guard disabled'
+            Content = $strCopilotSetupContent.Replace('          if ($arrVersionOutput.Count -ne 1) {', '          if ($false) {')
+            Failure = 'Copilot setup must preserve native runtime status and single-line identity.'
+        },
+        [pscustomobject]@{
+            Name = 'runtime identity guard disabled'
+            Content = $strCopilotSetupContent.Replace('          if ($strObservedVersion -cne "v$strVersion") {', '          if ($false) {')
+            Failure = 'Copilot setup must preserve native runtime status and single-line identity.'
+        },
         [pscustomobject]@{
             Name = 'Python CanonicalCache guard is disabled'
             Content = $strCopilotSetupContent.Replace(
@@ -15342,7 +15467,7 @@ if ($SelfTest) {
     if ($intFinalizationResolverSelfTestExit -ne 0 -or
         $arrFinalizationResolverSelfTestOutput.Count -ne 1 -or
         [string]$arrFinalizationResolverSelfTestOutput[0] -cne
-        'Finalization resolver self-tests passed: 112 fixtures.') {
+        'Finalization resolver self-tests passed: 144 fixtures.') {
         throw (
             'The finalization-time resolver self-test failed: ' +
             ($arrFinalizationResolverSelfTestOutput -join '; ')
@@ -15358,7 +15483,82 @@ if ($SelfTest) {
             ($arrAutomatedMergeWorkflowFailures -join '; ')
         )
     }
+    if ([regex]::Matches(
+            $strAgentWorkflowContent,
+            [regex]::Escape("    env:`n      GIT_CONFIG_NOSYSTEM:")
+        ).Count -ne 1) {
+        throw 'The ordinary credential fixture requires one exact job environment context.'
+    }
     $arrAutomatedMergeWorkflowMutations = @(
+        [pscustomobject]@{
+            Name = 'checkout status capture removed'
+            From = '          $intHeadExitCode = $LASTEXITCODE'
+            To = '          # native exit capture removed'
+            Failure = 'Agent workflow must preserve native checkout status and single-line identity.'
+        },
+        [pscustomobject]@{
+            Name = 'checkout status guard disabled'
+            From = '          if ($intHeadExitCode -ne 0) {'
+            To = '          if ($false) {'
+            Failure = 'Agent workflow must preserve native checkout status and single-line identity.'
+        },
+        [pscustomobject]@{
+            Name = 'checkout cardinality guard disabled'
+            From = '          if ($arrHeadOutput.Count -ne 1) {'
+            To = '          if ($false) {'
+            Failure = 'Agent workflow must preserve native checkout status and single-line identity.'
+        },
+        [pscustomobject]@{
+            Name = 'checkout identity guard disabled'
+            From = '          if ($strHead -cne $strSha) {'
+            To = '          if ($false) {'
+            Failure = 'Agent workflow must preserve native checkout status and single-line identity.'
+        },
+        [pscustomobject]@{
+            Name = 'runtime status capture removed'
+            From = '          $intVersionExitCode = $LASTEXITCODE'
+            To = '          # native exit capture removed'
+            Failure = 'Agent workflow must preserve native runtime status and single-line identity.'
+        },
+        [pscustomobject]@{
+            Name = 'runtime status guard disabled'
+            From = '          if ($intVersionExitCode -ne 0) {'
+            To = '          if ($false) {'
+            Failure = 'Agent workflow must preserve native runtime status and single-line identity.'
+        },
+        [pscustomobject]@{
+            Name = 'runtime cardinality guard disabled'
+            From = '          if ($arrVersionOutput.Count -ne 1) {'
+            To = '          if ($false) {'
+            Failure = 'Agent workflow must preserve native runtime status and single-line identity.'
+        },
+        [pscustomobject]@{
+            Name = 'runtime identity guard disabled'
+            From = '          if ($strObservedVersion -cne "v$strVersion") {'
+            To = '          if ($false) {'
+            Failure = 'Agent workflow must preserve native runtime status and single-line identity.'
+        },
+        [pscustomobject]@{
+            Name = 'ordinary job timeout is missing'
+            From = '    timeout-minutes: 15'
+            To = ''
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '    timeout-minutes: 15'
+        },
+        [pscustomobject]@{
+            Name = 'ordinary job timeout is shorter'
+            From = '    timeout-minutes: 15'
+            To = '    timeout-minutes: 10'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '    timeout-minutes: 15'
+        },
+        [pscustomobject]@{
+            Name = 'ordinary job timeout is longer'
+            From = '    timeout-minutes: 15'
+            To = '    timeout-minutes: 20'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '    timeout-minutes: 15'
+        },
         [pscustomobject]@{
             Name = 'npm userconfig export is weakened'
             From = 'export npm_config_userconfig=/dev/null'
@@ -15428,62 +15628,62 @@ if ($SelfTest) {
         [pscustomobject]@{
             Name = 'GitHub token alias'
             Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
-            From = "    env:`n"
-            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github.token }}' + "`n"
+            From = "    env:`n      GIT_CONFIG_NOSYSTEM:"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github.token }}' + "`n      GIT_CONFIG_NOSYSTEM:"
         },
         [pscustomobject]@{
             Name = 'secret token alias'
             Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
-            From = "    env:`n"
-            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ secrets.GITHUB_TOKEN }}' + "`n"
+            From = "    env:`n      GIT_CONFIG_NOSYSTEM:"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ secrets.GITHUB_TOKEN }}' + "`n      GIT_CONFIG_NOSYSTEM:"
         },
         [pscustomobject]@{
             Name = 'indexed GitHub token alias'
             Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
-            From = "    env:`n"
-            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github[''token''] }}' + "`n"
+            From = "    env:`n      GIT_CONFIG_NOSYSTEM:"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github[''token''] }}' + "`n      GIT_CONFIG_NOSYSTEM:"
         },
         [pscustomobject]@{
             Name = 'computed GitHub index'
             Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
-            From = "    env:`n"
-            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github[format(''to{0}'', ''ken'')] }}' + "`n"
+            From = "    env:`n      GIT_CONFIG_NOSYSTEM:"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github[format(''to{0}'', ''ken'')] }}' + "`n      GIT_CONFIG_NOSYSTEM:"
         },
         [pscustomobject]@{
             Name = 'indexed secret alias'
             Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
-            From = "    env:`n"
-            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ secrets[''GITHUB_TOKEN''] }}' + "`n"
+            From = "    env:`n      GIT_CONFIG_NOSYSTEM:"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ secrets[''GITHUB_TOKEN''] }}' + "`n      GIT_CONFIG_NOSYSTEM:"
         },
         [pscustomobject]@{
             Name = 'whole GitHub context'
             Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
-            From = "    env:`n"
-            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ toJSON(github) }}' + "`n"
+            From = "    env:`n      GIT_CONFIG_NOSYSTEM:"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ toJSON(github) }}' + "`n      GIT_CONFIG_NOSYSTEM:"
         },
         [pscustomobject]@{
             Name = 'whole secrets context'
             Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
-            From = "    env:`n"
-            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ toJSON(secrets) }}' + "`n"
+            From = "    env:`n      GIT_CONFIG_NOSYSTEM:"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ toJSON(secrets) }}' + "`n      GIT_CONFIG_NOSYSTEM:"
         },
         [pscustomobject]@{
             Name = 'mixed-case token alias'
             Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
-            From = "    env:`n"
-            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ GitHub.Token }}' + "`n"
+            From = "    env:`n      GIT_CONFIG_NOSYSTEM:"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ GitHub.Token }}' + "`n      GIT_CONFIG_NOSYSTEM:"
         },
         [pscustomobject]@{
             Name = 'spaced token alias'
             Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
-            From = "    env:`n"
-            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github . token }}' + "`n"
+            From = "    env:`n      GIT_CONFIG_NOSYSTEM:"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ github . token }}' + "`n      GIT_CONFIG_NOSYSTEM:"
         },
         [pscustomobject]@{
             Name = 'quoted expression delimiter'
             Failure = 'The ordinary agent workflow must not project credentials or execute actions.'
-            From = "    env:`n"
-            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ format(''}}{0}'', github.token) }}' + "`n"
+            From = "    env:`n      GIT_CONFIG_NOSYSTEM:"
+            To = "    env:`n" + '      CREDENTIAL_ALIAS: ${{ format(''}}{0}'', github.token) }}' + "`n      GIT_CONFIG_NOSYSTEM:"
         },
         [pscustomobject]@{
             Name = 'named action step added'
@@ -15658,6 +15858,20 @@ if ($SelfTest) {
                 '          -TrustedFinalizationTimestamp'
             From = '          -TrustedFinalizationTimestamp'
             To = '          -Verbose'
+        },
+        [pscustomobject]@{
+            Name = 'shared rate-limit formatter import removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '          import { formatRateLimitDiagnostic } from ''./.github/workflows/Resolve-AgentInstructionFinalizationTime.mjs'';'
+            From = '          import { formatRateLimitDiagnostic } from ''./.github/workflows/Resolve-AgentInstructionFinalizationTime.mjs'';'
+            To = '          // Shared formatter import removed.'
+        },
+        [pscustomobject]@{
+            Name = 'shared rate-limit formatter call removed'
+            Failure = 'The automated merge-source workflow contract must contain exactly once: ' +
+                '                formatRateLimitDiagnostic(response),'
+            From = '                formatRateLimitDiagnostic(response),'
+            To = '                '''','
         }
     )
     $arrUnrelatedAutomatedMergeWorkflowFailures = @(
@@ -15687,6 +15901,15 @@ if ($SelfTest) {
             $objAutomatedMergeWorkflowMutation.From,
             $objAutomatedMergeWorkflowMutation.To
         )
+        if ($strMutatedAgentWorkflowContent.Contains('CREDENTIAL_ALIAS:') -and
+            ([regex]::Matches(
+                    $strMutatedAgentWorkflowContent, '(?m)^      CREDENTIAL_ALIAS:'
+                ).Count -ne 1 -or
+                [regex]::Matches(
+                    $strMutatedAgentWorkflowContent, 'CREDENTIAL_ALIAS:'
+                ).Count -ne 1)) {
+            throw 'An ordinary credential fixture must insert exactly one job-level alias.'
+        }
         $arrMutatedAutomatedMergeWorkflowFailures = @(
             Get-AutomatedMergeSourceWorkflowContractFailure `
                 -WorkflowContent $strMutatedAgentWorkflowContent

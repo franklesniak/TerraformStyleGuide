@@ -21,7 +21,7 @@ jobs:
       !github.event.deleted
     name: Validate agent instructions
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions: {}
     env:
       GIT_CONFIG_NOSYSTEM: "1"
@@ -106,8 +106,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "acquire: git fetch exited $LASTEXITCODE" }
           & $strGitPath -c core.hooksPath=/dev/null checkout --quiet --detach FETCH_HEAD
           if ($LASTEXITCODE -ne 0) { throw "acquire: git checkout exited $LASTEXITCODE" }
-          $strHead = (& $strGitPath rev-parse HEAD).Trim()
-          if ($LASTEXITCODE -ne 0 -or $strHead -cne $strSha) {
+          $arrHeadOutput = @(& $strGitPath rev-parse HEAD)
+          $intHeadExitCode = $LASTEXITCODE
+          if ($intHeadExitCode -ne 0) {
+              throw "acquire: git rev-parse exited $intHeadExitCode"
+          }
+          if ($arrHeadOutput.Count -ne 1) {
+              throw 'acquire: git rev-parse must return exactly one line'
+          }
+          $strHead = $arrHeadOutput[0].Trim()
+          if ($strHead -cne $strSha) {
               throw 'acquire: the checked out revision is not the triggering revision'
           }
           Write-Information "acquire: anonymous exact checkout of $strSha" -InformationAction Continue
@@ -210,8 +218,16 @@ jobs:
           if (-not [IO.File]::Exists($strNodePath) -or -not [IO.File]::Exists($strNpmPath)) {
               throw 'toolchain: verified runtime executables are missing'
           }
-          $strObservedVersion = (& $strNodePath --version).Trim()
-          if ($LASTEXITCODE -ne 0 -or $strObservedVersion -cne "v$strVersion") {
+          $arrVersionOutput = @(& $strNodePath --version)
+          $intVersionExitCode = $LASTEXITCODE
+          if ($intVersionExitCode -ne 0) {
+              throw "toolchain: runtime version command exited $intVersionExitCode"
+          }
+          if ($arrVersionOutput.Count -ne 1) {
+              throw 'toolchain: runtime version command must return exactly one line'
+          }
+          $strObservedVersion = $arrVersionOutput[0].Trim()
+          if ($strObservedVersion -cne "v$strVersion") {
               throw 'toolchain: verified runtime executable identity is wrong'
           }
           [IO.File]::AppendAllText($env:GITHUB_PATH,
@@ -343,6 +359,7 @@ jobs:
           [[ "${RANGE_HEAD_SHA}" =~ ^[0-9a-f]{40}$ ]]
           node --input-type=module <<'NODE'
           import { appendFileSync } from 'node:fs';
+          import { formatRateLimitDiagnostic } from './.github/workflows/Resolve-AgentInstructionFinalizationTime.mjs';
 
           const objectId = /^[0-9a-f]{40}$/u;
           const positiveInteger = /^[1-9][0-9]*$/u;
@@ -369,7 +386,10 @@ jobs:
               },
             });
             if (!response.ok) {
-              throw new Error(`Associated pull-request lookup failed: ${response.status}.`);
+              throw new Error(
+                `Associated pull-request lookup failed: ${response.status}.` +
+                formatRateLimitDiagnostic(response),
+              );
             }
             const pageRecords = await response.json();
             if (!Array.isArray(pageRecords)) {
