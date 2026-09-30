@@ -20,7 +20,7 @@ repos:
         files: >-
           (?x)^(
             package(-lock)?\.json|
-            \.github/workflows/package(-lock)?\.json|
+            \.github/workflows/[^/]+\.json|
             \.github/document-metadata-classification\.json
           )$
       - id: check-yaml

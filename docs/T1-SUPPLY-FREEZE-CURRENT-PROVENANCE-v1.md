@@ -5,11 +5,13 @@
 
 - **Status:** Active
 - **Owner:** TerraformStyleGuide Repository Maintainers
-- **Last Updated:** 2026-09-22
+- **Last Updated:** 2026-09-30
 - **Scope:** Defines current-profile observations, field provenance, Linux preparation, separate Git verification, refusals and validation. Historical T1 assertions remain in the linked original record.
 - **Related:** [Historical T1 record](T1-SUPPLY-FREEZE-v1.md), [Issue 54](https://github.com/franklesniak/TerraformStyleGuide/issues/54), [policy contract](../.github/workflows/workflow-policy-contract.json), [recorder](../.github/workflows/Get-SupplyFreezeDigest.mjs), [focused tests](../.github/workflows/Get-SupplyFreezeDigest.test.mjs)
 
 This companion keeps the complete current method together within the repository's governed-document size limit. The [historical record](T1-SUPPLY-FREEZE-v1.md) retains all original compared and recorded-only assertions, recorder identity and advisory status.
+
+The recorder is an optional manual diagnostic. It is not a routine CI, dependency-update, or merge requirement. Its historical tuple is retained unchanged in [historical-supply-profile.json](../.github/workflows/historical-supply-profile.json), separate from active workflow policy. The historical blob identities below still describe their recorded commits.
 
 ## Meaning of a current run
 
@@ -197,7 +199,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-const freeze = JSON.parse(readFileSync('.github/workflows/workflow-policy-contract.json')).supplyFreeze;
+const freeze = JSON.parse(readFileSync('.github/workflows/historical-supply-profile.json')).supplyFreeze;
 assert.equal(freeze.reviewedCommit, 'e5064a672c10f4fad90f36e82af33ff8fc230b5f');
 assert.equal(typeof process.env.PATH, 'string');
 const gitEnvironment = {
@@ -275,7 +277,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-const freeze = JSON.parse(readFileSync('.github/workflows/workflow-policy-contract.json')).supplyFreeze;
+const freeze = JSON.parse(readFileSync('.github/workflows/historical-supply-profile.json')).supplyFreeze;
 assert.equal(freeze.reviewedCommit, 'e5064a672c10f4fad90f36e82af33ff8fc230b5f');
 assert.equal(typeof process.env.PATH, 'string');
 const gitEnvironment = {

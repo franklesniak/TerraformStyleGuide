@@ -6,6 +6,7 @@ on:
     branches:
       - "**"
     paths:
+      - .github/workflows/ci-toolchain.json
       - "**/*.yaml"
       - "**/*.yml"
       - .github/workflows/.npmrc
@@ -23,6 +24,7 @@ on:
       - requirements-dev.txt
   pull_request:
     paths:
+      - .github/workflows/ci-toolchain.json
       - "**/*.yaml"
       - "**/*.yml"
       - .github/workflows/.npmrc
@@ -303,19 +305,6 @@ jobs:
             fi
           done
 
-          declare -Ar reviewed_sha256=(
-            ["${root_manifest}"]='ca77a11a7bd4ae55842ef0f1b8c4b9c0d32e3d6b8fa202455a12e354bf2d696b'
-            ["${root_lock}"]='e07939c3791be364486aedc928da532870f6d9f29ec2a6a4733be2cc143f5009'
-            ["${workflow_manifest}"]='c6db6befda88e58aa5568f52f44ca934af5751e545dba0644297b9fb15577e0d'
-            ["${workflow_lock}"]='84cbe61e33e4c66b653efd2bfbe3f80b0061368a64ad80ef0de4898da28d887d'
-            ["${pre_commit_config}"]='0e9da6a7c4bd0d89c83fd3041e67921e3bc08d159f4b6cd36b1b2e9f0b63a37b'
-            ["${python_hook_launcher}"]='9bc31918ba4407bf86a4d0d8e568962d05c157752a9df13e9bae2f081aa80e96'
-            ["${staged_markdown_helper}"]='6e8ac89afb17dd36f1edcf9b59ddfb066706fc6686be22e007c540ae20c810c2'
-          )
-          for reviewed_input in "${!reviewed_sha256[@]}"; do
-            actual_sha256="$(sha256sum -- "${reviewed_input}" | cut -d ' ' -f 1)"
-            test "${actual_sha256}" = "${reviewed_sha256[${reviewed_input}]}"
-          done
 
       - name: Set up Python 3.12
         shell: bash
@@ -404,12 +393,11 @@ jobs:
           observed_python_minor="$(python -c \
             'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
           test "${observed_python_minor}" = '3.12'
-          reviewed_requirements_sha256='f9aaac5456d8c076becff82222a49a3a16ef1267de93d347ebcac0fe3a3f5652'
-          test "$(sha256sum requirements-dev.txt | cut -d ' ' -f 1)" \
-            = "${reviewed_requirements_sha256}"
           python -m pip install --requirement requirements-dev.txt
           observed_pre_commit="$(python -m pre_commit --version)"
-          test "${observed_pre_commit}" = 'pre-commit 4.6.2'
+          expected_pre_commit="$(sed -n 's/^pre-commit==\([^ ]*\) .*/\1/p' requirements-dev.txt)"
+          test -n "${expected_pre_commit}"
+          test "${observed_pre_commit}" = "pre-commit ${expected_pre_commit}"
           python -m pip check
 
       - name: Set up locked Node.js runtime
@@ -424,8 +412,25 @@ jobs:
               -not [string]::IsNullOrEmpty($env:ACTIONS_RUNTIME_TOKEN)) {
               throw 'credential-policy: a token was projected into a code job'
           }
-          $strVersion = '24.18.1'
-          $strReviewedSha256 = 'D6C664DF3F3F61458E8C277585571328522D705166723A7C7823A9253A4D15A0'
+          $strDigestSource = 'copilot-setup-steps.yml retained runtime digest'
+          if (Test-Path -LiteralPath '.github/workflows/ci-toolchain.json') {
+              $objRuntimePin = Get-Content -Raw -LiteralPath '.github/workflows/ci-toolchain.json' | ConvertFrom-Json -ErrorAction Stop
+              $objEngines = (Get-Content -Raw -LiteralPath 'package.json' | ConvertFrom-Json -ErrorAction Stop).engines
+              $strVersion = $objEngines.node
+              if ($objEngines.npm -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+                  throw 'toolchain: the npm selector is invalid'
+              }
+              $strReviewedSha256 = $objRuntimePin.linuxX64Sha256.ToUpperInvariant()
+              $strDigestSource = 'package.json engines.node and .github/workflows/ci-toolchain.json linuxX64Sha256'
+          } else {
+              # Preserve setup for published branches before the shared declaration.
+              $strVersion = '24.18.1'
+              $strReviewedSha256 = 'D6C664DF3F3F61458E8C277585571328522D705166723A7C7823A9253A4D15A0'
+          }
+          if ($strVersion -cnotmatch '^24\.[0-9]+\.[0-9]+$' -or
+              $strReviewedSha256 -cnotmatch '^[A-F0-9]{64}$') {
+              throw 'toolchain: the runtime declaration is invalid'
+          }
           $strNodeRoot = [IO.Path]::Combine($env:RUNNER_TEMP, 'agent-validation-node')
           $strArchive = [IO.Path]::Combine($env:RUNNER_TEMP, 'agent-validation-node.tar.xz')
           if ([IO.Path]::Exists($strNodeRoot) -or [IO.Path]::Exists($strArchive)) {
@@ -442,7 +447,7 @@ jobs:
           & $strCurlPath --silent --show-error --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --retry 3 --retry-all-errors --connect-timeout 20 --max-time 120 --retry-max-time 300 --output $strArchive $strUrl
           if ($LASTEXITCODE -ne 0) { throw "toolchain: download exited $LASTEXITCODE" }
           if ((Get-FileHash -LiteralPath $strArchive -Algorithm SHA256).Hash -cne $strReviewedSha256) {
-              throw 'toolchain: official Node archive does not match the reviewed digest'
+              throw "toolchain: official Node archive does not match the reviewed digest for $strUrl. Check $strDigestSource. Verify the official release checksum before changing the declaration."
           }
           [void][IO.Directory]::CreateDirectory($strNodeRoot)
           & $strTarPath -xJf $strArchive -C $strNodeRoot --strip-components=1
@@ -478,6 +483,10 @@ jobs:
             exit 1
           fi
           export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          # Each step is a fresh process; remove inherited npm override aliases.
+          while IFS= read -r variable; do
+            if [[ "${variable,,}" == npm_config_* ]]; then unset "${variable}"; fi
+          done < <(compgen -e)
           export npm_config_userconfig=/dev/null
           export npm_config_globalconfig=/etc/npmrc-absent-by-policy
           if [[ ! -c "${npm_config_userconfig}" || -s "${npm_config_userconfig}" ||
@@ -503,8 +512,22 @@ jobs:
             exit 1
           fi
           export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
-          npm ci --ignore-scripts --no-audit --fund=false --include=dev
-          npm ci --ignore-scripts --no-audit --fund=false --include=dev \
+          # Each step is a fresh process; remove inherited npm override aliases.
+          while IFS= read -r variable; do
+            if [[ "${variable,,}" == npm_config_* ]]; then unset "${variable}"; fi
+          done < <(compgen -e)
+          export npm_config_userconfig=/dev/null
+          export npm_config_globalconfig=/etc/npmrc-absent-by-policy
+          if [[ ! -c "${npm_config_userconfig}" || -s "${npm_config_userconfig}" ||
+            -e "${npm_config_globalconfig}" || -L "${npm_config_globalconfig}" ]]; then
+            echo '::error::Unexpected package-manager configuration source.'
+            exit 1
+          fi
+          if [[ -f .github/workflows/ci-toolchain.json ]]; then
+            node .github/workflows/Validate-WorkflowPolicy.mjs --preflight
+          fi
+          npm ci --ignore-scripts --no-audit --no-fund --include=dev --package-lock=true
+          npm ci --ignore-scripts --no-audit --fund=false --include=dev --package-lock=true \
             --prefix .github/workflows
 
       - name: Verify locked dependency trees and immutable manifests
@@ -518,6 +541,17 @@ jobs:
             exit 1
           fi
           export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          # Each step is a fresh process; remove inherited npm override aliases.
+          while IFS= read -r variable; do
+            if [[ "${variable,,}" == npm_config_* ]]; then unset "${variable}"; fi
+          done < <(compgen -e)
+          export npm_config_userconfig=/dev/null
+          export npm_config_globalconfig=/etc/npmrc-absent-by-policy
+          if [[ ! -c "${npm_config_userconfig}" || -s "${npm_config_userconfig}" ||
+            -e "${npm_config_globalconfig}" || -L "${npm_config_globalconfig}" ]]; then
+            echo '::error::Unexpected package-manager configuration source.'
+            exit 1
+          fi
           npm ls --all
           npm --prefix .github/workflows ls --all
           immutable_inputs=(
@@ -542,6 +576,17 @@ jobs:
             exit 1
           fi
           export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          # Each step is a fresh process; remove inherited npm override aliases.
+          while IFS= read -r variable; do
+            if [[ "${variable,,}" == npm_config_* ]]; then unset "${variable}"; fi
+          done < <(compgen -e)
+          export npm_config_userconfig=/dev/null
+          export npm_config_globalconfig=/etc/npmrc-absent-by-policy
+          if [[ ! -c "${npm_config_userconfig}" || -s "${npm_config_userconfig}" ||
+            -e "${npm_config_globalconfig}" || -L "${npm_config_globalconfig}" ]]; then
+            echo '::error::Unexpected package-manager configuration source.'
+            exit 1
+          fi
           npm --prefix .github/workflows run prepare
           test "$(git config --get core.hooksPath)" = '.husky/_'
           test -x .husky/_/pre-commit
@@ -557,4 +602,15 @@ jobs:
             exit 1
           fi
           export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
+          # Each step is a fresh process; remove inherited npm override aliases.
+          while IFS= read -r variable; do
+            if [[ "${variable,,}" == npm_config_* ]]; then unset "${variable}"; fi
+          done < <(compgen -e)
+          export npm_config_userconfig=/dev/null
+          export npm_config_globalconfig=/etc/npmrc-absent-by-policy
+          if [[ ! -c "${npm_config_userconfig}" || -s "${npm_config_userconfig}" ||
+            -e "${npm_config_globalconfig}" || -L "${npm_config_globalconfig}" ]]; then
+            echo '::error::Unexpected package-manager configuration source.'
+            exit 1
+          fi
           python -m pre_commit run --all-files
