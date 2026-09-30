@@ -163,6 +163,12 @@ fs.writeFileSync(args[args.indexOf('--output')+1], 'incorrect archive bytes');
       mode === 'native-download-failure' ? /Runtime download failed/ : /archive digest is incorrect/);
     if (!mode.endsWith('-stage')) assert.equal(fs.existsSync(path.join(f.root, 'styleguide-node')), false);
     if (!['native-download-failure', 'wrong-download-bytes'].includes(mode)) assert.ok(f.calls().every(row => !row.includes('curl')));
+    if (mode === 'wrong-download-bytes') {
+      const manifest = JSON.parse(fs.readFileSync(path.join(f.work, 'package.json'), 'utf8'));
+      assert.match(result.stderr, /package\.json/);
+      assert.match(result.stderr, /ci-toolchain\.json/);
+      assert.ok(result.stderr.includes(`node-v${manifest.engines.node}-linux-x64.tar.xz`));
+    }
   });
 }
 
@@ -235,11 +241,11 @@ test('accepted PR-data loader rejects failed fetch and wrong or missing objects 
   }
 });
 
-for (const mode of ['native-download-failure', 'wrong-download-bytes']) {
+for (const mode of ['native-download-failure', 'wrong-download-bytes', 'pre-declaration']) {
   test(`Copilot declared runtime refuses ${mode} before extraction`, { skip: !linux }, t => {
     const f = fixture(t), workflows = path.join(f.work, '.github/workflows');
     fs.mkdirSync(workflows, { recursive: true });
-    fs.copyFileSync(path.join(directory, 'ci-toolchain.json'), path.join(workflows, 'ci-toolchain.json'));
+    if (mode !== 'pre-declaration') fs.copyFileSync(path.join(directory, 'ci-toolchain.json'), path.join(workflows, 'ci-toolchain.json'));
     fs.copyFileSync(path.join(directory, '../../package.json'), path.join(f.work, 'package.json'));
     const curl = path.join(f.root, 'curl');
     fs.writeFileSync(curl, `#!${process.execPath}
@@ -252,6 +258,12 @@ fs.writeFileSync(args[args.indexOf('--output')+1], 'incorrect archive bytes');
     const result = f.run(source, { TEST_MODE: mode });
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, mode === 'native-download-failure' ? /download exited 19/ : /does not match the reviewed digest/);
+    if (mode !== 'native-download-failure') {
+      assert.match(result.stderr, mode === 'pre-declaration' ? /copilot-setup-steps\.yml/ : /ci-toolchain\.json/);
+      const manifest = JSON.parse(fs.readFileSync(path.join(f.work, 'package.json'), 'utf8'));
+      const version = mode === 'pre-declaration' ? '24.18.1' : manifest.engines.node;
+      assert.ok(result.stderr.includes(`node-v${version}-linux-x64.tar.xz`));
+    }
     assert.equal(fs.existsSync(path.join(f.root, 'agent-validation-node')), false);
   });
 }
@@ -340,5 +352,51 @@ for (const [helper, names] of [
     assert.match(result.stderr, /requires runner environment/);
     assert.match(result.stderr, new RegExp(name));
     assert.equal(f.calls().length, 0);
+  });
+}
+
+for (const mode of ['clean', 'stale', 'verifier-channel', 'verifier-config', 'verifier-worktree', 'verifier-failure']) {
+  test(`artifact gate includes verifier child effects: ${mode}`, { skip: !linux }, t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'styleguide-artifact-child-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const work = path.join(root, 'work'), scripts = path.join(work, '.github/workflows');
+    fs.mkdirSync(scripts, { recursive: true });
+    const records = [['copilot', 'copilot-instructions.md'], ['terraform-instructions', 'terraform.instructions.md'],
+      ['chat', 'STYLE_GUIDE_CHAT.md'], ['full', 'STYLE_GUIDE_FULL.md']];
+    for (const [, name] of records) fs.writeFileSync(path.join(work, name), 'committed fixture\n');
+    fs.writeFileSync(path.join(scripts, 'Test-StyleGuideArtifacts.ps1'), read('Test-StyleGuideArtifacts.ps1'));
+    const generation = { Schema: 'TerraformStyleGuide.GeneratorResult.v2', Overall: 'NoChange', Phase: 'complete',
+      Category: 'none', NativeOutcome: 'Success', ExitCode: 0,
+      Artifacts: records.map(([ArtifactId, Path]) => ({ ArtifactId, Path, Status: 'NoChange' })) };
+    fs.writeFileSync(path.join(scripts, 'Generate-StyleGuideArtifacts.ps1'),
+      (mode === 'stale' ? "[IO.File]::WriteAllText('STYLE_GUIDE_CHAT.md', 'regenerated fixture')\n" : '') +
+      quote(JSON.stringify(generation)) + '\nexit 0\n');
+    const mutation = {
+      'verifier-channel': "[IO.File]::AppendAllText($env:GITHUB_OUTPUT, 'fixture=changed')",
+      'verifier-config': "[IO.File]::AppendAllText((Join-Path $env:GITHUB_WORKSPACE '.git/config'), \"`n# changed by verifier`n\")",
+      'verifier-worktree': "[IO.File]::WriteAllText('unexpected.txt', 'changed by verifier')",
+    }[mode] ?? '';
+    const verifierFails = ['stale', 'verifier-failure'].includes(mode);
+    fs.writeFileSync(path.join(scripts, 'Test-ExactGitPathSet.ps1'), mutation + '\n' +
+      quote(JSON.stringify({ Schema: 'TerraformStyleGuide.ExactGitPathSetResult.v2', Success: !verifierFails })) +
+      `\nexit ${verifierFails ? 1 : 0}\n`);
+    const env = { ...process.env, GITHUB_WORKSPACE: work, GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0' };
+    for (const key of ['GITHUB_TOKEN', 'GH_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS']) delete env[key];
+    for (const key of ['GITHUB_ENV', 'GITHUB_PATH', 'GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY']) {
+      env[key] = path.join(root, key); fs.writeFileSync(env[key], '');
+    }
+    for (const args of [['init', '-q'], ['add', '-A'],
+      ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Artifact fixture']]) {
+      const result = spawnSync('/usr/bin/git', args, { cwd: work, env, encoding: 'utf8', timeout: 30000 });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+    }
+    const result = spawnSync('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File',
+      path.join(scripts, 'Test-StyleGuideArtifacts.ps1')], { cwd: work, env, encoding: 'utf8', timeout: 30000 });
+    assert.equal(result.status, mode === 'clean' ? 0 : 1, result.stdout + result.stderr);
+    const expected = { clean: /committed bytes match generator output/, stale: /Generate-StyleGuideArtifacts\.ps1/,
+      'verifier-channel': /runner-state/, 'verifier-config': /configuration or hooks/,
+      'verifier-worktree': /outside the four/, 'verifier-failure': /Exact-path verification did not confirm/ }[mode];
+    assert.match(result.stdout + result.stderr, expected);
   });
 }
