@@ -5,9 +5,9 @@
 
 - **Status:** Active
 - **Owner:** TerraformStyleGuide Repository Maintainers
-- **Last Updated:** 2026-09-21
+- **Last Updated:** 2026-09-30
 - **Scope:** Retains the historical T1 supply-input assertions and links the separate current-profile observation and Git provenance method for issue 52.
-- **Related:** [Issue 52](https://github.com/franklesniak/TerraformStyleGuide/issues/52), [policy contract](../.github/workflows/workflow-policy-contract.json), [recorder](../.github/workflows/Get-SupplyFreezeDigest.mjs), [focused tests](../.github/workflows/Get-SupplyFreezeDigest.test.mjs), [Decision records](decisions/)
+- **Related:** [Issue 52](https://github.com/franklesniak/TerraformStyleGuide/issues/52), [archived profile](../.github/workflows/historical-supply-profile.json), [recorder](../.github/workflows/Get-SupplyFreezeDigest.mjs), [focused tests](../.github/workflows/Get-SupplyFreezeDigest.test.mjs), [Decision records](decisions/)
 
 ## Reading this record
 

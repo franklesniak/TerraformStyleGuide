@@ -6,7 +6,7 @@
 
 - **Status:** Active
 - **Owner:** Repository maintainer (@franklesniak)
-- **Last Updated:** 2026-09-21
+- **Last Updated:** 2026-09-30
 - **Scope:** Repository-owned scripts in `.github/workflows` and their supported local entry points.
 - **Related:** [Markdown lint implementation](MARKDOWN-LINTING-IMPLEMENTATION.md)
 
@@ -15,13 +15,17 @@
 | Script | Purpose | Supported command |
 | --- | --- | --- |
 | `Generate-StyleGuideArtifacts.ps1` | Regenerates consumer style-guide artifacts from the normative and rationale sources. | `pwsh -NoLogo -NoProfile -File .github/workflows/Generate-StyleGuideArtifacts.ps1` |
-| `Get-SupplyFreezeDigest.mjs` | Computes the reviewed workflow supply-freeze digest. | See [Prepare and record on Linux/x64](../../docs/T1-SUPPLY-FREEZE-CURRENT-PROVENANCE-v1.md#prepare-and-record-on-linuxx64); bare invocation is unsupported. |
+| `Get-SupplyFreezeDigest.mjs` | Optional manual diagnostic; no routine CI, update, or merge requirement. Reads `historical-supply-profile.json` for the retained historical tuple. Computes the reviewed workflow supply-freeze digest. | See [Prepare and record on Linux/x64](../../docs/T1-SUPPLY-FREEZE-CURRENT-PROVENANCE-v1.md#prepare-and-record-on-linuxx64); bare invocation is unsupported. |
 | `lint-nested-markdown.js` | Recursively lints `markdown` and `md` fenced content in repository `.md` and `.mdc` files. | `npm run lint:md:nested` |
 | `lint-staged-markdown.mjs` | Selects and lints outer and nested staged `.md` and `.mdc` content without replacing worktree files. | `node .github/workflows/lint-staged-markdown.mjs` |
-| `Sync-PullRequestBodyIdentity.mjs` | Derives, checks, or updates the deterministic pull-request body identity block and runs its dependency-free case suite. | `node .github/workflows/Sync-PullRequestBodyIdentity.mjs --self-test`; use `--generate`, `--check-event EVENT`, or `--update --repository OWNER/REPO --pull-request NUMBER` for the other modes. Update mode reads its token only from the `GITHUB_TOKEN` environment variable. |
-| `Test-AgentInstructionParserManifest.mjs` | Validates the root parser manifest and lock as inert data before dependency installation. | `node .github/workflows/Test-AgentInstructionParserManifest.mjs --repository-root . --trusted-revision $(git rev-parse HEAD) --input-revision $(git rev-parse HEAD) --self-test` |
-| `Test-AgentInstructions.ps1` | Validates governed instruction capacity, operative policy, metadata transitions, Git ranges, and mutation controls. | `npm run test:agent-instructions` |
-| `Validate-WorkflowPolicy.mjs` | Validates the repository's embedded workflow policy and negative fixtures. | `node .github/workflows/Validate-WorkflowPolicy.mjs .github/workflows/build.yml .github/workflows/markdownlint.yml` |
+| `Test-AgentInstructions.ps1` | Validates governed instruction capacity, operative policy, final-state metadata, staged-input matching, and behavioral mutation controls. | `npm run test:agent-instructions` |
+| `Validate-WorkflowPolicy.mjs` | Validates workflow structure, helper interfaces, and locked parser integrity; run `node --test .github/workflows/Validate-WorkflowPolicy.test.mjs` for negative fixtures. | `node .github/workflows/Validate-WorkflowPolicy.mjs .github/workflows/build.yml .github/workflows/markdownlint.yml` |
+
+The native required checks keep their existing names. `verify` runs deterministic generation and checks the stable result schemas and committed artifacts. `policy` validates the workflow structure, helper selection, and reviewed parser integrity. `markdownlint` runs both existing Markdown lint phases. Candidate instruction tests are separate from the accepted-base maintenance classification. Classification does not grant maintenance authority; the authenticated owner/executor review process still binds scope, current head/base/policy, candidate tests, findings, and independent final quality review.
+
+For current manifest and lock validation before dependency installation, run `node .github/workflows/Validate-WorkflowPolicy.mjs --preflight`. After the locked workflow dependencies are installed, run `node .github/workflows/Validate-WorkflowPolicy.mjs .github/workflows/build.yml .github/workflows/markdownlint.yml`. Historical runtime-selector equality admission is retired; its old implementation remains in Git history.
+
+The shared Linux CI helpers are `Initialize-CiToolchain.ps1`, `Test-CheckoutCredentials.ps1`, `Test-StyleGuideArtifacts.ps1`, and `Invoke-MarkdownLint.ps1`. The runtime declaration is `ci-toolchain.json`. Run helper behavior tests with `node --test .github/workflows/Test-CiHelpers.test.mjs .github/workflows/Test-LocalValidation.test.mjs`; Linux is required for the loader, runtime, and shell-hook cases. Run classifier tests with `node --test .github/workflows/Classify-InstructionMaintenance.test.mjs`.
 
 ## Setup and validation
 

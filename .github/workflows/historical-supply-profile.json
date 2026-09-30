@@ -1,0 +1,78 @@
+{
+  "supplyFreeze": {
+    "schema": "TerraformStyleGuide.FrozenSupplyProfile.v1",
+    "reviewedCommit": "e5064a672c10f4fad90f36e82af33ff8fc230b5f",
+    "baseline": {
+      "packageJson": {
+        "blob": "103075d0d14f61b49d29cf2ed8dc8a7804fe092e",
+        "length": 1070,
+        "sha256": "c6db6befda88e58aa5568f52f44ca934af5751e545dba0644297b9fb15577e0d"
+      },
+      "packageLockJson": {
+        "blob": "92a2f83a2d2d6904521800108ad0e1b1436909e2",
+        "length": 66725,
+        "sha256": "84cbe61e33e4c66b653efd2bfbe3f80b0061368a64ad80ef0de4898da28d887d"
+      }
+    },
+    "reviewedWorkingBytes": {
+      "packageJson": {
+        "length": 1070,
+        "sha256": "c6db6befda88e58aa5568f52f44ca934af5751e545dba0644297b9fb15577e0d"
+      },
+      "packageLockJson": {
+        "length": 66725,
+        "sha256": "84cbe61e33e4c66b653efd2bfbe3f80b0061368a64ad80ef0de4898da28d887d"
+      }
+    },
+    "producer": {
+      "profilePurpose": "reviewed-runtime-requirement-not-historical-lock-production",
+      "nodeVersion": "24.18.1",
+      "npmVersion": "11.16.0",
+      "linuxArchive": "https://nodejs.org/dist/v24.18.1/node-v24.18.1-linux-x64.tar.xz",
+      "linuxArchiveSha256": "d6c664df3f3f61458e8c277585571328522d705166723a7c7823a9253a4d15a0"
+    },
+    "yaml": {
+      "version": "2.9.0",
+      "tarball": "https://registry.npmjs.org/yaml/-/yaml-2.9.0.tgz",
+      "integrity": "sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==",
+      "enginesNode": ">= 14.6"
+    },
+    "dependencyPolicy": {
+      "scripts": {
+        "lint:md": "cd ../.. && node .github/workflows/lint-nested-markdown.js --outer",
+        "lint:md:nested": "node lint-nested-markdown.js",
+        "prepare": "cd ../.. && husky"
+      },
+      "devDependencies": {
+        "glob": "^10.3.10",
+        "husky": "^9.1.7",
+        "markdown-it": "14.3.0",
+        "markdownlint": "0.41.1",
+        "markdownlint-cli2": "0.23.2",
+        "yaml": "2.9.0"
+      },
+      "overrides": {
+        "markdownlint-cli2@0.23.2": {
+          "smol-toml": "1.7.1"
+        }
+      },
+      "securityPatch": {
+        "packagePath": "node_modules/smol-toml",
+        "version": "1.7.1",
+        "resolved": "https://registry.npmjs.org/smol-toml/-/smol-toml-1.7.1.tgz",
+        "integrity": "sha512-PPlsspAZ4jbMBu5DMFhfUGDQLu/vrL4SyBROVS37x8ynnVmFIs1VPBz1Co8Xks3TvpIaZXmU85y4DrQ+UyVFoQ==",
+        "parentPath": "node_modules/markdownlint-cli2",
+        "parentDeclaredVersion": "1.7.0"
+      }
+    },
+    "provenance": {
+      "historicalRecord": "../../docs/T1-SUPPLY-FREEZE-v1.md",
+      "historicalRecordIsCurrentGraphMeasurement": false,
+      "advisoryDispositionGranted": false,
+      "unresolvedAdvisoryConsumerIssues": [
+        22,
+        24
+      ]
+    }
+  }
+}
