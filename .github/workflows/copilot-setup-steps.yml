@@ -12,6 +12,7 @@ on:
       - .github/workflows/.npmrc
       - .github/workflows/copilot-setup-steps.yml
       - .github/workflows/Invoke-LockedPythonHook.ps1
+      - .github/workflows/install-husky.mjs
       - .github/workflows/lint-staged-markdown.mjs
       - .github/workflows/npm-shrinkwrap.json
       - .github/workflows/package.json
@@ -30,6 +31,7 @@ on:
       - .github/workflows/.npmrc
       - .github/workflows/copilot-setup-steps.yml
       - .github/workflows/Invoke-LockedPythonHook.ps1
+      - .github/workflows/install-husky.mjs
       - .github/workflows/lint-staged-markdown.mjs
       - .github/workflows/npm-shrinkwrap.json
       - .github/workflows/package.json
@@ -593,6 +595,7 @@ jobs:
             .github/workflows/package.json
             .github/workflows/package-lock.json
             .github/workflows/Invoke-LockedPythonHook.ps1
+            .github/workflows/install-husky.mjs
             .github/workflows/lint-staged-markdown.mjs
             requirements-dev.txt
           )
