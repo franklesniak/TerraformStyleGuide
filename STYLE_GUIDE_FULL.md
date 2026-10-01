@@ -2707,7 +2707,7 @@ The prompt reads the bearer token without echo. Do not type a literal token assi
 <!-- SR-HCP-DISCOVERY -->
 ```bash
 (
-    set +x; set +v; set +o history; set -Eeuo pipefail
+    set +x; set +v; set +a; set +o history; set -Eeuo pipefail
     export LC_ALL=C
     declare -F sr_run >/dev/null || { printf '%s\n' 'Copy the recovery setup first.' >&2; exit 64; }
     [[ ${HCP_HOST-} == app.terraform.io ]] || sr_bad_input

@@ -257,6 +257,10 @@ if (process.argv[2] === '--stub') {
     failure(run(first, 'repeat-signal'), 130);
     const inherited = run('SR-HCP-DISCOVERY', '', { token: 'INHERITED_SECRET_FIXTURE' }); success(inherited);
     assert.ok(inherited.calls.every(call => !call.exportedToken));
+    const allexport = run('SR-HCP-DISCOVERY', '', { token: 'INHERITED_SECRET_FIXTURE' }, value =>
+      `set -a\n${value}\nexample_status=$?\n[[ $- == *a* ]] || exit 77\nexit "$example_status"\n`);
+    success(allexport);
+    assert.ok(allexport.calls.every(call => !call.exportedToken), 'allexport and inherited token cannot export the prompted token to provider children');
     for (const [id, inputs] of [
       ['SR-AWS-DISCOVERY', { AWS_KEY: '' }], ['SR-AWS-RECOVERY', { AWS_VERSION_ID: 'null' }],
       ['SR-AWS-DISCOVERY', { AWS_BUCKET: 'unsupported--x-s3' }],
