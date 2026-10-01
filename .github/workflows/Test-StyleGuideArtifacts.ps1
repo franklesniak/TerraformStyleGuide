@@ -9,7 +9,7 @@ Runs without credentials or publication authority. Checks native results, stable
 interface schemas, filesystem changes, Git controls and runner communication files.
 
 .NOTES
-Version: 1.0.20260930.0
+Version: 1.1.20261001.0
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -475,6 +475,41 @@ if ([string]::IsNullOrEmpty($strPowerShellPath) -or
     -not [System.IO.File]::Exists($strPowerShellPath)) {
     throw 'The current PowerShell executable could not be resolved.'
 }
+
+# Resolve the runtime before any repository child runs. Keep the recovery
+# harness inside the same integrity snapshots as the generator and verifier.
+$objNodeCommand = Get-Command -Name 'node' -CommandType Application -ErrorAction Stop
+if (-not [System.IO.File]::Exists($objNodeCommand.Source)) {
+    throw 'state-recovery: the Node executable could not be resolved'
+}
+$objRecoveryStart = [System.Diagnostics.ProcessStartInfo]::new()
+$objRecoveryStart.FileName = $objNodeCommand.Source
+$objRecoveryStart.UseShellExecute = $false
+$objRecoveryStart.RedirectStandardOutput = $true
+$objRecoveryStart.RedirectStandardError = $true
+$objRecoveryStart.ArgumentList.Add('./.github/workflows/Test-StateRecoveryExamples.mjs')
+$objRecoveryProcess = [System.Diagnostics.Process]::new()
+$objRecoveryProcess.StartInfo = $objRecoveryStart
+$intRecoveryExit = -1
+$boolRecoveryTimedOut = $false
+try {
+    if (-not $objRecoveryProcess.Start()) {
+        throw 'state-recovery: the test process did not start'
+    }
+    $objRecoveryOutput = $objRecoveryProcess.StandardOutput.ReadToEndAsync()
+    $objRecoveryError = $objRecoveryProcess.StandardError.ReadToEndAsync()
+    if (-not $objRecoveryProcess.WaitForExit(300000)) {
+        $boolRecoveryTimedOut = $true
+        $objRecoveryProcess.Kill($true)
+        $objRecoveryProcess.WaitForExit()
+    }
+    $intRecoveryExit = $objRecoveryProcess.ExitCode
+    # Drain both streams without exposing fixture payloads in a failed run.
+    $null = $objRecoveryOutput.GetAwaiter().GetResult()
+    $null = $objRecoveryError.GetAwaiter().GetResult()
+} finally {
+    $objRecoveryProcess.Dispose()
+}
 $arrResult = @(& $strPowerShellPath `
     -NoLogo `
     -NoProfile `
@@ -581,6 +616,11 @@ if ($listChanged.Count -ne 0) {
     }
     throw 'generated-artifacts: committed artifacts do not match generator output. Run ./.github/workflows/Generate-StyleGuideArtifacts.ps1 and commit the four regenerated files.'
 }
+
+if ($boolRecoveryTimedOut -or $intRecoveryExit -ne 0) {
+    throw 'state-recovery: published-example tests did not complete successfully'
+}
+Write-Information 'state-recovery: published-example tests passed' -InformationAction Continue
 
 # Check the saved verifier result after the specific integrity diagnostics.
 if ($arrPathSetResult.Count -ne 1) { throw 'Exact-path verification returned an invalid shape.' }
