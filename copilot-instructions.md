@@ -2,13 +2,13 @@
 
 # Terraform Writing Style
 
-**Version:** 2.6.20260726.0
+**Version:** 2.7.20261001.0
 
 ## Metadata
 
 - **Status:** Active
 - **Owner:** Repository Maintainers
-- **Last Updated:** 2026-07-26
+- **Last Updated:** 2026-10-01
 - **Scope:** Terraform coding standards for all `.tf`, `.tfvars`, `.tftest.hcl`, `.tf.json`, `.tftpl`, and `.tfbackend` files in this repository — style, formatting, naming, file organization, variable and output design, resource configuration, module design, state management, cross-stack data sharing, provider management, security, testing, and documentation.
 
 ## Keywords
@@ -2370,23 +2370,346 @@ resource "aws_s3_bucket_lifecycle_configuration" "terraform_state" {
 }
 ```
 
-To recover a previous state version from S3:
+#### Read a retained state version safely
 
+Discovery and retrieval **MUST** be separate actions. Select the exact object and a retained version deliberately. These examples only read remote data; they do not restore, upload, apply, or replace remote state.
+
+**Runtime:** Linux, Bash 5+, GNU coreutils, jq 1.6+, and the relevant configured AWS CLI v2, Azure CLI, Google Cloud CLI, or curl 7.76+. Native Windows, Git Bash and macOS/BSD are outside this example's supported runtime. WSL requires Linux storage, not a Windows-mounted directory.
+
+**Storage preconditions:** Use a local private directory outside Git, shared storage and synchronization/backup locations that are inappropriate for state secrets. The immediate parent must already exist, belong to your user and have mode `0700`. Its ancestors must be owned by root or your user and not be writable by other users. No other process may change this directory during the operation. Owner/mode checks cannot prove absence of privileged or same-user writers, all ACL effects, synchronization or remote mounts. Use an isolated incident-response account when those preconditions cannot otherwise be met.
+
+1. Open a disposable Bash shell with tracing disabled. Copy the setup below once into that shell. It only defines functions.
+2. Set `SR_DEST` to a new absolute directory under your private parent, for example `/home/alice/private-recovery/incident-001`. Set the selected provider's input variables. Missing values and unsupported inputs fail before output creation or a provider request.
+3. Run one discovery block. Read its `versions.json` privately; it can contain sensitive identifiers or signed URLs. Do not paste it into a log or ticket.
+4. Select a retained version from that evidence. Set a **different new** `SR_DEST` and the exact version variable. Run the corresponding retrieval block. Its `recovered.tfstate` is a local candidate for a separate reviewed recovery procedure.
+5. Close the disposable shell. Retain or dispose of the private output under your incident data-handling procedure.
+
+An existing destination directory, output file or link is an error. Before publication, failure leaves no published output and cleans only temporary files whose ownership remains established. On ownership uncertainty, it retains private files and fails. After publication, it never deletes the published output to manufacture an absence result. Provider errors keep their exit status; trapped HUP/INT/TERM use `129`/`130`/`143`. Cleanup-only failure uses `74`. Bash waits for a foreground command to finish before running its signal trap: cancellation is not necessarily prompt. SIGKILL, power loss, detached writers and malicious same-user/privileged replacement are outside these shell guarantees.
+
+<!-- SR-SETUP -->
 ```bash
-# List available versions
-aws s3api list-object-versions \
-  --bucket acme-corp-terraform-state \
-  --prefix environments/prod/terraform.tfstate
+sr_text() {
+    [[ -n $1 && $1 != REPLACE_ME && ${#1} -le $2 && $1 != *[[:cntrl:]]* ]]
+}
+sr_bad_input() { printf '%s\n' 'Unsupported or missing recovery input.' >&2; exit 64; }
+sr_dir_id() { stat -c '%d:%i:%u:%a' -- "$1"; }
+sr_file_id() { stat -c '%d:%i:%u:%a:%h' -- "$1"; }
+sr_private_file() {
+    [[ -f $1 && ! -L $1 ]] || return 1
+    local owner mode
+    read -r owner mode < <(stat -c '%u %a' -- "$1") || return 1
+    [[ $owner == "$UID" && $mode == 600 ]]
+}
+sr_run() (
+    set +x
+    set +v
+    set -Eeuo pipefail
+    umask 077
+    local action=$1 output=$2 parent component owner mode
+    local sr_work='' sr_directory_id='' sr_work_id='' sr_published=0
+    local sr_data_id='' sr_cleanup_failed=0 sr_ownership_uncertain=0
+    local -A sr_ids=()
+    [[ $(uname -s) == Linux && ${BASH_VERSINFO[0]} -ge 5 ]] || sr_bad_input
+    sr_text "${SR_DEST-}" 4096 || sr_bad_input
+    [[ $SR_DEST == /* && $SR_DEST != */ && $SR_DEST != *'/../'* && $SR_DEST != *'/./'* ]] || sr_bad_input
+    parent=$(dirname -- "$SR_DEST")
+    [[ $(realpath -e -- "$parent") == "$parent" ]] || sr_bad_input
+    [[ ! -e $SR_DEST && ! -L $SR_DEST ]] || sr_bad_input
+    component=$parent
+    while :; do
+        [[ -d $component && ! -L $component ]] || sr_bad_input
+        [[ ! -e $component/.git && ! -L $component/.git ]] || sr_bad_input
+        [[ ! ( -f $component/HEAD && -d $component/objects ) ]] || sr_bad_input
+        read -r owner mode < <(stat -c '%u %a' -- "$component") || sr_bad_input
+        [[ $owner == 0 || $owner == "$UID" ]] || sr_bad_input
+        (( (8#$mode & 0022) == 0 )) || sr_bad_input
+        case "$component" in /tmp|/var/tmp|/dev/shm|/run/user) sr_bad_input ;; esac
+        [[ $component != / ]] || break
+        component=$(dirname -- "$component")
+    done
+    read -r owner mode < <(stat -c '%u %a' -- "$parent") || sr_bad_input
+    [[ $owner == "$UID" && $mode == 700 ]] || sr_bad_input
+    command -v jq >/dev/null || sr_bad_input
 
-# Download a specific version
-aws s3api get-object \
-  --bucket acme-corp-terraform-state \
-  --key environments/prod/terraform.tfstate \
-  --version-id <VERSION_ID> \
-  terraform.tfstate.recovered
+    sr_same_directories() {
+        [[ -n $sr_directory_id && ! -L $SR_DEST && $(sr_dir_id "$SR_DEST") == "$sr_directory_id" ]] &&
+        [[ -n $sr_work_id && ! -L $sr_work && $(sr_dir_id "$sr_work") == "$sr_work_id" ]]
+    }
+    sr_record_files() {
+        local name identity links
+        sr_same_directories || return 1
+        # These fixed paths were absent in our exclusive directory before the
+        # foreground provider ran. This relies on the no-competing-writer rule.
+        for name in data response error log; do
+            [[ -e $sr_work/$name || -L $sr_work/$name ]] || continue
+            sr_private_file "$sr_work/$name" || return 1
+            identity=$(sr_file_id "$sr_work/$name") || return 1
+            links=${identity##*:}
+            if [[ $name == data && $sr_published == 1 ]]; then
+                [[ $links == 2 && $identity == "$sr_data_id" ]] || return 1
+            else
+                [[ $links == 1 ]] || return 1
+            fi
+            [[ ! ${sr_ids[$name]+present} || ${sr_ids[$name]} == "$identity" ]] || return 1
+            sr_ids[$name]=$identity
+        done
+    }
+    sr_cleanup() {
+        local name
+        (( sr_ownership_uncertain == 0 )) || return 1
+        [[ -n $sr_work ]] || return 0
+        sr_record_files || return 1
+        for name in data response error log; do
+            [[ ${sr_ids[$name]+present} ]] || continue
+            sr_same_directories || return 1
+            [[ ! -L $sr_work/$name && $(sr_file_id "$sr_work/$name") == "${sr_ids[$name]}" ]] || return 1
+            rm -- "$sr_work/$name" || return 1
+        done
+        sr_same_directories || return 1
+        rmdir -- "$sr_work" || return 1
+        # Keep the destination directory, including any published output.
+    }
+    sr_finish() {
+        local status=$?
+        trap - EXIT
+        trap '' HUP INT TERM
+        set +e
+        sr_cleanup 2>/dev/null || sr_cleanup_failed=1
+        if (( sr_cleanup_failed )); then
+            printf '%s\n' 'Cleanup uncertain or failed; retain the private directory for inspection.' >&2
+            (( status != 0 )) || status=74
+        fi
+        if (( status != 0 )); then
+            printf 'Recovery read failed (status %s); do not publish its diagnostics.\n' "$status" >&2
+        fi
+        exit "$status"
+    }
+    trap sr_finish EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    mkdir -m 700 -- "$SR_DEST"
+    sr_directory_id=$(sr_dir_id "$SR_DEST")
+    [[ $sr_directory_id == *":$UID:700" ]]
+    sr_work=$(mktemp -d -- "$SR_DEST/.work.XXXXXXXXXX")
+    sr_work_id=$(sr_dir_id "$sr_work")
+    [[ $sr_work_id == *":$UID:700" ]]
+    for component in data response error log; do
+        if [[ -e $sr_work/$component || -L $sr_work/$component ]]; then
+            sr_ownership_uncertain=1
+            exit 73
+        fi
+    done
+    # Noclobber also protects files opened by shell redirections.
+    set -C
+    "$action" >"$sr_work/log" 2>"$sr_work/error"
+    sr_record_files
+    sr_private_file "$sr_work/data"
+    [[ -s $sr_work/data ]]
+    sr_same_directories
+    [[ ! -e $SR_DEST/$output && ! -L $SR_DEST/$output ]]
+    ln -T -- "$sr_work/data" "$SR_DEST/$output"
+    # Publication has occurred. No later error may delete this output.
+    sr_published=1
+    sr_data_id=$(sr_file_id "$sr_work/data")
+    sr_ids[data]=$sr_data_id
+    [[ ! -L $SR_DEST/$output && $(sr_file_id "$SR_DEST/$output") == "$sr_data_id" ]]
+    printf 'Private output: %s/%s\n' "$SR_DEST" "$output"
+)
+sr_state_json() {
+    jq -e -s 'length == 1 and (.[0] | type == "object" and .version == 4 and
+        (.serial | type == "number" and . >= 0) and
+        (.lineage | type == "string" and length > 0) and
+        (.resources | type == "array"))' "$1" >/dev/null
+}
+sr_aws_inputs() {
+    sr_text "${AWS_BUCKET-}" 63 && sr_text "${AWS_KEY-}" 1024 || sr_bad_input
+    [[ $AWS_BUCKET =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ && $AWS_BUCKET != *..* ]] || sr_bad_input
+    [[ ! $AWS_BUCKET =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || sr_bad_input
+    case "$AWS_BUCKET" in xn--*|sthree-*|amzn-s3-demo-*|*-s3alias|*--ol-s3|*.mrap|*--x-s3|*--table-s3) sr_bad_input ;; esac
+}
+sr_azure_inputs() {
+    sr_text "${AZURE_ACCOUNT-}" 24 && sr_text "${AZURE_CONTAINER-}" 63 && sr_text "${AZURE_BLOB-}" 1024 || sr_bad_input
+    [[ $AZURE_ACCOUNT =~ ^[a-z0-9]{3,24}$ && $AZURE_CONTAINER =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] || sr_bad_input
+    [[ $AZURE_CONTAINER != *--* ]] || sr_bad_input
+}
+sr_gcs_inputs() {
+    sr_text "${GCS_BUCKET-}" 63 && sr_text "${GCS_OBJECT-}" 1024 || sr_bad_input
+    [[ $GCS_BUCKET =~ ^[a-z0-9][a-z0-9_-]{1,61}[a-z0-9]$ ]] || sr_bad_input
+    case "$GCS_OBJECT" in *'*'*|*'?'*|*'['*|*']'*|*'#'*) sr_bad_input ;; esac
+    [[ $GCS_OBJECT != */ && $GCS_OBJECT != . && $GCS_OBJECT != .. ]] || sr_bad_input
+}
 ```
 
-> **Note:** Azure Storage supports blob versioning with soft delete. GCS supports object versioning. Terraform Cloud provides automatic state versioning.
+**Supported inputs:** Set variables to actual values, not `REPLACE_ME`. Object identifiers are never local file paths. AWS keys accept ordinary UTF-8 and punctuation within 1,024 bytes; control characters are excluded. Azure examples use ordinary named containers and block blobs; blob names are limited here to 1,024 UTF-8 bytes, a conservative subset of Azure's character limit. GCS examples support 3–63 character non-dotted bucket names and object names without control characters, wildcard metacharacters or `#`; these exclusions prevent CLI wildcard/generation interpretation. GCS folder-like trailing `/` names are excluded. Provider services support additional names; use their native procedures for names outside this subset. Version IDs remain unchanged opaque strings; GCS generations remain decimal strings, never rounded numbers. Retrieval requires one JSON object with version `4`, a non-negative numeric serial, a non-empty lineage string and a resources array. These are basic checks, not full Terraform state validation. Validate the candidate with the target Terraform version before any use in the separate recovery procedure.
+
+##### AWS S3
+
+Use a general-purpose bucket with retained versions and `s3:ListBucketVersions` for discovery. Explicit-version retrieval requires `s3:GetObjectVersion` and applicable KMS permissions (`kms:Decrypt` and, where required, `kms:GenerateDataKey`). Enabled versioning creates immutable non-null versions. Suspended versioning preserves retained non-null versions, but writes can replace the null version. These examples reject `null` recovery. Lifecycle expiration, permanent deletion and delete markers can make recovery impossible; archived objects must already be readable. They do not change bucket settings or restore archival copies. See [S3 listing](https://docs.aws.amazon.com/cli/latest/reference/s3api/list-object-versions.html), [retrieval](https://docs.aws.amazon.com/cli/latest/reference/s3api/get-object.html) and [suspended versioning](https://docs.aws.amazon.com/AmazonS3/latest/userguide/AddingObjectstoVersionSuspendedBuckets.html).
+
+Set `AWS_BUCKET`, `AWS_KEY` and a fresh `SR_DEST`. The CLI follows listing pages; exact filtering removes sibling keys that share the prefix.
+
+<!-- SR-AWS-DISCOVERY -->
+```bash
+(
+    set +x; set +v; set -Eeuo pipefail
+    export LC_ALL=C
+    declare -F sr_run >/dev/null || { printf '%s\n' 'Copy the recovery setup first.' >&2; exit 64; }
+    sr_aws_inputs
+    sr_action() {
+        AWS_PAGER='' aws s3api list-object-versions --bucket="$AWS_BUCKET" --prefix="$AWS_KEY" --output json >"$sr_work/response"
+        jq -e -s --arg key "$AWS_KEY" 'if length != 1 then error("invalid response count") else .[0] end |
+            if type != "object" then error("invalid listing") else
+            {Versions: [(.Versions // [])[] | select(.Key == $key)],
+             DeleteMarkers: [(.DeleteMarkers // [])[] | select(.Key == $key)]} end' "$sr_work/response" >"$sr_work/data"
+    }
+    sr_run sr_action versions.json
+)
+```
+
+Select a non-null `VersionId`, set `AWS_VERSION_ID` and a different new `SR_DEST`.
+
+<!-- SR-AWS-RECOVERY -->
+```bash
+(
+    set +x; set +v; set -Eeuo pipefail
+    export LC_ALL=C
+    declare -F sr_run >/dev/null || { printf '%s\n' 'Copy the recovery setup first.' >&2; exit 64; }
+    sr_aws_inputs
+    sr_text "${AWS_VERSION_ID-}" 1024 && [[ $AWS_VERSION_ID != null ]] || sr_bad_input
+    sr_action() {
+        AWS_PAGER='' aws s3api get-object --bucket="$AWS_BUCKET" --key="$AWS_KEY" --version-id="$AWS_VERSION_ID" --output json "$sr_work/data" >"$sr_work/response"
+        jq -e -s --arg version "$AWS_VERSION_ID" 'length == 1 and (.[0] | .VersionId == $version)' "$sr_work/response" >/dev/null
+        sr_state_json "$sr_work/data"
+    }
+    sr_run sr_action recovered.tfstate
+)
+```
+
+##### Azure Blob Storage
+
+Versioning must already be enabled in a supported non-HNS account (standard general-purpose v2, premium block blob or legacy Blob Storage). Use retained block-blob versions and an existing login with data-plane list/read permission, such as Storage Blob Data Reader. `--auth-mode login` avoids implicit account-key lookup. Soft deletion is a separate recovery procedure. See [Azure versioning](https://learn.microsoft.com/en-us/azure/storage/blobs/versioning-overview) and [Azure CLI blob commands](https://learn.microsoft.com/en-us/cli/azure/storage/blob?view=azure-cli-latest).
+
+Set `AZURE_ACCOUNT`, `AZURE_CONTAINER`, `AZURE_BLOB` and a fresh `SR_DEST`. Quoted `'*'` requests all listing results rather than silently stopping at the default limit.
+
+<!-- SR-AZURE-DISCOVERY -->
+```bash
+(
+    set +x; set +v; set -Eeuo pipefail
+    export LC_ALL=C
+    declare -F sr_run >/dev/null || { printf '%s\n' 'Copy the recovery setup first.' >&2; exit 64; }
+    sr_azure_inputs
+    sr_action() {
+        az storage blob list --auth-mode login --account-name="$AZURE_ACCOUNT" --container-name="$AZURE_CONTAINER" --prefix="$AZURE_BLOB" --include v --num-results '*' --only-show-errors --output json >"$sr_work/response"
+        jq -e -s --arg name "$AZURE_BLOB" 'if length != 1 then error("invalid response count") else .[0] end |
+            if type != "array" then error("invalid listing") else
+            [.[] | select(.name == $name) | {name, versionId, isCurrentVersion, deleted, properties}] end' "$sr_work/response" >"$sr_work/data"
+    }
+    sr_run sr_action versions.json
+)
+```
+
+Select a `versionId`, set `AZURE_VERSION_ID` unchanged and a different new `SR_DEST`. The default download behavior overwrites; this call explicitly disables it.
+
+<!-- SR-AZURE-RECOVERY -->
+```bash
+(
+    set +x; set +v; set -Eeuo pipefail
+    export LC_ALL=C
+    declare -F sr_run >/dev/null || { printf '%s\n' 'Copy the recovery setup first.' >&2; exit 64; }
+    sr_azure_inputs
+    sr_text "${AZURE_VERSION_ID-}" 1024 || sr_bad_input
+    sr_action() {
+        az storage blob download --auth-mode login --account-name="$AZURE_ACCOUNT" --container-name="$AZURE_CONTAINER" --name="$AZURE_BLOB" --version-id="$AZURE_VERSION_ID" --file "$sr_work/data" --overwrite false --no-progress --only-show-errors --output json >"$sr_work/response"
+        jq -e -s --arg version "$AZURE_VERSION_ID" 'length == 1 and (.[0] | .versionId == $version)' "$sr_work/response" >/dev/null
+        sr_state_json "$sr_work/data"
+    }
+    sr_run sr_action recovered.tfstate
+)
+```
+
+##### Google Cloud Storage
+
+Object Versioning generations must still be retained and readable. Soft-delete restoration is different and is not performed here. Discovery needs `storage.objects.list`; metadata and retrieval need `storage.objects.get`. Lifecycle deletion can remove versions. See [versioned objects](https://docs.cloud.google.com/storage/docs/using-versioned-objects), [gcloud copy](https://docs.cloud.google.com/sdk/gcloud/reference/storage/cp) and [transfer integrity checks](https://docs.cloud.google.com/storage/docs/data-validation).
+
+Set `GCS_BUCKET`, `GCS_OBJECT` and a fresh `SR_DEST`. The saved array contains only generation-qualified URIs for the exact object.
+
+<!-- SR-GCS-DISCOVERY -->
+```bash
+(
+    set +x; set +v; set -Eeuo pipefail
+    export LC_ALL=C
+    declare -F sr_run >/dev/null || { printf '%s\n' 'Copy the recovery setup first.' >&2; exit 64; }
+    sr_gcs_inputs
+    sr_action() {
+        gcloud storage ls --all-versions "gs://$GCS_BUCKET/$GCS_OBJECT" >"$sr_work/response"
+        jq -R -s --arg prefix "gs://$GCS_BUCKET/$GCS_OBJECT#" '[split("\n")[] | select(length > 0)] as $rows |
+            if ($rows | length) == 0 or any($rows[]; (test("^gs://.+#[1-9][0-9]*$") | not))
+            then error("invalid listing") else [$rows[] | select(startswith($prefix)) |
+                select(ltrimstr($prefix) | test("^[1-9][0-9]*$"))] end' "$sr_work/response" >"$sr_work/data"
+    }
+    sr_run sr_action versions.json
+)
+```
+
+Select the generation digits, set `GCS_GENERATION` and a different new `SR_DEST`. No-clobber can report a skip, so success also requires a new private payload. The CLI validates transfers using its supported checksums; the metadata check does not prove correctness of a malicious CLI.
+
+<!-- SR-GCS-RECOVERY -->
+```bash
+(
+    set +x; set +v; set -Eeuo pipefail
+    export LC_ALL=C
+    declare -F sr_run >/dev/null || { printf '%s\n' 'Copy the recovery setup first.' >&2; exit 64; }
+    sr_gcs_inputs
+    [[ ${GCS_GENERATION-} =~ ^[1-9][0-9]{0,19}$ ]] || sr_bad_input
+    sr_action() {
+        local uri="gs://$GCS_BUCKET/$GCS_OBJECT#$GCS_GENERATION"
+        gcloud storage objects describe "$uri" --raw --format=json >"$sr_work/response"
+        jq -e -s --arg bucket "$GCS_BUCKET" --arg name "$GCS_OBJECT" --arg generation "$GCS_GENERATION" \
+            'length == 1 and (.[0] | .bucket == $bucket and .name == $name and .generation == $generation)' "$sr_work/response" >/dev/null
+        gcloud storage cp --no-clobber --do-not-decompress "$uri" "$sr_work/data"
+        sr_state_json "$sr_work/data"
+    }
+    sr_run sr_action recovered.tfstate
+)
+```
+
+##### HCP Terraform
+
+This discovery example supports `app.terraform.io` and a token with workspace state-version read permission. Set `HCP_HOST`, `HCP_ORGANIZATION`, `HCP_WORKSPACE`, `HCP_WORKSPACE_ID`, `HCP_PAGE`, `HCP_PAGE_SIZE` and a fresh `SR_DEST`. Use page sizes 1–100 and page numbers 1–999999999 (the example's explicit bound). Organization/workspace names are limited to 255 UTF-8 bytes without control characters. Names are URL-encoded; the expected workspace ID checks returned relationships. One explicit page is read. An empty page does not prove the workspace has no retained versions; inspect pagination privately and request another page deliberately with a fresh destination. See the [state-version API](https://developer.hashicorp.com/terraform/cloud-docs/api-docs/state-versions).
+
+The prompt reads the bearer token without echo. Do not type a literal token assignment into shell history. The token is not exported or passed as a command-line argument. The response can contain signed state-download URLs, so the whole response is private. No redirect or returned URL is followed.
+
+<!-- SR-HCP-DISCOVERY -->
+```bash
+(
+    set +x; set +v; set +a; set +o history; set -Eeuo pipefail
+    export LC_ALL=C
+    declare -F sr_run >/dev/null || { printf '%s\n' 'Copy the recovery setup first.' >&2; exit 64; }
+    [[ ${HCP_HOST-} == app.terraform.io ]] || sr_bad_input
+    sr_text "${HCP_ORGANIZATION-}" 255 && sr_text "${HCP_WORKSPACE-}" 255 || sr_bad_input
+    [[ ${HCP_WORKSPACE_ID-} =~ ^ws-[A-Za-z0-9]+$ && ${HCP_PAGE-} =~ ^[1-9][0-9]{0,8}$ ]] || sr_bad_input
+    [[ ${HCP_PAGE_SIZE-} =~ ^([1-9]|[1-9][0-9]|100)$ ]] || sr_bad_input
+    unset token
+    IFS= read -r -s -p 'HCP read token: ' token || sr_bad_input
+    [[ -n $token && $token != *[[:space:][:cntrl:]]* ]] || sr_bad_input
+    sr_action() {
+        printf 'Authorization: Bearer %s\n' "$token" |
+            curl -q --fail --silent --show-error --proto '=https' --connect-timeout 15 --max-time 60 \
+                --header @- --header 'Content-Type: application/vnd.api+json' --get \
+                --data-urlencode "filter[organization][name]=$HCP_ORGANIZATION" \
+                --data-urlencode "filter[workspace][name]=$HCP_WORKSPACE" \
+                --data-urlencode "page[number]=$HCP_PAGE" --data-urlencode "page[size]=$HCP_PAGE_SIZE" \
+                "https://$HCP_HOST/api/v2/state-versions" >"$sr_work/data"
+        unset token
+        jq -e -s --arg workspace "$HCP_WORKSPACE_ID" 'length == 1 and (.[0] | (.data | type == "array") and
+            all(.data[]; .type == "state-versions" and .relationships.workspace.data.id == $workspace))' "$sr_work/data" >/dev/null
+    }
+    sr_run sr_action versions.json
+)
+```
+
+For example, a recovery that returns a different version fails before `recovered.tfstate` is published. A pre-existing file or link remains unchanged. A private cleanup failure after successful publication leaves `recovered.tfstate` in place and reports failure for operator inspection.
 
 #### Manual State Backup
 

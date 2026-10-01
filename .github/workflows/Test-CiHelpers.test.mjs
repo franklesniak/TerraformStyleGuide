@@ -357,7 +357,10 @@ for (const [helper, names] of [
   });
 }
 
-for (const mode of ['clean', 'stale', 'verifier-channel', 'verifier-config', 'verifier-worktree', 'verifier-failure']) {
+for (const mode of ['clean', 'stale', 'verifier-channel', 'verifier-config', 'verifier-worktree', 'verifier-failure',
+  'recovery-missing', 'recovery-failure', 'recovery-signal', 'recovery-timeout',
+  'recovery-channel', 'recovery-config', 'recovery-source', 'recovery-self',
+  'multiple-node-paths', 'first-node-failure']) {
   test(`artifact gate includes verifier child effects: ${mode}`, { skip: !linux }, t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'styleguide-artifact-child-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -366,7 +369,20 @@ for (const mode of ['clean', 'stale', 'verifier-channel', 'verifier-config', 've
     const records = [['copilot', 'copilot-instructions.md'], ['terraform-instructions', 'terraform.instructions.md'],
       ['chat', 'STYLE_GUIDE_CHAT.md'], ['full', 'STYLE_GUIDE_FULL.md']];
     for (const [, name] of records) fs.writeFileSync(path.join(work, name), 'committed fixture\n');
-    fs.writeFileSync(path.join(scripts, 'Test-StyleGuideArtifacts.ps1'), read('Test-StyleGuideArtifacts.ps1'));
+    fs.writeFileSync(path.join(scripts, 'Test-StyleGuideArtifacts.ps1'), mode === 'recovery-timeout' ?
+      read('Test-StyleGuideArtifacts.ps1').replace('WaitForExit(300000)', 'WaitForExit(100)') : read('Test-StyleGuideArtifacts.ps1'));
+    fs.writeFileSync(path.join(work, 'STYLE_GUIDE.md'), 'source fixture\n');
+    const recoveryCode = {
+      'recovery-failure': 'process.exit(19);',
+      'recovery-signal': "process.kill(process.pid, 'SIGTERM');",
+      'recovery-timeout': 'setInterval(() => {}, 1000);',
+      'recovery-channel': "fs.appendFileSync(process.env.GITHUB_OUTPUT, 'fixture=changed');",
+      'recovery-config': "fs.appendFileSync('.git/config', '\\n# changed by recovery\\n');",
+      'recovery-source': "fs.appendFileSync('STYLE_GUIDE.md', 'changed by recovery');",
+      'recovery-self': "fs.appendFileSync(new URL(import.meta.url), '// changed by recovery');",
+    }[mode] ?? '';
+    if (mode !== 'recovery-missing') fs.writeFileSync(path.join(scripts, 'Test-StateRecoveryExamples.mjs'),
+      "import fs from 'node:fs';\n" + recoveryCode + '\n');
     const generation = { Schema: 'TerraformStyleGuide.GeneratorResult.v2', Overall: 'NoChange', Phase: 'complete',
       Category: 'none', NativeOutcome: 'Success', ExitCode: 0,
       Artifacts: records.map(([ArtifactId, Path]) => ({ ArtifactId, Path, Status: 'NoChange' })) };
@@ -384,6 +400,19 @@ for (const mode of ['clean', 'stale', 'verifier-channel', 'verifier-config', 've
       `\nexit ${verifierFails ? 1 : 0}\n`);
     const env = { ...process.env, GITHUB_WORKSPACE: work, GIT_CONFIG_NOSYSTEM: '1',
       GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0' };
+    const runtimeLog = path.join(root, 'runtime-selection');
+    if (['multiple-node-paths', 'first-node-failure'].includes(mode)) {
+      const shellQuote = value => `'${value.replaceAll("'", "'\\''")}'`;
+      const runtimeDirectories = ['first-runtime', 'second-runtime'].map(name => path.join(root, name));
+      for (const [index, runtimeDirectory] of runtimeDirectories.entries()) {
+        fs.mkdirSync(runtimeDirectory);
+        const outcome = index === 0 && mode === 'multiple-node-paths' ?
+          `exec ${shellQuote(process.execPath)} "$@"` : 'exit 23';
+        fs.writeFileSync(path.join(runtimeDirectory, 'node'),
+          `#!/bin/sh\nprintf '%s\\n' ${index} >> ${shellQuote(runtimeLog)}\n${outcome}\n`, { mode: 0o700 });
+      }
+      env.PATH = [...runtimeDirectories, env.PATH].join(path.delimiter);
+    }
     for (const key of ['GITHUB_TOKEN', 'GH_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS']) delete env[key];
     for (const key of ['GITHUB_ENV', 'GITHUB_PATH', 'GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY']) {
       env[key] = path.join(root, key); fs.writeFileSync(env[key], '');
@@ -395,10 +424,21 @@ for (const mode of ['clean', 'stale', 'verifier-channel', 'verifier-config', 've
     }
     const result = spawnSync('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File',
       path.join(scripts, 'Test-StyleGuideArtifacts.ps1')], { cwd: work, env, encoding: 'utf8', timeout: 30000 });
-    assert.equal(result.status, mode === 'clean' ? 0 : 1, result.stdout + result.stderr);
+    assert.equal(result.status, ['clean', 'multiple-node-paths'].includes(mode) ? 0 : 1, result.stdout + result.stderr);
     const expected = { clean: /committed bytes match generator output/, stale: /Generate-StyleGuideArtifacts\.ps1/,
       'verifier-channel': /runner-state/, 'verifier-config': /configuration or hooks/,
-      'verifier-worktree': /outside the four/, 'verifier-failure': /Exact-path verification did not confirm/ }[mode];
+      'verifier-worktree': /outside the four/, 'verifier-failure': /Exact-path verification did not confirm/,
+      'recovery-missing': /state-recovery: published-example tests did not complete/,
+      'recovery-failure': /state-recovery: published-example tests did not complete/,
+      'recovery-signal': /state-recovery: published-example tests did not complete/,
+      'recovery-timeout': /state-recovery: published-example tests did not complete/,
+      'recovery-channel': /runner-state/, 'recovery-config': /configuration or hooks/,
+      'recovery-source': /outside the four/, 'recovery-self': /outside the four/,
+      'multiple-node-paths': /committed bytes match generator output/,
+      'first-node-failure': /state-recovery: published-example tests did not complete/ }[mode];
     assert.match(result.stdout + result.stderr, expected);
+    if (['multiple-node-paths', 'first-node-failure'].includes(mode)) {
+      assert.equal(fs.readFileSync(runtimeLog, 'utf8'), '0\n', 'select the first application once; never fall back after failure');
+    }
   });
 }

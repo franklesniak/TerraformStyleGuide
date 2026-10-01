@@ -3,7 +3,7 @@
 
 - **Status:** Active
 - **Owner:** TerraformStyleGuide Repository Maintainers
-- **Last Updated:** 2026-09-11
+- **Last Updated:** 2026-10-01
 - **Scope:** Explains the rationale, design philosophy, trade-offs, and historical context behind the normative Terraform rules in `STYLE_GUIDE.md`.
 - **Related:** [Terraform style guide](STYLE_GUIDE.md)
 
@@ -708,25 +708,7 @@ resource "azurerm_storage_account" "terraform_state" {
 }
 ```
 
-To recover a previous state version from Azure Storage:
-
-```bash
-# List blob versions
-az storage blob list \
-  --account-name stacmeterraform \
-  --container-name tfstate \
-  --include v \
-  --prefix environments/prod/terraform.tfstate \
-  --output table
-
-# Download a specific version
-az storage blob download \
-  --account-name stacmeterraform \
-  --container-name tfstate \
-  --name environments/prod/terraform.tfstate \
-  --version-id <VERSION_ID> \
-  --file terraform.tfstate.recovered
-```
+The normative guide contains the guarded discovery and exact-version retrieval procedure. Prefix listing alone is not exact blob selection, and Azure CLI downloads overwrite by default. Explicit login, exact-name filtering, native no-overwrite and separate private publication address those risks.
 
 **GCS Backend:**
 
@@ -760,34 +742,19 @@ resource "google_storage_bucket" "terraform_state" {
 }
 ```
 
-To recover a previous state version from GCS:
+GCS generation-qualified URIs identify retained object versions. The normative guide separates discovery from a deliberate generation selection. Its name subset excludes characters interpreted as wildcards or version suffixes by the CLI; this is not a restriction on the service's complete object-name grammar. Soft-delete restoration is a different operation and is not performed by the read examples.
 
-```bash
-# List object versions
-gsutil ls -la gs://acme-corp-terraform-state/environments/prod/
+**HCP Terraform:**
 
-# Copy a specific generation (version)
-gsutil cp gs://acme-corp-terraform-state/environments/prod/terraform.tfstate#<GENERATION> \
-  terraform.tfstate.recovered
-```
+The state-version listing endpoint is `GET /state-versions`, filtered by organization and workspace names. The workspace-scoped `POST /workspaces/:id/state-versions` endpoint creates state; it is not the discovery route. A listing response can contain signed download URLs, so protecting only the bearer token is insufficient. The normative example saves the entire response privately and reads one operator-selected page without following download links.
 
-**Terraform Cloud:**
+**Shared local boundary:**
 
-State versioning is automatic in Terraform Cloud. To access state history:
+The normative setup and seven marked Bash actions form one copied workflow. The setup is defined in the same guide, so a standalone consumer does not need a repository helper. The shared boundary creates fresh private storage, captures diagnostics, checks returned identifiers, and publishes through an exclusive hard link. GNU `ln -T` prevents an existing directory from changing the meaning of the destination operand.
 
-1. Navigate to your workspace in the Terraform Cloud UI
-2. Click on "States" in the left navigation
-3. Browse the list of state versions with timestamps
-4. Click on any version to view details or download
+The operator must choose appropriate private local storage and prevent competing writers. Owner, mode, inode and Git-marker checks detect ordinary mistakes and observed replacement; they do not prove protection from every ACL, synchronization mechanism or malicious same-user process. Foreground commands finish before Bash runs a deferred signal trap. Cleanup removes only known owned temporary paths; ownership uncertainty or cleanup failure is reported, and published state remains available for inspection. This preserves the primary failure and does not pretend a typed assertion establishes filesystem ownership.
 
-State versions can also be accessed via the Terraform Cloud API:
-
-```bash
-# List state versions for a workspace
-curl \
-  --header "Authorization: Bearer $TFC_TOKEN" \
-  https://app.terraform.io/api/v2/workspaces/<WORKSPACE_ID>/state-versions
-```
+The network-free regression harness extracts the actual `SR-SETUP` and seven action blocks from the normative source; it does not maintain separate runnable copies. Stub execution tests local behavior and targeting under the documented Linux assumptions. It cannot prove live cloud authorization, provider availability or the operator's storage policy. Adjacent manual backup, remote state mutation and corruption-recovery examples have a separate destructive-recovery scope.
 
 ### Cross-Stack Data Sharing Examples
 

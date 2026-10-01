@@ -58,6 +58,13 @@ test('candidate authority data cannot change classification', () => {
   assert.equal(Object.hasOwn(result, 'authorized'), false);
 });
 
+test('required artifact verification includes its recovery harness dependency', () => {
+  const name = '.github/workflows/Test-StateRecoveryExamples.mjs';
+  assert.equal(classify([name]).classification, 'maintenance_required');
+  assert.deepEqual(classify([name]).maintenancePaths, [name]);
+  assert.equal(classify(['.github/workflows/unreferenced-example.mjs']).classification, 'ordinary');
+});
+
 test('missing, invalid or ambiguous paths and revisions fail closed', () => {
   for (const name of ['', '../package.json', '/package.json',
     '.github\\workflows\\helper.mjs', 'a\nb', 'a//b', 'a/./b']) {
