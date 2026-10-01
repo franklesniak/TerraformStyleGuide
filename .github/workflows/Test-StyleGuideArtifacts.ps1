@@ -9,7 +9,7 @@ Runs without credentials or publication authority. Checks native results, stable
 interface schemas, filesystem changes, Git controls and runner communication files.
 
 .NOTES
-Version: 1.1.20261001.0
+Version: 1.1.20261001.1
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -478,7 +478,7 @@ if ([string]::IsNullOrEmpty($strPowerShellPath) -or
 
 # Resolve the runtime before any repository child runs. Keep the recovery
 # harness inside the same integrity snapshots as the generator and verifier.
-$objNodeCommand = Get-Command -Name 'node' -CommandType Application -ErrorAction Stop
+$objNodeCommand = Get-Command -Name 'node' -CommandType Application -All -TotalCount 1 -ErrorAction Stop
 if (-not [System.IO.File]::Exists($objNodeCommand.Source)) {
     throw 'state-recovery: the Node executable could not be resolved'
 }
