@@ -1502,13 +1502,10 @@ function Get-HuskySetupContractFailure {
         Write-Output 'Husky package manifests must be valid JSON.'
         return
     }
-    $strExpectedBootstrap =
-        'npm ci --ignore-scripts --no-audit --fund=false --include=dev --package-lock=true ' +
-        '&& npm --prefix .github/workflows ci --ignore-scripts --no-audit --fund=false ' +
-        '--include=dev --package-lock=true && npm --prefix .github/workflows run prepare'
+    $strExpectedBootstrap = 'node .github/workflows/NpmTools.mjs install'
     if ([string]$objRootPackage.scripts.'bootstrap:agent-instructions' -cne
         $strExpectedBootstrap) {
-        Write-Output 'Bootstrap needs two script-disabled locked installs, then workflow prepare.'
+        Write-Output 'Bootstrap must use the configuration-isolated locked installer.'
     }
     $strExpectedRootOuterLint = 'npm --prefix .github/workflows run lint:md'
     if ([string]$objRootPackage.scripts.'lint:md' -cne $strExpectedRootOuterLint) {
@@ -1545,7 +1542,7 @@ function Get-HuskySetupContractFailure {
             )
         }
     }
-    if ([string]$objWorkflowPackage.scripts.prepare -cne 'cd ../.. && husky') {
+    if ([string]$objWorkflowPackage.scripts.prepare -cne 'node install-husky.mjs') {
         Write-Output 'Workflow prepare must run Husky and expose failure.'
     }
     $strExpectedGuard =
@@ -5732,7 +5729,7 @@ $arrAgentSetupInputSpecs = @(
     }
     [pscustomobject]@{
         Path = '.github/workflows/copilot-setup-steps.yml'
-        MaximumBytes = 32768
+        MaximumBytes = 65536
     }
     [pscustomobject]@{
         Path = '.github/workflows/lint-staged-markdown.mjs'
@@ -6608,6 +6605,38 @@ if ($SelfTest) {
         $objValidatorOversizeStream.Dispose()
     }
 
+    $objSetupInputSpec = $arrAgentSetupInputSpecs | Where-Object {
+        $_.Path -ceq '.github/workflows/copilot-setup-steps.yml'
+    }
+    foreach ($intExtraSetupByte in @(0, 1)) {
+        $intSetupFixtureBytes = $objSetupInputSpec.MaximumBytes + $intExtraSetupByte
+        $objSetupBoundaryStream = [System.IO.MemoryStream]::new(
+            [byte[]]::new($intSetupFixtureBytes),
+            $false
+        )
+        try {
+            [byte[]] $arrSetupBoundaryBytes = Read-BoundedStreamData `
+                -Stream $objSetupBoundaryStream `
+                -MaximumBytes $objSetupInputSpec.MaximumBytes `
+                -DisplayName 'Copilot setup boundary'
+            if ($intExtraSetupByte -ne 0 -or
+                $arrSetupBoundaryBytes.Count -ne $intSetupFixtureBytes) {
+                throw 'The Copilot setup reader did not enforce its exact byte boundary.'
+            }
+        }
+        catch [System.IO.InvalidDataException] {
+            $strExpectedSetupFailure = 'Copilot setup boundary must not exceed ' +
+                $objSetupInputSpec.MaximumBytes + ' bytes.'
+            if ($intExtraSetupByte -ne 1 -or
+                $_.Exception.Message -cne $strExpectedSetupFailure) {
+                throw
+            }
+        }
+        finally {
+            $objSetupBoundaryStream.Dispose()
+        }
+    }
+
     $strRootPackageContent = $hashtableAgentSetupInputContent['package.json']
     $strWorkflowPackageContent =
         $hashtableAgentSetupInputContent['.github/workflows/package.json']
@@ -7004,19 +7033,19 @@ if ($SelfTest) {
             'must not declare direct markdownlint-cli2 because'
         )
         ,@(
-            'bootstrap omits prepare'
+            'bootstrap bypasses isolated installer'
             $strRootPackageContent.Replace(
-                ' && npm --prefix .github/workflows run prepare',
-                ''
+                'node .github/workflows/NpmTools.mjs install',
+                'npm ci'
             )
             $strWorkflowPackageContent
             $strHuskyHookContent
-            'two script-disabled locked installs'
+            'configuration-isolated locked installer'
         )
         ,@(
             'prepare hides failure'
             $strRootPackageContent
-            $strWorkflowPackageContent.Replace('cd ../.. && husky', 'cd ../.. && husky || true')
+            $strWorkflowPackageContent.Replace('node install-husky.mjs', 'node install-husky.mjs || true')
             $strHuskyHookContent
             'expose failure'
         )

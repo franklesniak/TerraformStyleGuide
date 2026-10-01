@@ -1,13 +1,13 @@
 <!-- markdownlint-disable MD013 -->
 # Agent Instructions for Claude Code
 
-**Version:** 1.10.20260930.0
+**Version:** 1.10.20261001.0
 
 ## Metadata
 
 - **Status:** Active
 - **Owner:** Repository maintainer (@franklesniak)
-- **Last Updated:** 2026-09-30
+- **Last Updated:** 2026-10-01
 - **Scope:** Agent-specific entry point for Claude Code and compatible AI coding agents operating in TerraformStyleGuide. Mirrors a minimal inline summary of the highest-priority shared rules; `.github/copilot-instructions.md` remains the canonical documentation-authoring source of truth.
 <!-- template-sync: begin markdown-reference-only -->
 - **Related:** [Repository Copilot Instructions](.github/copilot-instructions.md), [Documentation Writing Style](.github/instructions/docs.instructions.md)
@@ -56,7 +56,7 @@ Tracked `CLAUDE.local.md` files are prohibited at every supported project scope.
 - **Pre-commit and validation**
   - PowerShell 7 (`pwsh`) must be on `PATH` first. [Install](https://learn.microsoft.com/powershell/scripting/install/install-powershell), then verify with `pwsh -NoProfile -Command 'if ($PSVersionTable.PSVersion.Major -lt 7) { exit 1 }'`.
   - Install Python 3.12 and the pinned runner. On Windows, run `py -3.12 -m pip install --requirement requirements-dev.txt`. Elsewhere, run `python3.12 -m pip install --requirement requirements-dev.txt`; substitute a verified Python 3.12 command if needed.
-  - Run `npm run bootstrap:agent-instructions` once after each fresh clone or lockfile change. This installs only the locked Node.js dependencies required by the system-language hook.
+  - Run `node .github/workflows/NpmTools.mjs install` after a fresh clone or lockfile change. See [dependency maintenance](docs/dependency-maintenance.md) for script and hook behavior.
   - Before every commit, run `py -3.12 -m pre_commit run --all-files` on Windows or `python3.12 -m pre_commit run --all-files` elsewhere; make the same substitution if needed.
   - Retain the repository's existing Husky pre-commit checks for staged Markdown. They run `npm --prefix .github/workflows run lint:md` and `npm --prefix .github/workflows run lint:md:nested`.
   - Include all auto-fixes in the same commit as the related change.

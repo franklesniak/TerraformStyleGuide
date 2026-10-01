@@ -6,7 +6,7 @@
   "scripts": {
     "lint:md": "cd ../.. && node .github/workflows/lint-nested-markdown.js --outer",
     "lint:md:nested": "node lint-nested-markdown.js",
-    "prepare": "cd ../.. && husky"
+    "prepare": "node install-husky.mjs"
   },
   "repository": {
     "type": "git",
@@ -24,16 +24,17 @@
   },
   "homepage": "https://github.com/franklesniak/TerraformStyleGuide#readme",
   "devDependencies": {
-    "glob": "^10.3.10",
+    "glob": "13.0.6",
     "husky": "^9.1.7",
-    "markdown-it": "14.3.0",
+    "jsonc-parser": "3.3.1",
+    "markdown-it": "14.3.2",
     "markdownlint": "0.41.1",
-    "markdownlint-cli2": "0.23.2",
+    "markdownlint-cli2": "0.23.3",
     "yaml": "2.9.0"
   },
   "overrides": {
-    "markdownlint-cli2@0.23.2": {
-      "smol-toml": "1.7.1"
+    "markdownlint-cli2@0.23.3": {
+      "markdown-it": "15.0.2"
     }
   }
 }

@@ -483,12 +483,23 @@ jobs:
             exit 1
           fi
           export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
-          # Each step is a fresh process; remove inherited npm override aliases.
-          while IFS= read -r variable; do
-            if [[ "${variable,,}" == npm_config_* ]]; then unset "${variable}"; fi
-          done < <(compgen -e)
+          # env includes inherited names that are not valid Bash identifiers.
+          npm_environment=(/usr/bin/env)
+          while IFS= read -r -d '' entry; do
+            variable=${entry%%=*}
+            if [[ "${variable,,}" == npm_config_* ]]; then
+              npm_environment+=(-u "${variable}")
+            fi
+          done < <(/usr/bin/env -0)
+          # Wait for this process substitution before running any other child.
+          if ! wait "$!"; then
+            echo '::error::Unable to read the package-manager environment.'
+            exit 1
+          fi
           export npm_config_userconfig=/dev/null
           export npm_config_globalconfig=/etc/npmrc-absent-by-policy
+          npm_environment+=(-- "npm_config_userconfig=${npm_config_userconfig}"
+            "npm_config_globalconfig=${npm_config_globalconfig}")
           if [[ ! -c "${npm_config_userconfig}" || -s "${npm_config_userconfig}" ||
             -e "${npm_config_globalconfig}" || -L "${npm_config_globalconfig}" ]]; then
             echo '::error::Unexpected package-manager configuration source.'
@@ -499,7 +510,7 @@ jobs:
           expected_node="$(node -p 'require("./package.json").engines.node')"
           expected_npm="$(node -p 'require("./package.json").engines.npm')"
           test "$(node --version)" = "v${expected_node}"
-          test "$(npm --version)" = "${expected_npm}"
+          test "$("${npm_environment[@]}" npm --version)" = "${expected_npm}"
 
       - name: Install locked Node.js validation tools
         shell: bash
@@ -512,12 +523,23 @@ jobs:
             exit 1
           fi
           export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
-          # Each step is a fresh process; remove inherited npm override aliases.
-          while IFS= read -r variable; do
-            if [[ "${variable,,}" == npm_config_* ]]; then unset "${variable}"; fi
-          done < <(compgen -e)
+          # env includes inherited names that are not valid Bash identifiers.
+          npm_environment=(/usr/bin/env)
+          while IFS= read -r -d '' entry; do
+            variable=${entry%%=*}
+            if [[ "${variable,,}" == npm_config_* ]]; then
+              npm_environment+=(-u "${variable}")
+            fi
+          done < <(/usr/bin/env -0)
+          # Wait for this process substitution before running any other child.
+          if ! wait "$!"; then
+            echo '::error::Unable to read the package-manager environment.'
+            exit 1
+          fi
           export npm_config_userconfig=/dev/null
           export npm_config_globalconfig=/etc/npmrc-absent-by-policy
+          npm_environment+=(-- "npm_config_userconfig=${npm_config_userconfig}"
+            "npm_config_globalconfig=${npm_config_globalconfig}")
           if [[ ! -c "${npm_config_userconfig}" || -s "${npm_config_userconfig}" ||
             -e "${npm_config_globalconfig}" || -L "${npm_config_globalconfig}" ]]; then
             echo '::error::Unexpected package-manager configuration source.'
@@ -526,8 +548,8 @@ jobs:
           if [[ -f .github/workflows/ci-toolchain.json ]]; then
             node .github/workflows/Validate-WorkflowPolicy.mjs --preflight
           fi
-          npm ci --ignore-scripts --no-audit --no-fund --include=dev --package-lock=true
-          npm ci --ignore-scripts --no-audit --fund=false --include=dev --package-lock=true \
+          "${npm_environment[@]}" npm ci --ignore-scripts --no-audit --no-fund --include=dev --package-lock=true
+          "${npm_environment[@]}" npm ci --ignore-scripts --no-audit --fund=false --include=dev --package-lock=true \
             --prefix .github/workflows
 
       - name: Verify locked dependency trees and immutable manifests
@@ -541,19 +563,30 @@ jobs:
             exit 1
           fi
           export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
-          # Each step is a fresh process; remove inherited npm override aliases.
-          while IFS= read -r variable; do
-            if [[ "${variable,,}" == npm_config_* ]]; then unset "${variable}"; fi
-          done < <(compgen -e)
+          # env includes inherited names that are not valid Bash identifiers.
+          npm_environment=(/usr/bin/env)
+          while IFS= read -r -d '' entry; do
+            variable=${entry%%=*}
+            if [[ "${variable,,}" == npm_config_* ]]; then
+              npm_environment+=(-u "${variable}")
+            fi
+          done < <(/usr/bin/env -0)
+          # Wait for this process substitution before running any other child.
+          if ! wait "$!"; then
+            echo '::error::Unable to read the package-manager environment.'
+            exit 1
+          fi
           export npm_config_userconfig=/dev/null
           export npm_config_globalconfig=/etc/npmrc-absent-by-policy
+          npm_environment+=(-- "npm_config_userconfig=${npm_config_userconfig}"
+            "npm_config_globalconfig=${npm_config_globalconfig}")
           if [[ ! -c "${npm_config_userconfig}" || -s "${npm_config_userconfig}" ||
             -e "${npm_config_globalconfig}" || -L "${npm_config_globalconfig}" ]]; then
             echo '::error::Unexpected package-manager configuration source.'
             exit 1
           fi
-          npm ls --all
-          npm --prefix .github/workflows ls --all
+          "${npm_environment[@]}" npm ls --all
+          "${npm_environment[@]}" npm --prefix .github/workflows ls --all
           immutable_inputs=(
             package.json
             package-lock.json
@@ -576,18 +609,29 @@ jobs:
             exit 1
           fi
           export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
-          # Each step is a fresh process; remove inherited npm override aliases.
-          while IFS= read -r variable; do
-            if [[ "${variable,,}" == npm_config_* ]]; then unset "${variable}"; fi
-          done < <(compgen -e)
+          # env includes inherited names that are not valid Bash identifiers.
+          npm_environment=(/usr/bin/env)
+          while IFS= read -r -d '' entry; do
+            variable=${entry%%=*}
+            if [[ "${variable,,}" == npm_config_* ]]; then
+              npm_environment+=(-u "${variable}")
+            fi
+          done < <(/usr/bin/env -0)
+          # Wait for this process substitution before running any other child.
+          if ! wait "$!"; then
+            echo '::error::Unable to read the package-manager environment.'
+            exit 1
+          fi
           export npm_config_userconfig=/dev/null
           export npm_config_globalconfig=/etc/npmrc-absent-by-policy
+          npm_environment+=(-- "npm_config_userconfig=${npm_config_userconfig}"
+            "npm_config_globalconfig=${npm_config_globalconfig}")
           if [[ ! -c "${npm_config_userconfig}" || -s "${npm_config_userconfig}" ||
             -e "${npm_config_globalconfig}" || -L "${npm_config_globalconfig}" ]]; then
             echo '::error::Unexpected package-manager configuration source.'
             exit 1
           fi
-          npm --prefix .github/workflows run prepare
+          "${npm_environment[@]}" npm --prefix .github/workflows run prepare
           test "$(git config --get core.hooksPath)" = '.husky/_'
           test -x .husky/_/pre-commit
 
@@ -602,15 +646,26 @@ jobs:
             exit 1
           fi
           export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
-          # Each step is a fresh process; remove inherited npm override aliases.
-          while IFS= read -r variable; do
-            if [[ "${variable,,}" == npm_config_* ]]; then unset "${variable}"; fi
-          done < <(compgen -e)
+          # env includes inherited names that are not valid Bash identifiers.
+          npm_environment=(/usr/bin/env)
+          while IFS= read -r -d '' entry; do
+            variable=${entry%%=*}
+            if [[ "${variable,,}" == npm_config_* ]]; then
+              npm_environment+=(-u "${variable}")
+            fi
+          done < <(/usr/bin/env -0)
+          # Wait for this process substitution before running any other child.
+          if ! wait "$!"; then
+            echo '::error::Unable to read the package-manager environment.'
+            exit 1
+          fi
           export npm_config_userconfig=/dev/null
           export npm_config_globalconfig=/etc/npmrc-absent-by-policy
+          npm_environment+=(-- "npm_config_userconfig=${npm_config_userconfig}"
+            "npm_config_globalconfig=${npm_config_globalconfig}")
           if [[ ! -c "${npm_config_userconfig}" || -s "${npm_config_userconfig}" ||
             -e "${npm_config_globalconfig}" || -L "${npm_config_globalconfig}" ]]; then
             echo '::error::Unexpected package-manager configuration source.'
             exit 1
           fi
-          python -m pre_commit run --all-files
+          "${npm_environment[@]}" python -m pre_commit run --all-files
