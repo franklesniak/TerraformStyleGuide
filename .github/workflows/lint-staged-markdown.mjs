@@ -121,12 +121,12 @@ try {
   exitCode = normalizeMarkdownlintExitCode(markdownlintExitCode);
   if (exitCode === exitStatus.toolingFailure) {
     console.error('pre-commit: Markdown lint tooling returned an unexpected exit status.');
-    console.error('Try reinstalling dev dependencies: npm --prefix .github/workflows ci');
+    console.error('Rebuild the locked tools: node .github/workflows/NpmTools.mjs install');
   }
 } catch (error) {
   console.error(error);
   console.error('pre-commit: Markdown lint tooling failed to run.');
-  console.error('Try reinstalling dev dependencies: npm --prefix .github/workflows ci');
+  console.error('Rebuild the locked tools: node .github/workflows/NpmTools.mjs install');
   process.exit(exitStatus.toolingFailure);
 }
 
@@ -155,7 +155,7 @@ if (exitCode === exitStatus.lintFailure) {
   } catch (error) {
     console.error(error);
     console.error('pre-commit: Nested Markdown lint tooling failed to run.');
-    console.error('Try reinstalling dev dependencies: npm --prefix .github/workflows ci');
+    console.error('Rebuild the locked tools: node .github/workflows/NpmTools.mjs install');
     exitCode = exitStatus.toolingFailure;
   }
 }

@@ -322,6 +322,8 @@ if ('${executable}' === 'npm') {
     const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`,
       GITHUB_ENV: path.join(f.root, 'step-env'), NPM_CONFIG_SCRIPT_SHELL: 'hostile',
       npm_Config_Registry: 'https://invalid.example', npm_config_ignore_scripts: 'false',
+      'npm_config_script-shell': '/nonexistent-counterpart-proof',
+      'NPM_CONFIG_@fixture:registry': 'https://invalid.example',
       npm_config_userconfig: '/hostile' };
     for (const name of ['GITHUB_TOKEN', 'GH_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS']) delete env[name];
     const run = (name, stepEnv) => spawnSync('bash', ['--noprofile', '--norc', '-c', steps.find(step => step.name === name).run],

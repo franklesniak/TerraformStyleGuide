@@ -16,7 +16,7 @@ fi
 
 if [ ! -e .github/workflows/node_modules/.bin/markdownlint-cli2 ]; then
   echo "Markdown is staged, but the Markdown lint tooling is not installed."
-  echo "Run: npm --prefix .github/workflows ci"
+  echo "Run: node .github/workflows/NpmTools.mjs install"
   echo "(or commit with --no-verify to deliberately skip this check once)"
   exit 1
 fi

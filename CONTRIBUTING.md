@@ -4,6 +4,8 @@
 
 Thank you for your interest in contributing to this project! This guide explains the conventions used in this repository so that contributions stay consistent.
 
+Use the [dependency setup and checks](docs/dependency-maintenance.md) to install the locked tools and local Markdown hook.
+
 ## Document roles
 
 This repository maintains two primary source documents for the style guide:

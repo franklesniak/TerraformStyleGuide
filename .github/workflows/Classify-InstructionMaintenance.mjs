@@ -22,6 +22,8 @@ const selectorPaths = new Set([
     'Test-StyleGuideArtifacts.ps1',
     'Test-CheckoutCredentials.ps1', 'Initialize-CiToolchain.ps1',
     'Invoke-MarkdownLint.ps1', 'ci-toolchain.json',
+    'NpmTools.mjs', 'NpmTools.test.mjs', 'Check-NpmAudit.mjs', 'Check-NpmAudit.test.mjs',
+    'npm-risk-exceptions.json', 'install-husky.mjs',
     'Validate-WorkflowPolicy.test.mjs',
     'Test-CiHelpers.test.mjs', 'Test-LocalValidation.test.mjs', 'Invoke-LockedPythonHook.ps1', 'lint-staged-markdown.mjs',
   ].map(name => `.github/workflows/${name}`.toLowerCase()),

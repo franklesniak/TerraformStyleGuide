@@ -6,7 +6,7 @@
 
 - **Status:** Active
 - **Owner:** Repository maintainer (@franklesniak)
-- **Last Updated:** 2026-09-11
+- **Last Updated:** 2026-10-01
 - **Scope:** Active outer-file and recursive nested-Markdown lint behavior in TerraformStyleGuide.
 - **Related:** [Workflow script index](scripts-README.md), [Markdown workflow](markdownlint.yml)
 
@@ -18,10 +18,10 @@ The staged helper runs both lint phases against Markdown blobs from the Git inde
 
 ## Local validation
 
-Run the workflow-local commands to reproduce the existing Husky and CI checks:
+Use the declared Node and npm versions, then install the locked tools and run the workflow-local commands to reproduce the existing Husky and CI checks. See [dependency maintenance](../../docs/dependency-maintenance.md) for installation and audit details.
 
 ```bash
-npm --prefix .github/workflows ci --ignore-scripts --no-audit --fund=false
+node .github/workflows/NpmTools.mjs install
 npm --prefix .github/workflows run lint:md
 npm --prefix .github/workflows run lint:md:nested
 ```
