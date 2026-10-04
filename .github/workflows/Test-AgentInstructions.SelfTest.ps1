@@ -2497,7 +2497,7 @@ function Assert-AgentSetupSelfTest {
     # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
     # Parameters, return shape, and positional contract can change without notice.
     # Positional parameters are disabled; internal callers use named arguments.
-    # Version: 1.0.20261003.0
+    # Version: 1.0.20261004.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([void])]
     param([Parameter(Mandatory)][string] $RepositoryRootPath)
@@ -2527,6 +2527,8 @@ function Assert-AgentSetupSelfTest {
             ,@('package.json', '"devDependencies": {', '"devDependencies": {"markdownlint":"0.41.1",', 'must not declare direct markdownlint')
             ,@('package.json', '"devDependencies": {', '"devDependencies": {"markdownlint-cli2":"0.23.2",', 'must not declare direct markdownlint-cli2')
             ,@('.github/workflows/package.json', 'node lint-markdown.mjs', 'node lint-nested-markdown.js --outer', 'Setup package command')
+            ,@('.github/workflows/package.json', '"lint:md:nested": "node lint-nested-markdown.js",', '', 'Setup package command.*\.github/workflows/package\.json scripts\.lint:md:nested')
+            ,@('.github/workflows/package.json', 'node lint-nested-markdown.js', 'node -e 0', 'Setup package command.*\.github/workflows/package\.json scripts\.lint:md:nested')
             ,@('.github/workflows/package.json', 'node install-husky.mjs', 'node install-husky.mjs || true', 'Setup package command')
             ,@('.husky/pre-commit', " '*.mdc'", '', 'reviewed guard/lint phase')
             ,@('.husky/pre-commit', '--diff-filter=ACMR', '--diff-filter=ACM', 'reviewed guard/lint phase')

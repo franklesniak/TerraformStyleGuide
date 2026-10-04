@@ -28,7 +28,7 @@ function fixture() {
   return root;
 }
 function remove(root) {
-  assert.equal(path.dirname(root), fs.realpathSync(os.tmpdir()));
+  assert.equal(fs.realpathSync(path.dirname(root)), fs.realpathSync(os.tmpdir()));
   assert.ok(path.basename(root).startsWith('markdown-tool-test-'));
   fs.rmSync(root, { recursive: true });
 }
@@ -61,6 +61,46 @@ test('empty discovery deliberately succeeds through the actual outer child', () 
   const root = fixture();
   try { expect(run(root), 0, /Found 0 Markdown file/u); }
   finally { remove(root); }
+});
+
+for (const [order, contents] of [['invalid then clean', [invalid, clean]], ['clean then invalid', [clean, invalid]]]) {
+  test(`outer API rejects conflicting repeated labels: ${order}`, async t => {
+    const root = fixture(), diagnostics = [];
+    t.mock.method(console, 'error', (...args) => diagnostics.push(args.join(' ')));
+    try {
+      await assert.rejects(lintOuterMarkdownContents(root, contents.map(content => ({ filePath: 'same.md', content }))), error => {
+        assert.match(error.message, /Conflicting outer Markdown inputs/u);
+        assert.ok(error.message.includes('same.md'));
+        return true;
+      });
+      assert.deepEqual(diagnostics, []);
+    } finally { remove(root); }
+  });
+}
+
+for (const [name, content, status] of [['clean', clean, 0], ['invalid', invalid, 1]]) {
+  test(`outer API preserves lint results for identical repeated labels: ${name}`, async t => {
+    const root = fixture(), diagnostics = [];
+    t.mock.method(console, 'error', (...args) => diagnostics.push(args.join(' ')));
+    try {
+      assert.equal(await lintOuterMarkdownContents(root, [{ filePath: 'same.md', content }, { filePath: 'same.md', content }]), status);
+      if (status === 1) assert.match(diagnostics.join('\n'), /same\.md:.*MD022/u);
+      else assert.deepEqual(diagnostics, []);
+    } finally { remove(root); }
+  });
+}
+
+test('outer API preserves distinct case-sensitive labels and their diagnostics', async t => {
+  const root = fixture(), diagnostics = [];
+  t.mock.method(console, 'error', (...args) => diagnostics.push(args.join(' ')));
+  try {
+    assert.equal(await lintOuterMarkdownContents(root, [{ filePath: 'same.md', content: invalid }, { filePath: 'SAME.md', content: clean }]), 1);
+    assert.match(diagnostics.join('\n'), /same\.md:.*MD022/u);
+    assert.ok(diagnostics.every(message => !message.startsWith('SAME.md:')));
+    diagnostics.length = 0;
+    assert.equal(await lintOuterMarkdownContents(root, [{ filePath: 'same.md', content: clean }, { filePath: 'SAME.md', content: clean }]), 0);
+    assert.deepEqual(diagnostics, []);
+  } finally { remove(root); }
 });
 
 test('JSONC strings/comments, configured rules and JSON fallback agree in child and API', async () => {

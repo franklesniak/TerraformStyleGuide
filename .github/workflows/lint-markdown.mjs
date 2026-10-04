@@ -29,7 +29,17 @@ export async function lintMarkdownFiles(root = repoRoot, run = runBounded) {
   return status;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Prefer loader identity; retain direct-call detection on runtimes without this property.
+const isMain = typeof import.meta.main === 'boolean' ? import.meta.main : (() => {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
   try {
     if (process.argv.length !== 2) throw new Error('Usage: node .github/workflows/lint-markdown.mjs');
     process.exitCode = await lintMarkdownFiles();

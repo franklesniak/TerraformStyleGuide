@@ -451,7 +451,7 @@ function Get-AgentSetupPackageFailure {
     # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
     # Parameters, return shape, and positional contract can change without notice.
     # Positional parameters are disabled; internal callers use named arguments.
-    # Version: 1.0.20261003.0
+    # Version: 1.0.20261004.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param([Parameter(Mandatory)][hashtable] $Content)
@@ -475,7 +475,11 @@ function Get-AgentSetupPackageFailure {
                 'test:agent-instructions' = 'pwsh -NoLogo -NoProfile -NonInteractive -File .github/workflows/Test-AgentInstructions.ps1 -SelfTest'
             }
         } else {
-            @{ 'lint:md' = 'node lint-markdown.mjs'; prepare = 'node install-husky.mjs' }
+            @{
+                'lint:md' = 'node lint-markdown.mjs'
+                'lint:md:nested' = 'node lint-nested-markdown.js'
+                prepare = 'node install-husky.mjs'
+            }
         }
         foreach ($strName in $hashtableExpected.Keys) {
             $arrProperty = @($arrScripts[0].Value.PSObject.Properties | Where-Object { $_.Name -ceq $strName })

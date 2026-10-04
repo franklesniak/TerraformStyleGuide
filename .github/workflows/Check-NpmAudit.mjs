@@ -376,7 +376,17 @@ export function ciAudit({ root = repositoryRoot, environment = process.env } = {
   };
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Prefer loader identity; retain direct-call detection on runtimes without this property.
+const isMain = typeof import.meta.main === 'boolean' ? import.meta.main : (() => {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
   try {
     if (process.argv.length > 3 || (process.argv.length === 3 && process.argv[2] !== '--ci')) fail('Usage: node .github/workflows/Check-NpmAudit.mjs [--ci]');
     const result = process.argv[2] === '--ci' ? ciAudit() : audit();

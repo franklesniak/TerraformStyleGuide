@@ -362,6 +362,7 @@ function lintNestedMarkdownContents(
 
 /**
  * Run outer Markdown lint against caller-supplied in-memory content.
+ * Repeated filePath labels must contain identical content.
  * @param {string} repoRoot - Repository root.
  * @param {Array<{filePath: string, content: string}>} markdownInputs - Safe inputs.
  * @returns {Promise<number>} Zero for success or one for lint findings; throws on tooling failure.
@@ -372,6 +373,9 @@ async function lintOuterMarkdownContents(repoRoot, markdownInputs) {
     for (const input of markdownInputs) {
         if (!input || typeof input.filePath !== 'string' || typeof input.content !== 'string') {
             throw new TypeError('Each outer Markdown input must contain string filePath and content values.');
+        }
+        if (Object.hasOwn(strings, input.filePath) && strings[input.filePath] !== input.content) {
+            throw new Error(`Conflicting outer Markdown inputs for filePath: ${input.filePath}`);
         }
         strings[input.filePath] = input.content;
     }
