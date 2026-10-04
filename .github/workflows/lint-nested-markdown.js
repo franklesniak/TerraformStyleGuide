@@ -12,10 +12,10 @@
 
 const fs = require('fs');
 const path = require('path');
-let glob, globSync, parseJsonc, MarkdownIt, markdownlintSync;
+let glob, globSync, parseJsonc, visitJsonc, printParseErrorCode, MarkdownIt, markdownlintSync;
 try {
     ({ glob, globSync } = require('glob'));
-    ({ parse: parseJsonc } = require('jsonc-parser'));
+    ({ parse: parseJsonc, visit: visitJsonc, printParseErrorCode } = require('jsonc-parser'));
     MarkdownIt = require('markdown-it');
     ({ lint: markdownlintSync } = require('markdownlint/sync'));
 } catch (error) {
@@ -210,9 +210,22 @@ function loadMarkdownlintConfig(repoRoot = path.resolve(__dirname, '../..')) {
     assertLintConfigurationInputs(repoRoot);
     const file = markdownlintConfigPath(repoRoot);
     if (fs.statSync(file).size > 1024 * 1024) throw new Error('Markdown lint configuration exceeds one MiB.');
+    const text = fs.readFileSync(file, 'utf8');
     const errors = [];
-    const config = parseJsonc(fs.readFileSync(file, 'utf8'), errors);
-    if (errors.length || !config || typeof config !== 'object' || Array.isArray(config)) {
+    const config = parseJsonc(text, errors);
+    if (errors.length) {
+        let firstError;
+        visitJsonc(text, {
+            onError(error, _offset, _length, startLine, startCharacter) {
+                firstError ??= { error, line: startLine + 1, column: startCharacter + 1 };
+            }
+        });
+        const detail = firstError
+            ? ` ${printParseErrorCode(firstError.error)} at line ${firstError.line}, UTF-16 column ${firstError.column}; ${errors.length} parse error(s).`
+            : '';
+        throw new Error(`Invalid Markdown lint configuration: ${file}.${detail}`);
+    }
+    if (!config || typeof config !== 'object' || Array.isArray(config)) {
         throw new Error(`Invalid Markdown lint configuration: ${file}.`);
     }
     if (Object.hasOwn(config, 'extends')) {

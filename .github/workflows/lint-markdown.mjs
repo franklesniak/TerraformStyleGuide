@@ -21,7 +21,7 @@ export async function lintMarkdownFiles(root = repoRoot, run = runBounded) {
   if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw new Error('Markdown lint outer child resolves outside the repository.');
   }
-  const result = run(process.execPath, [canonicalChild, '--outer'], { cwd: root });
+  const result = run(process.execPath, [canonicalChild, '--outer'], { cwd: root, timeout: 120000, maxBuffer: 2 * 1024 * 1024 });
   if (result.stdout?.length) process.stdout.write(result.stdout);
   if (result.stderr?.length) process.stderr.write(result.stderr);
   const status = normalizeLintStatus(result.status);

@@ -10,7 +10,7 @@ import { runBounded } from './NpmTools.mjs';
 
 const source = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
-const { lintOuterMarkdownContents, lintNestedMarkdownContents, validateMarkdownInput } = require('./lint-nested-markdown.js');
+const { lintOuterMarkdownContents, lintNestedMarkdownContents, loadMarkdownlintConfig, validateMarkdownInput } = require('./lint-nested-markdown.js');
 const clean = '# Example\n\nClean text.\n';
 const invalid = '# Broken\ntext\n';
 const nestedInvalid = '# Example\n\n```markdown\n# Broken\ntext\n```\n';
@@ -301,3 +301,77 @@ for (const kind of ['regular', 'leaf-inside', 'leaf-outside', 'directory', 'miss
     }
   });
 }
+
+for (const [name, content, code, line, column, count] of [
+  ['LF', '{\n "default" true\n}', 'ColonExpected', 2, 12, 1],
+  ['CRLF', '{\r\n "default":\r\n}', 'ValueExpected', 3, 1, 1],
+  ['CR', '{\r "default":\r}', 'ValueExpected', 3, 1, 1],
+  ['UTF-16', '{ "name":"😀", "default" true }', 'ColonExpected', 1, 26, 1],
+  ['multiple', '{ "a":, "b":, "c": }', 'ValueExpected', 1, 7, 3],
+]) {
+  test(`JSONC diagnostics preserve first native position and count: ${name}`, () => {
+    const root = fixture();
+    try {
+      const file = write(root, '.github/workflows/.markdownlint.jsonc', content);
+      assert.throws(() => loadMarkdownlintConfig(root), error => {
+        assert.ok(error.message.includes(file));
+        assert.equal(error.message.match(new RegExp(code, 'gu'))?.length, 1);
+        const location = /line (\d+), UTF-16 column (\d+); (\d+) parse error/u.exec(error.message);
+        assert.ok(location, error.message);
+        assert.deepEqual(location.slice(1).map(Number), [line, column, count]);
+        return true;
+      });
+    } finally { remove(root); }
+  });
+}
+
+test('JSONC diagnostics bound added detail and do not disclose source contents', () => {
+  const root = fixture(), marker = 'PRIVATE_CONFIG_SOURCE_MARKER';
+  try {
+    const file = path.join(root, '.github/workflows/.markdownlint.jsonc');
+    for (const content of [`/*${marker}${'x'.repeat(900000)}*/\n{"default":}`,
+      `{${Array.from({ length: 500 }, (_, index) => `"${marker}${index}":`).join(',')}}`]) {
+      fs.writeFileSync(file, content);
+      assert.throws(() => loadMarkdownlintConfig(root), error => {
+        assert.match(error.message, /ValueExpected/u);
+        assert.match(error.message, /\bline \d+, UTF-16 column \d+; (?:1|500) parse error/u);
+        assert.equal(error.message.includes(marker), false);
+        assert.ok(error.message.length < file.length + 200);
+        assert.equal(error.message.match(/ValueExpected/gu)?.length, 1);
+        return true;
+      });
+    }
+    fs.writeFileSync(file, ' '.repeat(1024 * 1024 + 1));
+    assert.throws(() => loadMarkdownlintConfig(root), /exceeds one MiB/u);
+  } finally { remove(root); }
+});
+
+test('JSONC diagnostics retain separate semantic rejection and valid-object acceptance', () => {
+  const root = fixture();
+  try {
+    const file = path.join(root, '.github/workflows/.markdownlint.jsonc');
+    for (const content of ['[]', 'null', 'true', '1', '"text"']) {
+      fs.writeFileSync(file, content);
+      assert.throws(() => loadMarkdownlintConfig(root), error => {
+        assert.match(error.message, /Invalid Markdown lint configuration/u);
+        assert.doesNotMatch(error.message, /parse error|UTF-16 column/u);
+        return true;
+      });
+    }
+    fs.writeFileSync(file, '{"default":true}');
+    assert.equal(loadMarkdownlintConfig(root).default, true);
+  } finally { remove(root); }
+});
+
+test('JSONC diagnostics reach outer staged and nested CLI failure paths', () => {
+  const root = fixture();
+  try {
+    git(root, 'init', '--quiet');
+    write(root, 'example.md', clean); git(root, 'add', '--', 'example.md');
+    write(root, '.github/workflows/.markdownlint.jsonc', '{\n "default" true\n}');
+    for (const name of ['lint-markdown.mjs', 'lint-staged-markdown.mjs', 'lint-nested-markdown.js']) {
+      const output = expect(run(root, name), 2, /ColonExpected/u);
+      assert.match(output, /line 2, UTF-16 column 12; 1 parse error/u);
+    }
+  } finally { remove(root); }
+});
