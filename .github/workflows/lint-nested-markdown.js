@@ -190,7 +190,7 @@ function assertLintConfigurationInputs(repoRoot = path.resolve(__dirname, '../..
     const selectorName = /^\.markdownlint(?:-cli2\.(?:jsonc|json|ya?ml|cjs|mjs)|rc|ignore|\.(?:jsonc|json|ya?ml|cjs|mjs|js|toml))$/iu;
     for (const relative of selectors) {
         if (selectorName.test(path.basename(relative)) && !allowed.has(relative.split(path.sep).join('/'))) {
-            throw new Error(`Unsupported Markdown lint configuration: ${relative}. Use .github/workflows/.markdownlint.jsonc.`);
+            throw new Error(`Unsupported Markdown lint configuration: ${relative}. Use .github/workflows/.markdownlint.jsonc (preferred) or .github/workflows/.markdownlint.json.`);
         }
     }
 

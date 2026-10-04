@@ -215,3 +215,49 @@ test('real leaf/ancestor escape and nonregular paths are refused before reads', 
     }
   } finally { remove(root); fs.rmSync(outside, { recursive: true }); }
 });
+
+for (const kind of ['regular', 'leaf-inside', 'leaf-outside', 'directory', 'missing', 'broken-link', 'ancestor-outside', 'ancestor-inside', 'root-alias']) {
+  test(`actual outer child execution boundary: ${kind}`, async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'markdown-tool-test-'));
+    fs.mkdirSync(path.join(root, '.github/workflows'), { recursive: true });
+    write(root, 'package.json', JSON.stringify({ engines: { node: process.versions.node } }));
+    const outside = `${root}-outside`, alias = `${root}-alias`;
+    const directoryLink = process.platform === 'win32' ? 'junction' : 'dir';
+    const marker = path.join(root, 'child-executed');
+    let suppliedRoot = root;
+    fs.mkdirSync(outside);
+    try {
+      const child = path.join(root, '.github/workflows/lint-nested-markdown.js');
+      fs.writeFileSync(child, `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed');`);
+      if (kind.startsWith('leaf-')) {
+        const target = path.join(kind === 'leaf-inside' ? root : outside, 'child.cjs');
+        fs.renameSync(child, target); fs.symlinkSync(target, child, 'file');
+      } else if (kind === 'directory' || kind === 'missing' || kind === 'broken-link') {
+        fs.unlinkSync(child);
+        if (kind === 'directory') fs.mkdirSync(child);
+        if (kind === 'broken-link') fs.symlinkSync(path.join(outside, 'absent.cjs'), child, 'file');
+      } else if (kind.startsWith('ancestor-')) {
+        const destination = path.join(kind === 'ancestor-inside' ? root : outside, 'relocated-workflows');
+        fs.renameSync(path.dirname(child), destination);
+        fs.symlinkSync(destination, path.dirname(child), directoryLink);
+      } else if (kind === 'root-alias') {
+        fs.symlinkSync(root, alias, directoryLink); suppliedRoot = alias;
+      }
+      const accepted = ['regular', 'ancestor-inside', 'root-alias'].includes(kind);
+      if (accepted) {
+        assert.equal(await lintMarkdownFiles(suppliedRoot), 0);
+        assert.equal(fs.readFileSync(marker, 'utf8'), 'executed');
+      } else {
+        const failure = ['missing', 'broken-link'].includes(kind) ? /ENOENT|regular outer child/u : kind === 'ancestor-outside' ? /outside the repository/u : /regular outer child/u;
+        const error = await lintMarkdownFiles(suppliedRoot).then(() => null, failure => failure);
+        assert.equal(fs.existsSync(marker), false, 'Rejected child must not execute.');
+        assert.ok(error instanceof Error, 'Invalid child must report a tooling error.');
+        assert.match(error.message, failure);
+      }
+    } finally {
+      if (fs.existsSync(alias)) fs.unlinkSync(alias);
+      remove(root);
+      fs.rmSync(outside, { recursive: true });
+    }
+  });
+}

@@ -13,8 +13,15 @@ export async function lintMarkdownFiles(root = repoRoot, run = runBounded) {
     throw new Error(`Markdown lint requires declared Node ${required ?? 'version'}; observed ${process.versions.node}.`);
   }
   const child = path.join(root, '.github/workflows/lint-nested-markdown.js');
-  if (!fs.statSync(child).isFile()) throw new Error('Markdown lint requires the regular outer child script.');
-  const result = run(process.execPath, [child, '--outer'], { cwd: root });
+  const leaf = fs.lstatSync(child);
+  if (leaf.isSymbolicLink() || !leaf.isFile()) throw new Error('Markdown lint requires a non-symlink regular outer child script.');
+  const canonicalRoot = fs.realpathSync(root);
+  const canonicalChild = fs.realpathSync(child);
+  const relative = path.relative(canonicalRoot, canonicalChild);
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error('Markdown lint outer child resolves outside the repository.');
+  }
+  const result = run(process.execPath, [canonicalChild, '--outer'], { cwd: root });
   if (result.stdout?.length) process.stdout.write(result.stdout);
   if (result.stderr?.length) process.stderr.write(result.stderr);
   const status = normalizeLintStatus(result.status);

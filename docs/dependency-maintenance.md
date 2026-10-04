@@ -7,7 +7,7 @@
 - **Last Updated:** 2026-10-04
 - **Scope:** Locked npm and Python tools, the local Markdown hook, and current dependency-risk checks in TerraformStyleGuide.
 
-Setup and audit require the exact Node and bundled npm versions declared in the root [package.json](../package.json). If either version differs, install or select that Node distribution before retrying. Check `node --version` and `npm --version`. From the repository root, run:
+Setup and audit require the exact Node and bundled npm versions declared in the root [package.json](../package.json). If either version differs, install or select that Node distribution before retrying. Check `node --version` and `npm --version`. The Linux CI bootstrap verifies its Node archive with `linuxX64Sha256` in [ci-toolchain.json](../.github/workflows/ci-toolchain.json); the exact versions remain in root `package.json` `engines`. From the repository root, run:
 
 ```text
 node .github/workflows/NpmTools.mjs install
