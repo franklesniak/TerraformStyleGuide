@@ -18,14 +18,15 @@ const selectorPaths = new Set([
     'agent-instructions.yml',
     'copilot-setup-steps.yml',
     'build.yml', 'markdownlint.yml', '.markdownlint.jsonc', 'lint-nested-markdown.js',
+    'lint-markdown.mjs', 'lint-markdown.test.mjs',
     'Generate-StyleGuideArtifacts.ps1', 'Test-ExactGitPathSet.ps1',
-    'Test-StyleGuideArtifacts.ps1', 'Test-StateRecoveryExamples.mjs',
+    'Test-BlankLineExamples.ps1', 'Test-StateRecoveryExamples.mjs', 'Test-StyleGuideArtifacts.ps1',
     'Test-CheckoutCredentials.ps1', 'Initialize-CiToolchain.ps1',
     'Invoke-MarkdownLint.ps1', 'ci-toolchain.json',
     'NpmTools.mjs', 'NpmTools.test.mjs', 'Check-NpmAudit.mjs', 'Check-NpmAudit.test.mjs',
-    'npm-risk-exceptions.json', 'install-husky.mjs',
+    'npm-risk-exceptions.json', 'install-husky.mjs', 'lint-staged-markdown.mjs',
     'Validate-WorkflowPolicy.test.mjs',
-    'Test-CiHelpers.test.mjs', 'Test-LocalValidation.test.mjs', 'Invoke-LockedPythonHook.ps1', 'lint-staged-markdown.mjs',
+    'Test-CiHelpers.test.mjs', 'Test-LocalValidation.test.mjs', 'Invoke-LockedPythonHook.ps1',
   ].map(name => `.github/workflows/${name}`.toLowerCase()),
 ]);
 // Keep this accepted-code list aligned with actual loader changes. Adding a
@@ -58,6 +59,7 @@ export function classifyInstructionMaintenance({ base, head, changedPaths }) {
     requirePath(value);
     // Case folding also covers aliases on supported Windows filesystems.
     const name = value.toLowerCase();
+    // GitHub discovers a new workflow without a listed caller changing.
     const workflowEntry = /^\.github\/workflows\/[^/]+\.ya?ml$/u.test(name);
     if (workflowEntry || selectorPaths.has(name) || packageDirectories.some(prefix => name.startsWith(prefix))) {
       maintenancePaths.push(value);

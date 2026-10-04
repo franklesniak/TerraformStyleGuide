@@ -30,17 +30,17 @@ Pull-request artifacts are previews from the pull request's merge revision, not 
 
 The [STYLE_GUIDE.md](STYLE_GUIDE.md) document contains the following sections:
 
-1. [Executive Summary: Terraform Philosophy](STYLE_GUIDE.md#executive-summary-terraform-philosophy)
+1. [Quick Reference Checklist](STYLE_GUIDE.md#quick-reference-checklist)
 2. [Terraform Version Requirements](STYLE_GUIDE.md#terraform-version-requirements)
 3. [Formatting and Style](STYLE_GUIDE.md#formatting-and-style)
 4. [Naming Conventions](STYLE_GUIDE.md#naming-conventions)
-5. [File Organization](STYLE_GUIDE.md#file-organization)
+5. [File Organization (Quick Reference)](STYLE_GUIDE.md#file-organization-quick-reference)
 6. [Variable and Output Design](STYLE_GUIDE.md#variable-and-output-design)
-7. [Resource Configuration](STYLE_GUIDE.md#resource-configuration-1)
-8. [Module Design](STYLE_GUIDE.md#module-design-1)
-9. [State Management](STYLE_GUIDE.md#state-management-1)
-10. [Cross-Stack Data Sharing](STYLE_GUIDE.md#cross-stack-data-sharing-1)
-11. [Provider Management](STYLE_GUIDE.md#provider-management-1)
+7. [Resource Configuration](STYLE_GUIDE.md#resource-configuration)
+8. [Module Design](STYLE_GUIDE.md#module-design)
+9. [State Management](STYLE_GUIDE.md#state-management)
+10. [Cross-Stack Data Sharing](STYLE_GUIDE.md#cross-stack-data-sharing)
+11. [Provider Management](STYLE_GUIDE.md#provider-management)
 12. [Security Best Practices](STYLE_GUIDE.md#security-best-practices)
 13. [Testing with Terraform Test](STYLE_GUIDE.md#testing-with-terraform-test)
 14. [Documentation Standards](STYLE_GUIDE.md#documentation-standards)
@@ -48,8 +48,8 @@ The [STYLE_GUIDE.md](STYLE_GUIDE.md) document contains the following sections:
 ## Goals
 
 - **Consistency**: Establish uniform coding patterns across all Terraform projects
-- **Readability**: Make infrastructure code easier to understand and maintain
-- **Quality**: Promote best practices for security, modularity, and documentation
+- **Readability**: Make code easier to understand and maintain
+- **Quality**: Promote best practices and professional standards
 - **Accessibility**: Useful for both humans and AI/LLM code generation
 
 ## Contributing
@@ -58,7 +58,7 @@ This is a living document. Feedback and contributions are welcome to help improv
 
 ## Acknowledgments
 
-See [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for details.
+See [ACKNOWLEDGMENTS.md](ACKNOWLEDGMENTS.md) for detailed attribution and sources.
 
 ## License
 

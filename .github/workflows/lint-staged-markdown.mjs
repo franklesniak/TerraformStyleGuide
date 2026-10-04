@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, resolve, sep } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const workflowsDir = dirname(fileURLToPath(import.meta.url));
@@ -66,7 +66,6 @@ const runGit = (args) => {
 };
 
 const parseNulDelimitedPaths = (value) => value.split('\0').filter(Boolean);
-const toAbsolutePosixPath = (repoRelativePath) => resolve(repoRoot, repoRelativePath).split(sep).join('/');
 
 const stagedMarkdownPathspecs = Object.freeze(['*.md', '*.mdc']);
 let stagedMarkdownPaths;
@@ -92,13 +91,11 @@ if (stagedMarkdownPaths.length === 0) {
   process.exit(exitStatus.success);
 }
 
-const stagedMarkdownByAbsolutePosixPath = {};
 const stagedMarkdownInputs = [];
 
 try {
   for (const repoRelativePath of stagedMarkdownPaths) {
     const content = runGit(['show', `:${repoRelativePath}`]);
-    stagedMarkdownByAbsolutePosixPath[toAbsolutePosixPath(repoRelativePath)] = content;
     stagedMarkdownInputs.push({ filePath: repoRelativePath, content });
   }
 } catch (error) {
@@ -110,14 +107,9 @@ try {
 let exitCode;
 
 try {
-  const { main: markdownlintCli2 } = await import('markdownlint-cli2');
-  const markdownlintExitCode = await markdownlintCli2({
-    directory: repoRoot,
-    argv: ['--config', '.github/workflows/.markdownlint.jsonc'],
-    nonFileContents: stagedMarkdownByAbsolutePosixPath,
-    logMessage: console.log,
-    logError: console.error
-  });
+  const require = createRequire(import.meta.url);
+  const { lintOuterMarkdownContents } = require('./lint-nested-markdown.js');
+  const markdownlintExitCode = await lintOuterMarkdownContents(repoRoot, stagedMarkdownInputs);
   exitCode = normalizeMarkdownlintExitCode(markdownlintExitCode);
   if (exitCode === exitStatus.toolingFailure) {
     console.error('pre-commit: Markdown lint tooling returned an unexpected exit status.');

@@ -6,9 +6,9 @@
 - **Status:** Accepted
 - **Owner:** Frank Lesniak, TerraformStyleGuide Repository Owner
 - **Date:** 2026-08-10
-- **Last Updated:** 2026-09-11
+- **Last Updated:** 2026-10-04
 - **Scope:** Records the accepted ruleset limitation for pull requests that edit required-check workflows and the related implementation constraint.
-- **Related:** [T1 supply-freeze record](../T1-SUPPLY-FREEZE-v1.md)
+- **Related:** [T1 supply-freeze record](../T1-SUPPLY-FREEZE-v1.md); [Style Guide](../../STYLE_GUIDE.md); [Style Guide Rationale](../../STYLE_GUIDE_RATIONALE.md)
 
 ## 1. Context
 

@@ -5,10 +5,10 @@
 ## Metadata
 
 - **Status:** Active
-- **Owner:** TerraformStyleGuide Repository Maintainers
-- **Last Updated:** 2026-09-11
-- **Scope:** Provides the prompt template and output contract for evaluating proposed TerraformStyleGuide issues.
-- **Related:** [Terraform style guide](../STYLE_GUIDE.md) and [rationale](../STYLE_GUIDE_RATIONALE.md)
+- **Owner:** Repository Maintainers
+- **Last Updated:** 2026-10-04
+- **Scope:** Provides a reusable LLM prompt for evaluating and refining proposed style-guide issue titles and descriptions. It does not create, authorize, or mutate GitHub issues.
+- **Related:** [Style guide](../STYLE_GUIDE.md), [rationale](../STYLE_GUIDE_RATIONALE.md)
 
 This document contains a prompt template used to evaluate proposed GitHub Issues for the style guide. The typical workflow is:
 

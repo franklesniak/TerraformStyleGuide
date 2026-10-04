@@ -77,7 +77,7 @@ test('configuration and alternate lock selectors are rejected before npm', () =>
   } finally { removeFixture(root); }
 });
 
-test('actual Terraform installer activates in CI and production unless explicitly disabled', () => {
+test('actual installer activates in CI and production unless explicitly disabled', () => {
   for (const context of [{}, { CI: 'true' }, { NODE_ENV: 'production' },
     { CI: 'true', NODE_ENV: 'production' }, { CI: 'true', NODE_ENV: 'production', HUSKY: '0' }]) {
     const root = inputFixture();

@@ -12,9 +12,17 @@
 
 const fs = require('fs');
 const path = require('path');
-const { glob } = require('glob');
-const MarkdownIt = require('markdown-it');
-const { lint: markdownlintSync } = require('markdownlint/sync');
+let glob, globSync, parseJsonc, MarkdownIt, markdownlintSync;
+try {
+    ({ glob, globSync } = require('glob'));
+    ({ parse: parseJsonc } = require('jsonc-parser'));
+    MarkdownIt = require('markdown-it');
+    ({ lint: markdownlintSync } = require('markdownlint/sync'));
+} catch (error) {
+    if (require.main !== module) throw error;
+    console.error(`Markdown lint tooling: ${error.message}`);
+    process.exit(2);
+}
 
 const markdownIgnore = [
     'node_modules/**',
@@ -174,26 +182,43 @@ const colors = {
 /**
  * Load markdownlint configuration from .markdownlint.jsonc or .markdownlint.json
  */
-function loadMarkdownlintConfig() {
-    // Look for config in the same directory as this script
-    const scriptDir = __dirname;
-    // Try .jsonc first (preferred), then fall back to .json
-    const configPaths = [
-        path.join(scriptDir, '.markdownlint.jsonc'),
-        path.join(scriptDir, '.markdownlint.json')
-    ];
-
-    for (const configPath of configPaths) {
-        if (fs.existsSync(configPath)) {
-            const content = fs.readFileSync(configPath, 'utf8');
-            // Strip out // comments and /* */ comments for .jsonc compatibility
-            const jsonContent = content
-                .replace(/\/\/.*$/gm, '')  // Remove single-line comments
-                .replace(/\/\*[\s\S]*?\*\//g, '');  // Remove multi-line comments
-            return JSON.parse(jsonContent);
+function assertLintConfigurationInputs(repoRoot = path.resolve(__dirname, '../..')) {
+    const allowed = new Set(['.github/workflows/.markdownlint.jsonc', '.github/workflows/.markdownlint.json']);
+    const selectors = globSync('**/.markdownlint*', {
+        cwd: repoRoot, dot: true, follow: false, ignore: markdownIgnore
+    });
+    const selectorName = /^\.markdownlint(?:-cli2\.(?:jsonc|json|ya?ml|cjs|mjs)|rc|ignore|\.(?:jsonc|json|ya?ml|cjs|mjs|js|toml))$/iu;
+    for (const relative of selectors) {
+        if (selectorName.test(path.basename(relative)) && !allowed.has(relative.split(path.sep).join('/'))) {
+            throw new Error(`Unsupported Markdown lint configuration: ${relative}. Use .github/workflows/.markdownlint.jsonc.`);
         }
     }
-    return {};
+
+}
+
+function markdownlintConfigPath(repoRoot = path.resolve(__dirname, '../..')) {
+    for (const name of ['.markdownlint.jsonc', '.markdownlint.json']) {
+        const file = path.join(repoRoot, '.github/workflows', name);
+        try { fs.lstatSync(file); }
+        catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+        return validateMarkdownInput(repoRoot, file);
+    }
+    throw new Error('Markdown lint requires .github/workflows/.markdownlint.jsonc (or .markdownlint.json).');
+}
+
+function loadMarkdownlintConfig(repoRoot = path.resolve(__dirname, '../..')) {
+    assertLintConfigurationInputs(repoRoot);
+    const file = markdownlintConfigPath(repoRoot);
+    if (fs.statSync(file).size > 1024 * 1024) throw new Error('Markdown lint configuration exceeds one MiB.');
+    const errors = [];
+    const config = parseJsonc(fs.readFileSync(file, 'utf8'), errors);
+    if (errors.length || !config || typeof config !== 'object' || Array.isArray(config)) {
+        throw new Error(`Invalid Markdown lint configuration: ${file}.`);
+    }
+    if (Object.hasOwn(config, 'extends')) {
+        throw new Error('Unsupported Markdown lint configuration: extends. Put rules in the workflow rules file.');
+    }
+    return config;
 }
 
 /**
@@ -339,26 +364,24 @@ function lintNestedMarkdownContents(
  * Run outer Markdown lint against caller-supplied in-memory content.
  * @param {string} repoRoot - Repository root.
  * @param {Array<{filePath: string, content: string}>} markdownInputs - Safe inputs.
- * @returns {Promise<number>} markdownlint-cli2 exit status.
+ * @returns {Promise<number>} Zero for success or one for lint findings; throws on tooling failure.
  */
 async function lintOuterMarkdownContents(repoRoot, markdownInputs) {
-    const { main: markdownlintCli2 } = await import('markdownlint-cli2');
-    const nonFileContents = {};
-
+    const config = loadMarkdownlintConfig(repoRoot);
+    const strings = Object.create(null);
     for (const input of markdownInputs) {
-        const absolutePosixPath = path.resolve(repoRoot, input.filePath)
-            .split(path.sep)
-            .join('/');
-        nonFileContents[absolutePosixPath] = input.content;
+        if (!input || typeof input.filePath !== 'string' || typeof input.content !== 'string') {
+            throw new TypeError('Each outer Markdown input must contain string filePath and content values.');
+        }
+        strings[input.filePath] = input.content;
     }
-
-    return markdownlintCli2({
-        directory: repoRoot,
-        argv: ['--config', '.github/workflows/.markdownlint.jsonc'],
-        nonFileContents,
-        logMessage: console.log,
-        logError: console.error
-    });
+    const result = markdownlintSync({ strings, config });
+    for (const [file, errors] of Object.entries(result)) {
+        for (const error of errors) {
+            console.error(`${file}:${error.lineNumber}:${error.errorRange?.[0] ?? 1} ${error.ruleNames.join('/')} ${error.ruleDescription}${error.errorDetail ? ` [${error.errorDetail}]` : ''}`);
+        }
+    }
+    return Object.values(result).some(errors => errors.length) ? 1 : 0;
 }
 
 /**
@@ -465,7 +488,7 @@ async function main() {
     } catch (error) {
         console.error(`${colors.red}Error:${colors.reset}`, error.message);
         console.error(error.stack);
-        process.exit(1);
+        process.exit(2);
     }
 }
 
@@ -475,6 +498,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+    assertLintConfigurationInputs,
+    loadMarkdownlintConfig,
+    markdownlintConfigPath,
     displayResults,
     findMarkdownFiles,
     lintOuterMarkdownContents,
