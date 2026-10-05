@@ -1,14 +1,11 @@
 name: Build Style Guide Artifacts
 on:
   push:
-    branches:
-      - main
   pull_request:
-    branches:
-      - main
 permissions: {}
 jobs:
   verify:
+    if: github.event_name != 'push' || github.event.deleted != true
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions: {}
@@ -58,11 +55,11 @@ jobs:
         run: |
           ./.github/workflows/Test-CheckoutCredentials.ps1
       - name: Generate and verify committed artifacts
-        id: generate-and-verify
+        id: generate_style_guide_artifacts
         shell: pwsh
         run: |
           ./.github/workflows/Test-StyleGuideArtifacts.ps1
-  publish:
+  publish_committed_artifacts:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -70,7 +67,7 @@ jobs:
     needs: verify
     steps:
       - name: Checkout repository
-        id: checkout
+        id: checkout_repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ github.repository }}
@@ -86,10 +83,10 @@ jobs:
           set-safe-directory: true
           allow-unsafe-pr-checkout: false
       - name: Publish committed style guide artifacts
-        id: upload-generated
+        id: publish_committed_style_guide_artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: style-guide-artifacts
+          name: style-guide-committed-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             copilot-instructions.md
             terraform.instructions.md

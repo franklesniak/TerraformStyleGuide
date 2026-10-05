@@ -1,95 +1,108 @@
 # .SYNOPSIS
-# Verifies Codex capacity and shared Claude/Codex instruction capabilities.
-#
-# .DESCRIPTION
-# Confirms that AGENTS.md fits the configured Codex read limit with reserve,
-# that trusted project configuration enables the preferred GitHub plugin, that both
-# entry points retain portable review, placement, and deferral contracts, and
-# that platform safety markers remain present. Optional self-tests prove that
-# representative mutations fail closed.
-#
-# .PARAMETER SelfTest
-# Runs in-memory negative tests after the repository files pass validation.
+# Validates governed agent instructions and optional authenticated Git ranges.
 #
 # .PARAMETER RequireStagedInputMatch
-# Requires each staged validator input to match the worktree content that the
-# validator reads. Use this mode from pre-commit.
+# Requires staged validator inputs to match the worktree content being checked.
+# Applies only to local validation, including SelfTest; cannot combine revision modes.
 #
-# .PARAMETER InputRevision
-# The optional Git commit whose governed files are validation inputs. The
-# validator and its executable dependencies still come from the checked-out
-# trusted revision.
+# .PARAMETER MetadataClassificationOnly
+# Validates bounded classification data against exact accepted B/H endpoints.
+# Requires checkout B and returns before Markdown dependency/bootstrap work.
+# This result is data validation, not merge or owner authority.
 #
-# .PARAMETER PublishedBaselineRevision
-# The accepted full commit used for final metadata comparison. The checker must
-# run from this checkout. Candidate files are inert Git blobs.
+# .PARAMETER FinalizeMetadataNow
+# Checks changed-document metadata against the captured current UTC date at
+# deliberate author finalization. Requires exact accepted B/H and checkout B.
+# Cannot run with SelfTest or MetadataClassificationOnly. Later ordinary checks
+# do not establish the historical finalization date.
 #
-# .EXAMPLE
-# & ./.github/workflows/Test-AgentInstructions.ps1 -SelfTest
-#
-# # Validates the repository files and runs the mutation self-tests.
-#
-# .INPUTS
-# None. You can't pipe objects to this script.
-#
-# .OUTPUTS
-# [string] Success records for repository validation and optional self-tests.
+# .PARAMETER ProposedPolicy
+# Runs full B/H transition diagnostics with proposed checker code at H.
+# Requires distinct nonzero endpoints and checkout H. This is not accepted
+# policy, owner, merge or finalization authority. Cannot combine other modes.
 #
 # .NOTES
-# This script does not support positional parameters.
-# This validator keeps explicit backtick continuations so that large
-# named-parameter mutation calls remain auditable one argument per line.
-# Private helpers have focused examples. The -SelfTest suite covers edge cases.
-# Version: 1.7.20260928.0
+# Positional parameters are not supported.
+# Version: 1.18.20261005.0
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
 param(
-    [Parameter()]
-    [switch] $SelfTest,
-
-    [Parameter()]
-    [switch] $RequireStagedInputMatch,
-
-    [Parameter()]
-    [AllowEmptyString()]
-    [string] $InputRevision = '',
-
-    [Parameter()]
-    [AllowEmptyString()]
-    [string] $PublishedBaselineRevision = ''
+    [Parameter()][switch] $SelfTest,
+    [Parameter()][switch] $RequireStagedInputMatch,
+    [Parameter()][switch] $MetadataClassificationOnly,
+    [Parameter()][switch] $FinalizeMetadataNow,
+    [Parameter()][switch] $ProposedPolicy,
+    [Parameter()][AllowEmptyString()][string] $InputRevision = '',
+    [Parameter()][AllowEmptyString()][string] $PublishedBaselineRevision = ''
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$intAgentsMaximumInputBytes = 65536
+$intAgentsMaximumInputBytes = 32768
 $intClaudeMaximumInputBytes = 131072
 $intCodexConfigMaximumInputBytes = 65536
-$intDocumentClassificationMaximumInputBytes = 32768
+$intGitIgnoreMaximumInputBytes = 65536
 $intDocsInstructionsMaximumInputBytes = 131072
 $intInstructionDocumentMaximumInputBytes = 131072
-$intValidatorMaximumInputBytes = 786432
+$intStyleGuideRationaleMaximumInputBytes = 196608
+$intGitPathListMaximumBytes = 1048576
+$intDocumentClassificationMaximumInputBytes = 32768
+$strPythonPrerequisite =
+    'Python 3.12 is required to validate .codex/config.toml. On Windows, ' +
+    'install the Python launcher for `py -3.12`; otherwise, expose ' +
+    '`python3.12`, `python3`, or `python` on PATH.'
+$hashtableRuntimeContext = @{
+    WindowsPlatform = $IsWindows
+    PythonPathNames = @('python3.12', 'python3', 'python')
+    PythonCommandContext = $null
+    PythonResolutionKey = ''
+    NodeApplicationContext = $null
+}
 $script:objValidationUtcNow = [DateTimeOffset]::UtcNow
 $script:strMaximumMetadataUtcDate = $script:objValidationUtcNow.ToString('yyyy-MM-dd')
 $script:objMaximumCommitUtcTimestamp = $script:objValidationUtcNow.AddMinutes(5)
-$script:objPython312CommandContext = $null
-$script:objNodeApplicationContext = $null
-$script:strWorkflowPolicyCommandPrefix =
-    'node .github/workflows/Validate-WorkflowPolicy.mjs'
-
-if ($RequireStagedInputMatch -and (
-        -not [string]::IsNullOrEmpty($InputRevision) -or
-        -not [string]::IsNullOrEmpty($PublishedBaselineRevision))) {
-    throw 'Staged-input matching cannot be combined with revision validation.'
-}
-$script:strWorkflowPolicyCommand = $script:strWorkflowPolicyCommandPrefix +
-    ' .github/workflows/build.yml .github/workflows/markdownlint.yml'
-$script:arrAllowedMetadataStatuses = @(
-    'Draft', 'Proposed', 'Active', 'Accepted', 'Superseded', 'Deprecated'
+$script:arrCheckoutAttributePaths = @(
+    '.gitattributes',
+    '.github/.gitattributes',
+    '.github/workflows/.gitattributes'
 )
-$script:arrAllowedDecisionRecordStatuses = @(
-    'Proposed', 'Accepted', 'Superseded', 'Deprecated'
+$script:arrOperationalLintGuidePaths = @(
+    '.github/workflows/MARKDOWN-LINTING-IMPLEMENTATION.md',
+    '.github/workflows/scripts-README.md'
 )
+$script:arrGovernedInstructionRootPaths = @(
+    '.hermes.md',
+    'AGENTS.md',
+    'CLAUDE.md',
+    'GEMINI.md',
+    '.github/copilot-instructions.md'
+)
+$script:arrPushGovernedExactPaths = @(
+    $script:arrCheckoutAttributePaths
+    $script:arrOperationalLintGuidePaths
+    '.codex/config.toml',
+    '.github/document-metadata-classification.json',
+    '.github/workflows/Test-AgentInstructions.SelfTest.ps1',
+    '.github/workflows/Test-AgentInstructions.ps1',
+    '.github/workflows/workflow-policy-cases.json',
+    '.github/workflows/workflow-policy-contract.json',
+    '.github/workflows/Validate-WorkflowPolicy.mjs',
+    '.github/workflows/build.yml',
+    '.github/workflows/markdownlint.yml',
+    '.github/workflows/agent-instructions.yml',
+    '.github/workflows/copilot-setup-steps.yml',
+    '.gitignore',
+    '.npmrc',
+    'docs/ISSUE_EVALUATION_PROMPT.md',
+    'npm-shrinkwrap.json',
+    'package-lock.json',
+    'package.json',
+    'STYLE_GUIDE_RATIONALE.md'
+)
+$script:strDecisionRecordPathPattern =
+    '^docs/decisions/[0-9]{4}-[a-z0-9]+(?:-[a-z0-9]+)*\.md$'
+$script:strDecisionRecordDirectoryPathPattern = '^docs/decisions/.+$'
 $script:strStandingPlacementAuthorization =
     'No additional per-round, per-session, or PR-specific direct-push authorization from the owner is required.'
 $script:arrPlacementStructuralLiterals = @(
@@ -129,11 +142,7 @@ $script:arrSharedProseLiterals = @(
     'at least 60 seconds',
     'mutation-test',
     'PR body',
-    'both reviewers',
-    'one active task record',
-    'one final validation record',
-    'targeted remote readback',
-    'Do not request another approval for an on-plan merge.'
+    'both reviewers'
 )
 $script:arrSafetyLimitContracts = @(
     [pscustomobject]@{
@@ -204,41 +213,597 @@ $script:strOnlyGenuineDeferredWork = 'Only genuine deferred work requires a GitH
 $script:arrObsoleteDeferralLiterals = @(
     'If this comment''s outcome is anything other than a fix **completed in this PR**'
 )
+$script:arrProhibitedDocumentationClaimLiterals = @(
+    '.github/workflows/check-placeholders.yml',
+    '.github/workflows/auto-fix-precommit.yml',
+    '.github/ISSUE_TEMPLATE/',
+    '.github/pull_request_template.md',
+    'comment block at the top of `CONTRIBUTING.md`'
+)
+$script:arrDocumentationClaimOwnerPaths = @(
+    '.github/instructions/docs.instructions.md'
+)
+$script:strClaudeImportFailure =
+    'CLAUDE.md must not contain active @path imports.'
 
 #region Private helper functions
+
+function ConvertFrom-ParserJsonContext {
+    # .SYNOPSIS
+    # Decodes bounded parser JSON without coercing timestamp strings.
+    #
+    # .DESCRIPTION
+    # Preserves JSON types for the caller's existing exact shape checks.
+    # Rejects nonobject roots, ambiguous properties and excessive input.
+    #
+    # .PARAMETER Content
+    # The exact successful parser output.
+    #
+    # .PARAMETER MaximumBytes
+    # The maximum permitted UTF-8 output size.
+    #
+    # .EXAMPLE
+    # ConvertFrom-ParserJsonContext -Content '{"value":"2026-10-02T00:00:00Z"}' -MaximumBytes 4096
+    #
+    # # Preserves value as the original string.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [System.Management.Automation.PSCustomObject] Decoded JSON object.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20261002.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string] $Content,
+        [Parameter(Mandatory)][ValidateRange(1, 16777216)][int] $MaximumBytes
+    )
+
+    if ([Text.Encoding]::UTF8.GetByteCount($Content) -gt $MaximumBytes) {
+        throw 'The parser returned oversized JSON context.'
+    }
+    $objOptions = [System.Text.Json.JsonDocumentOptions]@{
+        AllowTrailingCommas = $false
+        CommentHandling = [System.Text.Json.JsonCommentHandling]::Disallow
+        MaxDepth = 64
+    }
+    $scriptBlockDecode = {
+        param([System.Text.Json.JsonElement] $Element)
+
+        switch ($Element.ValueKind) {
+            ([System.Text.Json.JsonValueKind]::Object) {
+                $hashtableProperties = [ordered]@{}
+                foreach ($objProperty in $Element.EnumerateObject()) {
+                    if ([string]::IsNullOrEmpty($objProperty.Name) -or
+                        $hashtableProperties.Contains($objProperty.Name)) {
+                        throw 'The parser returned ambiguous JSON properties.'
+                    }
+                    $hashtableProperties[$objProperty.Name] =
+                        & $scriptBlockDecode -Element $objProperty.Value
+                }
+                return [pscustomobject]$hashtableProperties
+            }
+            ([System.Text.Json.JsonValueKind]::Array) {
+                $listValues = [Collections.Generic.List[object]]::new()
+                foreach ($objElement in $Element.EnumerateArray()) {
+                    $listValues.Add((& $scriptBlockDecode -Element $objElement))
+                }
+                return ,$listValues.ToArray()
+            }
+            ([System.Text.Json.JsonValueKind]::String) { return $Element.GetString() }
+            ([System.Text.Json.JsonValueKind]::Number) {
+                $intValue = [int64]0
+                if ($Element.TryGetInt64([ref]$intValue)) { return $intValue }
+                $doubleValue = $Element.GetDouble()
+                if ([double]::IsNaN($doubleValue) -or [double]::IsInfinity($doubleValue)) {
+                    throw 'The parser returned an unsupported JSON number.'
+                }
+                return $doubleValue
+            }
+            ([System.Text.Json.JsonValueKind]::True) { return $true }
+            ([System.Text.Json.JsonValueKind]::False) { return $false }
+            ([System.Text.Json.JsonValueKind]::Null) { return $null }
+            default { throw 'The parser returned an unsupported JSON type.' }
+        }
+    }
+    $objDocument = $null
+    try {
+        $objDocument = [System.Text.Json.JsonDocument]::Parse($Content, $objOptions)
+        if ($objDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
+            throw 'The parser JSON context root must be an object.'
+        }
+        return & $scriptBlockDecode -Element $objDocument.RootElement
+    } finally {
+        if ($null -ne $objDocument) { $objDocument.Dispose() }
+    }
+}
+
+function Get-AgentSetupInputSpec {
+    # .SYNOPSIS
+    # Lists the finite setup inputs admitted by the instruction validator.
+    #
+    # .DESCRIPTION
+    # Keeps the actual setup readers bounded and includes their local executable inputs.
+    #
+    # .EXAMPLE
+    # Get-AgentSetupInputSpec
+    #
+    # # Returns the supported paths and byte limits.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [pscustomobject] A repository-relative path and its byte limit.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; there are no parameters.
+    # Version: 1.0.20261003.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([pscustomobject])]
+    param()
+    foreach ($arrSpec in @(
+            ,@('.github/workflows/agent-instructions.yml', 65536)
+            ,@('package.json', 16384)
+            ,@('.github/workflows/package.json', 16384)
+            ,@('.github/workflows/package-lock.json', 131072)
+            ,@('.github/workflows/copilot-setup-steps.yml', 65536)
+            ,@('.github/workflows/lint-staged-markdown.mjs', 32768)
+            ,@('.github/workflows/Invoke-LockedPythonHook.ps1', 32768)
+            ,@('.github/workflows/install-husky.mjs', 16384)
+            ,@('.husky/pre-commit', 16384)
+            ,@('.pre-commit-config.yaml', 16384)
+            ,@('.github/workflows/scripts-README.md', 32768)
+            ,@('requirements-dev.txt', 16384)
+        )) {
+        [pscustomobject]@{ Path = [string]$arrSpec[0]; MaximumBytes = [int]$arrSpec[1] }
+    }
+}
+
+function Read-AgentSetupInputContent {
+    # .SYNOPSIS
+    # Reads the complete setup closure through the existing safe readers.
+    #
+    # .DESCRIPTION
+    # Selects local or immutable revision inputs and checks each staged local read.
+    # Missing inputs are failures, not optional setup profiles.
+    #
+    # .PARAMETER RepositoryRootPath
+    # The actual repository root.
+    #
+    # .PARAMETER Revision
+    # The exact input revision, or an empty string for local inputs.
+    #
+    # .PARAMETER StagedInputPaths
+    # The exact ACMR path set, empty when staged matching is not selected.
+    #
+    # .EXAMPLE
+    # Read-AgentSetupInputContent -RepositoryRootPath $strRoot -Revision '' -StagedInputPaths $setPaths
+    #
+    # # Reads all required setup inputs with the matching byte bounds.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [hashtable] Setup text indexed by repository-relative path.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20261003.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][string] $RepositoryRootPath,
+        [Parameter(Mandatory)][AllowEmptyString()][string] $Revision,
+        [Parameter(Mandatory)][AllowEmptyCollection()]
+        [Collections.Generic.HashSet[string]] $StagedInputPaths
+    )
+    $hashtableContent = @{}
+    foreach ($objSpec in @(Get-AgentSetupInputSpec)) {
+        $hashtableContent[$objSpec.Path] = if ([string]::IsNullOrEmpty($Revision)) {
+            ConvertFrom-StrictUtf8Data -Bytes (Read-RepositoryInputData `
+                    -Path (Join-Path $RepositoryRootPath $objSpec.Path) `
+                    -RepositoryRootPath $RepositoryRootPath -RepositoryRelativePath $objSpec.Path `
+                    -DisplayName $objSpec.Path -MaximumBytes $objSpec.MaximumBytes `
+                    -RequireIndexContentMatch:($StagedInputPaths.Contains($objSpec.Path))) `
+                -DisplayName $objSpec.Path
+        } else {
+            Read-GitRevisionText -RepositoryRootPath $RepositoryRootPath -Revision $Revision `
+                -RepositoryRelativePath $objSpec.Path -MaximumBytes $objSpec.MaximumBytes -RequireRegularFile
+        }
+    }
+    return $hashtableContent
+}
+
+function Get-AgentSetupPackageFailure {
+    # .SYNOPSIS
+    # Checks the finite package delegation and prepare contracts.
+    #
+    # .DESCRIPTION
+    # Uses the strict JSON decoder and exact string properties, without coercion.
+    #
+    # .PARAMETER Content
+    # The safely read setup content map.
+    #
+    # .EXAMPLE
+    # Get-AgentSetupPackageFailure -Content $hashtableSetup
+    #
+    # # Emits failures for changed package commands or root lint dependencies.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [string] One record for each invalid setup contract.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20261004.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][hashtable] $Content)
+    foreach ($strPath in @('package.json', '.github/workflows/package.json')) {
+        try {
+            $objPackage = ConvertFrom-ParserJsonContext -Content $Content[$strPath] -MaximumBytes 16384
+        } catch {
+            Write-Output "Setup package must be strict unambiguous JSON: $strPath"
+            continue
+        }
+        $arrScripts = @($objPackage.PSObject.Properties | Where-Object { $_.Name -ceq 'scripts' })
+        if ($arrScripts.Count -ne 1 -or $arrScripts[0].Value -isnot [pscustomobject]) {
+            Write-Output "Setup package requires an exact scripts object: $strPath"
+            continue
+        }
+        $hashtableExpected = if ($strPath -ceq 'package.json') {
+            @{
+                'bootstrap:agent-instructions' = 'node .github/workflows/NpmTools.mjs install'
+                'lint:md' = 'npm --prefix .github/workflows run lint:md'
+                'lint:md:nested' = 'npm --prefix .github/workflows run lint:md:nested'
+                'test:agent-instructions' = 'pwsh -NoLogo -NoProfile -NonInteractive -File .github/workflows/Test-AgentInstructions.ps1 -SelfTest'
+            }
+        } else {
+            @{
+                'lint:md' = 'node lint-markdown.mjs'
+                'lint:md:nested' = 'node lint-nested-markdown.js'
+                prepare = 'node install-husky.mjs'
+            }
+        }
+        foreach ($strName in $hashtableExpected.Keys) {
+            $arrProperty = @($arrScripts[0].Value.PSObject.Properties | Where-Object { $_.Name -ceq $strName })
+            if ($arrProperty.Count -ne 1 -or $arrProperty[0].Value -isnot [string] -or
+                $arrProperty[0].Value -cne $hashtableExpected[$strName]) {
+                Write-Output "Setup package command must match the reviewed caller: $strPath scripts.$strName"
+            }
+        }
+        if ($strPath -ceq 'package.json') {
+            $arrDependencies = @($objPackage.PSObject.Properties | Where-Object { $_.Name -ceq 'devDependencies' })
+            if ($arrDependencies.Count -ne 1 -or $arrDependencies[0].Value -isnot [pscustomobject]) {
+                Write-Output 'Root package requires an exact devDependencies object.'
+            } else {
+                foreach ($strForbidden in @('markdownlint', 'markdownlint-cli2')) {
+                    if (@($arrDependencies[0].Value.PSObject.Properties | Where-Object {
+                                $_.Name -ieq $strForbidden
+                            }).Count -ne 0) {
+                        Write-Output "Root package must not declare direct $strForbidden."
+                    }
+                }
+            }
+        }
+    }
+}
+
+function Get-AgentBootstrapCommandFailure {
+    # .SYNOPSIS
+    # Checks the finite operative setup commands in one document.
+    #
+    # .DESCRIPTION
+    # Requires each canonical preflight, install and validation command exactly
+    # once in operative prose. Hidden, deleted and duplicate spans do not pass.
+    #
+    # .PARAMETER Name
+    # The document name used in failure diagnostics.
+    #
+    # .PARAMETER MarkdownContext
+    # The actual operative Markdown parser result for the document.
+    #
+    # .EXAMPLE
+    # Get-AgentBootstrapCommandFailure -Name 'AGENTS.md' -MarkdownContext $objMarkdown
+    #
+    # # Emits no output for a valid document; otherwise emits missing-command diagnostics.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [string] One diagnostic for each command whose operative count is not one.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20261003.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string] $Name,
+        [Parameter(Mandatory)][psobject] $MarkdownContext
+    )
+
+    $strInstall = '-m pip --isolated install --require-hashes --only-binary=:all: --index-url https://pypi.org/simple -r requirements-dev.txt'
+    $arrCommands = @(
+        "pwsh -NoProfile -Command 'if (`$PSVersionTable.PSVersion.Major -lt 7) { exit 1 }'"
+        "py -3.12 $strInstall"
+        "python3.12 $strInstall"
+        'py -3.12 -m pre_commit run --all-files'
+        'python3.12 -m pre_commit run --all-files'
+    )
+    foreach ($strCommand in $arrCommands) {
+        if (@($MarkdownContext.ProseBlocks.Code | Where-Object { $_ -ceq $strCommand }).Count -ne 1) {
+            Write-Output "$Name must contain this setup command exactly once: $strCommand"
+        }
+    }
+}
+
+function Get-AgentSetupContractFailure {
+    # .SYNOPSIS
+    # Checks the retained local hook, lock and setup contracts.
+    #
+    # .DESCRIPTION
+    # Validates finite actual caller forms and nonprotected bootstrap prose.
+    # Lock grammar and module availability do not attest installed package bytes.
+    # Protected bootstrap prose retains its separately authorized instruction checks.
+    #
+    # .PARAMETER Content
+    # The complete safely read setup content map.
+    #
+    # .EXAMPLE
+    # Get-AgentSetupContractFailure -Content $hashtableSetup
+    #
+    # # Emits setup contract violations without installing or executing hooks.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [string] One record for each invalid setup contract.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20261003.1
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][hashtable] $Content)
+    Get-AgentSetupPackageFailure -Content $Content
+    $strHook = $Content['.husky/pre-commit'].Replace("`r`n", "`n")
+    $arrHookCommands = @(
+        "if git diff --cached --quiet --diff-filter=ACMR -- '*.md' '*.mdc'; then"
+        'if node .github/workflows/lint-staged-markdown.mjs; then'
+        'if npm --prefix .github/workflows run lint:md; then'
+        'if npm --prefix .github/workflows run lint:md:nested; then'
+    )
+    $intPrevious = -1
+    foreach ($strCommand in $arrHookCommands) {
+        $arrMatches = @([regex]::Matches($strHook, '(?m)^' + [regex]::Escape($strCommand) + '$'))
+        if ($arrMatches.Count -ne 1 -or $arrMatches[0].Index -le $intPrevious) {
+            Write-Output "Husky must run each reviewed guard/lint phase once in order: $strCommand"
+        } else { $intPrevious = $arrMatches[0].Index }
+    }
+    $strConfig = $Content['.pre-commit-config.yaml'].Replace("`r`n", "`n")
+    $arrRepositories = @([regex]::Matches($strConfig,
+            '(?ms)^  - repo: (?<Name>[^\n]+)\n(?<Body>.*?)(?=^  - repo:|\z)'))
+    $arrLocal = @($arrRepositories | Where-Object { $_.Groups['Name'].Value -ceq 'local' })
+    $arrRemote = @($arrRepositories | Where-Object { $_.Groups['Name'].Value -cne 'local' })
+    if ($arrRepositories.Count -ne 3 -or $arrLocal.Count -ne 2 -or $arrRemote.Count -ne 1) {
+        Write-Output 'Pre-commit requires two local groups and one immutable actionlint group.'
+    }
+    if ($arrRemote.Count -ne 1 -or
+        $arrRemote[0].Groups['Name'].Value -cne 'https://github.com/rhysd/actionlint' -or
+        [regex]::Matches($arrRemote[0].Groups['Body'].Value, '(?m)^    rev: "[0-9a-f]{40}"(?: # [^\n]+)?$').Count -ne 1 -or
+        [regex]::Matches($arrRemote[0].Groups['Body'].Value, '(?m)^      - id: actionlint$').Count -ne 1 -or
+        [regex]::Matches($arrRemote[0].Groups['Body'].Value, '(?m)^      - id:').Count -ne 1) {
+        Write-Output 'The sole remote hook must be actionlint at a full lowercase commit pin.'
+    }
+    if ($strConfig -cmatch '(?m)^        (?:language: python(?:\s|$)|additional_dependencies:)') {
+        Write-Output 'Python hooks must not resolve a separate dependency environment.'
+    }
+    $hashtableModules = [ordered]@{
+        'check-json' = 'pre_commit_hooks.check_json'
+        'check-yaml' = 'pre_commit_hooks.check_yaml'
+        'end-of-file-fixer' = 'pre_commit_hooks.end_of_file_fixer'
+        'trailing-whitespace' = 'pre_commit_hooks.trailing_whitespace_fixer'
+        yamllint = 'yamllint'
+        'check-dependabot' = 'check_jsonschema'
+        'check-github-workflows' = 'check_jsonschema'
+    }
+    $hashtableHookBodies = @{}
+    foreach ($strId in @($hashtableModules.Keys) + @('staged-markdown', 'agent-instruction-contract')) {
+        $arrHooks = @([regex]::Matches($strConfig,
+                '(?ms)^      - id: ' + [regex]::Escape($strId) + '\n(?<Body>.*?)(?=^      - id:|^  - repo:|\z)'))
+        if ($arrHooks.Count -ne 1) {
+            Write-Output "Pre-commit requires one hook definition: $strId"
+            $hashtableHookBodies[$strId] = ''
+        } else { $hashtableHookBodies[$strId] = $arrHooks[0].Groups['Body'].Value }
+    }
+    foreach ($strId in $hashtableModules.Keys) {
+        $strBody = $hashtableHookBodies[$strId]
+        foreach ($strLine in @(
+                '          pwsh -NoLogo -NoProfile -NonInteractive -File'
+                '          .github/workflows/Invoke-LockedPythonHook.ps1'
+                ('          -Module ' + $hashtableModules[$strId])
+                '        language: system'
+            )) {
+            if ([regex]::Matches($strBody, '(?m)^' + [regex]::Escape($strLine) + '$').Count -ne 1) {
+                Write-Output "Python hook must use the reviewed system launcher/module: $strId"
+            }
+        }
+    }
+    foreach ($strId in @('check-yaml', 'yamllint')) {
+        if ([regex]::Matches($hashtableHookBodies[$strId], '(?m)^' +
+                [regex]::Escape('        files: ^.*\.ya?ml$') + '$').Count -ne 1) {
+            Write-Output "Hook must select all repository YAML: $strId"
+        }
+    }
+    foreach ($strId in @('check-json', 'end-of-file-fixer', 'trailing-whitespace')) {
+        if ([regex]::Matches($hashtableHookBodies[$strId], '(?m)^' +
+                [regex]::Escape('            \.github/document-metadata-classification\.json') + '$').Count -ne 1) {
+            Write-Output "Hook must select the classification manifest: $strId"
+        }
+    }
+    foreach ($arrRequiredLine in @(
+            ,@('staged-markdown', '        entry: node .github/workflows/lint-staged-markdown.mjs')
+            ,@('staged-markdown', '        files: ^(\.github/workflows/lint-staged-markdown\.mjs|.*\.(md|mdc))$')
+            ,@('agent-instruction-contract', '          pwsh -NoLogo -NoProfile -NonInteractive -File')
+            ,@('agent-instruction-contract', '          .github/workflows/Test-AgentInstructions.ps1 -SelfTest -RequireStagedInputMatch')
+            ,@('agent-instruction-contract', '        always_run: true')
+            ,@('agent-instruction-contract', '        pass_filenames: false')
+            ,@('agent-instruction-contract', '        language: system')
+        )) {
+        if ([regex]::Matches($hashtableHookBodies[$arrRequiredLine[0]],
+                '(?m)^' + [regex]::Escape($arrRequiredLine[1]) + '$').Count -ne 1) {
+            Write-Output "Hook must retain its reviewed activation and selector: $($arrRequiredLine[0])"
+        }
+    }
+    $strSetup = $Content['.github/workflows/copilot-setup-steps.yml']
+    if ($strSetup -match '(?m)^[ \t]+(?:-[ \t]*)?uses[ \t]*:') {
+        Write-Output 'Copilot setup must not execute an action.'
+    }
+    foreach ($strPattern in @(
+            '(?m)^[ \t]+(?:GITHUB_TOKEN|GH_TOKEN|ACTIONS_RUNTIME_TOKEN)[ \t]*:'
+            '\bgithub\s*\.\s*token\b'
+            '\bgithub\s*\['
+            '\bsecrets\b'
+            '\btojson\s*\(\s*github\s*\)'
+        )) {
+        if ($strSetup -match $strPattern) {
+            Write-Output 'Copilot setup must not project credentials.'
+            break
+        }
+    }
+    $strRequirements = $Content['requirements-dev.txt'].Replace("`r`n", "`n").Replace("`r", "`n")
+    $strPreamble = "--only-binary=:all:`n--require-hashes`n`n"
+    $boolLockValid = $strRequirements.StartsWith($strPreamble, [StringComparison]::Ordinal)
+    $strBody = if ($boolLockValid) { $strRequirements.Substring($strPreamble.Length) } else { $strRequirements }
+    $arrPackages = @([regex]::Matches($strBody,
+            '(?m)^(?<Name>[a-z][a-z0-9-]*)==(?<Version>[^\s\\]+) \\\n' +
+            '(?<Hashes>    --hash=sha256:[0-9a-f]{64}(?: \\\n    --hash=sha256:[0-9a-f]{64})*)\n'))
+    $setNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($objPackage in $arrPackages) {
+        $strBody = $strBody.Replace($objPackage.Value, '')
+        if (-not $setNames.Add($objPackage.Groups['Name'].Value) -or
+            $objPackage.Groups['Version'].Value -cnotmatch '^\d+\.\d+(?:\.\d+)?(?:[a-zA-Z0-9.+-]*)$') {
+            $boolLockValid = $false
+        }
+    }
+    foreach ($strRequired in @('pre-commit', 'pre-commit-hooks', 'yamllint', 'check-jsonschema')) {
+        if (-not $setNames.Contains($strRequired)) { $boolLockValid = $false }
+    }
+    if (-not $boolLockValid -or $strBody.Length -ne 0) {
+        Write-Output 'Python requirements must have binary/hash flags, unique pinned packages and complete SHA-256 records.'
+    }
+    $objMarkdown = Get-OperativeMarkdownContext -Content $Content['.github/workflows/scripts-README.md']
+    Get-AgentBootstrapCommandFailure -Name 'Script index' -MarkdownContext $objMarkdown
+}
+
+function Test-InitialMetadataCoveragePath {
+    # .SYNOPSIS
+    # Tests exact trusted prior exemption promotion.
+    #
+    # .DESCRIPTION
+    # Uses exact exemptions from a validated existing baseline manifest.
+    # Without a trusted manifest, no invalid parent can be waived.
+    # Known governed paths cannot become initial coverage.
+    #
+    # .PARAMETER HasTrustedBaselineManifest
+    # True when the trusted baseline already has classification data.
+    #
+    # .PARAMETER TrustedBaselineExemptPath
+    # Exact exemptions read from the validated trusted baseline manifest.
+    #
+    # .PARAMETER RepositoryRelativePath
+    # The exact candidate document path validated by the bounded input reader.
+    #
+    # .EXAMPLE
+    # Test-InitialMetadataCoveragePath @hashtableArguments
+    #
+    # # Returns true only for a proved previously ungoverned path.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [System.Boolean] True when the path was outside proved prior coverage.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20261002.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][bool] $HasTrustedBaselineManifest,
+        [Parameter()][AllowEmptyCollection()][string[]] $TrustedBaselineExemptPath = @(),
+        [Parameter(Mandatory)][string] $RepositoryRelativePath
+    )
+
+    $arrProvedPriorGovernedPaths = @(
+        'AGENTS.md', 'CLAUDE.md', '.github/copilot-instructions.md',
+        '.github/instructions/docs.instructions.md', '.github/instructions/yaml.instructions.md',
+        'docs/ISSUE_EVALUATION_PROMPT.md', 'STYLE_GUIDE_RATIONALE.md',
+        '.github/workflows/MARKDOWN-LINTING-IMPLEMENTATION.md', '.github/workflows/scripts-README.md')
+    if ($arrProvedPriorGovernedPaths -ccontains $RepositoryRelativePath -or
+        $RepositoryRelativePath -cmatch '^docs/decisions/[0-9]{4}-[a-z0-9]+(?:-[a-z0-9]+)*\.md$') {
+        return $false
+    }
+    if ($HasTrustedBaselineManifest) {
+        return $TrustedBaselineExemptPath -ccontains $RepositoryRelativePath
+    }
+    return $false
+}
 
 function ConvertFrom-StrictUtf8Data {
     # .SYNOPSIS
     # Decodes trusted bytes as strict UTF-8 without a byte-order mark.
     #
     # .DESCRIPTION
-    # Rejects known byte-order marks and invalid UTF-8 byte sequences before it
-    # returns decoded text.
+    # Rejects recognized byte-order marks or malformed UTF-8 before decoding.
     #
     # .PARAMETER Bytes
-    # The bytes to validate and decode.
+    # Trusted bytes to decode.
     #
     # .PARAMETER DisplayName
-    # The input name to include in validation failures.
+    # Input name for invalid-data diagnostics.
     #
     # .EXAMPLE
-    # ConvertFrom-StrictUtf8Data -Bytes $arrBytes -DisplayName 'AGENTS.md'
-    #
-    # # Returns the decoded text or throws an invalid-data exception.
+    # ConvertFrom-StrictUtf8Data -Bytes ([byte[]] @(0x4F, 0x4B)) `
+    #     -DisplayName 'fixture' # Returns System.String 'OK'.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. Pipeline input is not supported.
     #
     # .OUTPUTS
-    # [string] The decoded UTF-8 text.
+    # System.String.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.1.20260820.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -277,8 +842,7 @@ function ConvertFrom-StrictUtf8Data {
 
     try {
         return [System.Text.UTF8Encoding]::new($false, $true).GetString($Bytes)
-    }
-    catch [System.Text.DecoderFallbackException] {
+    } catch [System.Text.DecoderFallbackException] {
         throw [System.IO.InvalidDataException]::new(
             "$DisplayName must contain valid UTF-8 without a BOM.",
             $_.Exception
@@ -312,12 +876,10 @@ function Assert-EncodingMutationRejected {
     # None.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260819.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([void])]
     param(
@@ -331,8 +893,7 @@ function Assert-EncodingMutationRejected {
     try {
         [void](ConvertFrom-StrictUtf8Data -Bytes $Bytes -DisplayName $Name)
         throw "Self-test '$Name' was accepted."
-    }
-    catch [System.IO.InvalidDataException] {
+    } catch [System.IO.InvalidDataException] {
         $strExpectedMessage = "$Name must contain valid UTF-8 without a BOM."
         if ($_.Exception.Message -cne $strExpectedMessage) {
             throw "Self-test '$Name' returned an unexpected failure: $($_.Exception.Message)"
@@ -345,53 +906,48 @@ function Get-RepositoryInputMetadataFailure {
     # Finds unsafe repository-input metadata.
     #
     # .DESCRIPTION
-    # Validates the Git index and worktree metadata for one governed input and
-    # writes one failure string for each unsafe condition.
+    # Validates Git index and file-system metadata for one repository input.
     #
     # .PARAMETER DisplayName
-    # The input name to include in failure records.
+    # The trusted label to use in diagnostics.
     #
     # .PARAMETER GitIndexEntryCount
-    # The number of Git index entries for the input.
+    # The number of exact Git index entries for the path.
     #
     # .PARAMETER GitMode
-    # The Git file mode, or null when it cannot be parsed.
+    # The exact Git mode recorded for the path.
     #
     # .PARAMETER GitStage
-    # The Git index stage, or null when it cannot be parsed.
+    # The Git index stage recorded for the path.
     #
     # .PARAMETER IsFileInfo
-    # Indicates whether the worktree object is a regular file.
+    # Indicates whether file-system inspection returned a regular FileInfo object.
     #
     # .PARAMETER Attributes
-    # The worktree file attributes.
+    # The file-system attributes recorded for the path.
     #
     # .PARAMETER LinkType
-    # The PowerShell link type, when the provider exposes one.
+    # The file-system link type, when one exists.
     #
     # .PARAMETER UnixMode
-    # The Unix mode string, when the provider exposes one.
+    # The Unix file mode recorded for the path.
     #
     # .EXAMPLE
-    # Get-RepositoryInputMetadataFailure -DisplayName 'AGENTS.md' `
-    #     -GitIndexEntryCount 1 -GitMode '100644' -GitStage '0' `
-    #     -IsFileInfo $true -Attributes Normal
+    # Get-RepositoryInputMetadataFailure @hashtableArguments
     #
-    # # Writes no records for safe metadata.
+    # # Runs with validated named arguments.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. No pipeline input.
     #
     # .OUTPUTS
-    # [string] One record for each metadata failure.
+    # [System.String] Zero or more validated values or diagnostics described in the function description.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260819.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -426,8 +982,7 @@ function Get-RepositoryInputMetadataFailure {
 
     if ($GitIndexEntryCount -ne 1) {
         Write-Output "$DisplayName must have exactly one Git index entry."
-    }
-    elseif (($GitMode -cne '100644') -or ($GitStage -cne '0')) {
+    } elseif (($GitMode -cne '100644') -or ($GitStage -cne '0')) {
         Write-Output "$DisplayName must be a stage-0 regular file with Git mode 100644."
     }
 
@@ -450,56 +1005,51 @@ function Assert-RepositoryInputMetadataMutationRejected {
     # Confirms that an unsafe metadata fixture fails closed.
     #
     # .DESCRIPTION
-    # Evaluates one repository metadata fixture and verifies that it produces the
-    # specified failure. The expected validation result does not escape.
+    # Builds one unsafe metadata fixture and confirms that the metadata validator rejects it with the exact expected diagnostic.
     #
     # .PARAMETER Name
-    # The fixture name and input display name.
+    # The fixture or document name to use in diagnostics.
     #
     # .PARAMETER GitIndexEntryCount
-    # The simulated number of Git index entries.
+    # The number of exact Git index entries for the path.
     #
     # .PARAMETER GitMode
-    # The simulated Git file mode.
+    # The exact Git mode recorded for the path.
     #
     # .PARAMETER GitStage
-    # The simulated Git index stage.
+    # The Git index stage recorded for the path.
     #
     # .PARAMETER IsFileInfo
-    # Indicates whether the simulated worktree object is a regular file.
+    # Indicates whether file-system inspection returned a regular FileInfo object.
     #
     # .PARAMETER Attributes
-    # The simulated worktree file attributes.
+    # The file-system attributes recorded for the path.
     #
     # .PARAMETER LinkType
-    # The simulated PowerShell link type.
+    # The file-system link type, when one exists.
     #
     # .PARAMETER UnixMode
-    # The simulated Unix mode string.
+    # The Unix file mode recorded for the path.
     #
-    # .PARAMETER ExpectedFailure
-    # The exact failure that the fixture must produce.
+    # .PARAMETER Failure
+    # The exact diagnostic that the fixture must produce.
     #
     # .EXAMPLE
-    # Assert-RepositoryInputMetadataMutationRejected -Name 'symlink' `
-    #     -Attributes ReparsePoint `
-    #     -ExpectedFailure 'symlink must not be a symbolic link or reparse point.'
+    # Assert-RepositoryInputMetadataMutationRejected @hashtableArguments
     #
-    # # Returns no output when the fixture is rejected as expected.
+    # # Runs with validated named arguments.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. No pipeline input.
     #
     # .OUTPUTS
     # None.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260819.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([void])]
     param(
@@ -532,7 +1082,7 @@ function Assert-RepositoryInputMetadataMutationRejected {
         [string] $UnixMode = '',
 
         [Parameter(Mandatory)]
-        [string] $ExpectedFailure
+        [string] $Failure
     )
 
     $arrFailures = @(Get-RepositoryInputMetadataFailure `
@@ -547,76 +1097,8 @@ function Assert-RepositoryInputMetadataMutationRejected {
     if ($arrFailures.Count -eq 0) {
         throw "Self-test '$Name' was accepted."
     }
-    if (-not ($arrFailures -ccontains $ExpectedFailure)) {
+    if (-not ($arrFailures -ccontains $Failure)) {
         throw "Self-test '$Name' returned an unexpected failure: $($arrFailures -join '; ')"
-    }
-}
-
-function Get-StagedInputMatchFailure {
-    # .SYNOPSIS
-    # Finds a staged-input content mismatch.
-    #
-    # .DESCRIPTION
-    # Compares the exact decoded worktree and Git index content when a staged
-    # input is part of the candidate commit.
-    #
-    # .PARAMETER DisplayName
-    # The input name to include in a failure record.
-    #
-    # .PARAMETER RequireMatch
-    # Indicates that the input has a staged candidate that must match.
-    #
-    # .PARAMETER WorktreeContent
-    # The strict UTF-8 content read from the worktree.
-    #
-    # .PARAMETER IndexContent
-    # The strict UTF-8 content read from the stage-0 Git index blob.
-    #
-    # .EXAMPLE
-    # Get-StagedInputMatchFailure -DisplayName 'AGENTS.md' -RequireMatch `
-    #     -WorktreeContent $strWorktree -IndexContent $strIndex
-    #
-    # # Writes one failure when the staged and worktree content differ.
-    #
-    # .INPUTS
-    # None. You can't pipe objects to this function.
-    #
-    # .OUTPUTS
-    # [string] A staged-input mismatch record.
-    #
-    # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260912.0
-    [CmdletBinding(PositionalBinding = $false)]
-    [OutputType([string])]
-    param(
-        [Parameter(Mandatory)]
-        [string] $DisplayName,
-
-        [Parameter()]
-        [switch] $RequireMatch,
-
-        [Parameter(Mandatory)]
-        [AllowEmptyString()]
-        [string] $WorktreeContent,
-
-        [Parameter(Mandatory)]
-        [AllowEmptyString()]
-        [string] $IndexContent
-    )
-
-    if ($RequireMatch -and -not [string]::Equals(
-            $WorktreeContent,
-            $IndexContent,
-            [System.StringComparison]::Ordinal
-        )) {
-        Write-Output (
-            "$DisplayName worktree content must match its staged Git index blob."
-        )
     }
 }
 
@@ -625,37 +1107,36 @@ function Read-BoundedStreamData {
     # Reads a stream through a strict byte limit.
     #
     # .DESCRIPTION
-    # Reads at most one byte beyond the configured limit so that oversized input
-    # fails before the complete input is buffered.
+    # Reads a stream until end-of-stream while enforcing a strict byte cap and cancellation.
     #
     # .PARAMETER Stream
-    # The readable stream. The caller remains responsible for disposal.
+    # The readable stream to consume.
     #
     # .PARAMETER MaximumBytes
-    # The largest accepted byte count.
+    # The maximum permitted output size in bytes.
     #
     # .PARAMETER DisplayName
-    # The input name to include in validation failures.
+    # The trusted label to use in diagnostics.
+    #
+    # .PARAMETER CancellationToken
+    # The token that bounds or cancels the read.
     #
     # .EXAMPLE
-    # $arrBytes = @(Read-BoundedStreamData -Stream $objStream `
-    #     -MaximumBytes 65536 -DisplayName 'AGENTS.md')
+    # Read-BoundedStreamData @hashtableArguments
     #
-    # # Collects the streamed bytes when the limit is not exceeded.
+    # # Runs with validated named arguments.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. No pipeline input.
     #
     # .OUTPUTS
-    # [byte] Each byte read from the stream.
+    # [System.Byte] Zero or more bytes read from the stream.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260819.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([byte])]
     param(
@@ -667,7 +1148,11 @@ function Read-BoundedStreamData {
         [int] $MaximumBytes,
 
         [Parameter(Mandatory)]
-        [string] $DisplayName
+        [string] $DisplayName,
+
+        [Parameter()]
+        [Threading.CancellationToken] $CancellationToken =
+            [Threading.CancellationToken]::None
     )
 
     $arrBuffer = [byte[]]::new(8192)
@@ -678,7 +1163,17 @@ function Read-BoundedStreamData {
                     $arrBuffer.Length,
                     ($MaximumBytes + 1L) - $objOutputStream.Length
                 ))
-            $intReadBytes = $Stream.Read($arrBuffer, 0, $intRemainingBytes)
+            try {
+                $intReadBytes = if ($CancellationToken.CanBeCanceled) {
+                    $Stream.ReadAsync(
+                        $arrBuffer, 0, $intRemainingBytes, $CancellationToken
+                    ).GetAwaiter().GetResult()
+                } else {
+                    $Stream.Read($arrBuffer, 0, $intRemainingBytes)
+                }
+            } catch [OperationCanceledException] {
+                throw [TimeoutException]::new("$DisplayName timed out.", $_.Exception)
+            }
             if ($intReadBytes -eq 0) {
                 break
             }
@@ -692,10 +1187,401 @@ function Read-BoundedStreamData {
         }
 
         return $objOutputStream.ToArray()
-    }
-    finally {
+    } finally {
         $objOutputStream.Dispose()
     }
+}
+
+function Read-BoundedProcessData {
+    # .SYNOPSIS
+    # Reads bounded data from a child process.
+    #
+    # .DESCRIPTION
+    # Starts one shell-free child process, reads its standard output through a strict byte cap, waits through a strict timeout, and always reaps and disposes the process.
+    #
+    # .PARAMETER Process
+    # The configured shell-free process to start.
+    #
+    # .PARAMETER MaximumBytes
+    # The maximum permitted output size in bytes.
+    #
+    # .PARAMETER TimeoutMilliseconds
+    # The maximum elapsed time in milliseconds.
+    #
+    # .PARAMETER DisplayName
+    # The trusted label to use in diagnostics.
+    #
+    # .PARAMETER RejectStandardError
+    # Rejects any stderr output from an application identity probe.
+    #
+    # .EXAMPLE
+    # Read-BoundedProcessData @hashtableArguments
+    #
+    # # Runs with validated named arguments.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [System.Management.Automation.PSCustomObject] One object with Bytes and ExitCode properties.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.1.20261003.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)][Diagnostics.Process] $Process,
+        [Parameter(Mandatory)][ValidateRange(1, 2147483646)][int] $MaximumBytes,
+        [Parameter(Mandatory)][ValidateRange(1, 60000)][int] $TimeoutMilliseconds,
+        [Parameter(Mandatory)][string] $DisplayName,
+        [Parameter()][switch] $RejectStandardError
+    )
+    if ($Process.StartInfo.UseShellExecute -or
+        -not $Process.StartInfo.RedirectStandardOutput -or
+        -not $Process.StartInfo.RedirectStandardError) {
+        throw "$DisplayName requires shell-free redirected process streams."
+    }
+    $objCancel = [Threading.CancellationTokenSource]::new($TimeoutMilliseconds)
+    $objTimer = [Diagnostics.Stopwatch]::StartNew()
+    $boolRan = $false
+    $objErrorTask = $null
+    try {
+        if (-not $Process.Start()) {
+            throw "Could not start $DisplayName."
+        }
+        $boolRan = $true
+        $objErrorTask = if ($RejectStandardError) {
+            $Process.StandardError.BaseStream.ReadAsync([byte[]]::new(1), 0, 1)
+        } else {
+            $Process.StandardError.ReadToEndAsync()
+        }
+        $arrBytes = Read-BoundedStreamData `
+            -Stream $Process.StandardOutput.BaseStream `
+            -MaximumBytes $MaximumBytes `
+            -DisplayName $DisplayName `
+            -CancellationToken $objCancel.Token
+        $arrBytes = [byte[]] @($arrBytes)
+        $intRemaining = [Math]::Max(
+            0, $TimeoutMilliseconds - [int]$objTimer.ElapsedMilliseconds)
+        if (-not $Process.WaitForExit($intRemaining)) {
+            throw [TimeoutException]::new("$DisplayName timed out.")
+        }
+        $objStandardError = $objErrorTask.GetAwaiter().GetResult()
+        if ($RejectStandardError -and [int]$objStandardError -ne 0) {
+            throw "$DisplayName returned unexpected error output."
+        }
+        return [pscustomobject]@{Bytes = $arrBytes;ExitCode = $Process.ExitCode}
+    } catch {
+        $objFailure = $_.Exception
+        if ($boolRan) {
+            if (-not $Process.HasExited) {
+                $Process.Kill($true)
+            }
+            if (-not $Process.WaitForExit(5000)) {
+                throw "$DisplayName could not be reaped after failure."
+            }
+            if ($null -ne $objErrorTask) {
+                try {
+                    [void]$objErrorTask.GetAwaiter().GetResult()
+                } catch {
+                    [void]$_
+                }
+            }
+        }
+        throw $objFailure
+    } finally {
+        $objTimer.Stop()
+        $objCancel.Dispose()
+        $Process.Dispose()
+    }
+}
+
+function ConvertFrom-GitPathListData {
+    # .SYNOPSIS
+    # Decodes a NUL-delimited Git path list.
+    #
+    # .DESCRIPTION
+    # Requires strict UTF-8, a terminal NUL, nonempty path records, and unique
+    # paths by default. Commit-range path-touch output can opt into duplicates
+    # because one path can be changed by more than one commit in the same range.
+    #
+    # .PARAMETER Bytes
+    # The bounded raw bytes produced by a Git path-list command.
+    #
+    # .PARAMETER AllowDuplicatePath
+    # Allows repeated ordinal path records while retaining every other check.
+    #
+    # .EXAMPLE
+    # ConvertFrom-GitPathListData -Bytes $arrGitOutput
+    #
+    # # Returns each unique decoded tracked path.
+    #
+    # .EXAMPLE
+    # ConvertFrom-GitPathListData -Bytes $arrRangeOutput -AllowDuplicatePath
+    #
+    # # Returns repeated commit-range path touches in their original order.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [string] Zero or more decoded repository-relative paths.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.1.20260914.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [byte[]] $Bytes,
+
+        [Parameter()]
+        [switch] $AllowDuplicatePath
+    )
+
+    if ($Bytes.Length -eq 0) {
+        return [string[]] @()
+    }
+    if ($Bytes[-1] -ne 0) {
+        throw [IO.InvalidDataException]::new('Git path list must end with a NUL byte.')
+    }
+
+    $setPaths = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::Ordinal
+    )
+    $intRecordStart = 0
+    for ($intByteIndex = 0; $intByteIndex -lt $Bytes.Length; $intByteIndex++) {
+        if ($Bytes[$intByteIndex] -ne 0) {
+            continue
+        }
+        if ($intByteIndex -eq $intRecordStart) {
+            throw [IO.InvalidDataException]::new('Git path list contains an empty path.')
+        }
+        $arrPathBytes = $Bytes[$intRecordStart..($intByteIndex - 1)]
+        $strPath = ConvertFrom-StrictUtf8Data `
+            -Bytes $arrPathBytes -DisplayName 'Git path'
+        if (-not $setPaths.Add($strPath) -and -not $AllowDuplicatePath) {
+            throw [IO.InvalidDataException]::new('Git path list contains a duplicate path.')
+        }
+        $intRecordStart = $intByteIndex + 1
+    }
+    # Validate all records before emitting any path from the bounded input.
+    $intRecordStart = 0
+    for ($intByteIndex = 0; $intByteIndex -lt $Bytes.Length; $intByteIndex++) {
+        if ($Bytes[$intByteIndex] -eq 0) {
+            ConvertFrom-StrictUtf8Data `
+                -Bytes $Bytes[$intRecordStart..($intByteIndex - 1)] `
+                -DisplayName 'Git path'
+            $intRecordStart = $intByteIndex + 1
+        }
+    }
+}
+
+function Read-GitTrackedPath {
+    # .SYNOPSIS
+    # Reads a bounded tracked path list from one Git revision.
+    #
+    # .DESCRIPTION
+    # Runs Git against one revision and returns its decoded, NUL-delimited tracked paths.
+    #
+    # .PARAMETER RepositoryRootPath
+    # The absolute path of the trusted Git repository.
+    #
+    # .PARAMETER Revision
+    # The exact Git revision to inspect.
+    #
+    # .PARAMETER MaximumBytes
+    # The maximum permitted output size in bytes.
+    #
+    # .EXAMPLE
+    # Read-GitTrackedPath @hashtableArguments
+    #
+    # # Runs with validated named arguments.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [System.String] Zero or more validated values or diagnostics described in the function description.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $RepositoryRootPath,
+
+        [Parameter()]
+        [AllowEmptyString()]
+        [string] $Revision = '',
+
+        [Parameter(Mandatory)]
+        [ValidateRange(1, 2147483646)]
+        [int] $MaximumBytes
+    )
+
+    $arrArguments = if ([string]::IsNullOrEmpty($Revision)) {
+        @('-C', $RepositoryRootPath, 'ls-files', '--cached', '-z')
+    } else {
+        @('-C', $RepositoryRootPath, 'ls-tree', '-r', '-z', '--name-only', $Revision)
+    }
+    $objStartInfo = [Diagnostics.ProcessStartInfo]::new('git')
+    $objStartInfo.UseShellExecute = $false
+    $objStartInfo.CreateNoWindow = $true
+    $objStartInfo.RedirectStandardOutput = $true
+    $objStartInfo.RedirectStandardError = $true
+    foreach ($strArgument in $arrArguments) {
+        $objStartInfo.ArgumentList.Add($strArgument)
+    }
+
+    $objGitProcess = [Diagnostics.Process]::new()
+    $objGitProcess.StartInfo = $objStartInfo
+    $objProcessResult = Read-BoundedProcessData `
+        -Process $objGitProcess `
+        -MaximumBytes $MaximumBytes `
+        -TimeoutMilliseconds 10000 `
+        -DisplayName 'Git tracked-path enumeration'
+    if ($objProcessResult.ExitCode -ne 0) {
+        throw 'Could not enumerate tracked files for the governed instruction inventory.'
+    }
+    return ConvertFrom-GitPathListData -Bytes $objProcessResult.Bytes
+}
+
+function Read-GitPublishedEndpointChangedPath {
+    # .SYNOPSIS
+    # Reads bounded paths changed between the published baseline and final state.
+    #
+    # .DESCRIPTION
+    # Uses exact baseline and final endpoint trees. It does not reconstruct
+    # remote publication events or intermediate topic history.
+    #
+    # .PARAMETER RepositoryRootPath
+    # The absolute path of the trusted Git repository.
+    #
+    # .PARAMETER BaselineRevision
+    # The authenticated published baseline commit, or the zero object ID.
+    #
+    # .PARAMETER FinalRevision
+    # The authenticated published final commit.
+    #
+    # .PARAMETER MaximumBytes
+    # The maximum permitted Git path-list output size.
+    #
+    # .EXAMPLE
+    # Read-GitPublishedEndpointChangedPath @hashtableArguments
+    #
+    # # Returns the paths whose final state differs from the baseline.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [string] Zero or more changed repository-relative paths.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string] $RepositoryRootPath,
+        [Parameter(Mandatory)][AllowEmptyString()][string] $BaselineRevision,
+        [Parameter(Mandatory)][string] $FinalRevision,
+        [Parameter(Mandatory)][ValidateRange(1, 2147483646)][int] $MaximumBytes
+    )
+
+    foreach ($strRevision in @($BaselineRevision, $FinalRevision)) {
+        if ($strRevision -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'The document comparison requires two full commit hashes.'
+        }
+    }
+    $arrArguments = @('-C', $RepositoryRootPath, 'diff', '--name-only', '-z',
+        '--no-renames', '--no-ext-diff', '--no-textconv',
+        $BaselineRevision, $FinalRevision, '--', ':(top)**')
+    $objStartInfo = [Diagnostics.ProcessStartInfo]::new('git')
+    $objStartInfo.UseShellExecute = $false
+    $objStartInfo.CreateNoWindow = $true
+    $objStartInfo.RedirectStandardOutput = $true
+    $objStartInfo.RedirectStandardError = $true
+    foreach ($strArgument in $arrArguments) {
+        $objStartInfo.ArgumentList.Add($strArgument)
+    }
+    $objProcess = [Diagnostics.Process]::new()
+    $objProcess.StartInfo = $objStartInfo
+    $objResult = Read-BoundedProcessData -Process $objProcess `
+        -MaximumBytes $MaximumBytes -TimeoutMilliseconds 10000 `
+        -DisplayName 'Git published-endpoint path enumeration'
+    if ($objResult.ExitCode -ne 0) {
+        throw 'Could not enumerate paths changed between published endpoints.'
+    }
+    $arrPaths = @(ConvertFrom-GitPathListData -Bytes $objResult.Bytes)
+    return @($arrPaths | Sort-Object -Unique)
+}
+
+function Read-GitStagedInputPath {
+    # .SYNOPSIS
+    # Reads the bounded staged ACMR path set.
+    #
+    # .DESCRIPTION
+    # Uses NUL Git output and the existing strict path decoder. Native failures,
+    # malformed paths, incomplete records and oversized output are rejected.
+    #
+    # .PARAMETER RepositoryRootPath
+    # The absolute path of the trusted Git repository.
+    #
+    # .PARAMETER MaximumBytes
+    # The maximum byte size of the complete path output.
+    #
+    # .EXAMPLE
+    # Read-GitStagedInputPath -RepositoryRootPath $strRoot -MaximumBytes 1048576
+    #
+    # # Returns exact staged paths without reading their bodies.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [string] Each validated staged path. No output for an empty staged set.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20261003.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string] $RepositoryRootPath,
+        [Parameter(Mandatory)][ValidateRange(1, 2147483646)][int] $MaximumBytes
+    )
+    $objStartInfo = [Diagnostics.ProcessStartInfo]::new('git')
+    $objStartInfo.UseShellExecute = $false
+    $objStartInfo.CreateNoWindow = $true
+    $objStartInfo.RedirectStandardOutput = $true
+    $objStartInfo.RedirectStandardError = $true
+    foreach ($strArgument in @('-C', $RepositoryRootPath, 'diff', '--cached',
+            '--name-only', '--diff-filter=ACMR', '--no-ext-diff', '--no-textconv', '-z', '--')) {
+        $objStartInfo.ArgumentList.Add($strArgument)
+    }
+    $objProcess = [Diagnostics.Process]::new()
+    $objProcess.StartInfo = $objStartInfo
+    $objResult = Read-BoundedProcessData -Process $objProcess -MaximumBytes $MaximumBytes `
+        -TimeoutMilliseconds 10000 -DisplayName 'staged validator input paths'
+    if ($objResult.ExitCode -ne 0) { throw 'Could not inspect staged validator input paths.' }
+    ConvertFrom-GitPathListData -Bytes $objResult.Bytes
 }
 
 function Read-RepositoryInputData {
@@ -703,47 +1589,42 @@ function Read-RepositoryInputData {
     # Reads one governed repository file safely.
     #
     # .DESCRIPTION
-    # Resolves the provider path, validates Git and worktree metadata, and reads
-    # the regular file through a strict byte limit.
+    # Reads one worktree file only after exact repository metadata validation.
     #
     # .PARAMETER Path
-    # The PowerShell path of the worktree file.
+    # The absolute worktree path to read.
     #
     # .PARAMETER RepositoryRootPath
-    # The absolute repository root path used by Git.
+    # The absolute path of the trusted Git repository.
     #
     # .PARAMETER RepositoryRelativePath
-    # The repository-relative path used to inspect the Git index.
+    # The canonical repository-relative path to inspect.
     #
     # .PARAMETER DisplayName
-    # The input name to include in validation failures.
+    # The trusted label to use in diagnostics.
     #
     # .PARAMETER MaximumBytes
-    # The largest accepted byte count.
+    # The maximum permitted output size in bytes.
     #
     # .PARAMETER RequireIndexContentMatch
-    # Requires the worktree content to equal the stage-0 Git index blob.
+    # Requires this staged input to equal its bounded strict UTF-8 index content.
     #
     # .EXAMPLE
-    # $arrBytes = @(Read-RepositoryInputData -Path $strPath `
-    #     -RepositoryRootPath $strRoot -RepositoryRelativePath 'AGENTS.md' `
-    #     -DisplayName 'AGENTS.md' -MaximumBytes 65536)
+    # Read-RepositoryInputData @hashtableArguments
     #
-    # # Collects bytes from a safe regular repository file.
+    # # Runs with validated named arguments.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. No pipeline input.
     #
     # .OUTPUTS
-    # [byte] Each byte read from the repository file.
+    # [System.Byte] Zero or more validated bytes described in the function description.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.2.20260912.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.1.20261003.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([byte])]
     param(
@@ -763,8 +1644,7 @@ function Read-RepositoryInputData {
         [ValidateRange(1, 2147483646)]
         [int] $MaximumBytes,
 
-        [Parameter()]
-        [switch] $RequireIndexContentMatch
+        [Parameter()][switch] $RequireIndexContentMatch
     )
 
     $arrGitIndexEntries = @(& git -C $RepositoryRootPath ls-files --stage -- $RepositoryRelativePath 2>&1)
@@ -785,103 +1665,84 @@ function Read-RepositoryInputData {
         }
     }
 
-    $strResolvedRepositoryRootPath = [System.IO.Path]::GetFullPath(
+    if ([IO.Path]::IsPathRooted($RepositoryRelativePath) -or
+        $RepositoryRelativePath.Contains('\', [StringComparison]::Ordinal) -or
+        $RepositoryRelativePath -match '(^|/)\.\.?(/|$)') {
+        throw "$DisplayName has an invalid repository-relative input path."
+    }
+    $strRepositoryRootFullPath = [IO.Path]::GetFullPath(
         $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(
             $RepositoryRootPath
         )
-    )
-    $strResolvedInputPath = [System.IO.Path]::GetFullPath(
+    ).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $strResolvedInputPath = [IO.Path]::GetFullPath(
         $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
     )
-    $objPathComparison = if ([System.OperatingSystem]::IsWindows()) {
-        [System.StringComparison]::OrdinalIgnoreCase
-    }
-    else {
-        [System.StringComparison]::Ordinal
-    }
-    $strRepositoryBoundary = $strResolvedRepositoryRootPath
-    if (-not $strRepositoryBoundary.EndsWith(
-            [System.IO.Path]::DirectorySeparatorChar
-        ) -and
-        -not $strRepositoryBoundary.EndsWith(
-            [System.IO.Path]::AltDirectorySeparatorChar
-        )) {
-        $strRepositoryBoundary += [System.IO.Path]::DirectorySeparatorChar
-    }
-    $strExpectedInputPath = [System.IO.Path]::GetFullPath(
-        [System.IO.Path]::Combine(
-            $strResolvedRepositoryRootPath,
-            $RepositoryRelativePath.Replace(
-                [System.IO.Path]::AltDirectorySeparatorChar,
-                [System.IO.Path]::DirectorySeparatorChar
-            )
+    $strExpectedInputPath = [IO.Path]::GetFullPath(
+        [IO.Path]::Combine(
+            $strRepositoryRootFullPath,
+            $RepositoryRelativePath.Replace('/', [IO.Path]::DirectorySeparatorChar)
         )
     )
-    if ([System.IO.Path]::IsPathRooted($RepositoryRelativePath) -or
-        $RepositoryRelativePath -match '(^|[\\/])\.{1,2}([\\/]|$)' -or
-        -not $strExpectedInputPath.StartsWith(
-            $strRepositoryBoundary,
+    $objPathComparison = if ([IO.Path]::DirectorySeparatorChar -eq '\') {
+        [StringComparison]::OrdinalIgnoreCase
+    } else {
+        [StringComparison]::Ordinal
+    }
+    $strRepositoryRootPrefix =
+        $strRepositoryRootFullPath + [IO.Path]::DirectorySeparatorChar
+    if (-not [string]::Equals(
+            $strResolvedInputPath,
+            $strExpectedInputPath,
             $objPathComparison
         ) -or
-        -not $strExpectedInputPath.Equals(
-            $strResolvedInputPath,
+        -not $strResolvedInputPath.StartsWith(
+            $strRepositoryRootPrefix,
             $objPathComparison
         )) {
-        throw "Repository input is unsafe:`n- $DisplayName must resolve below the repository root."
+        throw "$DisplayName must resolve to its exact path beneath the repository root."
     }
-    $strCurrentAncestorPath = [System.IO.Path]::GetDirectoryName(
-        $strExpectedInputPath
-    )
-    while (-not [string]::IsNullOrEmpty($strCurrentAncestorPath) -and
-        -not $strCurrentAncestorPath.Equals(
-            $strResolvedRepositoryRootPath,
-            $objPathComparison
-        )) {
-        if (-not $strCurrentAncestorPath.StartsWith(
-                $strRepositoryBoundary,
-                $objPathComparison
-            )) {
-            throw "Repository input is unsafe:`n- $DisplayName must resolve below the repository root."
-        }
-        $objAncestorItem = Get-Item -Force -LiteralPath $strCurrentAncestorPath
-        $objAncestorLinkTypeProperty =
-            $objAncestorItem.PSObject.Properties['LinkType']
-        $strAncestorLinkType = if ($null -eq $objAncestorLinkTypeProperty) {
+
+    $listComponentSnapshots = [Collections.Generic.List[pscustomobject]]::new()
+    $strComponentPath = $strRepositoryRootFullPath
+    foreach ($strPathComponent in $RepositoryRelativePath.Split('/')) {
+        $strComponentPath = [IO.Path]::Combine($strComponentPath, $strPathComponent)
+        $objComponentItem = Get-Item -Force -LiteralPath $strComponentPath
+        $objComponentLinkTypeProperty =
+            $objComponentItem.PSObject.Properties['LinkType']
+        $strComponentLinkType = if ($null -eq $objComponentLinkTypeProperty) {
             ''
+        } else {
+            [string]$objComponentLinkTypeProperty.Value
         }
-        else {
-            [string] $objAncestorLinkTypeProperty.Value
-        }
-        if ($objAncestorItem -isnot [System.IO.DirectoryInfo] -or
-            ($objAncestorItem.Attributes -band
-                [System.IO.FileAttributes]::ReparsePoint) -ne 0 -or
-            -not [string]::IsNullOrEmpty($strAncestorLinkType)) {
-            $strUnsafeAncestor = [System.IO.Path]::GetRelativePath(
-                $strResolvedRepositoryRootPath,
-                $strCurrentAncestorPath
-            ).Replace([System.IO.Path]::DirectorySeparatorChar, '/')
+        if (($objComponentItem.Attributes -band
+                [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            -not [string]::IsNullOrEmpty($strComponentLinkType)) {
             throw (
-                "Repository input is unsafe:`n- $DisplayName must not traverse " +
-                "a symbolic link or reparse point: $strUnsafeAncestor."
+                "$DisplayName has an unsafe linked path component: " +
+                "$strPathComponent."
             )
         }
-        $strParentAncestorPath = [System.IO.Path]::GetDirectoryName(
-            $strCurrentAncestorPath
-        )
-        if ([string]::IsNullOrEmpty($strParentAncestorPath) -or
-            $strParentAncestorPath.Equals(
-                $strCurrentAncestorPath,
-                $objPathComparison
-            )) {
-            throw "Repository input is unsafe:`n- $DisplayName has an invalid parent path."
-        }
-        $strCurrentAncestorPath = $strParentAncestorPath
+        $listComponentSnapshots.Add([pscustomobject]@{
+                Path = $strComponentPath
+                Type = $objComponentItem.GetType().FullName
+                CreationTimeUtcTicks = $objComponentItem.CreationTimeUtc.Ticks
+            })
     }
+
     $objInputItem = Get-Item -Force -LiteralPath $strResolvedInputPath
     $objLinkTypeProperty = $objInputItem.PSObject.Properties['LinkType']
-    $strLinkType = if ($null -eq $objLinkTypeProperty) { '' } else { [string] $objLinkTypeProperty.Value }
+    $strLinkType = if ($null -eq $objLinkTypeProperty) {
+        ''
+    } else {
+        [string] $objLinkTypeProperty.Value
+    }
     $objUnixModeProperty = $objInputItem.PSObject.Properties['UnixMode']
-    $strUnixMode = if ($null -eq $objUnixModeProperty) { '' } else { [string] $objUnixModeProperty.Value }
+    $strUnixMode = if ($null -eq $objUnixModeProperty) {
+        ''
+    } else {
+        [string] $objUnixModeProperty.Value
+    }
     $arrMetadataFailures = @(Get-RepositoryInputMetadataFailure `
             -DisplayName $DisplayName `
             -GitIndexEntryCount $arrGitIndexEntries.Count `
@@ -902,38 +1763,140 @@ function Read-RepositoryInputData {
         [System.IO.FileShare]::Read
     )
     try {
-        [byte[]] $arrInputData = @(Read-BoundedStreamData `
+        $arrInputBytes = [byte[]]@(Read-BoundedStreamData `
             -Stream $objInputStream `
             -MaximumBytes $MaximumBytes `
             -DisplayName $DisplayName)
-    }
-    finally {
+    } finally {
         $objInputStream.Dispose()
     }
-
-    if ($RequireIndexContentMatch) {
-        $strWorktreeContent = ConvertFrom-StrictUtf8Data `
-            -Bytes $arrInputData `
-            -DisplayName $DisplayName
-        $strIndexContent = Read-GitRevisionText `
-            -RepositoryRootPath $RepositoryRootPath `
-            -Revision '' `
-            -RepositoryRelativePath $RepositoryRelativePath `
-            -MaximumBytes $MaximumBytes
-        $arrStagedInputFailures = @(Get-StagedInputMatchFailure `
-                -DisplayName $DisplayName `
-                -RequireMatch `
-                -WorktreeContent $strWorktreeContent `
-                -IndexContent $strIndexContent)
-        if ($arrStagedInputFailures.Count -gt 0) {
-            throw (
-                "Repository input is unsafe:`n- " +
-                ($arrStagedInputFailures -join "`n- ")
-            )
+    foreach ($objComponentSnapshot in $listComponentSnapshots) {
+        $objComponentItem = Get-Item -Force -LiteralPath $objComponentSnapshot.Path
+        $objComponentLinkTypeProperty =
+            $objComponentItem.PSObject.Properties['LinkType']
+        $strComponentLinkType = if ($null -eq $objComponentLinkTypeProperty) {
+            ''
+        } else {
+            [string]$objComponentLinkTypeProperty.Value
+        }
+        if (($objComponentItem.Attributes -band
+                [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            -not [string]::IsNullOrEmpty($strComponentLinkType) -or
+            $objComponentItem.GetType().FullName -cne $objComponentSnapshot.Type -or
+            $objComponentItem.CreationTimeUtc.Ticks -ne
+                $objComponentSnapshot.CreationTimeUtcTicks) {
+            throw "$DisplayName path components changed during the bounded read."
         }
     }
+    if ($RequireIndexContentMatch) {
+        $strIndexBlob = Get-GitRegularFileBlobId -RepositoryRootPath $RepositoryRootPath `
+            -RepositoryRelativePath $RepositoryRelativePath
+        $objIndexStartInfo = [Diagnostics.ProcessStartInfo]::new('git')
+        $objIndexStartInfo.UseShellExecute = $false
+        $objIndexStartInfo.CreateNoWindow = $true
+        $objIndexStartInfo.RedirectStandardOutput = $true
+        $objIndexStartInfo.RedirectStandardError = $true
+        foreach ($strArgument in @('-C', $RepositoryRootPath, 'cat-file', 'blob', $strIndexBlob)) {
+            $objIndexStartInfo.ArgumentList.Add($strArgument)
+        }
+        $objIndexProcess = [Diagnostics.Process]::new()
+        $objIndexProcess.StartInfo = $objIndexStartInfo
+        $objIndexResult = Read-BoundedProcessData -Process $objIndexProcess `
+            -MaximumBytes $MaximumBytes -TimeoutMilliseconds 10000 `
+            -DisplayName "staged $DisplayName"
+        if ($objIndexResult.ExitCode -ne 0) { throw "Could not read staged $DisplayName." }
+        $strWorktreeContent = ConvertFrom-StrictUtf8Data -Bytes $arrInputBytes -DisplayName $DisplayName
+        $strIndexContent = ConvertFrom-StrictUtf8Data -Bytes $objIndexResult.Bytes -DisplayName "staged $DisplayName"
+        if (-not [string]::Equals($strWorktreeContent, $strIndexContent, [StringComparison]::Ordinal)) {
+            throw "$DisplayName worktree content must match its staged Git index blob."
+        }
+    }
+    return $arrInputBytes
+}
 
-    return $arrInputData
+function Get-GitRegularFileBlobId {
+    # .SYNOPSIS
+    # Gets one exact regular Git entry identity without reading its content.
+    #
+    # .DESCRIPTION
+    # Uses bounded literal NUL Git metadata. Requires one100644 blob in a
+    # revision, or one100644 stage0 index entry for a local candidate.
+    # Does not inspect worktree file-system types or open generated bodies.
+    #
+    # .PARAMETER RepositoryRootPath
+    # The absolute path of the trusted Git repository.
+    #
+    # .PARAMETER RepositoryRelativePath
+    # The exact ordinal repository-relative path.
+    #
+    # .PARAMETER Revision
+    # The exact Git revision. Empty selects the current index.
+    #
+    # .EXAMPLE
+    # Get-GitRegularFileBlobId @hashtableArguments
+    #
+    # # Returns a validated blob identity without a content read.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [string] The regular entry's immutable blob identity.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20261003.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string] $RepositoryRootPath,
+        [Parameter(Mandatory)][string] $RepositoryRelativePath,
+        [Parameter()][AllowEmptyString()][string] $Revision = ''
+    )
+
+    $longTreeMaximumBytes = [long][Text.Encoding]::UTF8.GetByteCount($RepositoryRelativePath) + 78
+    if ($longTreeMaximumBytes -gt 2147483646) {
+        throw 'Git revision entry exceeds the supported bounded output size.'
+    }
+    $objTreeStartInfo = [Diagnostics.ProcessStartInfo]::new('git')
+    $objTreeStartInfo.UseShellExecute = $false
+    $objTreeStartInfo.CreateNoWindow = $true
+    $objTreeStartInfo.RedirectStandardOutput = $true
+    $objTreeStartInfo.RedirectStandardError = $true
+    $arrEntryArguments = @('--literal-pathspecs', '-C', $RepositoryRootPath)
+    if ([string]::IsNullOrEmpty($Revision)) {
+        $arrEntryArguments += @('ls-files', '--stage', '-z', '--', $RepositoryRelativePath)
+    } else {
+        $arrEntryArguments += @('ls-tree', '-z', '--full-tree', $Revision, '--', $RepositoryRelativePath)
+    }
+    foreach ($strArgument in $arrEntryArguments) {
+        $objTreeStartInfo.ArgumentList.Add($strArgument)
+    }
+    $objTreeProcess = [Diagnostics.Process]::new()
+    $objTreeProcess.StartInfo = $objTreeStartInfo
+    $objTreeResult = Read-BoundedProcessData -Process $objTreeProcess `
+        -MaximumBytes ([int]$longTreeMaximumBytes) -TimeoutMilliseconds 10000 `
+        -DisplayName "Git revision entry $Revision`:$RepositoryRelativePath"
+    if ($objTreeResult.ExitCode -ne 0) {
+        throw "Could not inspect $Revision`:$RepositoryRelativePath in Git."
+    }
+    $strTreeRecord = if ($objTreeResult.Bytes.Length -eq 0) { '' } else {
+        ConvertFrom-StrictUtf8Data -Bytes $objTreeResult.Bytes -DisplayName 'Git revision entry'
+    }
+    $strEntryPattern = if ([string]::IsNullOrEmpty($Revision)) {
+        '\A100644 (?<ObjectId>[0-9a-fA-F]{40}|[0-9a-fA-F]{64}) 0\t(?<Path>[^\x00]+)\x00\z'
+    } else {
+        '\A100644 blob (?<ObjectId>[0-9a-fA-F]{40}|[0-9a-fA-F]{64})\t(?<Path>[^\x00]+)\x00\z'
+    }
+    $objTreeMatch = [regex]::Match($strTreeRecord, $strEntryPattern)
+    if (-not $objTreeMatch.Success -or
+        -not [string]::Equals($objTreeMatch.Groups['Path'].Value,
+            $RepositoryRelativePath, [StringComparison]::Ordinal)) {
+        throw "Git revision input is not one regular 100644 blob: $Revision`:$RepositoryRelativePath"
+    }
+    return $objTreeMatch.Groups['ObjectId'].Value
 }
 
 function Read-GitRevisionText {
@@ -941,44 +1904,40 @@ function Read-GitRevisionText {
     # Reads one bounded UTF-8 file from a Git revision.
     #
     # .DESCRIPTION
-    # Invokes Git without a shell, bounds standard output, and decodes the blob as
-    # strict UTF-8 without a byte-order mark.
+    # Reads one file from an exact Git revision as strict UTF-8. Required regular
+    # files use a bounded NUL-delimited tree record and exact ordinal path.
     #
     # .PARAMETER RepositoryRootPath
-    # The absolute repository root path used by Git.
+    # The absolute path of the trusted Git repository.
     #
     # .PARAMETER Revision
-    # The commit or tree revision that contains the file. An empty value selects
-    # the stage-0 Git index entry when RequireRegularFile is not set.
+    # The exact Git revision to inspect.
     #
     # .PARAMETER RepositoryRelativePath
-    # The repository-relative blob path.
+    # The canonical repository-relative path to inspect.
     #
     # .PARAMETER MaximumBytes
-    # The largest accepted blob byte count.
+    # The maximum permitted output size in bytes.
     #
     # .PARAMETER RequireRegularFile
-    # Requires the revision path to be one regular 100644 Git blob.
+    # Requires the Git object to have a regular-file mode.
     #
     # .EXAMPLE
-    # Read-GitRevisionText -RepositoryRootPath $strRoot -Revision 'HEAD^' `
-    #     -RepositoryRelativePath 'AGENTS.md' -MaximumBytes 65536
+    # Read-GitRevisionText @hashtableArguments
     #
-    # # Returns the decoded file text from the selected revision.
+    # # Runs with validated named arguments.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. No pipeline input.
     #
     # .OUTPUTS
-    # [string] The decoded revision text.
+    # [System.String] Zero or more validated values or diagnostics described in the function description.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.2.20260912.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.1.20261002.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -986,7 +1945,6 @@ function Read-GitRevisionText {
         [string] $RepositoryRootPath,
 
         [Parameter(Mandatory)]
-        [AllowEmptyString()]
         [string] $Revision,
 
         [Parameter(Mandatory)]
@@ -1000,20 +1958,10 @@ function Read-GitRevisionText {
         [switch] $RequireRegularFile
     )
 
-    if ($RequireRegularFile -and [string]::IsNullOrEmpty($Revision)) {
-        throw 'A regular-file revision lookup requires a commit or tree.'
-    }
+    $strBlobObject = "${Revision}:$RepositoryRelativePath"
     if ($RequireRegularFile) {
-        $objTreeEntry = Get-GitRevisionTreeEntryContext `
-            -RepositoryRootPath $RepositoryRootPath `
-            -Revision $Revision `
-            -RepositoryRelativePath $RepositoryRelativePath
-        if ($null -eq $objTreeEntry -or
-            $objTreeEntry.Mode -cne '100644' -or
-            $objTreeEntry.Type -cne 'blob' -or
-            $objTreeEntry.Path -cne $RepositoryRelativePath) {
-            throw "Git revision input is not one regular 100644 blob: $Revision`:$RepositoryRelativePath"
-        }
+        $strBlobObject = Get-GitRegularFileBlobId -RepositoryRootPath $RepositoryRootPath `
+            -Revision $Revision -RepositoryRelativePath $RepositoryRelativePath
     }
 
     $objStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -1027,327 +1975,185 @@ function Read-GitRevisionText {
             $RepositoryRootPath,
             'cat-file',
             'blob',
-            "${Revision}:$RepositoryRelativePath"
+            $strBlobObject
         )) {
         $objStartInfo.ArgumentList.Add($strArgument)
     }
 
     $objGitProcess = [System.Diagnostics.Process]::new()
     $objGitProcess.StartInfo = $objStartInfo
-    try {
-        if (-not $objGitProcess.Start()) {
-            throw "Could not start Git to read $Revision`:$RepositoryRelativePath."
-        }
-
-        $objStandardErrorTask = $objGitProcess.StandardError.ReadToEndAsync()
-        $arrRevisionBytes = Read-BoundedStreamData `
-            -Stream $objGitProcess.StandardOutput.BaseStream `
-            -MaximumBytes $MaximumBytes `
-            -DisplayName "$Revision`:$RepositoryRelativePath"
-        if (-not $objGitProcess.WaitForExit(10000)) {
-            $objGitProcess.Kill($true)
-            [void]$objGitProcess.WaitForExit(1000)
-            throw "Git timed out while reading $Revision`:$RepositoryRelativePath."
-        }
-
-        [void]$objStandardErrorTask.GetAwaiter().GetResult()
-        if ($objGitProcess.ExitCode -ne 0) {
-            throw "Could not read $Revision`:$RepositoryRelativePath from Git."
-        }
-
-        return ConvertFrom-StrictUtf8Data `
-            -Bytes $arrRevisionBytes `
-            -DisplayName "$Revision`:$RepositoryRelativePath"
+    $objProcessResult = Read-BoundedProcessData `
+        -Process $objGitProcess `
+        -MaximumBytes $MaximumBytes `
+        -TimeoutMilliseconds 10000 `
+        -DisplayName "$Revision`:$RepositoryRelativePath"
+    if ($objProcessResult.ExitCode -ne 0) {
+        throw "Could not read $Revision`:$RepositoryRelativePath from Git."
     }
-    finally {
-        $objGitProcess.Dispose()
-    }
+    return ConvertFrom-StrictUtf8Data `
+        -Bytes $objProcessResult.Bytes `
+        -DisplayName "$Revision`:$RepositoryRelativePath"
 }
 
-function Invoke-GitNulRecordQuery {
+function Read-PublishedBaselineDocumentText {
     # .SYNOPSIS
-    # Reads one bounded list of NUL-delimited UTF-8 records from Git.
+    # Reads complete historical metadata without relaxing current input limits.
     #
     # .DESCRIPTION
-    # Invokes Git without a shell, bounds standard output, requires a trailing
-    # NUL terminator, and returns strict UTF-8 records without pathname quoting.
-    # The supplied Git arguments must select a NUL-delimited output mode.
+    # Historical AGENTS metadata supports the prior 65536-byte reader. This
+    # private parent-only path never supplies current instruction admission.
+    # Other documents retain their current bounded read limits.
     #
     # .PARAMETER RepositoryRootPath
-    # The absolute repository root path used by Git.
-    #
-    # .PARAMETER Argument
-    # The Git arguments after the repository-root selection.
-    #
-    # .PARAMETER DisplayName
-    # The operation name used in bounded-output and failure messages.
-    #
-    # .PARAMETER MaximumBytes
-    # The largest accepted standard-output byte count.
-    #
-    # .EXAMPLE
-    # Invoke-GitNulRecordQuery -RepositoryRootPath $strRoot `
-    #     -Argument @('ls-files', '--cached', '-z') -DisplayName 'tracked paths'
-    #
-    # # Returns each tracked path without Git pathname quoting.
-    #
-    # .INPUTS
-    # None. You can't pipe objects to this function.
-    #
-    # .OUTPUTS
-    # [string[]] The decoded records, without NUL terminators.
-    #
-    # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260910.0
-    [CmdletBinding(PositionalBinding = $false)]
-    [OutputType([string[]])]
-    param(
-        [Parameter(Mandatory)]
-        [string] $RepositoryRootPath,
-
-        [Parameter(Mandatory)]
-        [ValidateNotNullOrEmpty()]
-        [string[]] $Argument,
-
-        [Parameter(Mandatory)]
-        [string] $DisplayName,
-
-        [Parameter()]
-        [ValidateRange(1, 2147483646)]
-        [int] $MaximumBytes = 16777216
-    )
-
-    $objStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $objStartInfo.FileName = 'git'
-    $objStartInfo.UseShellExecute = $false
-    $objStartInfo.CreateNoWindow = $true
-    $objStartInfo.RedirectStandardOutput = $true
-    $objStartInfo.RedirectStandardError = $true
-    foreach ($strArgument in @('-C', $RepositoryRootPath) + $Argument) {
-        $objStartInfo.ArgumentList.Add($strArgument)
-    }
-
-    $objGitProcess = [System.Diagnostics.Process]::new()
-    $objGitProcess.StartInfo = $objStartInfo
-    try {
-        if (-not $objGitProcess.Start()) {
-            throw "Could not start Git to enumerate $DisplayName."
-        }
-        $objStandardErrorTask = $objGitProcess.StandardError.ReadToEndAsync()
-        $arrOutputBytes = Read-BoundedStreamData `
-            -Stream $objGitProcess.StandardOutput.BaseStream `
-            -MaximumBytes $MaximumBytes `
-            -DisplayName $DisplayName
-        if (-not $objGitProcess.WaitForExit(10000)) {
-            $objGitProcess.Kill($true)
-            [void]$objGitProcess.WaitForExit(1000)
-            throw "Git timed out while enumerating $DisplayName."
-        }
-        [void]$objStandardErrorTask.GetAwaiter().GetResult()
-        if ($objGitProcess.ExitCode -ne 0) {
-            throw "Could not enumerate $DisplayName with Git."
-        }
-        if ($null -eq $arrOutputBytes -or $arrOutputBytes.Count -eq 0) {
-            return [string[]] @()
-        }
-        if ($arrOutputBytes[$arrOutputBytes.Count - 1] -ne 0) {
-            throw "Git returned a non-NUL-terminated $DisplayName stream."
-        }
-
-        $strOutput = ConvertFrom-StrictUtf8Data `
-            -Bytes $arrOutputBytes `
-            -DisplayName $DisplayName
-        $arrRecordsWithTerminator = @($strOutput.Split([char] 0))
-        if ($arrRecordsWithTerminator.Count -lt 2 -or
-            $arrRecordsWithTerminator[-1] -cne '') {
-            throw "Git returned a malformed $DisplayName stream."
-        }
-        $arrRecords = @($arrRecordsWithTerminator[0..($arrRecordsWithTerminator.Count - 2)])
-        if (@($arrRecords | Where-Object { [string]::IsNullOrEmpty([string] $_) }).Count -gt 0) {
-            throw "Git returned an empty record in the $DisplayName stream."
-        }
-        return [string[]] $arrRecords
-    }
-    finally {
-        $objGitProcess.Dispose()
-    }
-}
-
-function Get-GitRevisionTreeEntryContext {
-    # .SYNOPSIS
-    # Gets one exact, unquoted Git tree entry.
-    #
-    # .DESCRIPTION
-    # Uses bounded NUL-delimited Git output so that pathnames retain their exact
-    # UTF-8 text. Returns null when the path is absent. Malformed or duplicate
-    # records fail closed.
-    #
-    # .PARAMETER RepositoryRootPath
-    # The absolute repository root path used by Git.
+    # The absolute path of the repository containing the baseline Git object.
     #
     # .PARAMETER Revision
-    # The commit or tree revision to inspect.
+    # The published parent revision selected by the existing role checks.
     #
     # .PARAMETER RepositoryRelativePath
-    # The exact repository-relative path to inspect.
+    # The exact ordinal repository-relative document path.
+    #
+    # .PARAMETER CurrentMaximumBytes
+    # The current document read limit, retained for all other parent paths.
     #
     # .EXAMPLE
-    # Get-GitRevisionTreeEntryContext -RepositoryRootPath $strRoot `
-    #     -Revision 'HEAD' -RepositoryRelativePath 'module/AGENTS.md'
+    # Read-PublishedBaselineDocumentText @hashtableArguments
     #
-    # # Returns the exact mode, type, object ID, and unquoted path.
+    # # Reads only a metadata parent through the regular strict UTF-8 reader.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. No pipeline input.
     #
     # .OUTPUTS
-    # [pscustomobject] The exact tree entry, or null when the path is absent.
+    # [string] The complete historical document.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260911.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Positional parameters are disabled; callers use named arguments.
+    # Version: 1.0.20261004.0
     [CmdletBinding(PositionalBinding = $false)]
-    [OutputType([pscustomobject])]
-    param(
-        [Parameter(Mandatory)]
-        [string] $RepositoryRootPath,
-
-        [Parameter(Mandatory)]
-        [string] $Revision,
-
-        [Parameter(Mandatory)]
-        [string] $RepositoryRelativePath
-    )
-
-    $arrTreeRecords = @(
-        Invoke-GitNulRecordQuery `
-            -RepositoryRootPath $RepositoryRootPath `
-            -Argument @(
-                'ls-tree', '--full-tree', '-z',
-                $Revision, '--', $RepositoryRelativePath
-            ) `
-            -DisplayName "$Revision`:$RepositoryRelativePath tree entry"
-    )
-    if ($arrTreeRecords.Count -eq 0) {
-        return
-    }
-    if ($arrTreeRecords.Count -ne 1) {
-        throw "Git returned multiple tree entries for $Revision`:$RepositoryRelativePath."
-    }
-
-    $objTreeEntryMatch = [regex]::Match(
-        [string] $arrTreeRecords[0],
-        '\A(?<Mode>[0-9]{6}) (?<Type>[a-z]+) ' +
-            '(?<ObjectId>(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64}))\t' +
-            '(?<Path>(?s:.*))\z'
-    )
-    if (-not $objTreeEntryMatch.Success) {
-        throw "Git returned a malformed tree entry for $Revision`:$RepositoryRelativePath."
-    }
-
-    return [pscustomobject]@{
-        Mode = $objTreeEntryMatch.Groups['Mode'].Value
-        Type = $objTreeEntryMatch.Groups['Type'].Value
-        ObjectId = $objTreeEntryMatch.Groups['ObjectId'].Value
-        Path = $objTreeEntryMatch.Groups['Path'].Value
-    }
-}
-
-function Get-GovernedDocumentParentContext {
-    # .SYNOPSIS
-    # Reads the explicit published or local metadata baseline.
-    # .DESCRIPTION
-    # Local changed content uses today's UTC date. Final endpoint checks do not
-    # reconstruct intermediate history or treat commit timestamps as authority.
-    # .PARAMETER RepositoryRootPath
-    # Repository to read.
-    # .PARAMETER RepositoryRelativePath
-    # Exact document path.
-    # .PARAMETER MaximumBytes
-    # Maximum baseline blob bytes.
-    # .PARAMETER Revision
-    # Optional final candidate revision.
-    # .PARAMETER LocalBaselineRevision
-    # Exact local checked-out baseline.
-    # .PARAMETER PublishedBaselineRevision
-    # Exact accepted baseline for a candidate final snapshot.
-    # .EXAMPLE
-    # Get-GovernedDocumentParentContext -RepositoryRootPath $strRoot `
-    #     -RepositoryRelativePath 'AGENTS.md' -MaximumBytes 65536 `
-    #     -LocalBaselineRevision $strHead
-    # .OUTPUTS
-    # [pscustomobject] Baseline content and authoring context.
-    [CmdletBinding(PositionalBinding = $false)]
-    [OutputType([pscustomobject])]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string] $RepositoryRootPath,
+        [Parameter(Mandatory)][string] $Revision,
         [Parameter(Mandatory)][string] $RepositoryRelativePath,
-        [Parameter(Mandatory)][int] $MaximumBytes,
-        [Parameter()][AllowEmptyString()][string] $Revision = '',
-        [Parameter()][AllowEmptyString()][string] $LocalBaselineRevision = '',
-        [Parameter()][AllowEmptyString()][string] $PublishedBaselineRevision = ''
+        [Parameter(Mandatory)]
+        [ValidateRange(1, 2147483646)]
+        [int] $CurrentMaximumBytes
     )
-    $strBaseline = if ($Revision) { $PublishedBaselineRevision } else { $LocalBaselineRevision }
-    $strParentContent = $null
-    $boolChanged = $false
-    if ($strBaseline) {
-        $objEntry = Get-GitRevisionTreeEntryContext -RepositoryRootPath $RepositoryRootPath `
-            -Revision $strBaseline -RepositoryRelativePath $RepositoryRelativePath
-        if ($null -ne $objEntry) {
-            $strParentContent = Read-GitRevisionText -RepositoryRootPath $RepositoryRootPath `
-                -Revision $strBaseline -RepositoryRelativePath $RepositoryRelativePath `
-                -MaximumBytes $MaximumBytes -RequireRegularFile
-        }
-        if (-not $Revision) {
-            & git -C $RepositoryRootPath diff --quiet HEAD -- $RepositoryRelativePath
-            $intDiffExitCode = $LASTEXITCODE
-            if ($intDiffExitCode -notin @(0, 1)) { throw 'Could not compare local metadata input.' }
-            $boolChanged = $intDiffExitCode -eq 1 -or $null -eq $strParentContent
-            $global:LASTEXITCODE = 0
-        }
+
+    $intParentMaximumBytes = if ($RepositoryRelativePath -ceq 'AGENTS.md') {
+        65536
+    } else {
+        $CurrentMaximumBytes
     }
-    [pscustomobject]@{
+    return Read-GitRevisionText -RepositoryRootPath $RepositoryRootPath `
+        -Revision $Revision -RepositoryRelativePath $RepositoryRelativePath `
+        -MaximumBytes $intParentMaximumBytes -RequireRegularFile
+}
+
+function Get-PublishedBaselineDocumentContext {
+    # .SYNOPSIS
+    # Gets the local HEAD baseline for one governed worktree document.
+    #
+    # .DESCRIPTION
+    # Reads the published local baseline from HEAD and reports whether the
+    # worktree content differs from it.
+    #
+    # .PARAMETER RepositoryRootPath
+    # The absolute path of the trusted Git repository.
+    #
+    # .PARAMETER RepositoryRelativePath
+    # The canonical repository-relative path to inspect.
+    #
+    # .PARAMETER MaximumBytes
+    # The maximum permitted output size in bytes.
+    #
+    # .EXAMPLE
+    # Get-PublishedBaselineDocumentContext @hashtableArguments
+    #
+    # # Runs with validated named arguments.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [System.Management.Automation.PSCustomObject] One validated context object described in the function description.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $RepositoryRootPath,
+
+        [Parameter(Mandatory)]
+        [string] $RepositoryRelativePath,
+
+        [Parameter(Mandatory)]
+        [ValidateRange(1, 2147483646)]
+        [int] $MaximumBytes
+    )
+
+    & git -C $RepositoryRootPath diff --quiet HEAD -- $RepositoryRelativePath
+    $intDiffExitCode = $LASTEXITCODE
+    if ($intDiffExitCode -notin @(0, 1)) {
+        throw "Could not compare $RepositoryRelativePath with HEAD."
+    }
+
+    $strParentRevision = 'HEAD'
+    $strExpectedUtcDate = if ($intDiffExitCode -eq 1) {
+        [DateTimeOffset]::UtcNow.ToString('yyyy-MM-dd')
+    } else {
+        ''
+    }
+
+    & git -C $RepositoryRootPath cat-file -e `
+        "$strParentRevision`:$RepositoryRelativePath" 2>$null
+    $strParentContent = if ($LASTEXITCODE -eq 0) {
+        Read-PublishedBaselineDocumentText `
+            -RepositoryRootPath $RepositoryRootPath `
+            -Revision $strParentRevision `
+            -RepositoryRelativePath $RepositoryRelativePath `
+            -CurrentMaximumBytes $MaximumBytes
+    } else {
+        $null
+    }
+    return [pscustomobject]@{
         ParentContent = $strParentContent
-        ExpectedUtcDate = if ($boolChanged) { $script:strMaximumMetadataUtcDate } else { '' }
-        IsWorktreeTransition = $boolChanged
+        ExpectedUtcDate = $strExpectedUtcDate
+        ParentRevision = $strParentRevision
+        IsWorktreeTransition = $intDiffExitCode -eq 1
     }
 }
 
 function Assert-OversizedStreamMutationRejected {
     # .SYNOPSIS
-    # Confirms that an oversized stream fails closed.
+    # Confirms that bounded stream and child-process reads fail closed.
     #
     # .DESCRIPTION
-    # Runs the fixed oversized-stream fixture and verifies the exact invalid-data
-    # failure. The expected failure is handled and does not escape.
+    # Exercises oversized stream and child-process fixtures.
     #
     # .EXAMPLE
     # Assert-OversizedStreamMutationRejected
     #
-    # # Returns no output when the fixture is rejected as expected.
+    # # Runs with validated named arguments.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. No pipeline input.
     #
     # .OUTPUTS
     # None.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260819.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([void])]
     param()
@@ -1359,664 +2165,324 @@ function Assert-OversizedStreamMutationRejected {
                 -MaximumBytes 4 `
                 -DisplayName 'oversized stream mutation')
         throw "Self-test 'oversized stream mutation' was accepted."
-    }
-    catch [System.IO.InvalidDataException] {
+    } catch [System.IO.InvalidDataException] {
         $strExpectedMessage = 'oversized stream mutation must not exceed 4 bytes.'
         if ($_.Exception.Message -cne $strExpectedMessage) {
             throw "Self-test 'oversized stream mutation' returned an unexpected failure: $($_.Exception.Message)"
         }
-    }
-    finally {
+    } finally {
         $objOversizedStream.Dispose()
     }
-}
 
-function Test-WorkflowCredentialProjection {
-    # .SYNOPSIS
-    # Detects credential declarations and reviewed unsafe context syntax.
-    #
-    # .DESCRIPTION
-    # Scans raw workflow text without parsing expression delimiters. This
-    # conservatively rejects matching comments and quoted text. It supplements
-    # the exact workflow digest; it does not perform credential-flow analysis.
-    #
-    # .PARAMETER WorkflowContent
-    # The complete reviewed workflow text to inspect.
-    #
-    # .EXAMPLE
-    # Test-WorkflowCredentialProjection -WorkflowContent 'ALIAS: ${{ github.token }}'
-    #
-    # # Returns true for a credential expression under an arbitrary name.
-    #
-    # .EXAMPLE
-    # Test-WorkflowCredentialProjection -WorkflowContent 'REVISION: ${{ github.sha }}'
-    #
-    # # Returns false for the public revision property.
-    #
-    # .INPUTS
-    # None. You can't pipe objects to this function.
-    #
-    # .OUTPUTS
-    # [bool] True for a forbidden declaration or context pattern; otherwise false.
-    #
-    # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260928.0
-    [CmdletBinding(PositionalBinding = $false)]
-    [OutputType([bool])]
-    param(
-        [Parameter(Mandatory)]
-        [string] $WorkflowContent
+    $objEmptyStartInfo = [Diagnostics.ProcessStartInfo]::new(
+        [Environment]::ProcessPath
     )
-
-    $arrCredentialPatterns = @(
-        '(?m)^[ \t]+(?:GITHUB_TOKEN|GH_TOKEN|ACTIONS_RUNTIME_TOKEN)[ \t]*:',
-        '\bgithub\s*\.\s*token\b',
-        '\bgithub\s*\[',
-        '\bsecrets\b',
-        '\btojson\s*\(\s*github\s*\)'
-    )
-    foreach ($strCredentialPattern in $arrCredentialPatterns) {
-        if ($WorkflowContent -match $strCredentialPattern) {
-            return $true
-        }
-    }
-    return $false
-}
-
-
-function Get-HuskySetupContractFailure {
-    # .SYNOPSIS
-    # Finds failures in the locked Husky bootstrap and staged-Markdown contract.
-    #
-    # .DESCRIPTION
-    # Parses both package manifests and checks the explicit prepare command,
-    # exact `.md` and `.mdc` staged-file guard, staged-index lint phase, and
-    # retained full-worktree phases in the Husky hook.
-    #
-    # .PARAMETER RootPackageContent
-    # The root package.json text that defines the documented bootstrap command.
-    #
-    # .PARAMETER WorkflowPackageContent
-    # The workflow-local package.json text that defines the prepare command.
-    #
-    # .PARAMETER HookContent
-    # The `.husky/pre-commit` text that contains the staged-file guard.
-    #
-    # .PARAMETER CopilotSetupContent
-    # The Copilot setup workflow text that activates the retained hook.
-    #
-    # .PARAMETER PreCommitConfigContent
-    # The pre-commit configuration text executed by the setup workflow.
-    #
-    # .EXAMPLE
-    # Get-HuskySetupContractFailure -RootPackageContent $strRootPackage `
-    #     -WorkflowPackageContent $strWorkflowPackage `
-    #     -HookContent $strHook `
-    #     -CopilotSetupContent $strCopilotSetup `
-    #     -PreCommitConfigContent $strPreCommitConfig
-    #
-    # # Writes one string for each Husky setup-contract failure.
-    #
-    # .INPUTS
-    # None. You can't pipe objects to this function.
-    #
-    # .OUTPUTS
-    # [string] One record for each Husky setup-contract failure.
-    #
-    # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.16.20260928.0
-    [CmdletBinding(PositionalBinding = $false)]
-    [OutputType([string])]
-    param(
-        [Parameter(Mandatory)]
-        [string] $RootPackageContent,
-
-        [Parameter(Mandatory)]
-        [string] $WorkflowPackageContent,
-
-        [Parameter(Mandatory)]
-        [string] $HookContent,
-
-        [Parameter(Mandatory)]
-        [string] $CopilotSetupContent,
-
-        [Parameter(Mandatory)]
-        [string] $PreCommitConfigContent
-    )
-
-    try {
-        $objRootPackage = $RootPackageContent | ConvertFrom-Json -ErrorAction Stop
-        $objWorkflowPackage = $WorkflowPackageContent | ConvertFrom-Json -ErrorAction Stop
-    }
-    catch {
-        Write-Output 'Husky package manifests must be valid JSON.'
-        return
-    }
-    $strExpectedBootstrap = 'node .github/workflows/NpmTools.mjs install'
-    if ([string]$objRootPackage.scripts.'bootstrap:agent-instructions' -cne
-        $strExpectedBootstrap) {
-        Write-Output 'Bootstrap must use the configuration-isolated locked installer.'
-    }
-    $strExpectedRootOuterLint = 'npm --prefix .github/workflows run lint:md'
-    if ([string]$objRootPackage.scripts.'lint:md' -cne $strExpectedRootOuterLint) {
-        Write-Output 'Root lint:md must delegate to the workflow-local lint:md script.'
-    }
-    $strExpectedRootNestedLint = 'npm --prefix .github/workflows run lint:md:nested'
-    if ([string]$objRootPackage.scripts.'lint:md:nested' -cne $strExpectedRootNestedLint) {
-        Write-Output 'Root lint:md:nested must delegate to the workflow-local lint:md:nested script.'
-    }
-    $strExpectedWorkflowOuterLint =
-        'cd ../.. && node .github/workflows/lint-nested-markdown.js --outer'
-    if ([string]$objWorkflowPackage.scripts.'lint:md' -cne
-        $strExpectedWorkflowOuterLint) {
-        Write-Output (
-            'Workflow lint:md must run only the reviewed outer Markdown lint phase.'
-        )
-    }
-    $strExpectedRootAgentTest =
-        'pwsh -NoLogo -NoProfile -NonInteractive -File ' +
-        '.github/workflows/Test-AgentInstructions.ps1 -SelfTest'
-    if ([string]$objRootPackage.scripts.'test:agent-instructions' -cne
-        $strExpectedRootAgentTest) {
-        Write-Output (
-            'Root test:agent-instructions must invoke the reviewed agent validator.'
-        )
-    }
-    foreach ($strForbiddenRootLintDependency in @('markdownlint', 'markdownlint-cli2')) {
-        if ($null -ne $objRootPackage.devDependencies.PSObject.Properties[
-                $strForbiddenRootLintDependency
-            ]) {
-            Write-Output (
-                "Root package must not declare direct $strForbiddenRootLintDependency " +
-                'because the workflow-local package owns Markdown linting.'
-            )
-        }
-    }
-    if ([string]$objWorkflowPackage.scripts.prepare -cne 'node install-husky.mjs') {
-        Write-Output 'Workflow prepare must run Husky and expose failure.'
-    }
-    $strExpectedGuard =
-        "if git diff --cached --quiet --diff-filter=ACMR -- '*.md' '*.mdc'; then"
-    if ([regex]::Matches(
-            $HookContent,
-            '(?m)^' + [regex]::Escape($strExpectedGuard) + '$'
-        ).Count -ne 1) {
-        Write-Output 'Husky guard must cover ACMR .md and .mdc once.'
-    }
-    $strExpectedStagedMarkdownSelector =
-        '        files: ^(\.github/workflows/lint-staged-markdown\.mjs|.*\.(md|mdc))$'
-    if ([regex]::Matches(
-            $PreCommitConfigContent,
-            '(?m)^' + [regex]::Escape($strExpectedStagedMarkdownSelector) + '\r?$'
-        ).Count -ne 1) {
-        Write-Output 'The staged-Markdown hook must select Markdown and helper-only changes.'
-    }
-    $strExpectedStagedInputEntry =
-        '          .github/workflows/Test-AgentInstructions.ps1 -SelfTest ' +
-        '-RequireStagedInputMatch'
-    if ([regex]::Matches(
-            $PreCommitConfigContent,
-            '(?m)^' + [regex]::Escape($strExpectedStagedInputEntry) + '\r?$'
-        ).Count -ne 1) {
-        Write-Output (
-            'The agent-instruction hook must require staged input matching.'
-        )
-    }
-    $strExpectedYamlSelector = '        files: ^.*\.ya?ml$'
-    foreach ($strYamlHookId in @('check-yaml', 'yamllint')) {
-        $objYamlHook = [regex]::Match(
-            $PreCommitConfigContent,
-            "(?ms)^      - id: $([regex]::Escape($strYamlHookId))\r?\n" +
-            '(?<Body>.*?)(?=^      - id:|^  - repo:|\z)'
-        )
-        if (-not $objYamlHook.Success -or
-            [regex]::Matches(
-                $objYamlHook.Groups['Body'].Value,
-                '(?m)^' + [regex]::Escape($strExpectedYamlSelector) + '\r?$'
-            ).Count -ne 1) {
-            Write-Output "The $strYamlHookId hook must select all repository YAML files."
-        }
-    }
-    $strClassificationSelector =
-        '            \.github/document-metadata-classification\.json'
-    foreach ($strClassificationHookId in @(
-            'check-json',
-            'end-of-file-fixer',
-            'trailing-whitespace'
+    $objEmptyStartInfo.UseShellExecute = $false
+    $objEmptyStartInfo.CreateNoWindow = $true
+    $objEmptyStartInfo.RedirectStandardOutput = $true
+    $objEmptyStartInfo.RedirectStandardError = $true
+    foreach ($strArgument in @(
+            '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', 'exit 0'
         )) {
-        $objClassificationHook = [regex]::Match(
-            $PreCommitConfigContent,
-            "(?ms)^      - id: $([regex]::Escape($strClassificationHookId))\r?\n" +
-            '(?<Body>.*?)(?=^      - id:|^  - repo:|\z)'
-        )
-        if (-not $objClassificationHook.Success -or
-            [regex]::Matches(
-                $objClassificationHook.Groups['Body'].Value,
-                '(?m)^' + [regex]::Escape($strClassificationSelector) + '\r?$'
-            ).Count -ne 1) {
-            Write-Output (
-                "The $strClassificationHookId hook must select " +
-                '.github/document-metadata-classification.json.'
-            )
-        }
+        $objEmptyStartInfo.ArgumentList.Add($strArgument)
     }
-    $arrRepositoryBlocks = @([regex]::Matches(
-            $PreCommitConfigContent,
-            '(?ms)^  - repo: (?<Repository>[^\r\n]+)\r?\n' +
-            '(?<Body>.*?)(?=^  - repo:|\z)'
-        ))
-    $arrLocalRepositoryBlocks = @($arrRepositoryBlocks | Where-Object {
-            $_.Groups['Repository'].Value -ceq 'local'
+    $objEmptyProcess = [Diagnostics.Process]::new()
+    $objEmptyProcess.StartInfo = $objEmptyStartInfo
+    $objEmptyResult = Read-BoundedProcessData `
+        -Process $objEmptyProcess `
+        -MaximumBytes 4 `
+        -TimeoutMilliseconds 5000 `
+        -DisplayName 'successful zero-output process read'
+    if ($null -eq $objEmptyResult.Bytes -or
+        -not ($objEmptyResult.Bytes -is [byte[]]) -or
+        $objEmptyResult.Bytes.Length -ne 0 -or
+        $objEmptyResult.ExitCode -ne 0) {
+        throw "Self-test 'successful zero-output process read' changed output."
+    }
+
+    $arrProcessCases = @(
+        @{N = 'stalled process read';C = 'Start-Sleep -Seconds 5';T = 250;E = [TimeoutException]},
+        @{
+            N = 'oversized process read'
+            C = '[Console]::OpenStandardOutput().Write([byte[]]::new(1024)); Start-Sleep -Seconds 5'
+            T = 3000
+            E = [IO.InvalidDataException]
+        },
+        @{
+            N = 'concurrent process error drain'
+            C = "[Console]::Error.Write('e' * 131072); [Console]::OpenStandardOutput().Write([byte[]]@(97,0)); exit 7"
+            T = 5000
+            E = $null
         })
-    $arrRemoteRepositoryBlocks = @($arrRepositoryBlocks | Where-Object {
-            $_.Groups['Repository'].Value -cne 'local'
-        })
-    if ($arrRepositoryBlocks.Count -ne 3 -or
-        $arrLocalRepositoryBlocks.Count -ne 2 -or
-        $arrRemoteRepositoryBlocks.Count -ne 1) {
-        Write-Output (
-            'Pre-commit must use two local hook groups and only one reviewed ' +
-            'remote hook repository.'
-        )
-    }
-    $strExpectedActionlintRepository = 'https://github.com/rhysd/actionlint'
-    $strExpectedActionlintRevision = '[0-9a-f]{40}'
-    if ($arrRemoteRepositoryBlocks.Count -ne 1 -or
-        $arrRemoteRepositoryBlocks[0].Groups['Repository'].Value -cne
-            $strExpectedActionlintRepository -or
-        [regex]::Matches(
-            $arrRemoteRepositoryBlocks[0].Groups['Body'].Value,
-            '(?m)^    rev: "' + $strExpectedActionlintRevision +
-            '"(?: # [^\r\n]+)?\r?$'
-        ).Count -ne 1 -or
-        [regex]::Matches(
-            $arrRemoteRepositoryBlocks[0].Groups['Body'].Value,
-            '(?m)^      - id: actionlint\r?$'
-        ).Count -ne 1 -or
-        [regex]::Matches(
-            $arrRemoteRepositoryBlocks[0].Groups['Body'].Value,
-            '(?m)^      - id:'
-        ).Count -ne 1) {
-        Write-Output (
-            "Pre-commit hook repository $strExpectedActionlintRepository must " +
-            "use reviewed full commit $strExpectedActionlintRevision and contain " +
-            'only actionlint.'
-        )
-    }
-    if ([regex]::Matches(
-            $PreCommitConfigContent,
-            '(?m)^        (?:language: python|additional_dependencies:)\r?$'
-        ).Count -ne 0) {
-        Write-Output 'Python pre-commit hooks must not resolve separate environments.'
-    }
-    $hashtableExpectedLockedPythonHookModule = [ordered]@{
-        'check-json' = 'pre_commit_hooks.check_json'
-        'check-yaml' = 'pre_commit_hooks.check_yaml'
-        'end-of-file-fixer' = 'pre_commit_hooks.end_of_file_fixer'
-        'trailing-whitespace' = 'pre_commit_hooks.trailing_whitespace_fixer'
-        yamllint = 'yamllint'
-        'check-dependabot' = 'check_jsonschema'
-        'check-github-workflows' = 'check_jsonschema'
-    }
-    foreach ($objLockedPythonHook in
-        $hashtableExpectedLockedPythonHookModule.GetEnumerator()) {
-        $arrLockedPythonHook = @([regex]::Matches(
-                $PreCommitConfigContent,
-                "(?ms)^      - id: $([regex]::Escape($objLockedPythonHook.Key))\r?\n" +
-                '(?<Body>.*?)(?=^      - id:|^  - repo:|\z)'
-            ))
-        if ($arrLockedPythonHook.Count -ne 1 -or
-            [regex]::Matches(
-                $arrLockedPythonHook[0].Groups['Body'].Value,
-                '(?m)^          \.github/workflows/Invoke-LockedPythonHook\.ps1\r?$'
-            ).Count -ne 1 -or
-            [regex]::Matches(
-                $arrLockedPythonHook[0].Groups['Body'].Value,
-                '(?m)^          -Module ' +
-                [regex]::Escape($objLockedPythonHook.Value) + '\r?$'
-            ).Count -ne 1 -or
-            [regex]::Matches(
-                $arrLockedPythonHook[0].Groups['Body'].Value,
-                '(?m)^        language: system\r?$'
-            ).Count -ne 1) {
-            Write-Output (
-                "The $($objLockedPythonHook.Key) hook must run module " +
-                "$($objLockedPythonHook.Value) from the locked local system environment."
-            )
+    foreach ($objProcessCase in $arrProcessCases) {
+        $objStartInfo = [Diagnostics.ProcessStartInfo]::new([Environment]::ProcessPath)
+        $objStartInfo.UseShellExecute = $false
+        $objStartInfo.CreateNoWindow = $true
+        $objStartInfo.RedirectStandardOutput = $true
+        $objStartInfo.RedirectStandardError = $true
+        foreach ($strArgument in @(
+                '-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+                $objProcessCase.C
+            )) {
+            $objStartInfo.ArgumentList.Add($strArgument)
         }
-    }
-    $arrRequiredLintCommands = @(
-        'if node .github/workflows/lint-staged-markdown.mjs; then',
-        'if npm --prefix .github/workflows run lint:md; then',
-        'if npm --prefix .github/workflows run lint:md:nested; then'
-    )
-    foreach ($strRequiredLintCommand in $arrRequiredLintCommands) {
-        if ([regex]::Matches(
-                $HookContent,
-                '(?m)^' + [regex]::Escape($strRequiredLintCommand) + '$'
-            ).Count -ne 1) {
-            Write-Output "Husky must run this lint command once: $strRequiredLintCommand"
-        }
-    }
-    $intStagedLintIndex = $HookContent.IndexOf(
-        $arrRequiredLintCommands[0],
-        [System.StringComparison]::Ordinal
-    )
-    $intOuterLintIndex = $HookContent.IndexOf(
-        $arrRequiredLintCommands[1],
-        [System.StringComparison]::Ordinal
-    )
-    $intNestedLintIndex = $HookContent.IndexOf(
-        $arrRequiredLintCommands[2],
-        [System.StringComparison]::Ordinal
-    )
-    if ($intStagedLintIndex -lt 0 -or
-        $intOuterLintIndex -lt 0 -or
-        $intNestedLintIndex -lt 0 -or
-        $intStagedLintIndex -gt $intOuterLintIndex -or
-        $intOuterLintIndex -gt $intNestedLintIndex) {
-        Write-Output 'Husky must lint the staged index before both retained worktree phases.'
-    }
-    if ($CopilotSetupContent -match '(?m)^[ \t]+(?:-[ \t]*)?uses[ \t]*:') {
-        Write-Output 'Copilot setup must not execute an action.'
-    }
-    if (Test-WorkflowCredentialProjection -WorkflowContent $CopilotSetupContent) {
-        Write-Output 'Copilot setup must not project credentials.'
-    }
-}
-
-
-function Get-PreCommitBootstrapContractFailure {
-    # .SYNOPSIS
-    # Finds failures in the documented pre-commit runner bootstrap contract.
-    #
-    # .DESCRIPTION
-    # Requires one complete, hash-checked binary-only Python tool lock, an exact
-    # PowerShell 7 preflight, and exact interpreter-qualified Windows and POSIX
-    # install and run commands in both agent entry points and the workflow script
-    # index.
-    #
-    # .PARAMETER AgentsContent
-    # The AGENTS.md text that documents the shared validation workflow.
-    #
-    # .PARAMETER ClaudeContent
-    # The CLAUDE.md text that documents the shared validation workflow.
-    #
-    # .PARAMETER ScriptIndexContent
-    # The workflow script-index text that documents local setup.
-    #
-    # .PARAMETER RequirementsContent
-    # The requirements-dev.txt text that locks the pre-commit runner closure.
-    #
-    # .EXAMPLE
-    # Get-PreCommitBootstrapContractFailure -AgentsContent $strAgents `
-    #     -ClaudeContent $strClaude -ScriptIndexContent $strScriptIndex `
-    #     -RequirementsContent $strRequirements
-    #
-    # # Writes one string for each bootstrap-contract failure.
-    #
-    # .INPUTS
-    # None. You can't pipe objects to this function.
-    #
-    # .OUTPUTS
-    # [string] One record for each bootstrap-contract failure.
-    #
-    # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.3.20260911.0
-    [CmdletBinding(PositionalBinding = $false)]
-    [OutputType([string])]
-    param(
-        [Parameter(Mandatory)]
-        [string] $AgentsContent,
-
-        [Parameter(Mandatory)]
-        [string] $ClaudeContent,
-
-        [Parameter(Mandatory)]
-        [string] $ScriptIndexContent,
-
-        [Parameter(Mandatory)]
-        [string] $RequirementsContent
-    )
-
-    $strNormalizedRequirements = $RequirementsContent.Replace("`r`n", "`n").Replace(
-        "`r",
-        "`n"
-    )
-    $arrRequiredPythonPackages = @('pre-commit', 'pre-commit-hooks', 'yamllint', 'check-jsonschema')
-    $strLockPreamble = "--only-binary=:all:`n--require-hashes`n`n"
-    $boolRequirementsLockValid = $strNormalizedRequirements.StartsWith(
-        $strLockPreamble,
-        [System.StringComparison]::Ordinal
-    )
-    $strRequirementBody = if ($boolRequirementsLockValid) {
-        $strNormalizedRequirements.Substring($strLockPreamble.Length)
-    }
-    else {
-        $strNormalizedRequirements
-    }
-    $arrRequirementMatches = @([regex]::Matches(
-            $strRequirementBody,
-            '(?ms)^(?<Name>[a-z][a-z0-9-]*)==(?<Version>[^\s\\]+) \\\n' +
-            '(?<Hashes>    --hash=sha256:[0-9a-f]{64}' +
-            '(?: \\\n    --hash=sha256:[0-9a-f]{64})*)\n'
-        ))
-    $strUnparsedRequirementBody = $strRequirementBody
-    foreach ($objRequirementMatch in $arrRequirementMatches) {
-        $strUnparsedRequirementBody = $strUnparsedRequirementBody.Replace(
-            $objRequirementMatch.Value,
-            ''
-        )
-    }
-    if ($strUnparsedRequirementBody.Length -ne 0 -or
-        $arrRequirementMatches.Count -lt $arrRequiredPythonPackages.Count -or
-        @($arrRequirementMatches | ForEach-Object { $_.Groups['Name'].Value } | Sort-Object -Unique).Count -ne $arrRequirementMatches.Count) {
-        $boolRequirementsLockValid = $false
-    }
-    foreach ($strRequiredPackage in $arrRequiredPythonPackages) {
-        if (@($arrRequirementMatches | Where-Object {
-                $_.Groups['Name'].Value -ceq $strRequiredPackage
-            }).Count -ne 1) { $boolRequirementsLockValid = $false }
-    }
-    foreach ($objRequirementMatch in $arrRequirementMatches) {
-        if ($objRequirementMatch.Groups['Version'].Value -cnotmatch '^\d+\.\d+(?:\.\d+)?(?:[a-zA-Z0-9.+-]*)$') {
-            $boolRequirementsLockValid = $false
-        }
-    }
-    if (-not $boolRequirementsLockValid) {
-        Write-Output (
-            'requirements-dev.txt must contain the complete reviewed binary-only ' +
-            'Python 3.12 tool closure with SHA-256 hashes.'
-        )
-    }
-
-    $arrRequiredCommands = @(
-        "pwsh -NoProfile -Command 'if (`$PSVersionTable.PSVersion.Major -lt 7) { exit 1 }'",
-        'py -3.12 -m pip install --requirement requirements-dev.txt',
-        'python3.12 -m pip install --requirement requirements-dev.txt',
-        'py -3.12 -m pre_commit run --all-files',
-        'python3.12 -m pre_commit run --all-files'
-    )
-    foreach ($objDocument in @(
-            [pscustomobject]@{ Name = 'AGENTS.md'; Content = $AgentsContent },
-            [pscustomobject]@{ Name = 'CLAUDE.md'; Content = $ClaudeContent },
-            [pscustomobject]@{
-                Name = '.github/workflows/scripts-README.md'
-                Content = $ScriptIndexContent
+        $objProcess = [Diagnostics.Process]::new()
+        $objProcess.StartInfo = $objStartInfo
+        $objTimer = [Diagnostics.Stopwatch]::StartNew()
+        try {
+            $objResult = Read-BoundedProcessData `
+                -Process $objProcess `
+                -MaximumBytes 4 `
+                -TimeoutMilliseconds $objProcessCase.T `
+                -DisplayName $objProcessCase.N
+            if ($null -ne $objProcessCase.E) {
+                throw "Self-test '$($objProcessCase.N)' was accepted."
             }
-        )) {
-        $objMarkdownContext = Get-OperativeMarkdownContext -Content $objDocument.Content
-        $arrCodeSpans = @($objMarkdownContext.ProseBlocks.Code)
-        foreach ($strRequiredCommand in $arrRequiredCommands) {
-            if (@($arrCodeSpans | Where-Object { $_ -ceq $strRequiredCommand }).Count -ne 1) {
-                Write-Output (
-                    "$($objDocument.Name) must contain this setup command exactly once: " +
-                    $strRequiredCommand
+            if ($objResult.ExitCode -ne 7 -or $objResult.Bytes.Length -ne 2 -or
+                $objResult.Bytes[0] -ne 97 -or $objResult.Bytes[1] -ne 0) {
+                throw "Self-test '$($objProcessCase.N)' changed output."
+            }
+        } catch {
+            if ($null -eq $objProcessCase.E -or
+                -not $objProcessCase.E.IsAssignableFrom($_.Exception.GetType())) {
+                throw
+            }
+        } finally {
+            $objTimer.Stop()
+        }
+        if ($objTimer.ElapsedMilliseconds -ge 4000) {
+            throw "Self-test '$($objProcessCase.N)' exceeded its cleanup deadline."
+        }
+    }
+}
+
+function Assert-MarkdownParserTransportCleanup {
+    # .SYNOPSIS
+    # Confirms that failed Markdown parser processes are cleaned up.
+    #
+    # .DESCRIPTION
+    # Exercises timeout and transport failures in the locked Markdown parser.
+    #
+    # .EXAMPLE
+    # Assert-MarkdownParserTransportCleanup
+    #
+    # # Runs with validated named arguments.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # None.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([void])]
+    param()
+
+    $strPidPath = [IO.Path]::GetTempFileName()
+    try {
+        $objNodeCommand = Get-Command node -CommandType Application |
+            Select-Object -First 1
+        $objStartInfo = [Diagnostics.ProcessStartInfo]::new(
+            $objNodeCommand.Source
+        )
+        $objStartInfo.UseShellExecute = $false
+        $objStartInfo.CreateNoWindow = $true
+        $objStartInfo.RedirectStandardInput = $true
+        $objStartInfo.RedirectStandardOutput = $true
+        $objStartInfo.RedirectStandardError = $true
+        $objStartInfo.StandardInputEncoding = [Text.UTF8Encoding]::new($false)
+        $objStartInfo.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
+        $objStartInfo.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
+        foreach ($strArgument in @(
+                '-e',
+                'const fs = require("node:fs"); fs.appendFileSync(process.argv[1], process.pid + "\n"); setTimeout(() => process.exit(23), 100);',
+                $strPidPath
+            )) {
+            $objStartInfo.ArgumentList.Add($strArgument)
+        }
+
+        $strSentinel = 'governed-content-must-not-appear-in-transport-evidence'
+        $objTimer = [Diagnostics.Stopwatch]::StartNew()
+        try {
+            [void](Invoke-MarkdownParserProcess `
+                    -StartInfo $objStartInfo `
+                    -Content ($strSentinel + ('x' * 1048576)))
+            throw "Self-test 'premature parser input close' was accepted."
+        } catch [IO.IOException] {
+            if (-not $_.Exception.Message.Contains(
+                    'input closed prematurely after 2 attempts',
+                    [StringComparison]::Ordinal
+                ) -or
+                ([regex]::Matches(
+                        $_.Exception.Message,
+                        'premature-input-close, exit=23, stderr=empty'
+                    )).Count -ne 2 -or
+                $_.Exception.Message.Contains(
+                    $strSentinel,
+                    [StringComparison]::Ordinal
+                )) {
+                throw (
+                    "Self-test 'premature parser input close' changed classification: " +
+                        $_.Exception.Message
                 )
             }
+        } finally {
+            $objTimer.Stop()
         }
+        if ($objTimer.ElapsedMilliseconds -ge 5000) {
+            throw "Self-test 'premature parser input close' exceeded its cleanup deadline."
+        }
+
+        $arrParserPids = @(
+            [IO.File]::ReadAllLines($strPidPath) |
+                ForEach-Object { [int]$_ }
+        )
+        if ($arrParserPids.Count -ne 2) {
+            throw "Self-test 'premature parser input close' changed attempt count."
+        }
+        foreach ($intParserPid in $arrParserPids) {
+            $objParserProcess = $null
+            try {
+                $objParserProcess = [Diagnostics.Process]::GetProcessById($intParserPid)
+                if (-not $objParserProcess.HasExited) {
+                    throw "Self-test 'premature parser input close' left a child running."
+                }
+            } catch [ArgumentException] {
+                [void]$_
+            } finally {
+                if ($null -ne $objParserProcess) {
+                    $objParserProcess.Dispose()
+                }
+            }
+        }
+    } finally {
+        Remove-Item -LiteralPath $strPidPath -Force -ErrorAction SilentlyContinue
     }
 }
 
 function Test-Python312Application {
     # .SYNOPSIS
-    # Tests whether one application invocation is Python 3.12.
+    # Tests one isolated Python application for the exact supported version.
     #
     # .DESCRIPTION
-    # Starts the candidate without profile or site initialization and accepts it
-    # only when it reports exactly Python 3.12 with no error output. Operational
-    # failures return false instead of escaping this helper.
+    # Uses the bounded process reader and returns false on unavailable, noisy,
+    # oversized, timed-out or incompatible applications.
     #
     # .PARAMETER Path
-    # The application path to invoke.
+    # The application path to probe.
     #
     # .PARAMETER PrefixArgument
-    # Arguments, such as `-3.12`, that must precede the isolated version probe.
+    # Launcher arguments that precede the isolated probe.
     #
     # .EXAMPLE
     # Test-Python312Application -Path '/usr/bin/python3.12'
     #
-    # # Returns true only when the application is an exact Python 3.12 runtime.
+    # # Returns true only for an exact Python 3.12 application.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. No pipeline input.
     #
     # .OUTPUTS
-    # [bool] True for an exact Python 3.12 runtime; otherwise, false.
+    # [bool] True for Python 3.12; false for all probe failures.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260907.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20261003.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([bool])]
     param(
-        [Parameter(Mandatory)]
-        [string] $Path,
-
-        [Parameter()]
-        [string[]] $PrefixArgument = @()
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter()][string[]] $PrefixArgument = @()
     )
-
-    $objStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $objStartInfo.FileName = $Path
+    $objStartInfo = [Diagnostics.ProcessStartInfo]::new($Path)
     $objStartInfo.UseShellExecute = $false
     $objStartInfo.CreateNoWindow = $true
     $objStartInfo.RedirectStandardOutput = $true
     $objStartInfo.RedirectStandardError = $true
-    foreach ($strArgument in @(
-            $PrefixArgument + @(
-                '-I',
-                '-S',
-                '-c',
-                'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")'
-            )
-        )) {
+    foreach ($strArgument in @($PrefixArgument) + @('-I', '-S', '-c',
+            'import sys;sys.stdout.write("3.12" if sys.version_info[:2]==(3,12) else "")')) {
         $objStartInfo.ArgumentList.Add($strArgument)
     }
-
-    $objProcess = [System.Diagnostics.Process]::new()
+    $objProcess = [Diagnostics.Process]::new()
     $objProcess.StartInfo = $objStartInfo
     try {
-        if (-not $objProcess.Start()) {
-            return $false
-        }
-        $objOutputTask = $objProcess.StandardOutput.ReadToEndAsync()
-        $objErrorTask = $objProcess.StandardError.ReadToEndAsync()
-        if (-not $objProcess.WaitForExit(10000)) {
-            $objProcess.Kill($true)
-            [void]$objProcess.WaitForExit(1000)
-            return $false
-        }
-        $strOutput = $objOutputTask.GetAwaiter().GetResult()
-        $strError = $objErrorTask.GetAwaiter().GetResult()
-        return $objProcess.ExitCode -eq 0 -and
-            $strOutput.Trim() -ceq '3.12' -and
-            [string]::IsNullOrEmpty($strError)
-    }
-    catch {
+        $objResult = Read-BoundedProcessData -Process $objProcess -MaximumBytes 4 `
+            -TimeoutMilliseconds 5000 -DisplayName 'Python 3.12 prerequisite probe' `
+            -RejectStandardError
+        return $objResult.ExitCode -eq 0 -and
+            [Text.Encoding]::UTF8.GetString($objResult.Bytes) -ceq '3.12'
+    } catch {
+        Write-Debug 'The Python application did not complete the isolated version probe.'
         return $false
-    }
-    finally {
-        $objProcess.Dispose()
     }
 }
 
 function Get-Python312CommandContext {
     # .SYNOPSIS
-    # Resolves a verified Python 3.12 application and its prefix arguments.
+    # Resolves and caches an exact Python 3.12 application.
     #
     # .DESCRIPTION
-    # Searches platform-appropriate command names in documented order, ignores
-    # non-application commands, and returns the first exact Python 3.12 match.
-    # Optional resolvers provide deterministic mutation fixtures.
+    # Tries the Windows launcher and supported PATH names in order. Rejects
+    # aliases and functions. Fixture resolvers bypass the live cache.
+    # Operational probe failures allow the next supported application.
     #
-    # .PARAMETER WindowsPlatform
-    # Indicates whether to use the Windows `py -3.12` resolution route.
+    # .PARAMETER RuntimeContext
+    # The shared runtime state passed through the validator and SelfTest loader.
     #
     # .PARAMETER CommandResolver
-    # An optional command resolver used in place of `Get-Command`.
+    # Optional private fixture resolver for application command records.
     #
     # .PARAMETER VersionProbe
-    # An optional predicate used in place of the live Python version probe.
+    # Optional private fixture predicate for an application and prefix arguments.
+    #
+    # .PARAMETER WindowsPlatform
+    # Includes the Windows launcher before the supported PATH names.
+    #
+    # .PARAMETER PathNames
+    # The supported Python application names in resolution order.
     #
     # .EXAMPLE
-    # Get-Python312CommandContext -WindowsPlatform $IsWindows
+    # Get-Python312CommandContext
     #
-    # # Returns a verified path and any required launcher prefix argument.
+    # # Returns an application path and its launcher arguments, or null.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. No pipeline input.
     #
     # .OUTPUTS
-    # [pscustomobject] The application path and prefix arguments, or null when no
-    # exact Python 3.12 application is available.
+    # [pscustomobject] Path and Arguments for the verified application; null if unavailable.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260907.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20261003.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
-        [Parameter(Mandatory)]
-        [bool] $WindowsPlatform,
-
-        [Parameter()]
-        [AllowNull()]
-        [scriptblock] $CommandResolver,
-
-        [Parameter()]
-        [AllowNull()]
-        [scriptblock] $VersionProbe
+        [Parameter()][ValidateNotNull()][hashtable] $RuntimeContext = $hashtableRuntimeContext,
+        [Parameter()][AllowNull()][scriptblock] $CommandResolver,
+        [Parameter()][AllowNull()][scriptblock] $VersionProbe,
+        [Parameter()][bool] $WindowsPlatform = $RuntimeContext.WindowsPlatform,
+        [Parameter()][string[]] $PathNames = $RuntimeContext.PythonPathNames
     )
-
+    $boolLiveResolution = $null -eq $CommandResolver -and $null -eq $VersionProbe
+    $strResolutionKey = [string]$WindowsPlatform + ':' + ($PathNames -join '|')
+    if ($boolLiveResolution -and $null -ne $RuntimeContext.PythonCommandContext -and
+        $RuntimeContext.PythonResolutionKey -ceq $strResolutionKey) {
+        return $RuntimeContext.PythonCommandContext
+    }
     if ($null -eq $CommandResolver) {
         $CommandResolver = {
             param([string] $Name)
-            @(Get-Command -Name $Name -CommandType Application -All `
-                    -ErrorAction SilentlyContinue)
+            Get-Command -Name $Name -CommandType Application -All -ErrorAction SilentlyContinue
         }
     }
     if ($null -eq $VersionProbe) {
@@ -2025,44 +2491,196 @@ function Get-Python312CommandContext {
             Test-Python312Application -Path $Path -PrefixArgument $PrefixArgument
         }
     }
-
-    $arrCandidates = if ($WindowsPlatform) {
-        @([pscustomobject]@{ Name = 'py'; PrefixArgument = [string[]] @('-3.12') })
-    }
-    else {
-        @(
-            [pscustomobject]@{ Name = 'python3.12'; PrefixArgument = [string[]] @() }
-            [pscustomobject]@{ Name = 'python3'; PrefixArgument = [string[]] @() }
-            [pscustomobject]@{ Name = 'python'; PrefixArgument = [string[]] @() }
-        )
-    }
-    foreach ($objCandidate in $arrCandidates) {
-        $objCommand = @(
-            & $CommandResolver $objCandidate.Name |
-                Where-Object {
-                    $_.PSObject.Properties['CommandType'] -and
-                    [string]$_.CommandType -ceq 'Application' -and
-                    $_.PSObject.Properties['Path'] -and
-                    -not [string]::IsNullOrWhiteSpace([string]$_.Path)
-                } |
-                Select-Object -First 1
-        )
-        if ($objCommand.Count -ne 1) {
-            continue
-        }
-        $strPath = [string]$objCommand[0].Path
-        try {
-            $boolIsPython312 = [bool](& $VersionProbe `
-                    $strPath ([string[]]$objCandidate.PrefixArgument))
-        }
-        catch {
-            $boolIsPython312 = $false
-        }
-        if ($boolIsPython312) {
-            return [pscustomobject]@{
-                Path = $strPath
-                PrefixArgument = [string[]]$objCandidate.PrefixArgument
+    $arrCommandNames = @(
+        if ($WindowsPlatform) { 'py' }
+        $PathNames
+    )
+    $setApplications = [Collections.Generic.HashSet[string]]::new($(if ($IsWindows) {
+                [StringComparer]::OrdinalIgnoreCase
+            } else { [StringComparer]::Ordinal }))
+    foreach ($strName in $arrCommandNames) {
+        $arrPrefixArguments = [string[]]@()
+        if ($strName -ceq 'py') { $arrPrefixArguments = [string[]]@('-3.12') }
+        foreach ($objCommand in @(& $CommandResolver $strName)) {
+            if ($null -eq $objCommand -or
+                $null -eq $objCommand.PSObject.Properties['CommandType'] -or
+                [string]$objCommand.CommandType -cne 'Application' -or
+                $null -eq $objCommand.PSObject.Properties['Path'] -or
+                -not [IO.Path]::IsPathFullyQualified([string]$objCommand.Path)) { continue }
+            $strApplicationPath = [IO.Path]::GetFullPath([string]$objCommand.Path)
+            if (-not $setApplications.Add($strApplicationPath + '|' + ($arrPrefixArguments -join '|'))) {
+                continue
             }
+            try {
+                if (-not (& $VersionProbe $strApplicationPath $arrPrefixArguments)) { continue }
+            } catch {
+                Write-Debug 'The Python version predicate failed; try the next application.'
+                continue
+            }
+            $objContext = [pscustomobject]@{
+                Path = $strApplicationPath
+                Arguments = $arrPrefixArguments
+            }
+            if ($boolLiveResolution) {
+                $RuntimeContext.PythonCommandContext = $objContext
+                $RuntimeContext.PythonResolutionKey = $strResolutionKey
+            }
+            return $objContext
+        }
+    }
+    return $null
+}
+
+function Invoke-NodeRuntimeProbe {
+    # .SYNOPSIS
+    # Reads bounded identity data from one Node application.
+    #
+    # .DESCRIPTION
+    # Removes preload environment variables and runs a fixed identity program.
+    # Returns null on native, timeout, output-size or stderr failure.
+    #
+    # .PARAMETER Path
+    # The application path to probe.
+    #
+    # .EXAMPLE
+    # Invoke-NodeRuntimeProbe -Path '/usr/bin/node'
+    #
+    # # Returns strict JSON identity data for the supported resolver.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [string] Bounded UTF-8 JSON output, or null on probe failure.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20261003.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][string] $Path)
+    $objStartInfo = [Diagnostics.ProcessStartInfo]::new($Path)
+    $objStartInfo.UseShellExecute = $false
+    $objStartInfo.CreateNoWindow = $true
+    $objStartInfo.RedirectStandardOutput = $true
+    $objStartInfo.RedirectStandardError = $true
+    [void]$objStartInfo.Environment.Remove('NODE_OPTIONS')
+    [void]$objStartInfo.Environment.Remove('NODE_PATH')
+    $objStartInfo.ArgumentList.Add('-p')
+    $objStartInfo.ArgumentList.Add(
+        'JSON.stringify({execPath:process.execPath,nodeVersion:process.versions.node})')
+    $objProcess = [Diagnostics.Process]::new()
+    $objProcess.StartInfo = $objStartInfo
+    try {
+        $objResult = Read-BoundedProcessData -Process $objProcess -MaximumBytes 4096 `
+            -TimeoutMilliseconds 10000 -DisplayName 'Node application identity probe' `
+            -RejectStandardError
+        if ($objResult.ExitCode -ne 0) { return $null }
+        return ConvertFrom-StrictUtf8Data -Bytes $objResult.Bytes -DisplayName 'Node identity'
+    } catch {
+        Write-Debug 'The Node application did not return a bounded identity.'
+        return $null
+    }
+}
+
+function Get-NodeApplicationContext {
+    # .SYNOPSIS
+    # Resolves and caches the direct supported Node application.
+    #
+    # .DESCRIPTION
+    # Probes application candidates and validates their reported absolute
+    # executable path and Node 22-or-later version with the strict JSON decoder.
+    # Invalid or unavailable candidates fall through; private fixture hooks do not cache.
+    #
+    # .PARAMETER RuntimeContext
+    # The shared runtime state passed through the validator and SelfTest loader.
+    #
+    # .PARAMETER CommandResolver
+    # Optional private resolver for PATH application candidates.
+    #
+    # .PARAMETER RuntimeProbe
+    # Optional private probe that returns the candidate's JSON identity text.
+    #
+    # .PARAMETER ApplicationResolver
+    # Optional private resolver for the reported direct application path.
+    #
+    # .EXAMPLE
+    # Get-NodeApplicationContext
+    #
+    # # Returns the verified direct application path and version, or null.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [pscustomobject] Path and Version for the application; null if unavailable.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20261003.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter()][ValidateNotNull()][hashtable] $RuntimeContext = $hashtableRuntimeContext,
+        [Parameter()][AllowNull()][scriptblock] $CommandResolver,
+        [Parameter()][AllowNull()][scriptblock] $RuntimeProbe,
+        [Parameter()][AllowNull()][scriptblock] $ApplicationResolver
+    )
+    $boolLiveResolution = $null -eq $CommandResolver -and $null -eq $RuntimeProbe -and
+        $null -eq $ApplicationResolver
+    if ($boolLiveResolution -and $null -ne $RuntimeContext.NodeApplicationContext) {
+        return $RuntimeContext.NodeApplicationContext
+    }
+    if ($null -eq $CommandResolver) {
+        $CommandResolver = {
+            param([string] $Name)
+            Get-Command -Name $Name -CommandType Application -All -ErrorAction SilentlyContinue
+        }
+    }
+    if ($null -eq $RuntimeProbe) {
+        $RuntimeProbe = { param([string] $Path) Invoke-NodeRuntimeProbe -Path $Path }
+    }
+    if ($null -eq $ApplicationResolver) { $ApplicationResolver = $CommandResolver }
+    foreach ($objCandidate in @(& $CommandResolver 'node')) {
+        if ($null -eq $objCandidate -or
+            $null -eq $objCandidate.PSObject.Properties['CommandType'] -or
+            [string]$objCandidate.CommandType -cne 'Application' -or
+            $null -eq $objCandidate.PSObject.Properties['Path'] -or
+            -not [IO.Path]::IsPathFullyQualified([string]$objCandidate.Path)) { continue }
+        try {
+            $strIdentity = & $RuntimeProbe ([string]$objCandidate.Path)
+            if ($strIdentity -isnot [string]) { continue }
+            $objIdentity = ConvertFrom-ParserJsonContext -Content $strIdentity -MaximumBytes 4096
+            if ($objIdentity.execPath -isnot [string] -or
+                $objIdentity.nodeVersion -isnot [string] -or
+                -not [IO.Path]::IsPathFullyQualified($objIdentity.execPath)) { continue }
+            $objVersion = [regex]::Match($objIdentity.nodeVersion, '\A(?<Major>[0-9]+)\.[0-9]+\.[0-9]+\z')
+            $intMajorVersion = 0
+            if (-not $objVersion.Success -or
+                -not [int]::TryParse($objVersion.Groups['Major'].Value, [ref]$intMajorVersion) -or
+                $intMajorVersion -lt 22) { continue }
+            $strDirectPath = [IO.Path]::GetFullPath($objIdentity.execPath)
+            $objComparison = if ($IsWindows) { [StringComparison]::OrdinalIgnoreCase } else {
+                [StringComparison]::Ordinal
+            }
+            foreach ($objApplication in @(& $ApplicationResolver $strDirectPath)) {
+                if ($null -eq $objApplication -or
+                    $null -eq $objApplication.PSObject.Properties['CommandType'] -or
+                    [string]$objApplication.CommandType -cne 'Application' -or
+                    $null -eq $objApplication.PSObject.Properties['Path'] -or
+                    -not [IO.Path]::IsPathFullyQualified([string]$objApplication.Path) -or
+                    -not [string]::Equals([IO.Path]::GetFullPath([string]$objApplication.Path),
+                        $strDirectPath, $objComparison)) { continue }
+                $objContext = [pscustomobject]@{ Path = $strDirectPath; Version = $objIdentity.nodeVersion }
+                if ($boolLiveResolution) { $RuntimeContext.NodeApplicationContext = $objContext }
+                return $objContext
+            }
+        } catch {
+            Write-Debug 'The Node application identity was invalid; try the next application.'
         }
     }
     return $null
@@ -2070,35 +2688,30 @@ function Get-Python312CommandContext {
 
 function Get-TomlParseContext {
     # .SYNOPSIS
-    # Gets a safe typed TOML parse context.
+    # Parses the trusted TOML subset used by the validator.
     #
     # .DESCRIPTION
-    # Runs the trusted Python 3.12 TOML parser once in isolated mode. It returns
-    # a fixed JSON projection of the root capacity, GitHub plugin enablement,
-    # and parser-confirmed identities of the first three semantic statements.
-    # PowerShell validates that projection before returning typed values.
+    # Parses the repository-owned TOML subset without evaluating code.
     #
     # .PARAMETER Content
-    # The TOML text to validate.
+    # The trusted input text to parse or transform.
     #
     # .EXAMPLE
-    # Get-TomlParseContext -Content 'project_doc_max_bytes = 65536'
+    # Get-TomlParseContext @hashtableArguments
     #
-    # # Returns typed capacity and plugin context for valid TOML.
+    # # Runs with validated named arguments.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. No pipeline input.
     #
     # .OUTPUTS
-    # [pscustomobject] A failure and validated typed TOML context.
+    # [System.Management.Automation.PSCustomObject] One validated context object described in the function description.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.2.20260820.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.1.20261003.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
@@ -2117,6 +2730,11 @@ function Get-TomlParseContext {
         PluginEnabledPresent = $false
         PluginEnabledType = 'missing'
         PluginEnabledValue = $false
+        FeatureTablePresent = $false
+        FeatureTableType = 'missing'
+        MultiAgentPresent = $false
+        MultiAgentType = 'missing'
+        MultiAgentValue = $false
         CapacityIsFirstStatement = $false
         PluginHeaderIsSecondStatement = $false
         PluginEnablementIsThirdStatement = $false
@@ -2124,89 +2742,48 @@ function Get-TomlParseContext {
         PluginEnabledValueLength = 0
     }
 
-    if ($null -eq $script:objPython312CommandContext) {
-        $script:objPython312CommandContext = Get-Python312CommandContext `
-            -WindowsPlatform ([bool]$IsWindows)
-    }
-    $objPythonCommand = $script:objPython312CommandContext
+    $objPythonCommand = Get-Python312CommandContext
     if ($null -eq $objPythonCommand) {
-        $objContext.Failure =
-            'A trusted Python 3.12 interpreter is required to validate .codex/config.toml.'
+        $objContext.Failure = $strPythonPrerequisite
         return [pscustomobject]$objContext
     }
     $strPythonPath = $objPythonCommand.Path
 
-    $strPythonProgram = @(
-        'import json, re, sys, tomllib'
-        'content = sys.stdin.read()'
-        'data = tomllib.loads(content)'
-        'semantic_lines = []'
-        'semantic_ends = []'
-        'offset = 0'
-        'for line in content.splitlines(keepends=True):'
-        '    text = line[:-2] if line.endswith("\r\n") else line[:-1] if line.endswith("\n") else line'
-        '    stripped = text.lstrip()'
-        '    offset += len(line)'
-        '    if stripped and not stripped.startswith("#"):'
-        '        semantic_lines.append(text)'
-        '        semantic_ends.append(offset)'
-        'def parse_prefix(statement_count):'
-        '    if len(semantic_ends) < statement_count:'
-        '        return None'
-        '    try:'
-        '        return tomllib.loads(content[:semantic_ends[statement_count - 1]])'
-        '    except tomllib.TOMLDecodeError:'
-        '        return None'
-        'prefix_one = parse_prefix(1)'
-        'prefix_two = parse_prefix(2)'
-        'prefix_three = parse_prefix(3)'
-        'capacity_is_first = isinstance(prefix_one, dict) and set(prefix_one) == {"project_doc_max_bytes"}'
-        'prefix_two_plugins = prefix_two.get("plugins") if isinstance(prefix_two, dict) else None'
-        'prefix_two_plugin = prefix_two_plugins.get("github@openai-curated") if isinstance(prefix_two_plugins, dict) else None'
-        'second_is_table_header = len(semantic_lines) > 1 and semantic_lines[1].lstrip().startswith("[") and not semantic_lines[1].lstrip().startswith("[[")'
-        'plugin_header_is_second = capacity_is_first and second_is_table_header and isinstance(prefix_two, dict) and set(prefix_two) == {"project_doc_max_bytes", "plugins"} and isinstance(prefix_two_plugins, dict) and set(prefix_two_plugins) == {"github@openai-curated"} and prefix_two_plugin == {}'
-        'prefix_three_plugins = prefix_three.get("plugins") if isinstance(prefix_three, dict) else None'
-        'prefix_three_plugin = prefix_three_plugins.get("github@openai-curated") if isinstance(prefix_three_plugins, dict) else None'
-        'third_is_assignment = len(semantic_lines) > 2 and not semantic_lines[2].lstrip().startswith("[")'
-        'plugin_enablement_is_third = plugin_header_is_second and third_is_assignment and isinstance(prefix_three, dict) and set(prefix_three) == {"project_doc_max_bytes", "plugins"} and isinstance(prefix_three_plugins, dict) and set(prefix_three_plugins) == {"github@openai-curated"} and isinstance(prefix_three_plugin, dict) and set(prefix_three_plugin) == {"enabled"} and type(prefix_three_plugin.get("enabled")) is bool'
-        'enabled_value_statement_offset = -1'
-        'enabled_value_length = 0'
-        'if plugin_enablement_is_third:'
-        '    separator = semantic_lines[2].find("=")'
-        '    value_match = re.fullmatch(r"\s*(true|false)\s*(?:#.*)?", semantic_lines[2][separator + 1:]) if separator >= 0 else None'
-        '    if value_match is None:'
-        '        plugin_enablement_is_third = False'
-        '    else:'
-        '        enabled_value_statement_offset = separator + 1 + value_match.start(1)'
-        '        enabled_value_length = len(value_match.group(1))'
-        'capacity_present = "project_doc_max_bytes" in data'
-        'capacity = data.get("project_doc_max_bytes")'
-        'plugins = data.get("plugins")'
-        'plugin_table_present = isinstance(plugins, dict) and "github@openai-curated" in plugins'
-        'plugin_table = plugins.get("github@openai-curated") if plugin_table_present else None'
-        'plugin_enabled_present = isinstance(plugin_table, dict) and "enabled" in plugin_table'
-        'plugin_enabled = plugin_table.get("enabled") if plugin_enabled_present else None'
-        'context = {'
-        '    "capacity_present": capacity_present,'
-        '    "capacity_type": type(capacity).__name__ if capacity_present else "missing",'
-        '    "capacity_value": str(capacity) if type(capacity) is int else None,'
-        '    "plugin_table_present": plugin_table_present,'
-        '    "plugin_table_type": type(plugin_table).__name__ if plugin_table_present else "missing",'
-        '    "plugin_enabled_present": plugin_enabled_present,'
-        '    "plugin_enabled_type": type(plugin_enabled).__name__ if plugin_enabled_present else "missing",'
-        '    "plugin_enabled_value": plugin_enabled if type(plugin_enabled) is bool else None,'
-        '    "capacity_is_first_statement": capacity_is_first,'
-        '    "plugin_header_is_second_statement": plugin_header_is_second,'
-        '    "plugin_enablement_is_third_statement": plugin_enablement_is_third,'
-        '    "plugin_enabled_value_statement_offset": enabled_value_statement_offset,'
-        '    "plugin_enabled_value_length": enabled_value_length,'
-        '}'
-        'print(json.dumps(context, separators=(",", ":"), sort_keys=True))'
-    ) -join "`n"
+    $strPythonProgram = @'
+import json,re,sys
+if sys.version_info[:2]!=(3,12):sys.exit(78)
+import tomllib
+c=sys.stdin.read();d=tomllib.loads(c);l=[];e=[];o=0
+for x in c.splitlines(keepends=True):
+ t=x[:-2] if x.endswith("\r\n") else x[:-1] if x.endswith("\n") else x;o+=len(x);s=t.lstrip()
+ if s and not s.startswith("#"):l.append(t);e.append(o)
+def p(n):
+ if len(e)<n:return None
+ try:return tomllib.loads(c[:e[n-1]])
+ except tomllib.TOMLDecodeError:return None
+def g(x,k):return x.get(k) if type(x)is dict else None
+a=p(1);b=p(2);f=p(3);a1=type(a)is dict and set(a)=={"project_doc_max_bytes"}
+bp=g(b,"plugins");bt=g(bp,"github@openai-curated")
+h=len(l)>1 and l[1].lstrip().startswith("[") and not l[1].lstrip().startswith("[[")
+h=a1 and h and type(b)is dict and set(b)=={"project_doc_max_bytes","plugins"} and type(bp)is dict and set(bp)=={"github@openai-curated"} and bt=={}
+fp=g(f,"plugins");ft=g(fp,"github@openai-curated")
+v=len(l)>2 and not l[2].lstrip().startswith("[")
+v=h and v and type(f)is dict and set(f)=={"project_doc_max_bytes","plugins"} and type(fp)is dict and set(fp)=={"github@openai-curated"} and type(ft)is dict and set(ft)=={"enabled"} and type(ft.get("enabled"))is bool
+vo=-1;vl=0
+if v:
+ q=l[2].find("=");m=re.fullmatch(r"\s*(true|false)\s*(?:#.*)?",l[2][q+1:]) if q>=0 else None
+ if m is None:v=False
+ else:vo=q+1+m.start(1);vl=len(m.group(1))
+cp="project_doc_max_bytes" in d;cv=d.get("project_doc_max_bytes");ps=d.get("plugins");tb=g(ps,"github@openai-curated")
+tp=type(ps)is dict and "github@openai-curated" in ps;ep=type(tb)is dict and "enabled" in tb;ev=g(tb,"enabled")
+fe=d.get("features");mp=type(fe)is dict and "multi_agent" in fe;ma=g(fe,"multi_agent")
+r=dict(a=cp,b=type(cv).__name__ if cp else "missing",c=str(cv) if type(cv)is int else None,d=tp,e=type(tb).__name__ if tp else "missing",f=ep,g=type(ev).__name__ if ep else "missing",h=ev if type(ev)is bool else None,i=a1,j=h,k=v,l=vo,m=vl,n="features" in d,o=type(fe).__name__ if "features" in d else "missing",p=mp,q=type(ma).__name__ if mp else "missing",r=ma if type(ma)is bool else None)
+print(json.dumps(r,separators=(",",":"),sort_keys=True))
+'@
 
-    $arrPythonArguments = [System.Collections.Generic.List[string]]::new()
-    foreach ($strPrefixArgument in $objPythonCommand.PrefixArgument) {
-        $arrPythonArguments.Add($strPrefixArgument)
+    $arrPythonArguments = [Collections.Generic.List[string]]::new()
+    foreach ($strPythonArgument in $objPythonCommand.Arguments) {
+        $arrPythonArguments.Add($strPythonArgument)
     }
     foreach ($strPythonArgument in @(
             '-I',
@@ -2236,8 +2813,7 @@ function Get-TomlParseContext {
     $objParserProcess.StartInfo = $objStartInfo
     try {
         if (-not $objParserProcess.Start()) {
-            $objContext.Failure =
-                'A trusted Python 3.12 interpreter is required to validate .codex/config.toml.'
+            $objContext.Failure = $strPythonPrerequisite
             return [pscustomobject]$objContext
         }
 
@@ -2255,90 +2831,69 @@ function Get-TomlParseContext {
         $strParserOutput = $objStandardOutputTask.GetAwaiter().GetResult()
         $strParserError = $objStandardErrorTask.GetAwaiter().GetResult()
         if ($objParserProcess.ExitCode -ne 0) {
-            $objContext.Failure = 'The project configuration must contain valid TOML.'
+            $objContext.Failure = if ($objParserProcess.ExitCode -eq 78) {
+                $strPythonPrerequisite
+            } else {
+                'The project configuration must contain valid TOML.'
+            }
             return [pscustomobject]$objContext
         }
         if (-not [string]::IsNullOrEmpty($strParserError)) {
             $objContext.Failure = 'The trusted TOML parser returned unexpected error output.'
             return [pscustomobject]$objContext
         }
-    }
-    catch {
-        $objContext.Failure =
-            'A trusted Python 3.12 interpreter is required to validate .codex/config.toml.'
+    } catch {
+        $objContext.Failure = $strPythonPrerequisite
         return [pscustomobject]$objContext
-    }
-    finally {
+    } finally {
         $objParserProcess.Dispose()
     }
 
-    if ([System.Text.Encoding]::UTF8.GetByteCount($strParserOutput) -gt 4096) {
+    if ([Text.Encoding]::UTF8.GetByteCount($strParserOutput) -gt 4096) {
         $objContext.Failure = 'The trusted TOML parser returned oversized typed context.'
         return [pscustomobject]$objContext
     }
 
     try {
-        $objParserContext = $strParserOutput | ConvertFrom-Json -ErrorAction Stop
-    }
-    catch {
+        $objParserContext = ConvertFrom-ParserJsonContext `
+            -Content $strParserOutput -MaximumBytes 4096
+    } catch {
         $objContext.Failure = 'The trusted TOML parser returned invalid typed context.'
         return [pscustomobject]$objContext
     }
 
-    $arrExpectedProperties = @(
-        'capacity_present',
-        'capacity_type',
-        'capacity_value',
-        'plugin_table_present',
-        'plugin_table_type',
-        'plugin_enabled_present',
-        'plugin_enabled_type',
-        'plugin_enabled_value',
-        'capacity_is_first_statement',
-        'plugin_header_is_second_statement',
-        'plugin_enablement_is_third_statement',
-        'plugin_enabled_value_statement_offset',
-        'plugin_enabled_value_length'
-    )
+    $arrExpectedProperties = @('a', 'b', 'c', 'd', 'e', 'f', 'g',
+        'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r')
     $arrActualProperties = @($objParserContext.PSObject.Properties.Name)
     if ($arrActualProperties.Count -ne $arrExpectedProperties.Count -or
         @(Compare-Object $arrExpectedProperties $arrActualProperties).Count -ne 0 -or
-        $objParserContext.capacity_present -isnot [bool] -or
-        $objParserContext.capacity_type -isnot [string] -or
-        ($null -ne $objParserContext.capacity_value -and
-            $objParserContext.capacity_value -isnot [string]) -or
-        $objParserContext.plugin_table_present -isnot [bool] -or
-        $objParserContext.plugin_table_type -isnot [string] -or
-        $objParserContext.plugin_enabled_present -isnot [bool] -or
-        $objParserContext.plugin_enabled_type -isnot [string] -or
-        ($null -ne $objParserContext.plugin_enabled_value -and
-            $objParserContext.plugin_enabled_value -isnot [bool]) -or
-        $objParserContext.capacity_is_first_statement -isnot [bool] -or
-        $objParserContext.plugin_header_is_second_statement -isnot [bool] -or
-        $objParserContext.plugin_enablement_is_third_statement -isnot [bool] -or
-        $objParserContext.plugin_enabled_value_statement_offset -isnot [int64] -or
-        $objParserContext.plugin_enabled_value_length -isnot [int64] -or
-        $objParserContext.plugin_enabled_value_statement_offset -lt -1 -or
-        $objParserContext.plugin_enabled_value_statement_offset -gt $Content.Length -or
-        $objParserContext.plugin_enabled_value_length -lt 0 -or
-        $objParserContext.plugin_enabled_value_length -gt 5 -or
-        ($objParserContext.plugin_enablement_is_third_statement -and
-            ($objParserContext.plugin_enabled_value_statement_offset -lt 0 -or
-                $objParserContext.plugin_enabled_value_length -notin @(4, 5))) -or
-        (-not $objParserContext.plugin_enablement_is_third_statement -and
-            ($objParserContext.plugin_enabled_value_statement_offset -ne -1 -or
-                $objParserContext.plugin_enabled_value_length -ne 0))) {
+        $objParserContext.a -isnot [bool] -or $objParserContext.b -isnot [string] -or
+        ($null -ne $objParserContext.c -and $objParserContext.c -isnot [string]) -or
+        $objParserContext.d -isnot [bool] -or $objParserContext.e -isnot [string] -or
+        $objParserContext.f -isnot [bool] -or $objParserContext.g -isnot [string] -or
+        ($null -ne $objParserContext.h -and $objParserContext.h -isnot [bool]) -or
+        $objParserContext.i -isnot [bool] -or $objParserContext.j -isnot [bool] -or
+        $objParserContext.k -isnot [bool] -or $objParserContext.l -isnot [int64] -or
+        $objParserContext.m -isnot [int64] -or $objParserContext.l -lt -1 -or
+        $objParserContext.n -isnot [bool] -or $objParserContext.o -isnot [string] -or
+        $objParserContext.p -isnot [bool] -or $objParserContext.q -isnot [string] -or
+        ($null -ne $objParserContext.r -and $objParserContext.r -isnot [bool]) -or
+        $objParserContext.l -gt $Content.Length -or $objParserContext.m -lt 0 -or
+        $objParserContext.m -gt 5 -or
+        ($objParserContext.k -and ($objParserContext.l -lt 0 -or
+                $objParserContext.m -notin @(4, 5))) -or
+        (-not $objParserContext.k -and ($objParserContext.l -ne -1 -or
+                $objParserContext.m -ne 0))) {
         $objContext.Failure = 'The trusted TOML parser returned invalid typed context.'
         return [pscustomobject]$objContext
     }
 
-    $objContext.CapacityPresent = $objParserContext.capacity_present
-    $objContext.CapacityType = $objParserContext.capacity_type
-    if ($objParserContext.capacity_type -ceq 'int' -and
-        $objParserContext.capacity_value -is [string]) {
+    $objContext.CapacityPresent = $objParserContext.a
+    $objContext.CapacityType = $objParserContext.b
+    if ($objParserContext.b -ceq 'int' -and $objParserContext.c -is [string]) {
         $intCapacityValue = [int64]0
         $objContext.CapacityFitsInt64 = [int64]::TryParse(
-            $objParserContext.capacity_value,
+            $objParserContext.c,
             [System.Globalization.NumberStyles]::AllowLeadingSign,
             [System.Globalization.CultureInfo]::InvariantCulture,
             [ref] $intCapacityValue
@@ -2347,271 +2902,245 @@ function Get-TomlParseContext {
             $objContext.CapacityValue = $intCapacityValue
         }
     }
-    $objContext.PluginTablePresent = $objParserContext.plugin_table_present
-    $objContext.PluginTableType = $objParserContext.plugin_table_type
-    $objContext.PluginEnabledPresent = $objParserContext.plugin_enabled_present
-    $objContext.PluginEnabledType = $objParserContext.plugin_enabled_type
-    if ($objParserContext.plugin_enabled_value -is [bool]) {
-        $objContext.PluginEnabledValue = $objParserContext.plugin_enabled_value
+    $objContext.PluginTablePresent = $objParserContext.d
+    $objContext.PluginTableType = $objParserContext.e
+    $objContext.PluginEnabledPresent = $objParserContext.f
+    $objContext.PluginEnabledType = $objParserContext.g
+    if ($objParserContext.h -is [bool]) {
+        $objContext.PluginEnabledValue = $objParserContext.h
     }
-    $objContext.CapacityIsFirstStatement = $objParserContext.capacity_is_first_statement
-    $objContext.PluginHeaderIsSecondStatement =
-        $objParserContext.plugin_header_is_second_statement
-    $objContext.PluginEnablementIsThirdStatement =
-        $objParserContext.plugin_enablement_is_third_statement
-    $objContext.PluginEnabledValueStatementOffset =
-        [int]$objParserContext.plugin_enabled_value_statement_offset
-    $objContext.PluginEnabledValueLength =
-        [int]$objParserContext.plugin_enabled_value_length
+    $objContext.FeatureTablePresent = $objParserContext.n
+    $objContext.FeatureTableType = $objParserContext.o
+    $objContext.MultiAgentPresent = $objParserContext.p
+    $objContext.MultiAgentType = $objParserContext.q
+    if ($objParserContext.r -is [bool]) {
+        $objContext.MultiAgentValue = $objParserContext.r
+    }
+    $objContext.CapacityIsFirstStatement = $objParserContext.i
+    $objContext.PluginHeaderIsSecondStatement = $objParserContext.j
+    $objContext.PluginEnablementIsThirdStatement = $objParserContext.k
+    $objContext.PluginEnabledValueStatementOffset = [int]$objParserContext.l
+    $objContext.PluginEnabledValueLength = [int]$objParserContext.m
 
     return [pscustomobject]$objContext
 }
 
-function Invoke-NodeRuntimeProbe {
+function Invoke-MarkdownParserProcess {
     # .SYNOPSIS
-    # Gets direct runtime identity from one Node command candidate.
+    # Runs the locked Markdown parser process with strict bounds.
     #
     # .DESCRIPTION
-    # Runs a fixed `process.execPath` and version probe with preload environment
-    # variables removed. Start, timeout, and process failures return a negative
-    # result object instead of escaping this helper.
+    # Sends Markdown to the locked parser through redirected streams.
     #
-    # .PARAMETER Path
-    # The Node command candidate path to invoke.
+    # .PARAMETER StartInfo
+    # The validated process start configuration.
+    #
+    # .PARAMETER Content
+    # The trusted input text to parse or transform.
     #
     # .EXAMPLE
-    # Invoke-NodeRuntimeProbe -Path $strNodeCommandPath
+    # Invoke-MarkdownParserProcess @hashtableArguments
     #
-    # # Returns the exit code, bounded identity output, and error output.
+    # # Runs with validated named arguments.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. No pipeline input.
     #
     # .OUTPUTS
-    # [pscustomobject] ExitCode is zero only for a completed probe; Output contains
-    # runtime identity JSON; Error contains standard error.
+    # [System.Management.Automation.PSCustomObject] One validated context object described in the function description.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260907.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)]
-        [string] $Path
+        [Diagnostics.ProcessStartInfo] $StartInfo,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $Content
     )
 
-    $objStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
-    $objStartInfo.FileName = $Path
-    $objStartInfo.UseShellExecute = $false
-    $objStartInfo.CreateNoWindow = $true
-    $objStartInfo.RedirectStandardOutput = $true
-    $objStartInfo.RedirectStandardError = $true
-    $objStartInfo.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
-    $objStartInfo.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
-    [void]$objStartInfo.Environment.Remove('NODE_OPTIONS')
-    [void]$objStartInfo.Environment.Remove('NODE_PATH')
-    $objStartInfo.ArgumentList.Add('-p')
-    $objStartInfo.ArgumentList.Add(
-        'JSON.stringify({execPath:process.execPath,nodeVersion:process.versions.node})'
-    )
+    if ($StartInfo.UseShellExecute -or
+        -not $StartInfo.RedirectStandardInput -or
+        -not $StartInfo.RedirectStandardOutput -or
+        -not $StartInfo.RedirectStandardError) {
+        throw 'The locked Markdown parser requires shell-free redirected process streams.'
+    }
 
-    $objProcess = [System.Diagnostics.Process]::new()
-    $objProcess.StartInfo = $objStartInfo
-    try {
-        if (-not $objProcess.Start()) {
-            return [pscustomobject]@{ ExitCode = -1; Output = ''; Error = '' }
+    $listAttemptEvidence = [Collections.Generic.List[string]]::new()
+    foreach ($intAttempt in 1..2) {
+        $objParserProcess = [Diagnostics.Process]::new()
+        $objParserProcess.StartInfo = $StartInfo
+        $objStandardOutputTask = $null
+        $objStandardErrorTask = $null
+        $objTimer = [Diagnostics.Stopwatch]::StartNew()
+        $objFailure = $null
+        $objInputFailure = $null
+        $objCleanupFailure = $null
+        $boolStarted = $false
+        $boolInputAccepted = $false
+        $strParserOutput = ''
+        $strParserError = ''
+        $strExitClassification = 'unavailable'
+        $intExitCode = $null
+        try {
+            if (-not $objParserProcess.Start()) {
+                throw 'Could not start the locked Markdown parser.'
+            }
+            $boolStarted = $true
+            $objStandardOutputTask = $objParserProcess.StandardOutput.ReadToEndAsync()
+            $objStandardErrorTask = $objParserProcess.StandardError.ReadToEndAsync()
+            try {
+                $objWriteTask = $objParserProcess.StandardInput.WriteAsync($Content)
+                $intRemaining = [Math]::Max(
+                    0, 10000 - [int]$objTimer.ElapsedMilliseconds)
+                if (-not $objWriteTask.Wait($intRemaining)) {
+                    throw [TimeoutException]::new(
+                        'Markdown block parsing must complete within 10 seconds.'
+                    )
+                }
+                [void]$objWriteTask.GetAwaiter().GetResult()
+                $objParserProcess.StandardInput.Close()
+                $boolInputAccepted = $true
+            } catch {
+                $objInputFailure = $_.Exception
+                throw
+            }
+
+            $intRemaining = [Math]::Max(
+                0, 10000 - [int]$objTimer.ElapsedMilliseconds)
+            if (-not $objParserProcess.WaitForExit($intRemaining)) {
+                throw [TimeoutException]::new(
+                    'Markdown block parsing must complete within 10 seconds.'
+                )
+            }
+        } catch {
+            $objFailure = $_.Exception
+        } finally {
+            if ($boolStarted) {
+                try {
+                    $objParserProcess.StandardInput.Close()
+                } catch {
+                    [void]$_
+                }
+                try {
+                    if (-not $objParserProcess.HasExited) {
+                        $intRemaining = [Math]::Max(
+                            0, 10000 - [int]$objTimer.ElapsedMilliseconds)
+                        if ($intRemaining -gt 0) {
+                            [void]$objParserProcess.WaitForExit($intRemaining)
+                        }
+                    }
+                    if (-not $objParserProcess.HasExited) {
+                        $objParserProcess.Kill($true)
+                    }
+                    if (-not $objParserProcess.WaitForExit(1000)) {
+                        throw 'The locked Markdown parser could not be reaped.'
+                    }
+                    $intExitCode = $objParserProcess.ExitCode
+                    $strExitClassification = [string]$intExitCode
+                } catch {
+                    $objCleanupFailure = $_.Exception
+                }
+                if ($null -ne $objStandardOutputTask) {
+                    try {
+                        $strParserOutput = $objStandardOutputTask.GetAwaiter().GetResult()
+                    } catch {
+                        if ($null -eq $objCleanupFailure) {
+                            $objCleanupFailure = $_.Exception
+                        }
+                    }
+                }
+                if ($null -ne $objStandardErrorTask) {
+                    try {
+                        $strParserError = $objStandardErrorTask.GetAwaiter().GetResult()
+                    } catch {
+                        if ($null -eq $objCleanupFailure) {
+                            $objCleanupFailure = $_.Exception
+                        }
+                    }
+                }
+            }
+            $objTimer.Stop()
+            $objParserProcess.Dispose()
         }
-        $objOutputTask = $objProcess.StandardOutput.ReadToEndAsync()
-        $objErrorTask = $objProcess.StandardError.ReadToEndAsync()
-        if (-not $objProcess.WaitForExit(10000)) {
-            $objProcess.Kill($true)
-            [void]$objProcess.WaitForExit(1000)
-            return [pscustomobject]@{ ExitCode = -1; Output = ''; Error = '' }
+
+        $strErrorClassification = if ([string]::IsNullOrEmpty($strParserError)) {
+            'stderr=empty'
+        } else {
+            'stderr=present'
+        }
+        if ($null -ne $objCleanupFailure) {
+            throw [InvalidOperationException]::new(
+                "The locked Markdown parser cleanup failed on attempt $intAttempt " +
+                    "(exit=$strExitClassification; $strErrorClassification).",
+                $objCleanupFailure
+            )
+        }
+        if ($null -ne $objFailure) {
+            $listExceptions = [Collections.Generic.List[Exception]]::new()
+            $listExceptions.Add($objFailure)
+            $boolPrematureInputClose = $false
+            for ($intException = 0;
+                $intException -lt $listExceptions.Count -and $intException -lt 16;
+                $intException++) {
+                $objException = $listExceptions[$intException]
+                if ($objException -is [IO.IOException]) {
+                    $boolPrematureInputClose = $true
+                    break
+                }
+                if ($objException -is [AggregateException]) {
+                    foreach ($objInnerException in $objException.InnerExceptions) {
+                        $listExceptions.Add($objInnerException)
+                    }
+                } elseif ($null -ne $objException.InnerException) {
+                    $listExceptions.Add($objException.InnerException)
+                }
+            }
+            if ($null -ne $objInputFailure -and
+                -not $boolInputAccepted -and $boolPrematureInputClose) {
+                $listAttemptEvidence.Add(
+                    "attempt $intAttempt`: premature-input-close, " +
+                        "exit=$strExitClassification, $strErrorClassification"
+                )
+                if ($intAttempt -lt 2) {
+                    continue
+                }
+                throw [IO.IOException]::new(
+                    'The locked Markdown parser input closed prematurely after ' +
+                        "2 attempts ($($listAttemptEvidence -join '; ')).",
+                    $objFailure
+                )
+            }
+            if ($objFailure -is [TimeoutException]) {
+                throw [TimeoutException]::new(
+                    'Markdown block parsing must complete within 10 seconds ' +
+                        "(attempt $intAttempt; exit=$strExitClassification; " +
+                        "$strErrorClassification).",
+                    $objFailure
+                )
+            }
+            throw [InvalidOperationException]::new(
+                "The locked Markdown parser failed on attempt $intAttempt " +
+                    "(exit=$strExitClassification; $strErrorClassification).",
+                $objFailure
+            )
+        }
+        if ($intExitCode -ne 0) {
+            throw "The locked Markdown parser rejected a governed document " +
+                "(attempt $intAttempt; exit=$strExitClassification; " +
+                "$strErrorClassification)."
         }
         return [pscustomobject]@{
-            ExitCode = $objProcess.ExitCode
-            Output = $objOutputTask.GetAwaiter().GetResult()
-            Error = $objErrorTask.GetAwaiter().GetResult()
+            Output = $strParserOutput
+            AttemptCount = $intAttempt
         }
     }
-    catch {
-        return [pscustomobject]@{ ExitCode = -1; Output = ''; Error = '' }
-    }
-    finally {
-        $objProcess.Dispose()
-    }
-}
-
-function Get-NodeApplicationContext {
-    # .SYNOPSIS
-    # Resolves the direct executable behind a supported Node command.
-    #
-    # .DESCRIPTION
-    # Probes PATH application candidates for their direct `process.execPath`,
-    # accepts Node 22 or later, verifies that the reported path is an application,
-    # and caches live resolution. Optional resolvers support mutation fixtures.
-    #
-    # .PARAMETER CommandResolver
-    # An optional resolver that returns Node command candidates.
-    #
-    # .PARAMETER RuntimeProbe
-    # An optional probe that returns direct runtime identity for one candidate.
-    #
-    # .PARAMETER ApplicationResolver
-    # An optional resolver that verifies the reported direct application path.
-    #
-    # .EXAMPLE
-    # Get-NodeApplicationContext
-    #
-    # # Returns the direct Node executable behind a PATH shim or wrapper.
-    #
-    # .INPUTS
-    # None. You can't pipe objects to this function.
-    #
-    # .OUTPUTS
-    # [pscustomobject] The direct executable path and Node version, or null when no
-    # supported verified runtime is available.
-    #
-    # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260907.0
-    [CmdletBinding(PositionalBinding = $false)]
-    [OutputType([pscustomobject])]
-    param(
-        [Parameter()]
-        [AllowNull()]
-        [scriptblock] $CommandResolver,
-
-        [Parameter()]
-        [AllowNull()]
-        [scriptblock] $RuntimeProbe,
-
-        [Parameter()]
-        [AllowNull()]
-        [scriptblock] $ApplicationResolver
-    )
-
-    $boolUseDefaultResolution = $null -eq $CommandResolver -and
-        $null -eq $RuntimeProbe -and $null -eq $ApplicationResolver
-    if ($boolUseDefaultResolution -and $null -ne $script:objNodeApplicationContext) {
-        return $script:objNodeApplicationContext
-    }
-    if ($null -eq $CommandResolver) {
-        $CommandResolver = {
-            param([string] $Name)
-            @(Get-Command -Name $Name -CommandType Application -All `
-                    -ErrorAction SilentlyContinue)
-        }
-    }
-    if ($null -eq $RuntimeProbe) {
-        $RuntimeProbe = {
-            param([string] $Path)
-            Invoke-NodeRuntimeProbe -Path $Path
-        }
-    }
-    if ($null -eq $ApplicationResolver) {
-        $ApplicationResolver = {
-            param([string] $Path)
-            @(Get-Command -Name $Path -CommandType Application -All `
-                    -ErrorAction SilentlyContinue)
-        }
-    }
-
-    $arrCandidates = @(
-        & $CommandResolver 'node' |
-            Where-Object {
-                $_.PSObject.Properties['CommandType'] -and
-                [string]$_.CommandType -ceq 'Application' -and
-                $_.PSObject.Properties['Path'] -and
-                -not [string]::IsNullOrWhiteSpace([string]$_.Path)
-            }
-    )
-    foreach ($objCandidate in $arrCandidates) {
-        try {
-            $objProbe = & $RuntimeProbe ([string]$objCandidate.Path)
-            if ($null -eq $objProbe -or
-                $null -eq $objProbe.PSObject.Properties['ExitCode'] -or
-                $null -eq $objProbe.PSObject.Properties['Output'] -or
-                $null -eq $objProbe.PSObject.Properties['Error'] -or
-                [int]$objProbe.ExitCode -ne 0 -or
-                -not [string]::IsNullOrEmpty([string]$objProbe.Error) -or
-                [System.Text.Encoding]::UTF8.GetByteCount([string]$objProbe.Output) -gt 4096) {
-                continue
-            }
-            $objRuntime = [string]$objProbe.Output |
-                ConvertFrom-Json -ErrorAction Stop
-            if ($null -eq $objRuntime -or
-                $objRuntime.execPath -isnot [string] -or
-                $objRuntime.nodeVersion -isnot [string] -or
-                -not [System.IO.Path]::IsPathFullyQualified($objRuntime.execPath)) {
-                continue
-            }
-            $objVersionMatch = [regex]::Match(
-                $objRuntime.nodeVersion,
-                '^(?<Major>[0-9]+)\.[0-9]+\.[0-9]+$'
-            )
-            $intNodeMajorVersion = 0
-            if (-not $objVersionMatch.Success -or
-                -not [int]::TryParse(
-                    $objVersionMatch.Groups['Major'].Value,
-                    [ref]$intNodeMajorVersion
-                ) -or
-                $intNodeMajorVersion -lt 22) {
-                continue
-            }
-            $strReportedPath = [System.IO.Path]::GetFullPath($objRuntime.execPath)
-            $objPathComparison = if ($IsWindows) {
-                [System.StringComparison]::OrdinalIgnoreCase
-            }
-            else {
-                [System.StringComparison]::Ordinal
-            }
-            $arrApplications = @(
-                & $ApplicationResolver $strReportedPath |
-                    Where-Object {
-                        $_.PSObject.Properties['CommandType'] -and
-                        [string]$_.CommandType -ceq 'Application' -and
-                        $_.PSObject.Properties['Path'] -and
-                        -not [string]::IsNullOrWhiteSpace([string]$_.Path)
-                    }
-            )
-            $objApplication = $arrApplications |
-                Where-Object {
-                    $strApplicationPath = [System.IO.Path]::GetFullPath(
-                        [string]$_.Path
-                    )
-                    $strApplicationPath.Equals(
-                        $strReportedPath,
-                        $objPathComparison
-                    )
-                } |
-                Select-Object -First 1
-            if ($null -eq $objApplication) {
-                continue
-            }
-            $objContext = [pscustomobject]@{
-                Path = $strReportedPath
-                Version = $objRuntime.nodeVersion
-            }
-            if ($boolUseDefaultResolution) {
-                $script:objNodeApplicationContext = $objContext
-            }
-            return $objContext
-        }
-        catch {
-            continue
-        }
-    }
-    return $null
 }
 
 function Get-MarkdownParseContext {
@@ -2620,8 +3149,9 @@ function Get-MarkdownParseContext {
     #
     # .DESCRIPTION
     # Uses the repository-locked markdown-it package to identify code-block ranges,
-    # prose blocks with operative code spans, top-level blocks, top-level list
-    # items, and level-two headings.
+    # prose blocks with operative code spans and link destinations, top-level
+    # blocks, table rows and cells, top-level list items, all top-level headings,
+    # and level-two headings.
     # It validates all parser output before returning it.
     #
     # .PARAMETER Content
@@ -2642,12 +3172,10 @@ function Get-MarkdownParseContext {
     # [pscustomobject] The validated Markdown parse context.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.2.20260820.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.1.20261003.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
@@ -2660,8 +3188,8 @@ function Get-MarkdownParseContext {
         [int] $LineCount
     )
 
-    $strRepositoryRootPath = [System.IO.Path]::GetDirectoryName(
-        [System.IO.Path]::GetDirectoryName($PSScriptRoot)
+    $strRepositoryRootPath = [IO.Path]::GetDirectoryName(
+        [IO.Path]::GetDirectoryName($PSScriptRoot)
     )
     $strMarkdownParserPath = Join-Path `
         -Path $strRepositoryRootPath `
@@ -2672,7 +3200,7 @@ function Get-MarkdownParseContext {
 
     $objNodeCommand = Get-NodeApplicationContext
     if ($null -eq $objNodeCommand) {
-        throw 'A trusted Node.js 22 or later runtime is required to validate operative Markdown.'
+        throw 'A trusted Node.js runtime is required to validate operative Markdown.'
     }
 
     $strNodeProgram = @(
@@ -2686,7 +3214,9 @@ function Get-MarkdownParseContext {
         '  const deletionStack = [];'
         '  const htmlContainerStack = [];'
         '  const output = [];'
+        '  const renderedOutput = [];'
         '  const code = [];'
+        '  const links = [];'
         '  for (const child of children) {'
         '    if (child.type === "s_open" || child.type === "s_close") {'
         '      const isOpening = child.type === "s_open";'
@@ -2711,16 +3241,31 @@ function Get-MarkdownParseContext {
         '      }'
         '    }'
         '    if (deletionStack.length > 0 || htmlContainerStack.length > 0) continue;'
-        '    if (child.type === "text" || child.type === "text_special") output.push(child.content);'
-        '    else if (child.type === "softbreak" || child.type === "hardbreak") output.push("\n");'
-        '    else if (child.type === "code_inline") code.push(child.content);'
+        '    if (child.type === "link_open") {'
+        '      const href = child.attrGet("href");'
+        '      if (typeof href !== "string") throw new Error("Invalid Markdown link destination.");'
+        '      links.push(href);'
+        '    }'
+        '    if (child.type === "text" || child.type === "text_special") {'
+        '      output.push(child.content);'
+        '      renderedOutput.push(child.content);'
+        '    } else if (child.type === "softbreak" || child.type === "hardbreak") {'
+        '      output.push("\n");'
+        '      renderedOutput.push("\n");'
+        '    } else if (child.type === "code_inline") {'
+        '      code.push(child.content);'
+        '      renderedOutput.push(child.content);'
+        '    }'
         '  }'
         '  if (deletionStack.length > 0) throw new Error("Unclosed deletion container.");'
         '  if (htmlContainerStack.length > 0) throw new Error("Unclosed inline HTML container.");'
-        '  return { text: output.join(""), code };'
+        '  return { text: output.join(""), renderedText: renderedOutput.join(""), code, links };'
         '};'
         'const codeBlockRanges = tokens.filter((token) => token.type === "fence" || token.type === "code_block").map((token) => token.map);'
-        'const proseBlocks = tokens.filter((token) => token.type === "inline" && Array.isArray(token.map) && Array.isArray(token.children)).map((token) => ({ range: token.map, ...getOperativeInlineContext(token.children) }));'
+        'const proseBlocks = tokens.filter((token) => token.type === "inline" && Array.isArray(token.map) && Array.isArray(token.children)).map((token) => {'
+        '  const context = getOperativeInlineContext(token.children);'
+        '  return { range: token.map, text: context.text, code: context.code, links: context.links };'
+        '});'
         'const topLevelBlocks = tokens.flatMap((token, index) => {'
         '  if (token.level !== 0 || !Array.isArray(token.map) || (token.nesting !== 0 && token.nesting !== 1)) return [];'
         '  let text = null;'
@@ -2735,16 +3280,70 @@ function Get-MarkdownParseContext {
         '  if (token.type !== "list_item_open" || token.tag !== "li" || token.level !== 1 || !Array.isArray(token.map)) return [];'
         '  const closeIndex = tokens.findIndex((candidate, candidateIndex) => candidateIndex > index && candidate.type === "list_item_close" && candidate.tag === "li" && candidate.level === 1);'
         '  if (closeIndex < 0) throw new Error("Unclosed top-level list item.");'
-        '  const inlineToken = tokens.slice(index + 1, closeIndex).find((candidate) => candidate.type === "inline" && candidate.level === 3 && Array.isArray(candidate.children));'
-        '  const context = inlineToken ? getOperativeInlineContext(inlineToken.children) : null;'
-        '  return [{ range: token.map, text: context?.text ?? null, code: context?.code ?? [] }];'
+        '  const blocks = [];'
+        '  for (let paragraphIndex = index + 1; paragraphIndex < closeIndex; paragraphIndex += 1) {'
+        '    const paragraphToken = tokens[paragraphIndex];'
+        '    if (paragraphToken.type !== "paragraph_open" || paragraphToken.level !== 2) continue;'
+        '    if (paragraphToken.tag !== "p" || paragraphToken.nesting !== 1 || !Array.isArray(paragraphToken.map)) throw new Error("Invalid top-level list-item paragraph.");'
+        '    const inlineToken = tokens[paragraphIndex + 1];'
+        '    const closeToken = tokens[paragraphIndex + 2];'
+        '    if (inlineToken?.type !== "inline" || inlineToken.level !== 3 || !Array.isArray(inlineToken.children) || closeToken?.type !== "paragraph_close" || closeToken.tag !== "p" || closeToken.level !== 2 || closeToken.nesting !== -1) throw new Error("Invalid top-level list-item paragraph container.");'
+        '    const context = getOperativeInlineContext(inlineToken.children);'
+        '    blocks.push({ range: paragraphToken.map, text: context.text, code: context.code, links: context.links });'
+        '  }'
+        '  return blocks;'
+        '});'
+        'const headings = tokens.flatMap((token, index) => {'
+        '  if (token.type !== "heading_open" || token.level !== 0) return [];'
+        '  if (!/^h[1-6]$/.test(token.tag) || token.nesting !== 1 || !Array.isArray(token.map)) throw new Error("Invalid Markdown heading.");'
+        '  const inlineToken = tokens[index + 1];'
+        '  const closeToken = tokens[index + 2];'
+        '  if (inlineToken?.type !== "inline" || !Array.isArray(inlineToken.children) || closeToken?.type !== "heading_close" || closeToken.tag !== token.tag || closeToken.nesting !== -1) throw new Error("Invalid Markdown heading container.");'
+        '  return [{ tag: token.tag, range: token.map, text: getOperativeInlineContext(inlineToken.children).text }];'
         '});'
         'const levelTwoHeadings = tokens.flatMap((token, index) => {'
         '  if (token.type !== "heading_open" || token.tag !== "h2" || token.level !== 0) return [];'
         '  const inlineToken = tokens[index + 1];'
         '  return [{ range: token.map, text: inlineToken?.type === "inline" ? inlineToken.content : null }];'
         '});'
-        'process.stdout.write(JSON.stringify({ codeBlockRanges, proseBlocks, topLevelBlocks, topLevelListItems, levelTwoHeadings }));'
+        'const tableContainers = new Map();'
+        'const tableStack = [];'
+        'tokens.forEach((token, index) => {'
+        '  if (token.type === "table_open") {'
+        '    if (token.tag !== "table" || token.nesting !== 1 || !Array.isArray(token.map)) throw new Error("Invalid Markdown table container.");'
+        '    tableStack.push({ level: token.level, index });'
+        '  } else if (token.type === "table_close") {'
+        '    const table = tableStack.pop();'
+        '    if (token.tag !== "table" || token.nesting !== -1 || !table || table.level !== token.level) throw new Error("Unbalanced Markdown table container.");'
+        '  } else if (token.type === "tr_open") {'
+        '    const table = tableStack[tableStack.length - 1];'
+        '    if (!table) throw new Error("Markdown table row has no table container.");'
+        '    tableContainers.set(index, table);'
+        '  }'
+        '});'
+        'if (tableStack.length > 0) throw new Error("Unclosed Markdown table container.");'
+        'const tableRows = tokens.flatMap((token, index) => {'
+        '  if (token.type !== "tr_open" || token.tag !== "tr" || token.nesting !== 1 || !Array.isArray(token.map)) return [];'
+        '  const table = tableContainers.get(index);'
+        '  if (!table) throw new Error("Markdown table row has no tracked container.");'
+        '  if (table.level !== 0) return [];'
+        '  const closeIndex = tokens.findIndex((candidate, candidateIndex) => candidateIndex > index && candidate.type === "tr_close" && candidate.tag === "tr" && candidate.nesting === -1 && candidate.level === token.level);'
+        '  if (closeIndex < 0) throw new Error("Unclosed Markdown table row.");'
+        '  const cells = [];'
+        '  for (let cellIndex = index + 1; cellIndex < closeIndex; cellIndex += 1) {'
+        '    const cellToken = tokens[cellIndex];'
+        '    if (cellToken.type !== "th_open" && cellToken.type !== "td_open") continue;'
+        '    if ((cellToken.tag !== "th" && cellToken.tag !== "td") || cellToken.nesting !== 1) throw new Error("Invalid Markdown table cell.");'
+        '    const inlineToken = tokens[cellIndex + 1];'
+        '    const closeToken = tokens[cellIndex + 2];'
+        '    if (inlineToken?.type !== "inline" || !Array.isArray(inlineToken.children) || closeToken?.type !== `${cellToken.tag}_close` || closeToken.tag !== cellToken.tag || closeToken.nesting !== -1) throw new Error("Invalid Markdown table-cell container.");'
+        '    const context = getOperativeInlineContext(inlineToken.children);'
+        '    cells.push({ tag: cellToken.tag, text: context.renderedText, code: context.code, links: context.links });'
+        '  }'
+        '  if (cells.length === 0) throw new Error("Markdown table row has no cells.");'
+        '  return [{ range: token.map, cells }];'
+        '});'
+        'process.stdout.write(JSON.stringify({ codeBlockRanges, proseBlocks, tableRows, topLevelBlocks, topLevelListItems, headings, levelTwoHeadings }));'
     ) -join "`n"
 
     $objStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -2763,48 +3362,15 @@ function Get-MarkdownParseContext {
     $objStartInfo.ArgumentList.Add('-e')
     $objStartInfo.ArgumentList.Add($strNodeProgram)
 
-    $objParserProcess = [System.Diagnostics.Process]::new()
-    $objParserProcess.StartInfo = $objStartInfo
-    try {
-        if (-not $objParserProcess.Start()) {
-            throw 'Could not start the locked Markdown parser.'
-        }
-
-        $objStandardOutputTask = $objParserProcess.StandardOutput.ReadToEndAsync()
-        $objStandardErrorTask = $objParserProcess.StandardError.ReadToEndAsync()
-        try {
-            $objParserProcess.StandardInput.Write($Content)
-            $objParserProcess.StandardInput.Close()
-        }
-        catch [System.IO.IOException] {
-            if (-not $objParserProcess.HasExited) {
-                $objParserProcess.Kill($true)
-                [void]$objParserProcess.WaitForExit(1000)
-            }
-            [void]$objStandardOutputTask.GetAwaiter().GetResult()
-            [void]$objStandardErrorTask.GetAwaiter().GetResult()
-            throw 'The locked Markdown parser ended before it accepted the governed document.'
-        }
-        if (-not $objParserProcess.WaitForExit(10000)) {
-            $objParserProcess.Kill($true)
-            [void]$objParserProcess.WaitForExit(1000)
-            throw 'Markdown block parsing must complete within 10 seconds.'
-        }
-
-        $strParserOutput = $objStandardOutputTask.GetAwaiter().GetResult()
-        [void]$objStandardErrorTask.GetAwaiter().GetResult()
-        if ($objParserProcess.ExitCode -ne 0) {
-            throw 'The locked Markdown parser rejected a governed document.'
-        }
-    }
-    finally {
-        $objParserProcess.Dispose()
-    }
+    $objParserResult = Invoke-MarkdownParserProcess `
+        -StartInfo $objStartInfo `
+        -Content $Content
+    $strParserOutput = $objParserResult.Output
 
     try {
-        $objRawContext = $strParserOutput | ConvertFrom-Json -ErrorAction Stop
-    }
-    catch {
+        $objRawContext = ConvertFrom-ParserJsonContext `
+            -Content $strParserOutput -MaximumBytes 16777216
+    } catch {
         throw [System.IO.InvalidDataException]::new(
             'The locked Markdown parser returned invalid context data.',
             $_.Exception
@@ -2813,13 +3379,15 @@ function Get-MarkdownParseContext {
     if ($null -eq $objRawContext -or
         $null -eq $objRawContext.codeBlockRanges -or
         $null -eq $objRawContext.proseBlocks -or
+        $null -eq $objRawContext.tableRows -or
         $null -eq $objRawContext.topLevelBlocks -or
         $null -eq $objRawContext.topLevelListItems -or
+        $null -eq $objRawContext.headings -or
         $null -eq $objRawContext.levelTwoHeadings) {
         throw 'The locked Markdown parser returned incomplete context data.'
     }
 
-    $listRanges = [System.Collections.Generic.List[pscustomobject]]::new()
+    $listRanges = [Collections.Generic.List[pscustomobject]]::new()
     $intPreviousEnd = 0
     foreach ($arrRawRange in @($objRawContext.codeBlockRanges)) {
         if ($arrRawRange -isnot [array] -or $arrRawRange.Count -ne 2) {
@@ -2844,14 +3412,16 @@ function Get-MarkdownParseContext {
         $intPreviousEnd = [int]$intEnd
     }
 
-    $listProseBlocks = [System.Collections.Generic.List[pscustomobject]]::new()
+    $listProseBlocks = [Collections.Generic.List[pscustomobject]]::new()
     foreach ($objRawProseBlock in @($objRawContext.proseBlocks)) {
         if ($null -eq $objRawProseBlock -or
             $objRawProseBlock.range -isnot [array] -or
             $objRawProseBlock.range.Count -ne 2 -or
             $null -eq $objRawProseBlock.text -or
             $objRawProseBlock.code -isnot [array] -or
-            @($objRawProseBlock.code | Where-Object { $_ -isnot [string] }).Count -ne 0) {
+            @($objRawProseBlock.code | Where-Object { $_ -isnot [string] }).Count -ne 0 -or
+            $objRawProseBlock.links -isnot [array] -or
+            @($objRawProseBlock.links | Where-Object { $_ -isnot [string] }).Count -ne 0) {
             throw 'The locked Markdown parser returned a malformed prose block.'
         }
 
@@ -2870,10 +3440,63 @@ function Get-MarkdownParseContext {
                 End = [int]$intEnd
                 Text = [string]$objRawProseBlock.text
                 Code = [string[]]@($objRawProseBlock.code)
+                Links = [string[]]@($objRawProseBlock.links)
             })
     }
 
-    $listTopLevelBlocks = [System.Collections.Generic.List[pscustomobject]]::new()
+    $listTableRows = [Collections.Generic.List[pscustomobject]]::new()
+    $intPreviousTableRowEnd = 0
+    foreach ($objRawTableRow in @($objRawContext.tableRows)) {
+        if ($null -eq $objRawTableRow -or
+            $objRawTableRow.range -isnot [array] -or
+            $objRawTableRow.range.Count -ne 2 -or
+            $objRawTableRow.cells -isnot [array] -or
+            $objRawTableRow.cells.Count -eq 0) {
+            throw 'The locked Markdown parser returned a malformed table row.'
+        }
+
+        $intStart = [int64] 0
+        $intEnd = [int64] 0
+        if (-not [int64]::TryParse([string]$objRawTableRow.range[0], [ref]$intStart) -or
+            -not [int64]::TryParse([string]$objRawTableRow.range[1], [ref]$intEnd) -or
+            $intStart -lt $intPreviousTableRowEnd -or
+            $intStart -lt 0 -or
+            $intEnd -le $intStart -or
+            $intEnd -gt $LineCount) {
+            throw 'The locked Markdown parser returned an invalid table-row range.'
+        }
+
+        $listCells = [Collections.Generic.List[pscustomobject]]::new()
+        foreach ($objRawCell in @($objRawTableRow.cells)) {
+            if ($null -eq $objRawCell -or
+                $objRawCell.tag -isnot [string] -or
+                @('th', 'td') -cnotcontains $objRawCell.tag -or
+                $objRawCell.text -isnot [string] -or
+                $objRawCell.code -isnot [array] -or
+                @($objRawCell.code | Where-Object { $_ -isnot [string] }).Count -ne 0 -or
+                $objRawCell.links -isnot [array] -or
+                @($objRawCell.links | Where-Object { $_ -isnot [string] }).Count -ne 0) {
+                throw 'The locked Markdown parser returned a malformed table cell.'
+            }
+            $listCells.Add([pscustomobject]@{
+                    Tag = [string]$objRawCell.tag
+                    Start = [int]$intStart
+                    End = [int]$intEnd
+                    Text = [string]$objRawCell.text
+                    Code = [string[]]@($objRawCell.code)
+                    Links = [string[]]@($objRawCell.links)
+                })
+        }
+
+        $listTableRows.Add([pscustomobject]@{
+                Start = [int]$intStart
+                End = [int]$intEnd
+                Cells = [pscustomobject[]]$listCells.ToArray()
+            })
+        $intPreviousTableRowEnd = [int]$intEnd
+    }
+
+    $listTopLevelBlocks = [Collections.Generic.List[pscustomobject]]::new()
     $intPreviousTopLevelBlockEnd = 0
     foreach ($objRawBlock in @($objRawContext.topLevelBlocks)) {
         if ($null -eq $objRawBlock -or
@@ -2903,15 +3526,14 @@ function Get-MarkdownParseContext {
                 End = [int]$intEnd
                 Text = if ($null -eq $objRawBlock.text) {
                     $null
-                }
-                else {
+                } else {
                     [string]$objRawBlock.text
                 }
             })
         $intPreviousTopLevelBlockEnd = [int]$intEnd
     }
 
-    $listTopLevelListItems = [System.Collections.Generic.List[pscustomobject]]::new()
+    $listTopLevelListItems = [Collections.Generic.List[pscustomobject]]::new()
     $intPreviousTopLevelListItemEnd = 0
     foreach ($objRawListItem in @($objRawContext.topLevelListItems)) {
         if ($null -eq $objRawListItem -or
@@ -2919,7 +3541,9 @@ function Get-MarkdownParseContext {
             $objRawListItem.range.Count -ne 2 -or
             ($null -ne $objRawListItem.text -and $objRawListItem.text -isnot [string]) -or
             $objRawListItem.code -isnot [array] -or
-            @($objRawListItem.code | Where-Object { $_ -isnot [string] }).Count -ne 0) {
+            @($objRawListItem.code | Where-Object { $_ -isnot [string] }).Count -ne 0 -or
+            $objRawListItem.links -isnot [array] -or
+            @($objRawListItem.links | Where-Object { $_ -isnot [string] }).Count -ne 0) {
             throw 'The locked Markdown parser returned a malformed top-level list item.'
         }
 
@@ -2939,16 +3563,48 @@ function Get-MarkdownParseContext {
                 End = [int]$intEnd
                 Text = if ($null -eq $objRawListItem.text) {
                     $null
-                }
-                else {
+                } else {
                     [string]$objRawListItem.text
                 }
                 Code = [string[]]@($objRawListItem.code)
+                Links = [string[]]@($objRawListItem.links)
             })
         $intPreviousTopLevelListItemEnd = [int]$intEnd
     }
 
-    $listLevelTwoHeadings = [System.Collections.Generic.List[pscustomobject]]::new()
+    $listHeadings = [Collections.Generic.List[pscustomobject]]::new()
+    $intPreviousHeadingEnd = 0
+    foreach ($objRawHeading in @($objRawContext.headings)) {
+        if ($null -eq $objRawHeading -or
+            $objRawHeading.tag -isnot [string] -or
+            $objRawHeading.tag -cnotmatch '^h[1-6]$' -or
+            $objRawHeading.range -isnot [array] -or
+            $objRawHeading.range.Count -ne 2 -or
+            $objRawHeading.text -isnot [string]) {
+            throw 'The locked Markdown parser returned a malformed heading.'
+        }
+
+        $intStart = [int64] 0
+        $intEnd = [int64] 0
+        if (-not [int64]::TryParse([string]$objRawHeading.range[0], [ref]$intStart) -or
+            -not [int64]::TryParse([string]$objRawHeading.range[1], [ref]$intEnd) -or
+            $intStart -lt $intPreviousHeadingEnd -or
+            $intStart -lt 0 -or
+            $intEnd -le $intStart -or
+            $intEnd -gt $LineCount) {
+            throw 'The locked Markdown parser returned an invalid heading range.'
+        }
+
+        $listHeadings.Add([pscustomobject]@{
+                Tag = [string]$objRawHeading.tag
+                Start = [int]$intStart
+                End = [int]$intEnd
+                Text = [string]$objRawHeading.text
+            })
+        $intPreviousHeadingEnd = [int]$intEnd
+    }
+
+    $listLevelTwoHeadings = [Collections.Generic.List[pscustomobject]]::new()
     $intPreviousHeadingEnd = 0
     foreach ($objRawHeading in @($objRawContext.levelTwoHeadings)) {
         if ($null -eq $objRawHeading -or
@@ -2980,9 +3636,210 @@ function Get-MarkdownParseContext {
     return [pscustomobject]@{
         CodeBlockRanges = [pscustomobject[]]$listRanges.ToArray()
         ProseBlocks = [pscustomobject[]]$listProseBlocks.ToArray()
+        TableRows = [pscustomobject[]]$listTableRows.ToArray()
         TopLevelBlocks = [pscustomobject[]]$listTopLevelBlocks.ToArray()
         TopLevelListItems = [pscustomobject[]]$listTopLevelListItems.ToArray()
+        Headings = [pscustomobject[]]$listHeadings.ToArray()
         LevelTwoHeadings = [pscustomobject[]]$listLevelTwoHeadings.ToArray()
+    }
+}
+
+function Assert-MarkdownParserExactContext {
+    # .SYNOPSIS
+    # Confirms exact operative Markdown parsing behavior.
+    #
+    # .DESCRIPTION
+    # Parses adversarial Markdown fixtures and confirms that only visible, operative content reaches policy checks.
+    #
+    # .EXAMPLE
+    # Assert-MarkdownParserExactContext
+    #
+    # # Runs with validated named arguments.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # None.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260902.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([void])]
+    param()
+
+    $strMarkdown = @(
+        '## Transport'
+        ''
+        'Paragraph `code`.'
+    ) -join "`n"
+    $objContext = Get-MarkdownParseContext -Content $strMarkdown -LineCount 3
+    $strActual = $objContext | ConvertTo-Json -Depth 5 -Compress
+    $strExpected = '{"CodeBlockRanges":[],"ProseBlocks":[' +
+        '{"Start":0,"End":1,"Text":"Transport","Code":[],"Links":[]},' +
+        '{"Start":2,"End":3,"Text":"Paragraph .","Code":["code"],"Links":[]}],' +
+        '"TableRows":[],' +
+        '"TopLevelBlocks":[' +
+        '{"Type":"heading_open","Tag":"h2","Start":0,"End":1,"Text":"Transport"},' +
+        '{"Type":"paragraph_open","Tag":"p","Start":2,"End":3,"Text":"Paragraph ."}],' +
+        '"TopLevelListItems":[],"Headings":[' +
+        '{"Tag":"h2","Start":0,"End":1,"Text":"Transport"}],' +
+        '"LevelTwoHeadings":[' +
+        '{"Start":0,"End":1,"Text":"Transport"}]}'
+    if ($strActual -cne $strExpected) {
+        throw "Self-test 'ordinary exact Markdown parser context' changed output."
+    }
+
+    $strTableMarkdown = @(
+        '| **Decision** `Status` | Value |'
+        '| :--- | ---: |'
+        '| Field | *Accepted* |'
+    ) -join "`n"
+    $objTableContext = Get-MarkdownParseContext `
+        -Content $strTableMarkdown -LineCount 3
+    if ($objTableContext.TableRows.Count -ne 2 -or
+        $objTableContext.TableRows[0].Start -ne 0 -or
+        $objTableContext.TableRows[0].End -ne 1 -or
+        $objTableContext.TableRows[0].Cells.Count -ne 2 -or
+        $objTableContext.TableRows[0].Cells[0].Tag -cne 'th' -or
+        $objTableContext.TableRows[0].Cells[0].Text -cne 'Decision Status' -or
+        $objTableContext.TableRows[0].Cells[0].Code.Count -ne 1 -or
+        $objTableContext.TableRows[0].Cells[0].Code[0] -cne 'Status' -or
+        $objTableContext.TableRows[1].Start -ne 2 -or
+        $objTableContext.TableRows[1].End -ne 3 -or
+        $objTableContext.TableRows[1].Cells[1].Tag -cne 'td' -or
+        $objTableContext.TableRows[1].Cells[1].Text -cne 'Accepted') {
+        throw "Self-test 'exact Markdown table context' changed output."
+    }
+
+    $strTopLevelListMarkdown = @(
+        '- First paragraph.'
+        ''
+        '  Status: Accepted'
+        ''
+        '  > Status: Proposed'
+        ''
+        '  - Status: Deprecated'
+    ) -join "`n"
+    $objTopLevelListContext = Get-MarkdownParseContext `
+        -Content $strTopLevelListMarkdown -LineCount 7
+    if ($objTopLevelListContext.TopLevelListItems.Count -ne 2 -or
+        $objTopLevelListContext.TopLevelListItems[0].Start -ne 0 -or
+        $objTopLevelListContext.TopLevelListItems[0].End -ne 1 -or
+        $objTopLevelListContext.TopLevelListItems[0].Text -cne 'First paragraph.' -or
+        $objTopLevelListContext.TopLevelListItems[1].Start -ne 2 -or
+        $objTopLevelListContext.TopLevelListItems[1].End -ne 3 -or
+        $objTopLevelListContext.TopLevelListItems[1].Text -cne 'Status: Accepted') {
+        throw "Self-test 'direct top-level list-item paragraphs' changed output."
+    }
+
+    $arrNestedTableFixtures = @(
+        [pscustomobject]@{
+            Name = 'blockquoted table'
+            Content = @(
+                '> | Field | Value |'
+                '> | --- | --- |'
+                '> | Status | Accepted |'
+            ) -join "`n"
+        },
+        [pscustomobject]@{
+            Name = 'listed table'
+            Content = @(
+                '- Example:'
+                ''
+                '  | Field | Value |'
+                '  | --- | --- |'
+                '  | Status | Accepted |'
+            ) -join "`n"
+        },
+        [pscustomobject]@{
+            Name = 'nested-list table'
+            Content = @(
+                '- Outer'
+                '  - Inner:'
+                ''
+                '    | Field | Value |'
+                '    | --- | --- |'
+                '    | Status | Accepted |'
+            ) -join "`n"
+        }
+    )
+    foreach ($objNestedTableFixture in $arrNestedTableFixtures) {
+        $intNestedTableLineCount = @(
+            [regex]::Split($objNestedTableFixture.Content, '\r\n|\r|\n')
+        ).Count
+        $objNestedTableContext = Get-MarkdownParseContext `
+            -Content $objNestedTableFixture.Content `
+            -LineCount $intNestedTableLineCount
+        if ($objNestedTableContext.TableRows.Count -ne 0) {
+            throw "$($objNestedTableFixture.Name) became document-level table context."
+        }
+    }
+
+    $strHeadingMarkdown = @(
+        '## Context'
+        '### Decision **Status**'
+        '#### `Status`'
+    ) -join "`n"
+    $objHeadingContext = Get-MarkdownParseContext `
+        -Content $strHeadingMarkdown -LineCount 3
+    if ($objHeadingContext.Headings.Count -ne 3 -or
+        $objHeadingContext.Headings[0].Tag -cne 'h2' -or
+        $objHeadingContext.Headings[0].Text -cne 'Context' -or
+        $objHeadingContext.Headings[1].Tag -cne 'h3' -or
+        $objHeadingContext.Headings[1].Text -cne 'Decision Status' -or
+        $objHeadingContext.Headings[2].Tag -cne 'h4' -or
+        $objHeadingContext.Headings[2].Text -cne '' -or
+        $objHeadingContext.LevelTwoHeadings.Count -ne 1 -or
+        $objHeadingContext.LevelTwoHeadings[0].Text -cne 'Context') {
+        throw "Self-test 'all Markdown headings context' changed output."
+    }
+
+    $strNestedHeadingMarkdown = @(
+        '## Context'
+        '> ### Decision Status'
+        '- Item'
+        '  #### Status'
+        '```markdown'
+        '##### Status'
+        '```'
+        '<!--'
+        '###### Decision Status'
+        '-->'
+        '##### Decision Status'
+    ) -join "`n"
+    $objNestedHeadingContext = Get-MarkdownParseContext `
+        -Content $strNestedHeadingMarkdown -LineCount 11
+    $strNestedHeadingActual = [pscustomobject]@{
+        CodeBlockRanges = $objNestedHeadingContext.CodeBlockRanges
+        Headings = $objNestedHeadingContext.Headings
+        LevelTwoHeadings = $objNestedHeadingContext.LevelTwoHeadings
+    } | ConvertTo-Json -Depth 5 -Compress
+    $strNestedHeadingExpected = '{"CodeBlockRanges":[' +
+        '{"Start":4,"End":7}],"Headings":[' +
+        '{"Tag":"h2","Start":0,"End":1,"Text":"Context"},' +
+        '{"Tag":"h5","Start":10,"End":11,"Text":"Decision Status"}],' +
+        '"LevelTwoHeadings":[{"Start":0,"End":1,"Text":"Context"}]}'
+    if ($strNestedHeadingActual -cne $strNestedHeadingExpected) {
+        throw "Self-test 'top-level Markdown headings context' changed output."
+    }
+
+    $strParserSource = [IO.File]::ReadAllText($PSCommandPath)
+    $strTopLevelHeadingGuard =
+        'if (token.type !== "heading_open" || token.level !== 0) return [];'
+    $strNestedHeadingMutation = $strParserSource.Replace(
+        $strTopLevelHeadingGuard,
+        'if (token.type !== "heading_open") return [];'
+    )
+    if ($strNestedHeadingMutation -ceq $strParserSource -or
+        $strNestedHeadingMutation.Contains(
+            $strTopLevelHeadingGuard,
+            [StringComparison]::Ordinal
+        )) {
+        throw 'The top-level heading collector mutation was not detected.'
     }
 }
 
@@ -3009,12 +3866,10 @@ function Get-OperativeMarkdownContext {
     # [pscustomobject] Operative Markdown text, prose, lines, and range metadata.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260819.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260902.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
@@ -3038,7 +3893,7 @@ function Get-OperativeMarkdownContext {
         }
     }
 
-    $listOperativeLines = [System.Collections.Generic.List[string]]::new()
+    $listOperativeLines = [Collections.Generic.List[string]]::new()
     for ($intLine = 0; $intLine -lt $arrLines.Count; $intLine++) {
         if (-not $arrCodeBlockLines[$intLine]) {
             $listOperativeLines.Add($arrLines[$intLine])
@@ -3051,7 +3906,10 @@ function Get-OperativeMarkdownContext {
         SourceLines = [string[]]$arrLines
         CodeBlockLines = [bool[]]$arrCodeBlockLines
         ProseBlocks = [pscustomobject[]]$objParseContext.ProseBlocks
+        TableRows = [pscustomobject[]]$objParseContext.TableRows
+        TopLevelBlocks = [pscustomobject[]]$objParseContext.TopLevelBlocks
         TopLevelListItems = [pscustomobject[]]$objParseContext.TopLevelListItems
+        Headings = [pscustomobject[]]$objParseContext.Headings
         LevelTwoHeadings = [pscustomobject[]]$objParseContext.LevelTwoHeadings
     }
 }
@@ -3078,12 +3936,10 @@ function ConvertTo-OperativeMarkdownText {
     # [string] The operative Markdown text.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260819.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -3092,6 +3948,144 @@ function ConvertTo-OperativeMarkdownText {
     )
 
     return (Get-OperativeMarkdownContext -Content $Content).Text
+}
+
+function Get-ActiveClaudeImportReference {
+    # .SYNOPSIS
+    # Gets active Claude file-import references from operative Markdown prose.
+    #
+    # .DESCRIPTION
+    # Inspects parser-derived prose only. Fenced code, indented code, inline code,
+    # comments, and raw HTML are excluded before import matching.
+    #
+    # .PARAMETER MarkdownContext
+    # The validated operative Markdown context to inspect.
+    #
+    # .EXAMPLE
+    # Get-ActiveClaudeImportReference -MarkdownContext $objClaudeContext
+    #
+    # # Returns each active import target, including extensionless file names.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [string] Each active Claude import target.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [pscustomobject] $MarkdownContext
+    )
+
+    $strImportPattern =
+        '(?m)(?<!\S)@(?<Target>(?!(?:claude|codex)(?=$|\s))[^\s<>]+)' +
+        '(?=$|\s)'
+    foreach ($objProseBlock in $MarkdownContext.ProseBlocks) {
+        foreach ($objMatch in [regex]::Matches(
+                $objProseBlock.Text,
+                $strImportPattern
+            )) {
+            Write-Output $objMatch.Groups['Target'].Value
+        }
+    }
+}
+
+function Get-ClaudeImportFailure {
+    # .SYNOPSIS
+    # Finds an active import in one governed Claude instruction document.
+    #
+    # .DESCRIPTION
+    # Inspects one validated Markdown context for an active Claude import.
+    #
+    # .PARAMETER Name
+    # The fixture or document name to use in diagnostics.
+    #
+    # .PARAMETER MarkdownContext
+    # The validated operative Markdown context to inspect.
+    #
+    # .EXAMPLE
+    # Get-ClaudeImportFailure @hashtableArguments
+    #
+    # # Runs with validated named arguments.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [System.String] Zero or more validated values or diagnostics described in the function description.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Name,
+
+        [Parameter(Mandatory)]
+        [pscustomobject] $MarkdownContext
+    )
+
+    if (@(Get-ActiveClaudeImportReference `
+                -MarkdownContext $MarkdownContext).Count -gt 0) {
+        Write-Output "$Name must not contain active @path imports."
+    }
+}
+
+function Get-NestedClaudeImportFailure {
+    # .SYNOPSIS
+    # Finds active imports in cataloged nested Claude instruction documents.
+    #
+    # .DESCRIPTION
+    # Inspects every cataloged nested Claude instruction context.
+    #
+    # .PARAMETER DocumentContexts
+    # The cataloged nested instruction document contexts to inspect.
+    #
+    # .EXAMPLE
+    # Get-NestedClaudeImportFailure @hashtableArguments
+    #
+    # # Runs with validated named arguments.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [System.String] Zero or more validated values or diagnostics described in the function description.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [object[]] $DocumentContexts
+    )
+
+    foreach ($objDocumentContext in $DocumentContexts) {
+        if ($objDocumentContext.Path -ceq 'CLAUDE.md' -or
+            $objDocumentContext.Path -cnotmatch '(?:^|/)CLAUDE\.md$') {
+            continue
+        }
+        $objNestedClaudeContext = Get-OperativeMarkdownContext `
+            -Content $objDocumentContext.Content
+        Write-Output @(Get-ClaudeImportFailure `
+                -Name $objDocumentContext.Path `
+                -MarkdownContext $objNestedClaudeContext)
+    }
 }
 
 function Get-MarkdownLevelTwoSectionContext {
@@ -3122,12 +4116,10 @@ function Get-MarkdownLevelTwoSectionContext {
     # [pscustomobject] The section's text and parser-derived block context.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.1.20260820.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
@@ -3160,14 +4152,14 @@ function Get-MarkdownLevelTwoSectionContext {
         }
     }
 
-    $listSectionLines = [System.Collections.Generic.List[string]]::new()
+    $listSectionLines = [Collections.Generic.List[string]]::new()
     for ($intLine = $intSectionStart; $intLine -lt $intSectionEnd; $intLine++) {
         if (-not $MarkdownContext.CodeBlockLines[$intLine]) {
             $listSectionLines.Add($MarkdownContext.SourceLines[$intLine])
         }
     }
 
-    $listSectionProse = [System.Collections.Generic.List[string]]::new()
+    $listSectionProse = [Collections.Generic.List[string]]::new()
     foreach ($objProseBlock in $MarkdownContext.ProseBlocks) {
         if ($objProseBlock.Start -ge $intSectionStart -and
             $objProseBlock.End -le $intSectionEnd) {
@@ -3191,54 +4183,6 @@ function Get-MarkdownLevelTwoSectionContext {
                 }
         )
     }
-}
-
-function Test-MetadataCalendarDate {
-    # .SYNOPSIS
-    # Tests one metadata date as a real canonical calendar date.
-    #
-    # .DESCRIPTION
-    # Parses one yyyy-MM-dd value with the invariant Gregorian calendar.
-    #
-    # .PARAMETER Date
-    # The yyyy-MM-dd metadata date to validate.
-    #
-    # .EXAMPLE
-    # Test-MetadataCalendarDate -Date '2024-02-29'
-    #
-    # # Returns true for the canonical leap-day value.
-    #
-    # .INPUTS
-    # None. You can't pipe objects to this function.
-    #
-    # .OUTPUTS
-    # [bool] True when the string is one real canonical calendar date.
-    #
-    # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260908.0
-    [CmdletBinding(PositionalBinding = $false)]
-    [OutputType([bool])]
-    param(
-        [Parameter(Mandatory)]
-        [string] $Date
-    )
-
-    $objParsedDate = [datetime]::MinValue
-    return [datetime]::TryParseExact(
-        $Date,
-        'yyyy-MM-dd',
-        [System.Globalization.CultureInfo]::InvariantCulture,
-        [System.Globalization.DateTimeStyles]::None,
-        [ref] $objParsedDate
-    ) -and $objParsedDate.ToString(
-        'yyyy-MM-dd',
-        [System.Globalization.CultureInfo]::InvariantCulture
-    ) -ceq $Date
 }
 
 function Test-MetadataCalendarDatePair {
@@ -3268,12 +4212,10 @@ function Test-MetadataCalendarDatePair {
     # [bool] True when both strings represent the same real calendar date.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260819.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([bool])]
     param(
@@ -3284,11 +4226,21 @@ function Test-MetadataCalendarDatePair {
         [string] $UpdatedDate
     )
 
-    if (-not (Test-MetadataCalendarDate -Date $UpdatedDate)) {
+    $objParsedDate = [datetime]::MinValue
+    if (-not [datetime]::TryParseExact(
+            $UpdatedDate,
+            'yyyy-MM-dd',
+            [System.Globalization.CultureInfo]::InvariantCulture,
+            [System.Globalization.DateTimeStyles]::None,
+            [ref] $objParsedDate
+        )) {
         return $false
     }
 
-    return $UpdatedDate.Replace('-', '') -ceq $VersionDate
+    return $objParsedDate.ToString(
+        'yyyyMMdd',
+        [System.Globalization.CultureInfo]::InvariantCulture
+    ) -ceq $VersionDate
 }
 
 function ConvertTo-MetadataComparisonText {
@@ -3296,7 +4248,7 @@ function ConvertTo-MetadataComparisonText {
     # Normalizes governed text for metadata-only comparison.
     #
     # .DESCRIPTION
-    # Masks validated metadata-value lines, then normalizes mechanical whitespace.
+    # Masks two validated header lines, then normalizes mechanical whitespace.
     #
     # .PARAMETER Content
     # The governed document text to normalize.
@@ -3314,12 +4266,10 @@ function ConvertTo-MetadataComparisonText {
     # [string] Normalized comparison text.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.3.20260910.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -3338,10 +4288,9 @@ function ConvertTo-MetadataComparisonText {
         '^- \*\*Last Updated:\*\* \d{4}-\d{2}-\d{2}$') {
         throw 'The metadata comparison received an invalid header field index.'
     }
-    if ($MetadataContext.HasVersion) {
-        $intVersionLineIndex = [int]$MetadataContext.VersionLineIndex
-        if ($intVersionLineIndex -lt 0 -or
-            $intVersionLineIndex -ge $arrNormalizedLines.Count -or
+    $intVersionLineIndex = [int]$MetadataContext.VersionLineIndex
+    if ($intVersionLineIndex -ge 0) {
+        if ($intVersionLineIndex -ge $arrNormalizedLines.Count -or
             $arrNormalizedLines[$intVersionLineIndex] -cnotmatch
             '^\*\*Version:\*\* \d+\.\d+\.\d{8}\.\d+$') {
             throw 'The metadata comparison received an invalid Version field index.'
@@ -3350,12 +4299,11 @@ function ConvertTo-MetadataComparisonText {
     }
     $arrNormalizedLines[$intUpdatedLineIndex] = '- **Last Updated:** <metadata-date>'
 
-    $listNormalizedLines = [System.Collections.Generic.List[string]]::new()
+    $listNormalizedLines = [Collections.Generic.List[string]]::new()
     foreach ($strLine in $arrNormalizedLines) {
-        if ($strLine -match ' {2,}$' -or $strLine -match '\\[ \t]*$') {
+        if ($strLine -match ' {2,}$') {
             $listNormalizedLines.Add($strLine)
-        }
-        else {
+        } else {
             $listNormalizedLines.Add($strLine.TrimEnd([char[]] @(' ', "`t")))
         }
     }
@@ -3365,6 +4313,773 @@ function ConvertTo-MetadataComparisonText {
     }
 
     return $listNormalizedLines -join "`n"
+}
+
+function Get-PublishedEndpointLastUpdatedFailure {
+    # .SYNOPSIS
+    # Validates metadata and freshness with an optional Version field.
+    #
+    # .DESCRIPTION
+    # Validates Last Updated and any present Version. A newly introduced
+    # Version uses revision zero while retaining the actual parent for date
+    # and rendered-content checks; optional removal also retains that parent.
+    #
+    # .PARAMETER Name
+    # The fixture or document name to use in diagnostics.
+    #
+    # .PARAMETER CurrentContent
+    # The exact content at the current event revision.
+    #
+    # .PARAMETER BaseContent
+    # The exact content at the comparison revision.
+    #
+    # .PARAMETER TrustedEventUtcDate
+    # The authenticated event date in UTC.
+    #
+    # .PARAMETER RequireCurrentMaximumDateForRenderedChange
+    # Requires changed rendered content to use the latest allowed current date.
+    #
+    # .EXAMPLE
+    # Get-PublishedEndpointLastUpdatedFailure @hashtableArguments
+    #
+    # # Runs with validated named arguments.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [System.String] Zero or more validated values or diagnostics described in the function description.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string] $Name,
+        [Parameter(Mandatory)][string] $CurrentContent,
+        [Parameter()][AllowNull()][object] $BaseContent,
+        [Parameter(Mandatory)][AllowEmptyString()][string] $TrustedEventUtcDate,
+        [Parameter()][bool] $RequireCurrentMaximumDateForRenderedChange = $false
+    )
+
+    $objCurrentMetadata = Get-DocumentMetadataContext `
+        -Content $CurrentContent -RequiresVersion $false
+    if ($null -ne $objCurrentMetadata.Failure) {
+        Write-Output "$Name $($objCurrentMetadata.Failure)"
+        return
+    }
+    $strCurrentDate = $objCurrentMetadata.UpdatedDate
+    if (-not (Test-MetadataCalendarDatePair `
+                -VersionDate $strCurrentDate.Replace('-', '') `
+                -UpdatedDate $strCurrentDate)) {
+        Write-Output "$Name Last Updated must contain one real calendar date."
+        return
+    }
+    if ([string]::CompareOrdinal(
+            $strCurrentDate, $script:strMaximumMetadataUtcDate) -gt 0) {
+        Write-Output "$Name Last Updated is later than trusted UTC."
+        return
+    }
+
+    $boolRenderedContentChanged = $true
+    $objBaseMetadata = $null
+    if ($null -ne $BaseContent) {
+        $objBaseMetadata = Get-DocumentMetadataContext `
+            -Content $BaseContent -RequiresVersion $false
+        if ($null -ne $objBaseMetadata.Failure) {
+            Write-Output "The parent of $Name $($objBaseMetadata.Failure)"
+            return
+        }
+        $strBaseDate = $objBaseMetadata.UpdatedDate
+        if (-not (Test-MetadataCalendarDatePair `
+                    -VersionDate $strBaseDate.Replace('-', '') `
+                    -UpdatedDate $strBaseDate)) {
+            Write-Output "The parent of $Name Last Updated must contain one real calendar date."
+            return
+        }
+        $boolRenderedContentChanged = (
+            (ConvertTo-MetadataComparisonText -Content $CurrentContent `
+                -MetadataContext $objCurrentMetadata) -cne
+            (ConvertTo-MetadataComparisonText -Content $BaseContent `
+                -MetadataContext $objBaseMetadata)
+        )
+        if ([string]::CompareOrdinal(
+                $strCurrentDate,
+                $strBaseDate
+            ) -lt 0) {
+            Write-Output (
+                "$Name Last Updated must not move backward from " +
+                "$strBaseDate to $strCurrentDate."
+            )
+            return
+        }
+    }
+    if ($null -ne $objBaseMetadata -and $null -ne $objBaseMetadata.VersionDate -and
+        $null -eq $objCurrentMetadata.VersionDate) {
+        Write-Output @(Get-PublishedEndpointMetadataFailure -Name "The parent of $Name" `
+                -CurrentContent $BaseContent -ParentContent $null -ExpectedUtcDate '' `
+                -IsNewDocumentTransition $false -RequireExpectedUtcDateForRenderedChange $false)
+    }
+    if ($null -ne $objCurrentMetadata.VersionDate) {
+        $objVersionParentContent = $null
+        if ($null -ne $objBaseMetadata -and $null -ne $objBaseMetadata.VersionDate) {
+            $objVersionParentContent = $BaseContent
+        }
+        # Null here describes only the new Version tuple. The actual parent
+        # has already passed Last Updated and rendered-comparison checks above.
+        Write-Output @(Get-PublishedEndpointMetadataFailure -Name $Name `
+                -CurrentContent $CurrentContent -ParentContent $objVersionParentContent `
+                -ExpectedUtcDate '' -IsNewDocumentTransition ($null -eq $objVersionParentContent) `
+                -RequireExpectedUtcDateForRenderedChange $false)
+    }
+    if (-not $boolRenderedContentChanged) {
+        return
+    }
+    if (-not [string]::IsNullOrEmpty($TrustedEventUtcDate) -and
+        $strCurrentDate -cne $TrustedEventUtcDate) {
+        Write-Output (
+            "$Name Last Updated must be $TrustedEventUtcDate after the current " +
+            'event input changes rendered content.'
+        )
+    } elseif ($RequireCurrentMaximumDateForRenderedChange -and
+        -not $TrustedEventUtcDate -and
+        $strCurrentDate -cne $script:strMaximumMetadataUtcDate) {
+        Write-Output (
+            "$Name Last Updated must be $script:strMaximumMetadataUtcDate " +
+            'after a rendered-content change without a trusted event date.'
+        )
+    }
+}
+
+function Get-MarkdownParserBootstrapFailure {
+    # .SYNOPSIS
+    # Reports a missing locked Markdown parser bootstrap.
+    #
+    # .DESCRIPTION
+    # Checks that the locked Markdown parser dependency and runtime are available.
+    #
+    # .PARAMETER RepositoryRootPath
+    # The absolute path of the trusted Git repository.
+    #
+    # .EXAMPLE
+    # Get-MarkdownParserBootstrapFailure @hashtableArguments
+    #
+    # # Runs with validated named arguments.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [System.String] Zero or more validated values or diagnostics described in the function description.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][string] $RepositoryRootPath)
+
+    $strMarkdownParserPath = Join-Path -Path $RepositoryRootPath `
+        -ChildPath 'node_modules/markdown-it/package.json'
+    if (-not (Test-Path -LiteralPath $strMarkdownParserPath -PathType Leaf)) {
+        Write-Output (
+            'Locked Node.js dependencies are missing. Run ' +
+            '`node .github/workflows/NpmTools.mjs install` before pre-commit validation.'
+        )
+    }
+}
+
+function Invoke-SafeTemporaryDirectoryRemoval {
+    # .SYNOPSIS
+    # Removes one validated temporary directory with bounded retries.
+    #
+    # .DESCRIPTION
+    # Confirms that the directory is a child of the supplied system temporary root,
+    # retries transient recursive-delete failures, and fails after the exact bound.
+    #
+    # .PARAMETER LiteralPath
+    # The exact temporary directory to remove.
+    #
+    # .PARAMETER SystemTemporaryRootPath
+    # The normalized system temporary root that must contain LiteralPath.
+    #
+    # .PARAMETER MaximumAttempts
+    # The maximum number of recursive-delete attempts.
+    #
+    # .PARAMETER InitialDelayMilliseconds
+    # The delay before the second attempt. Each later delay doubles.
+    #
+    # .EXAMPLE
+    # Invoke-SafeTemporaryDirectoryRemoval @hashtableArguments
+    #
+    # # Removes one validated fixture directory.
+    #
+    # .INPUTS
+    # None. Pipeline input is not accepted.
+    #
+    # .OUTPUTS
+    # None.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([void])]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string] $LiteralPath,
+
+        [Parameter(Mandatory)]
+        [ValidateNotNullOrEmpty()]
+        [string] $SystemTemporaryRootPath,
+
+        [Parameter()]
+        [ValidateRange(1, 10)]
+        [int] $MaximumAttempts = 5,
+
+        [Parameter()]
+        [ValidateRange(1, 1000)]
+        [int] $InitialDelayMilliseconds = 50
+    )
+
+    $strValidatedTemporaryRoot = [IO.Path]::GetFullPath(
+        $SystemTemporaryRootPath
+    ).TrimEnd(
+        [IO.Path]::DirectorySeparatorChar,
+        [IO.Path]::AltDirectorySeparatorChar
+    )
+    $strValidatedDirectoryPath = [IO.Path]::GetFullPath($LiteralPath)
+    $strRequiredPrefix = $strValidatedTemporaryRoot +
+        [IO.Path]::DirectorySeparatorChar
+    if (-not $strValidatedDirectoryPath.StartsWith(
+            $strRequiredPrefix,
+            [StringComparison]::OrdinalIgnoreCase
+        )) {
+        throw 'Refusing to remove a directory outside the system temporary root.'
+    }
+
+    for ($intAttempt = 1; $intAttempt -le $MaximumAttempts; $intAttempt++) {
+        if (-not [IO.Directory]::Exists($strValidatedDirectoryPath)) {
+            return
+        }
+        try {
+            Remove-Item -LiteralPath $strValidatedDirectoryPath -Recurse -Force `
+                -ErrorAction Stop
+        } catch {
+            if ($intAttempt -eq $MaximumAttempts) {
+                throw
+            }
+        }
+        if (-not [IO.Directory]::Exists($strValidatedDirectoryPath)) {
+            return
+        }
+        if ($intAttempt -eq $MaximumAttempts) {
+            throw 'The temporary fixture directory still exists after cleanup.'
+        }
+        $intDelayMilliseconds = [int] (
+            $InitialDelayMilliseconds * [Math]::Pow(2, $intAttempt - 1)
+        )
+        Start-Sleep -Milliseconds $intDelayMilliseconds
+    }
+}
+
+function Test-RecursivePersonalMemoryIgnoreContract {
+    # .SYNOPSIS
+    # Proves an all-depth personal-memory exclusion in the root ignore file.
+    #
+    # .DESCRIPTION
+    # Supports a root-only tracked ignore inventory. A canonical recursive
+    # exclusion must follow every negation; native Git probes remain separate.
+    # Nested or case-alias ignore files invalidate this bounded proof.
+    #
+    # .PARAMETER GitIgnoreContent
+    # The exact root .gitignore text, not user-local exclusion configuration.
+    #
+    # .PARAMETER TrackedPath
+    # The complete bounded candidate tracked-path inventory.
+    #
+    # .EXAMPLE
+    # Test-RecursivePersonalMemoryIgnoreContract @hashtableArguments
+    #
+    # # Returns true only for the supported root-only all-depth contract.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [System.Boolean] Whether the bounded recursive proof succeeds.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20261002.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string] $GitIgnoreContent,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $TrackedPath
+    )
+
+    if ($TrackedPath -cnotcontains '.gitignore') { return $false }
+    foreach ($strTrackedPath in $TrackedPath) {
+        if ($strTrackedPath -imatch '(^|/)\.gitignore$' -and
+            $strTrackedPath -cne '.gitignore') {
+            return $false
+        }
+    }
+    $boolRecursiveExclusion = $false
+    foreach ($strRawLine in ($GitIgnoreContent -split '\r?\n')) {
+        # Git ignores unescaped trailing spaces; leading spaces remain literal.
+        $strLine = $strRawLine.TrimEnd([char]' ')
+        if (@('CLAUDE.local.md', '**/CLAUDE.local.md') -ccontains $strLine) {
+            $boolRecursiveExclusion = $true
+        } elseif ($strLine.Length -gt 1 -and
+            $strLine.StartsWith('!', [StringComparison]::Ordinal)) {
+            $boolRecursiveExclusion = $false
+        }
+    }
+    return $boolRecursiveExclusion
+}
+
+function Test-GitIgnorePathEffective {
+    # .SYNOPSIS
+    # Tests whether a Git ignore rule excludes one exact path.
+    #
+    # .DESCRIPTION
+    # Evaluates the supplied ignore rules against one exact repository-relative path.
+    #
+    # .PARAMETER GitIgnoreContent
+    # The exact .gitignore text to evaluate.
+    #
+    # .PARAMETER RepositoryRelativePath
+    # The canonical repository-relative path to inspect.
+    #
+    # .EXAMPLE
+    # Test-GitIgnorePathEffective @hashtableArguments
+    #
+    # # Runs with validated named arguments.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [System.Boolean] True when the condition in the synopsis is satisfied; otherwise false.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $GitIgnoreContent,
+
+        [Parameter(Mandatory)]
+        [string] $RepositoryRelativePath
+    )
+
+    if ($RepositoryRelativePath.StartsWith('-', [StringComparison]::Ordinal) -or
+        [IO.Path]::IsPathRooted($RepositoryRelativePath) -or
+        $RepositoryRelativePath -match '(^|/)\.\.?(/|$)' -or
+        $RepositoryRelativePath.Contains('\', [StringComparison]::Ordinal)) {
+        throw 'The effective-ignore probe path is invalid.'
+    }
+
+    $strSystemTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+    $strFixtureRoot = [IO.Path]::Combine(
+        $strSystemTempRoot,
+        'agent-instruction-gitignore-' + [Guid]::NewGuid().ToString('N')
+    )
+    [void][IO.Directory]::CreateDirectory($strFixtureRoot)
+    try {
+        $objUtf8WithoutBom = [Text.UTF8Encoding]::new($false)
+        $strEmptyExcludesPath = [IO.Path]::Combine($strFixtureRoot, 'empty-excludes')
+        [IO.File]::WriteAllText(
+            [IO.Path]::Combine($strFixtureRoot, '.gitignore'),
+            $GitIgnoreContent,
+            $objUtf8WithoutBom
+        )
+        [IO.File]::WriteAllText($strEmptyExcludesPath, '', $objUtf8WithoutBom)
+        & git -C $strFixtureRoot init --quiet
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not initialize the effective-ignore fixture.'
+        }
+        & git -C $strFixtureRoot `
+            -c "core.excludesFile=$strEmptyExcludesPath" `
+            check-ignore --no-index --quiet -- $RepositoryRelativePath
+        $intCheckIgnoreExitCode = $LASTEXITCODE
+        if ($intCheckIgnoreExitCode -eq 0) {
+            return $true
+        }
+        if ($intCheckIgnoreExitCode -eq 1) {
+            return $false
+        }
+        throw 'Git could not evaluate the proposed ignore rules.'
+    } finally {
+        if ([IO.Directory]::Exists($strFixtureRoot) -and
+            $strFixtureRoot.StartsWith(
+                $strSystemTempRoot,
+                [StringComparison]::OrdinalIgnoreCase
+            )) {
+            Remove-Item -LiteralPath $strFixtureRoot -Recurse -Force
+        }
+    }
+}
+
+function Test-ProhibitedClaudeLocalPath {
+    # .SYNOPSIS
+    # Tests whether a tracked path is prohibited operative local Claude memory.
+    #
+    # .DESCRIPTION
+    # Classifies one repository-relative path under the prohibited Claude local-memory policy.
+    #
+    # .PARAMETER RepositoryRelativePath
+    # The canonical repository-relative path to inspect.
+    #
+    # .EXAMPLE
+    # Test-ProhibitedClaudeLocalPath @hashtableArguments
+    #
+    # # Runs with validated named arguments.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [System.Boolean] True when the condition in the synopsis is satisfied; otherwise false.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([bool])]
+    param([Parameter(Mandatory)][string] $RepositoryRelativePath)
+
+    return $RepositoryRelativePath -imatch '^(?:[^/]+/)*CLAUDE\.local\.md$'
+}
+
+function Test-GovernedInstructionPath {
+    # .SYNOPSIS
+    # Tests whether a repository-relative path is a governed instruction path.
+    #
+    # .DESCRIPTION
+    # Matches an exact governed root path or a supported recursive instruction
+    # family. The comparison is ordinal and case-sensitive. A case-folded
+    # near-match is handled by Test-GovernedInstructionPathCaseMismatch.
+    #
+    # .PARAMETER RepositoryRelativePath
+    # The slash-separated repository-relative path to classify.
+    #
+    # .PARAMETER GovernedRootPaths
+    # The exact governed root instruction paths. The collection may be empty.
+    #
+    # .EXAMPLE
+    # Test-GovernedInstructionPath `
+    #     -RepositoryRelativePath 'tools/CLAUDE.md' `
+    #     -GovernedRootPaths @('AGENTS.md', 'CLAUDE.md')
+    #
+    # # Returns $true because nested CLAUDE.md files are governed.
+    #
+    # .EXAMPLE
+    # Test-GovernedInstructionPath `
+    #     -RepositoryRelativePath 'docs/readme.md' `
+    #     -GovernedRootPaths @('AGENTS.md', 'CLAUDE.md')
+    #
+    # # Returns $false because the path is not a governed family or exact root.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [bool] True for an exact governed root or recursive governed instruction
+    # family; otherwise, false.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $RepositoryRelativePath,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]] $GovernedRootPaths
+    )
+
+    return (
+        $GovernedRootPaths -ccontains $RepositoryRelativePath -or
+        $RepositoryRelativePath -cmatch `
+            '^(?:(?!\.\.?/)[^/]+/)*GEMINI\.md$' -or
+        $RepositoryRelativePath -cmatch `
+            '^(?:[^/]+/)*AGENTS(?:\.override)?\.md$' -or
+        $RepositoryRelativePath -cmatch `
+            '^(?:[^/]+/)*CLAUDE\.md$' -or
+        $RepositoryRelativePath -cmatch `
+            '^\.github/instructions/(?:[^/]+/)*[^/]+\.instructions\.md$' -or
+        $RepositoryRelativePath -cmatch `
+            '^\.cursor/rules/(?:[^/]+/)*[^/]+\.mdc$' -or
+        $RepositoryRelativePath -cmatch `
+            '^\.claude/rules/(?:[^/]+/)*[^/]+\.md$'
+    )
+}
+
+function Test-GovernedInstructionPathCaseMismatch {
+    # .SYNOPSIS
+    # Detects noncanonical casing of one governed instruction path.
+    #
+    # .DESCRIPTION
+    # Compares one path with the governed root paths.
+    #
+    # .PARAMETER RepositoryRelativePath
+    # The canonical repository-relative path to inspect.
+    #
+    # .PARAMETER GovernedRootPaths
+    # The canonical governed root instruction paths.
+    #
+    # .EXAMPLE
+    # Test-GovernedInstructionPathCaseMismatch @hashtableArguments
+    #
+    # # Runs with validated named arguments.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [System.Boolean] True when the condition in the synopsis is satisfied; otherwise false.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $RepositoryRelativePath,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]] $GovernedRootPaths
+    )
+
+    if (Test-GovernedInstructionPath `
+            -RepositoryRelativePath $RepositoryRelativePath `
+            -GovernedRootPaths $GovernedRootPaths) {
+        return $false
+    }
+    return (
+        $GovernedRootPaths -icontains $RepositoryRelativePath -or
+        $RepositoryRelativePath -imatch `
+            '^(?:(?!\.\.?/)[^/]+/)*GEMINI\.md$' -or
+        $RepositoryRelativePath -imatch `
+            '^(?:[^/]+/)*AGENTS(?:\.override)?\.md$' -or
+        $RepositoryRelativePath -imatch `
+            '^(?:[^/]+/)*CLAUDE\.md$' -or
+        $RepositoryRelativePath -imatch `
+            '^\.github/instructions/(?:[^/]+/)*[^/]+\.instructions\.md$' -or
+        $RepositoryRelativePath -imatch `
+            '^\.cursor/rules/(?:[^/]+/)*[^/]+\.mdc$' -or
+        $RepositoryRelativePath -imatch `
+            '^\.claude/rules/(?:[^/]+/)*[^/]+\.md$'
+    )
+}
+
+function Test-ExactPathCaseMismatch {
+    # .SYNOPSIS
+    # Detects noncanonical casing of one path from an exact reviewed set.
+    #
+    # .DESCRIPTION
+    # Compares one path with an exact reviewed path set.
+    #
+    # .PARAMETER RepositoryRelativePath
+    # The canonical repository-relative path to inspect.
+    #
+    # .PARAMETER CanonicalPaths
+    # The exact canonical paths accepted by the policy.
+    #
+    # .EXAMPLE
+    # Test-ExactPathCaseMismatch @hashtableArguments
+    #
+    # # Runs with validated named arguments.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [System.Boolean] True when the condition in the synopsis is satisfied; otherwise false.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $RepositoryRelativePath,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]] $CanonicalPaths
+    )
+
+    return (
+        $CanonicalPaths -icontains $RepositoryRelativePath -and
+        $CanonicalPaths -cnotcontains $RepositoryRelativePath
+    )
+}
+
+function Test-GovernedInstructionInventoryPath {
+    # .SYNOPSIS
+    # Selects canonical governed instructions and case-folded near-matches.
+    #
+    # .DESCRIPTION
+    # Selects canonical governed instruction paths and their case-folded near-matches for closed-world inventory checks.
+    #
+    # .PARAMETER RepositoryRelativePath
+    # The canonical repository-relative path to inspect.
+    #
+    # .EXAMPLE
+    # Test-GovernedInstructionInventoryPath @hashtableArguments
+    #
+    # # Runs with validated named arguments.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [System.Boolean] True when the condition in the synopsis is satisfied; otherwise false.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $RepositoryRelativePath
+    )
+
+    return (
+        (Test-ProhibitedClaudeLocalPath `
+            -RepositoryRelativePath $RepositoryRelativePath) -or
+        (Test-GovernedInstructionPath `
+            -RepositoryRelativePath $RepositoryRelativePath `
+            -GovernedRootPaths $script:arrGovernedInstructionRootPaths) -or
+        (Test-GovernedInstructionPathCaseMismatch `
+            -RepositoryRelativePath $RepositoryRelativePath `
+            -GovernedRootPaths $script:arrGovernedInstructionRootPaths) -or
+        (Test-ExactPathCaseMismatch `
+            -RepositoryRelativePath $RepositoryRelativePath `
+            -CanonicalPaths $script:arrPushGovernedExactPaths)
+    )
+}
+
+function Test-AgentInstructionWorkflowPath {
+    # .SYNOPSIS
+    # Tests whether one exact changed path requires agent validation.
+    #
+    # .DESCRIPTION
+    # Tests one changed path against the exact set that activates agent-instruction validation.
+    #
+    # .PARAMETER RepositoryRelativePath
+    # The canonical repository-relative path to inspect.
+    #
+    # .EXAMPLE
+    # Test-AgentInstructionWorkflowPath @hashtableArguments
+    #
+    # # Runs with validated named arguments.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [System.Boolean] True when the condition in the synopsis is satisfied; otherwise false.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $RepositoryRelativePath
+    )
+
+    return (
+        (Test-ProhibitedClaudeLocalPath `
+            -RepositoryRelativePath $RepositoryRelativePath) -or
+        $RepositoryRelativePath -cmatch $script:strDecisionRecordDirectoryPathPattern -or
+        $script:arrPushGovernedExactPaths -ccontains $RepositoryRelativePath -or
+        (Test-ExactPathCaseMismatch `
+            -RepositoryRelativePath $RepositoryRelativePath `
+            -CanonicalPaths $script:arrPushGovernedExactPaths) -or
+        (Test-GovernedInstructionPath `
+            -RepositoryRelativePath $RepositoryRelativePath `
+            -GovernedRootPaths $script:arrGovernedInstructionRootPaths) -or
+        (Test-GovernedInstructionPathCaseMismatch `
+            -RepositoryRelativePath $RepositoryRelativePath `
+            -GovernedRootPaths $script:arrGovernedInstructionRootPaths)
+    )
+}
+
+function Get-DecisionRecordPathFailure {
+    # .SYNOPSIS
+    # Gets a decision-name failure.
+    #
+    # .DESCRIPTION
+    # Validates one decision-record path against the canonical numbered filename contract.
+    #
+    # .PARAMETER RepositoryRelativePath
+    # The canonical repository-relative path to inspect.
+    #
+    # .EXAMPLE
+    # Get-DecisionRecordPathFailure @hashtableArguments
+    #
+    # # Runs with validated named arguments.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [System.String] Zero or more validated values or diagnostics described in the function description.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][string] $RepositoryRelativePath)
+
+    if ($RepositoryRelativePath -cmatch $script:strDecisionRecordDirectoryPathPattern -and
+        $RepositoryRelativePath -cnotmatch $script:strDecisionRecordPathPattern) {
+        Write-Output "$RepositoryRelativePath must use docs/decisions/NNNN-short-title.md."
+    }
 }
 
 function Get-GovernedInstructionInventoryFailure {
@@ -3394,12 +5109,10 @@ function Get-GovernedInstructionInventoryFailure {
     # [string] One record for each inventory failure.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260820.1
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -3417,8 +5130,8 @@ function Get-GovernedInstructionInventoryFailure {
     )
     foreach ($strCatalogPath in $CatalogPaths) {
         if ([string]::IsNullOrWhiteSpace($strCatalogPath) -or
-            [System.IO.Path]::IsPathRooted($strCatalogPath) -or
-            $strCatalogPath.Contains('\', [System.StringComparison]::Ordinal) -or
+            [IO.Path]::IsPathRooted($strCatalogPath) -or
+            $strCatalogPath.Contains('\', [StringComparison]::Ordinal) -or
             $strCatalogPath -match '(?:^|/)\.\.(?:/|$)' -or
             $strCatalogPath.IndexOfAny([char[]] @("`0", "`r", "`n")) -ge 0) {
             Write-Output "The governed instruction catalog contains an unsafe path: $strCatalogPath"
@@ -3439,6 +5152,13 @@ function Get-GovernedInstructionInventoryFailure {
     }
 
     foreach ($strTrackedPath in $setTrackedPaths) {
+        if (Test-ProhibitedClaudeLocalPath -RepositoryRelativePath $strTrackedPath) {
+            Write-Output (
+                'Tracked CLAUDE.local.md is prohibited operative project memory: ' +
+                $strTrackedPath
+            )
+            continue
+        }
         if (-not $setCatalogPaths.Contains($strTrackedPath)) {
             Write-Output (
                 'Tracked governed instruction is missing from the catalog: ' +
@@ -3456,185 +5176,321 @@ function Get-GovernedInstructionInventoryFailure {
     }
 }
 
-function Get-GovernedDecisionDocumentPath {
+function Get-DocumentationClaimFailure {
     # .SYNOPSIS
-    # Selects Markdown decision records from candidate Git paths.
+    # Finds false repository-specific documentation source claims.
     #
     # .DESCRIPTION
-    # Returns a deterministic, duplicate-free inventory for Markdown below the
-    # repository's configured `docs/decisions/` decision-record root.
-    #
-    # .PARAMETER CandidatePath
-    # Repository-relative paths found in the candidate state or event range.
-    #
-    # .EXAMPLE
-    # Get-GovernedDecisionDocumentPath -CandidatePath @(
-    #     'docs/user/decisions/provider-selection.md',
-    #     'docs/decisions/archive/0003-old.md'
-    # )
-    #
-    # # Returns only the formal decision record.
-    #
-    # .INPUTS
-    # None. You can't pipe objects to this function.
-    #
-    # .OUTPUTS
-    # [string] One repository-relative decision-record path.
-    #
-    # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.3.20260911.0
-    [CmdletBinding(PositionalBinding = $false)]
-    [OutputType([string])]
-    param(
-        [Parameter(Mandatory)]
-        [AllowEmptyCollection()]
-        [string[]] $CandidatePath
-    )
-
-    return @(
-        $CandidatePath |
-            Where-Object {
-                [string]$_ -cmatch '^docs/decisions/(?:[^/]+/)*[^/]+\.md$'
-            } |
-            Sort-Object -CaseSensitive -Unique
-    )
-}
-
-function Get-DecisionRecordContractFailure {
-    # .SYNOPSIS
-    # Finds structural contract failures in one decision record.
-    #
-    # .DESCRIPTION
-    # Requires the canonical numbered leaf name, one real Date metadata item,
-    # and one operative level-two heading for each required decision section.
-    # Numeric heading prefixes are permitted.
-    #
-    # .PARAMETER Name
-    # The repository-relative decision-record path.
+    # Rejects known absent placeholder-tooling claims and proves that each named
+    # owner retained by the PSStyleGuide URL policy is tracked at the exact input
+    # revision.
     #
     # .PARAMETER Content
-    # The validated decision-record Markdown text.
+    # The documentation instruction content to inspect.
     #
-    # .PARAMETER MetadataContext
-    # The validated document metadata context.
+    # .PARAMETER TrackedPaths
+    # The exact input revision's tracked repository paths.
     #
     # .EXAMPLE
-    # Get-DecisionRecordContractFailure -Name 'docs/decisions/0001-example.md' `
-    #     -Content $strContent -MetadataContext $objMetadata
+    # Get-DocumentationClaimFailure -Content $strDocs -TrackedPaths $arrPaths
     #
-    # # Returns one failure for each missing or malformed contract element.
+    # # Returns one string for each false or unowned repository claim.
     #
     # .INPUTS
     # None. You can't pipe objects to this function.
     #
     # .OUTPUTS
-    # [string] One record for each decision-record contract failure.
+    # [string] One record for each documentation claim failure.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260911.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
-        [Parameter(Mandatory)]
-        [string] $Name,
-
         [Parameter(Mandatory)]
         [string] $Content,
 
         [Parameter(Mandatory)]
-        [pscustomobject] $MetadataContext
+        [AllowEmptyCollection()]
+        [string[]] $TrackedPaths
     )
 
-    $strLeafName = ($Name -split '/')[-1]
-    if ($strLeafName -cnotmatch '^[0-9]{4}-[a-z0-9]+(?:-[a-z0-9]+)*\.md$') {
-        Write-Output "$Name must use the decision-record leaf name NNNN-short-title.md."
-    }
-    if (-not ($script:arrAllowedDecisionRecordStatuses -ccontains
-            $MetadataContext.Status)) {
-        Write-Output (
-            "$Name Status must be one of " +
-            ($script:arrAllowedDecisionRecordStatuses -join ', ') +
-            ' for a governed decision record.'
-        )
-    }
-
-    $objMarkdownContext = Get-OperativeMarkdownContext -Content $Content
-    foreach ($strRequiredHeading in @(
-            'Context',
-            'Decision',
-            'Consequences',
-            'Alternatives Considered'
-        )) {
-        $arrMatchingHeadings = @(
-            $objMarkdownContext.LevelTwoHeadings |
-                Where-Object {
-                    [regex]::Replace(
-                        [string]$_.Text,
-                        '^\d+\.\s+',
-                        ''
-                    ) -ceq $strRequiredHeading
-                }
-        )
-        if ($arrMatchingHeadings.Count -ne 1) {
+    foreach ($strLiteral in $script:arrProhibitedDocumentationClaimLiterals) {
+        if ($Content.Contains($strLiteral, [StringComparison]::Ordinal)) {
             Write-Output (
-                "$Name must contain one operative level-two " +
-                "$strRequiredHeading heading."
+                'Documentation instructions name an absent repository-specific ' +
+                "source or enforcement claim: $strLiteral"
             )
         }
     }
 
-    $arrContentLines = [regex]::Split($Content, '\r\n|\r|\n')
-    $objParseContext = Get-MarkdownParseContext `
-        -Content $Content `
-        -LineCount $arrContentLines.Count
-    $arrDateRecords = @(
-        $objParseContext.TopLevelListItems |
-            Where-Object {
-                $_.Text -is [string] -and
-                $_.Text.StartsWith(
-                    'Date:',
-                    [System.StringComparison]::Ordinal
-                ) -and
-                $_.Start -gt $MetadataContext.MetadataContentStart -and
-                $_.Start -lt $MetadataContext.MetadataContentEnd
-            }
-    )
-    $strDateFailure = "$Name must contain one exact Date: YYYY-MM-DD list item in Metadata."
-    $boolDateHasContinuation = $false
-    if ($arrDateRecords.Count -eq 1) {
-        for ($intLine = $arrDateRecords[0].Start + 1;
-            $intLine -lt $arrDateRecords[0].End;
-            $intLine++) {
-            if (-not [string]::IsNullOrWhiteSpace(
-                    $arrContentLines[$intLine]
-                )) {
-                $boolDateHasContinuation = $true
-                break
-            }
+    $objMarkdownContext = Get-OperativeMarkdownContext -Content $Content
+    $arrVisibleCodeSpans = [string[]]@($objMarkdownContext.ProseBlocks.Code)
+    foreach ($strOwnerPath in $script:arrDocumentationClaimOwnerPaths) {
+        if ($arrVisibleCodeSpans -cnotcontains $strOwnerPath) {
+            Write-Output (
+                'Documentation instructions are missing the named claim owner: ' +
+                $strOwnerPath
+            )
+        }
+        if ($TrackedPaths -cnotcontains $strOwnerPath) {
+            Write-Output (
+                'Documentation claim owner is not tracked at the validation ' +
+                "revision: $strOwnerPath"
+            )
         }
     }
-    if ($arrDateRecords.Count -ne 1 -or $boolDateHasContinuation) {
-        Write-Output $strDateFailure
+}
+
+function Get-DecisionLifecyclePolicyFailure {
+    # .SYNOPSIS
+    # Finds an invalid decision-record lifecycle policy.
+    #
+    # .DESCRIPTION
+    # Requires one decision-record Status representation, the four retained
+    # lifecycle values, an explicit prohibition on a second narrative status,
+    # and the unchanged-byte legacy migration boundary.
+    #
+    # .PARAMETER Content
+    # The documentation instruction content to inspect.
+    #
+    # .EXAMPLE
+    # Get-DecisionLifecyclePolicyFailure -Content $strDocs
+    #
+    # # Returns one string for each lifecycle-policy failure.
+    #
+    # .INPUTS
+    # None. You can't pipe objects to this function.
+    #
+    # .OUTPUTS
+    # [string] One record for each decision lifecycle policy failure.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260902.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string] $Content
+    )
+
+    $arrSectionMatches = @([regex]::Matches(
+            $Content,
+            '(?ms)^## Decision Record Standards\s*\r?\n(?<Body>.*?)(?=^## |\z)'
+        ))
+    if ($arrSectionMatches.Count -ne 1) {
+        Write-Output (
+            'Documentation instructions must contain exactly one Decision Record ' +
+            'Standards section.'
+        )
         return
     }
-    $objDateMatch = [regex]::Match(
-        $arrContentLines[$arrDateRecords[0].Start],
-        '^- \*\*Date:\*\* (?<Date>\d{4}-\d{2}-\d{2})$'
+
+    $strSectionBody = $arrSectionMatches[0].Groups['Body'].Value
+    if ([regex]::Matches($strSectionBody, '\*\*Status\*\*').Count -ne 1) {
+        Write-Output (
+            'Decision records must use exactly one Tier 1 Status representation.'
+        )
+    }
+
+    $arrAllowedValuesMatches = @([regex]::Matches(
+            $strSectionBody,
+            'For decision records, its value MUST be ' +
+                '(?<Values>[A-Za-z]+(?: \| [A-Za-z]+)+)\.'
+        ))
+    $strExpectedValues = 'Proposed | Accepted | Superseded | Deprecated'
+    if ($arrAllowedValuesMatches.Count -ne 1 -or
+        $arrAllowedValuesMatches[0].Groups['Values'].Value -cne $strExpectedValues) {
+        Write-Output (
+            'Decision record Status must allow exactly ' + $strExpectedValues + '.'
+        )
+    }
+
+    if ([regex]::Matches(
+            $strSectionBody,
+            'A decision record MUST NOT add a separate narrative status field or section\.'
+        ).Count -ne 1) {
+        Write-Output (
+            'Decision records must prohibit a separate narrative status representation.'
+        )
+    }
+
+    if ([regex]::Matches(
+            $strSectionBody,
+            ('Published legacy decision records that predate this lifecycle rule ' +
+                'MAY retain their existing status representation while their bytes ' +
+                'remain unchanged\. The next change to such a record MUST migrate it ' +
+                'to the single Tier 1 Status metadata field and MUST remove each ' +
+                'separate narrative status field or section\.')
+        ).Count -ne 1) {
+        Write-Output (
+            'Decision records must document the unchanged legacy migration boundary.'
+        )
+    }
+}
+
+function Test-DecisionLifecycleStatusLabel {
+    # .SYNOPSIS
+    # Tests one normalized decision lifecycle label.
+    #
+    # .DESCRIPTION
+    # Returns true only for Status or Decision Status after trimming and
+    # collapsing whitespace. Comparison is case-insensitive.
+    #
+    # .PARAMETER Label
+    # The heading or field label to test.
+    #
+    # .EXAMPLE
+    # Test-DecisionLifecycleStatusLabel -Label 'Decision Status'
+    #
+    # # Returns true.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [bool] True only for one exact supported lifecycle label.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]
+        [AllowEmptyString()]
+        [string] $Label
     )
-    if (-not $objDateMatch.Success -or
-        -not (Test-MetadataCalendarDate `
-            -Date $objDateMatch.Groups['Date'].Value)) {
-        Write-Output $strDateFailure
+
+    $strNormalizedLabel = [regex]::Replace($Label.Trim(), '\s+', ' ')
+    return (
+        $strNormalizedLabel -ieq 'Status' -or
+        $strNormalizedLabel -ieq 'Decision Status'
+    )
+}
+
+function Get-DecisionRecordLifecycleFailure {
+    # .SYNOPSIS
+    # Finds lifecycle representation failures in one decision record.
+    #
+    # .DESCRIPTION
+    # Requires one four-state metadata Status and no separate structured Status
+    # field or section for a new or changed ADR. An unchanged published legacy ADR
+    # remains valid until its next content change under the migration boundary.
+    # Uses validated parser coordinates to exempt only the canonical Status
+    # list item in either direct or headed metadata.
+    #
+    # .PARAMETER Name
+    # The repository-relative decision-record path.
+    #
+    # .PARAMETER CurrentContent
+    # The final decision-record content.
+    #
+    # .PARAMETER BaselineContent
+    # The published baseline content, or null when no baseline document exists.
+    #
+    # .EXAMPLE
+    # Get-DecisionRecordLifecycleFailure @hashtableArguments
+    #
+    # # Returns lifecycle failures for one changed decision record.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [string] Zero or more lifecycle diagnostics.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20261005.0.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string] $Name,
+        [Parameter(Mandatory)][string] $CurrentContent,
+        [Parameter()][AllowNull()][string] $BaselineContent
+    )
+
+    if ($null -ne $BaselineContent -and
+        $CurrentContent -ceq $BaselineContent) {
+        return
+    }
+    $objMetadata = Get-DocumentMetadataContext `
+        -Content $CurrentContent -RequiresVersion $false
+    if ($null -ne $objMetadata.Failure) {
+        return
+    }
+    $arrAllowedStatuses = @(
+        'Proposed', 'Accepted', 'Superseded', 'Deprecated'
+    )
+    if ($arrAllowedStatuses -cnotcontains $objMetadata.Status) {
+        Write-Output (
+            "$Name Status must be Proposed, Accepted, Superseded, or Deprecated."
+        )
+    }
+    $objMarkdownContext = $objMetadata.MarkdownParseContext
+    if (@($objMarkdownContext.Headings |
+            Where-Object {
+                $_.Tag -cne 'h1' -and
+                (Test-DecisionLifecycleStatusLabel -Label $_.Text)
+            }).Count -ne 0) {
+        Write-Output "$Name must not contain a separate operative Status section."
+    }
+    $arrTopLevelLifecycleFieldBlocks = @(
+        $objMarkdownContext.TopLevelBlocks |
+            Where-Object { $_.Type -ceq 'paragraph_open' }
+        $objMarkdownContext.TopLevelListItems
+    )
+    if (@($arrTopLevelLifecycleFieldBlocks |
+            Where-Object {
+                $boolCanonicalMetadataStatus =
+                    $_.Start -eq $objMetadata.StatusLineIndex -and
+                    $_.Start -ge $objMetadata.MetadataListStart -and
+                    $_.End -le $objMetadata.MetadataListEnd
+                $objFieldMatch = [regex]::Match(
+                    $_.Text,
+                    '^\s*(?<Label>[^:\r\n]+?)\s*:\s*\S'
+                )
+                -not $boolCanonicalMetadataStatus -and
+                    $objFieldMatch.Success -and
+                    (Test-DecisionLifecycleStatusLabel `
+                        -Label $objFieldMatch.Groups['Label'].Value)
+            }).Count -ne 0) {
+        Write-Output (
+            "$Name must not contain a separate operative Status field."
+        )
+    }
+    if (@($objMarkdownContext.TableRows |
+            Where-Object {
+                $boolHasStatusField = $false
+                if ($_.Cells.Count -eq 2 -and
+                    $_.Cells[0].Tag -ceq 'td' -and
+                    $_.Cells[1].Tag -ceq 'td') {
+                    $strValue = [regex]::Replace(
+                        $_.Cells[1].Text.Trim(),
+                        '\s+',
+                        ' '
+                    )
+                    $boolHasStatusField =
+                        (Test-DecisionLifecycleStatusLabel `
+                            -Label $_.Cells[0].Text) -and
+                        -not [string]::IsNullOrWhiteSpace($strValue)
+                }
+                $boolHasStatusField
+            }).Count -ne 0) {
+        Write-Output (
+            "$Name must not contain a separate operative Status field."
+        )
     }
 }
 
@@ -3665,7 +5521,7 @@ function Get-DocumentMetadataClassificationContext {
     # None. You can't pipe objects to this function.
     #
     # .OUTPUTS
-    # [pscustomobject] The failure, active exemptions, and authorization paths.
+    # [pscustomobject] Failure, schema, exact categories, and authorization paths.
     #
     # .NOTES
     # PRIVATE/INTERNAL HELPER - This function is not part of the
@@ -3673,7 +5529,7 @@ function Get-DocumentMetadataClassificationContext {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.1.20260911.0
+    # Version: 1.2.20261002.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
@@ -3690,6 +5546,9 @@ function Get-DocumentMetadataClassificationContext {
 
         return [pscustomobject]@{
             Failure = $Message
+            SchemaVersion = 0
+            Tier2Paths = [string[]]@()
+            GeneratedPaths = [string[]]@()
             ExemptPaths = [string[]]@()
             AuthorizedExemptionPaths = [string[]]@()
         }
@@ -3747,7 +5606,8 @@ function Get-DocumentMetadataClassificationContext {
         }
 
         $intSchemaVersion = 0
-        if (-not $dictionaryProperties['schemaVersion'].TryGetInt32(
+        if ($dictionaryProperties['schemaVersion'].ValueKind -ne [System.Text.Json.JsonValueKind]::Number -or
+            -not $dictionaryProperties['schemaVersion'].TryGetInt32(
                 [ref]$intSchemaVersion
             ) -or $intSchemaVersion -ne 2) {
             return & $scriptBlockFailure `
@@ -3762,7 +5622,9 @@ function Get-DocumentMetadataClassificationContext {
             [System.StringComparer]::Ordinal
         )
         $listExemptPaths = [System.Collections.Generic.List[string]]::new()
+        $dictionaryCategoryPaths = @{}
         foreach ($strArrayProperty in @('tier2Paths', 'generatedPaths')) {
+            $listCategoryPaths = [Collections.Generic.List[string]]::new()
             $objArray = $dictionaryProperties[$strArrayProperty]
             if ($objArray.ValueKind -ne [System.Text.Json.JsonValueKind]::Array) {
                 return & $scriptBlockFailure -Message (
@@ -3782,7 +5644,7 @@ function Get-DocumentMetadataClassificationContext {
                     $strPath.Contains('\', [System.StringComparison]::Ordinal) -or
                     $strPath -match '(?:^|/)\.\.(?:/|$)' -or
                     $strPath -match '[\x00-\x1f\x7f]' -or
-                    $strPath -cnotmatch '\.(?:md|mdc)$') {
+                    $strPath -inotmatch '\.(?:md|mdc)$') {
                     return & $scriptBlockFailure -Message (
                         "The document classification contains an unsafe path: $strPath"
                     )
@@ -3805,8 +5667,10 @@ function Get-DocumentMetadataClassificationContext {
                     )
                 }
                 $listExemptPaths.Add($strPath)
+                $listCategoryPaths.Add($strPath)
                 $strPreviousPath = $strPath
             }
+            $dictionaryCategoryPaths[$strArrayProperty] = $listCategoryPaths.ToArray()
         }
 
         $objAuthorizationArray = $dictionaryProperties['authorizedExemptionPaths']
@@ -3829,7 +5693,7 @@ function Get-DocumentMetadataClassificationContext {
                 $strPath.Contains('\', [System.StringComparison]::Ordinal) -or
                 $strPath -match '(?:^|/)\.\.(?:/|$)' -or
                 $strPath -match '[\x00-\x1f\x7f]' -or
-                $strPath -cnotmatch '\.(?:md|mdc)$') {
+                $strPath -inotmatch '\.(?:md|mdc)$') {
                 return & $scriptBlockFailure -Message (
                     "The document classification contains an unsafe path: $strPath"
                 )
@@ -3856,6 +5720,9 @@ function Get-DocumentMetadataClassificationContext {
 
         return [pscustomobject]@{
             Failure = $null
+            SchemaVersion = $intSchemaVersion
+            Tier2Paths = [string[]]$dictionaryCategoryPaths['tier2Paths']
+            GeneratedPaths = [string[]]$dictionaryCategoryPaths['generatedPaths']
             ExemptPaths = [string[]]$listExemptPaths.ToArray()
             AuthorizedExemptionPaths =
                 [string[]]$listAuthorizedExemptionPaths.ToArray()
@@ -3872,6 +5739,69 @@ function Get-DocumentMetadataClassificationContext {
     }
 }
 
+function Get-InitialDocumentMetadataClassificationFailure {
+    # .SYNOPSIS
+    # Validates the one supported initial classification mapping.
+    #
+    # .DESCRIPTION
+    # Requires the exact known manifest-absent baseline and prior validator.
+    # Validates parsed category mappings, not formatting or candidate assertions.
+    # This bootstrap check does not establish first-install or merge authority.
+    #
+    # .PARAMETER BaselineRevision
+    # The exact trusted baseline, whose manifest absence the caller proved.
+    #
+    # .PARAMETER TrustedBaselineValidatorSha256
+    # SHA-256 of the bounded regular validator blob at the trusted baseline.
+    #
+    # .PARAMETER CandidateContext
+    # The result from the shared strict classification parser.
+    #
+    # .EXAMPLE
+    # Get-InitialDocumentMetadataClassificationFailure @hashtableArguments
+    #
+    # # Returns no failure only for the closed initial mapping.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # [System.String] Zero or more bootstrap failures.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20261002.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string] $BaselineRevision,
+        [Parameter(Mandatory)][AllowEmptyString()][string] $TrustedBaselineValidatorSha256,
+        [Parameter(Mandatory)][pscustomobject] $CandidateContext
+    )
+
+    if ($BaselineRevision -cne 'a71f16a8d76beeca1ba8fdc3b1c95e1958e0973c' -or
+        $TrustedBaselineValidatorSha256 -cne
+        '5a61845f756be1d1bc4ddb772ffbc6c71ab525f0394d11d8c672f998a05fb4a5') {
+        Write-Output 'The manifest-absent classification baseline is not the supported exact initialization.'
+        return
+    }
+    $arrInitialTier2Paths = @(
+        'ACKNOWLEDGMENTS.md', 'CONTRIBUTING.md', 'README.md',
+        'samples/test-nested-markdown-linting.md', 'samples/test-recursive-nested-markdown.md')
+    $arrInitialGeneratedPaths = @(
+        'STYLE_GUIDE_CHAT.md', 'STYLE_GUIDE_FULL.md',
+        'copilot-instructions.md', 'powershell.instructions.md')
+    if ($null -ne $CandidateContext.Failure -or
+        $CandidateContext.SchemaVersion -ne 2 -or
+        $CandidateContext.AuthorizedExemptionPaths.Count -ne 0 -or
+        ($CandidateContext.Tier2Paths -join "`n") -cne ($arrInitialTier2Paths -join "`n") -or
+        ($CandidateContext.GeneratedPaths -join "`n") -cne ($arrInitialGeneratedPaths -join "`n")) {
+        Write-Output 'The initial classification must retain the exact reviewed Tier 2/generated mappings and empty authorizations.'
+    }
+}
+
 function Get-DocumentMetadataClassificationExpansionFailure {
     # .SYNOPSIS
     # Rejects candidate-only Markdown metadata exemptions.
@@ -3880,8 +5810,11 @@ function Get-DocumentMetadataClassificationExpansionFailure {
     # Compares the parsed candidate exemption set with an authenticated baseline.
     # A new active exemption must already be active or authorized in the trusted
     # published baseline. Candidate-only authorizations are inert. A missing
-    # baseline manifest is permitted only for the one-time manifest bootstrap.
-    # Removals are permitted because they strengthen metadata validation.
+    # baseline manifest fails this helper and requires the separate closed
+    # initialization proof.
+    # Generated status must already be generated or authorized in the baseline;
+    # membership in the baseline Tier2 category does not authorize that change.
+    # Removals and generated-to-Tier2 moves strengthen metadata validation.
     #
     # .PARAMETER HasTrustedBaselineManifest
     # Indicates that the authenticated baseline contains the manifest.
@@ -3895,12 +5828,19 @@ function Get-DocumentMetadataClassificationExpansionFailure {
     # .PARAMETER CandidateExemptPath
     # Parsed exact exemptions in the candidate revision.
     #
+    # .PARAMETER TrustedBaselineGeneratedPath
+    # Parsed generated paths in the authenticated baseline.
+    #
+    # .PARAMETER CandidateGeneratedPath
+    # Parsed generated paths in the candidate revision.
+    #
     # .EXAMPLE
     # Get-DocumentMetadataClassificationExpansionFailure `
     #     -HasTrustedBaselineManifest $true `
     #     -TrustedBaselineExemptPath @('README.md') `
     #     -TrustedBaselineAuthorizedExemptionPath @('docs/guide.md') `
-    #     -CandidateExemptPath @('README.md', 'docs/RUNBOOK.md')
+    #     -CandidateExemptPath @('README.md', 'docs/RUNBOOK.md') `
+    #     -TrustedBaselineGeneratedPath @() -CandidateGeneratedPath @()
     #
     # # Reports docs/RUNBOOK.md as an unauthenticated exemption addition.
     #
@@ -3908,7 +5848,7 @@ function Get-DocumentMetadataClassificationExpansionFailure {
     # None. You can't pipe objects to this function.
     #
     # .OUTPUTS
-    # [string] One failure for each candidate-only exemption path.
+    # [string] One failure for each unauthorized exemption or generated classification.
     #
     # .NOTES
     # PRIVATE/INTERNAL HELPER - This function is not part of the
@@ -3916,7 +5856,7 @@ function Get-DocumentMetadataClassificationExpansionFailure {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.1.20260911.0
+    # Version: 1.2.20261002.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -3933,10 +5873,19 @@ function Get-DocumentMetadataClassificationExpansionFailure {
 
         [Parameter(Mandatory)]
         [AllowEmptyCollection()]
-        [string[]] $CandidateExemptPath
+        [string[]] $CandidateExemptPath,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]] $TrustedBaselineGeneratedPath,
+
+        [Parameter(Mandatory)]
+        [AllowEmptyCollection()]
+        [string[]] $CandidateGeneratedPath
     )
 
     if (-not $HasTrustedBaselineManifest) {
+        Write-Output 'Classification expansion requires a trusted manifest or the separately proved closed initialization.'
         return
     }
     $setTrustedBaselineExemptPaths =
@@ -3949,8 +5898,12 @@ function Get-DocumentMetadataClassificationExpansionFailure {
             $TrustedBaselineAuthorizedExemptionPath,
             [System.StringComparer]::Ordinal
         )
-    foreach ($strCandidateExemptPath in
-        ($CandidateExemptPath | Sort-Object -CaseSensitive -Unique)) {
+    $setTrustedBaselineGeneratedPaths =
+        [System.Collections.Generic.HashSet[string]]::new(
+            $TrustedBaselineGeneratedPath,
+            [System.StringComparer]::Ordinal
+        )
+    foreach ($strCandidateExemptPath in $CandidateExemptPath) {
         if ($setTrustedBaselineExemptPaths.Contains($strCandidateExemptPath) -or
             $setTrustedBaselineAuthorizedExemptionPaths.Contains(
                 $strCandidateExemptPath
@@ -3962,6 +5915,17 @@ function Get-DocumentMetadataClassificationExpansionFailure {
             "exemption: $strCandidateExemptPath. Add the exact path to " +
             'authorizedExemptionPaths in a separate change and publish that ' +
             'authorization before activating the exemption.'
+        )
+    }
+    foreach ($strCandidateGeneratedPath in $CandidateGeneratedPath) {
+        if ($setTrustedBaselineGeneratedPaths.Contains($strCandidateGeneratedPath) -or
+            $setTrustedBaselineAuthorizedExemptionPaths.Contains($strCandidateGeneratedPath)) {
+            continue
+        }
+        Write-Output (
+            "The document classification adds unauthenticated generated status: $strCandidateGeneratedPath. " +
+            'The exact path must already be generated or authorized in the trusted baseline; ' +
+            'a Tier2 exemption does not authorize generated status.'
         )
     }
 }
@@ -4004,7 +5968,7 @@ function Get-DiscoveredGovernedMarkdownDocumentPath {
     # contract may change without notice.
     #
     # This function does not support positional parameters.
-    # Version: 1.0.20260910.0
+    # Version: 1.1.20261002.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -4032,7 +5996,7 @@ function Get-DiscoveredGovernedMarkdownDocumentPath {
             $Path.Contains('\', [System.StringComparison]::Ordinal) -or
             $Path -match '(?:^|/)\.\.(?:/|$)' -or
             $Path -match '[\x00-\x1f\x7f]' -or
-            $Path -cnotmatch '\.(?:md|mdc)$') {
+            $Path -inotmatch '\.(?:md|mdc)$') {
             throw "$InventoryName contains an unsafe Markdown path: $Path"
         }
     }
@@ -4041,7 +6005,7 @@ function Get-DiscoveredGovernedMarkdownDocumentPath {
         [System.StringComparer]::Ordinal
     )
     foreach ($strCandidatePath in $CandidatePath) {
-        if ($strCandidatePath -cnotmatch '\.(?:md|mdc)$') {
+        if ($strCandidatePath -inotmatch '\.(?:md|mdc)$') {
             continue
         }
         & $scriptBlockAssertSafeMarkdownPath `
@@ -4092,52 +6056,119 @@ function Get-DiscoveredGovernedMarkdownDocumentPath {
     )
 }
 
-function Get-ProhibitedTrackedClaudeLocalFailure {
+function Test-DocumentMetadataHeaderIntent {
     # .SYNOPSIS
-    # Finds tracked personal Claude project-memory files.
+    # Detects intentional optional metadata without accepting its structure.
     #
     # .DESCRIPTION
-    # Rejects the exact CLAUDE.local.md name at the repository root or below a
-    # tracked repository directory. Similar names remain permitted.
+    # Uses parsed document-level header blocks, excluding leading front matter,
+    # quoted or fenced examples and later ordinary sections. Peer H2 Metadata
+    # sections select validation even when misplaced. Incomplete fields
+    # still select the strict metadata validator. Generated paths are excluded
+    # by the caller, not inferred from their copied source contents.
     #
-    # .PARAMETER TrackedPaths
-    # The complete tracked repository-relative path inventory.
+    # .PARAMETER Content
+    # The bounded document text supplied by the existing safe input reader.
     #
     # .EXAMPLE
-    # Get-ProhibitedTrackedClaudeLocalFailure `
-    #     -TrackedPaths @('CLAUDE.local.md', 'module/CLAUDE.local.md')
+    # Test-DocumentMetadataHeaderIntent -Content $strDocument
     #
-    # # Reports both prohibited paths.
+    # # Reports recognizable header intent, not valid metadata.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. This function does not accept pipeline input.
     #
     # .OUTPUTS
-    # [string] One record for each prohibited tracked path.
+    # [bool] True when the document header contains metadata markers.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260909.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20261003.0
     [CmdletBinding(PositionalBinding = $false)]
-    [OutputType([string])]
-    param(
-        [Parameter(Mandatory)]
-        [AllowEmptyCollection()]
-        [string[]] $TrackedPaths
-    )
+    [OutputType([bool])]
+    param([Parameter(Mandatory)][AllowEmptyString()][string] $Content)
 
-    foreach ($strTrackedPath in $TrackedPaths) {
-        if ($strTrackedPath -cmatch '(?:^|/)CLAUDE\.local\.md$') {
-            Write-Output (
-                'Tracked personal Claude project memory is prohibited: ' +
-                $strTrackedPath
-            )
+    $arrLines = [regex]::Split($Content, '\r\n|\r|\n')
+    $arrParserLines = [string[]]$arrLines.Clone()
+    $intBodyStart = 0
+    if ($arrLines[0] -ceq '---') {
+        $intFrontMatterEnd = -1
+        for ($intLine = 1; $intLine -lt $arrLines.Count; $intLine++) {
+            if ($arrLines[$intLine] -ceq '---') {
+                $intFrontMatterEnd = $intLine
+                break
+            }
+        }
+        # A marked header behind an unclosed delimiter must not disappear as
+        # successful optional coverage. The strict parser reports that error.
+        if ($intFrontMatterEnd -lt 0) {
+            return $Content -imatch '(?m)^(?:#+\s+Metadata|[-+*]\s+\*\*(?:Status|Owner|Last Updated|Scope)|\*\*Version:)'
+        }
+        for ($intLine = 0; $intLine -le $intFrontMatterEnd; $intLine++) {
+            $arrParserLines[$intLine] = ''
+        }
+        $intBodyStart = $intFrontMatterEnd + 1
+    }
+    $objParseContext = Get-MarkdownParseContext `
+        -Content ($arrParserLines -join "`n") -LineCount $arrLines.Count
+    $arrBlocks = @($objParseContext.TopLevelBlocks)
+    # A later peer Metadata section is misplaced intent, not an ordinary
+    # subsection example. Leave deeper headings to the existing header window.
+    foreach ($objBlock in $arrBlocks) {
+        if ($objBlock.Type -ceq 'heading_open' -and $objBlock.Tag -ceq 'h2' -and
+            $objBlock.Text -imatch '^Metadata\s*:?$') { return $true }
+    }
+    $intHeaderStart = $intBodyStart
+    foreach ($objBlock in $arrBlocks) {
+        if ($objBlock.Type -ceq 'heading_open' -and $objBlock.Tag -ceq 'h1' -and
+            ($objBlock.Start - $intBodyStart) -lt 30) {
+            $intHeaderStart = $objBlock.End
+            break
         }
     }
+    # A recognizable header before an early title is misplaced, not absent.
+    # Stop this prefix at its first heading so later examples stay excluded.
+    $intPrefixEnd = $intHeaderStart
+    foreach ($objBlock in $arrBlocks) {
+        if ($objBlock.Start -ge $intBodyStart -and $objBlock.Start -lt $intHeaderStart -and
+            $objBlock.Type -ceq 'heading_open') {
+            if ($objBlock.Tag -cne 'h1' -and $objBlock.Text -imatch '^Metadata\s*:?$') { return $true }
+            $intPrefixEnd = $objBlock.Start
+            break
+        }
+    }
+    $intHeaderEnd = $arrLines.Count
+    foreach ($objBlock in $arrBlocks) {
+        if ($objBlock.Start -lt $intHeaderStart -or $objBlock.Type -cne 'heading_open') {
+            continue
+        }
+        if ($objBlock.Tag -cne 'h1' -and $objBlock.Text -imatch '^Metadata\s*:?$') { return $true }
+        $intHeaderEnd = $objBlock.Start
+        break
+    }
+    foreach ($objBlock in $arrBlocks) {
+        $boolInHeader = ($objBlock.Start -ge $intHeaderStart -and $objBlock.Start -lt $intHeaderEnd) -or
+            ($objBlock.Start -ge $intBodyStart -and $objBlock.Start -lt $intPrefixEnd)
+        if ($boolInHeader -and
+            $objBlock.Type -ceq 'paragraph_open' -and $objBlock.Text -imatch '^Version\s*:') {
+            return $true
+        }
+    }
+    foreach ($objItem in $objParseContext.TopLevelListItems) {
+        $boolInHeader = ($objItem.Start -ge $intHeaderStart -and $objItem.Start -lt $intHeaderEnd) -or
+            ($objItem.Start -ge $intBodyStart -and $objItem.Start -lt $intPrefixEnd)
+        if (-not $boolInHeader) { continue }
+        # Status/date labels are distinctive. Generic Owner/Scope prose alone
+        # is not an opt-in; explicitly emphasized reserved fields are markers.
+        if ($objItem.Text -imatch '^(?:Status|Last\s+Updated)\s*(?::|$)' -or
+            $arrLines[$objItem.Start] -imatch
+                '^\s*[-+*]\s+\*\*(?:Status|Owner|Last\s+Updated|Scope)\s*(?::|\*\*)') {
+            return $true
+        }
+    }
+    return $false
 }
 
 function Get-DocumentMetadataContext {
@@ -4145,35 +6176,43 @@ function Get-DocumentMetadataContext {
     # Gets validated document-level metadata context.
     #
     # .DESCRIPTION
-    # Locates optional Version and required Last Updated metadata in the parsed
-    # document header.
+    # Parses direct or headed document-level metadata after an early H1,
+    # or direct metadata at body start after an optional leading directive.
+    # Leading YAML front matter is excluded from the 30-line H1 window.
+    # Parses any present Version, independently of whether it is required.
+    # Returns validated list and Status coordinates with the same parser context
+    # for private consumers that must identify the canonical metadata field.
     #
     # .PARAMETER Content
-    # The governed Markdown document text.
+    # The trusted input text to parse or transform.
+    #
+    # .PARAMETER RequiresVersion
+    # Indicates whether the document header must contain Version metadata.
     #
     # .EXAMPLE
-    # Get-DocumentMetadataContext -Content $strAgentsContent
+    # Get-DocumentMetadataContext @hashtableArguments
     #
-    # # Returns validated optional Version and required Last Updated values.
+    # # Runs with validated named arguments.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. No pipeline input.
     #
     # .OUTPUTS
-    # [pscustomobject] The metadata values and structural validation result.
+    # [System.Management.Automation.PSCustomObject] One validated context object described in the function description.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.6.20260910.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.7.20261005.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)]
-        [string] $Content
+        [string] $Content,
+
+        [Parameter()]
+        [bool] $RequiresVersion = $true
     )
 
     $arrLines = [regex]::Split($Content, '\r\n|\r|\n')
@@ -4207,148 +6246,127 @@ function Get-DocumentMetadataContext {
     $arrTopLevelBlocks = @($objParseContext.TopLevelBlocks)
     $arrTopLevelListItems = @($objParseContext.TopLevelListItems)
 
-    $listH1Indices = [System.Collections.Generic.List[int]]::new()
-    $listH2Indices = [System.Collections.Generic.List[int]]::new()
+    $listH1Indices = [Collections.Generic.List[int]]::new()
+    $listH2Indices = [Collections.Generic.List[int]]::new()
     for ($intIndex = 0; $intIndex -lt $arrTopLevelBlocks.Count; $intIndex++) {
         $objBlock = $arrTopLevelBlocks[$intIndex]
         if ($objBlock.Type -ceq 'heading_open' -and $objBlock.Tag -ceq 'h1') {
             $listH1Indices.Add($intIndex)
-        }
-        elseif ($objBlock.Type -ceq 'heading_open' -and $objBlock.Tag -ceq 'h2') {
+        } elseif ($objBlock.Type -ceq 'heading_open' -and $objBlock.Tag -ceq 'h2') {
             $listH2Indices.Add($intIndex)
         }
     }
 
-    if ($listH1Indices.Count -ne 1 -or
-        ($arrTopLevelBlocks[$listH1Indices[0]].Start - $intBodyStart) -ge 30) {
+    if ($listH1Indices.Count -gt 1) {
         return [pscustomobject]@{
-            Failure = 'must contain exactly one document-level H1 within the first 30 body lines.'
+            Failure = 'must contain at most one document-level H1.'
             VersionDate = $null
             UpdatedDate = $null
             Revision = $null
         }
+    }
+
+    $intH1Index = -1
+    if ($listH1Indices.Count -eq 1 -and
+        ($arrTopLevelBlocks[$listH1Indices[0]].Start - $intBodyStart) -lt 30) {
+        $intH1Index = $listH1Indices[0]
+    }
+    $intMetadataIndex = 0
+    if ($intH1Index -ge 0) {
+        $intMetadataIndex = $intH1Index + 1
+    } elseif ($arrTopLevelBlocks.Count -gt 0 -and
+        $arrTopLevelBlocks[0].Type -ceq 'html_block') {
+        $objLeadingBlock = $arrTopLevelBlocks[0]
+        $strLeadingBlock = ($arrLines[$objLeadingBlock.Start..($objLeadingBlock.End - 1)] -join "`n").Trim()
+        if ($strLeadingBlock -cmatch '^<!-- markdownlint-disable(?: [A-Za-z0-9_-]+)* -->$') {
+            $intMetadataIndex = 1
+        }
+    }
+
+    $intHeaderRegionEnd = $arrLines.Count
+    $intVersionRegionStart = $intBodyStart
+    if ($intH1Index -ge 0) {
+        $intVersionRegionStart = $arrTopLevelBlocks[$intH1Index].End
+    }
+    foreach ($objHeaderBlock in $arrTopLevelBlocks) {
+        if ($objHeaderBlock.Start -lt $intVersionRegionStart -or
+            $objHeaderBlock.Type -cne 'heading_open') {
+            continue
+        }
+        if ($intH1Index -ge 0 -and $objHeaderBlock.Tag -ceq 'h2' -and
+            $objHeaderBlock.Text -ceq 'Metadata') {
+            continue
+        }
+        $intHeaderRegionEnd = $objHeaderBlock.Start
+        break
     }
 
     $strVersionPattern = '^\*\*Version:\*\* (?<Major>\d+)\.(?<Minor>\d+)\.' +
         '(?<Date>\d{8})\.(?<Revision>\d+)$'
-    $listVersionRecords = [System.Collections.Generic.List[pscustomobject]]::new()
+    $listVersionRecords = [Collections.Generic.List[pscustomobject]]::new()
     for ($intIndex = 0; $intIndex -lt $arrTopLevelBlocks.Count; $intIndex++) {
         $objBlock = $arrTopLevelBlocks[$intIndex]
-        if ($objBlock.Type -cne 'paragraph_open' -or
-            $objBlock.Text -isnot [string] -or
-            -not $objBlock.Text.StartsWith('Version:', [System.StringComparison]::Ordinal)) {
-            continue
+        if ($objBlock.Start -ge $intVersionRegionStart -and
+            $objBlock.Start -lt $intHeaderRegionEnd -and
+            $objBlock.Type -ceq 'paragraph_open' -and
+            $objBlock.Text -is [string] -and
+            [regex]::IsMatch($objBlock.Text, '^Version\s*:',
+                ([Text.RegularExpressions.RegexOptions]::IgnoreCase -bor
+                    [Text.RegularExpressions.RegexOptions]::CultureInvariant))) {
+            $listVersionRecords.Add([pscustomobject]@{ BlockIndex = $intIndex; Block = $objBlock })
         }
-
-        $listVersionRecords.Add([pscustomobject]@{
-                BlockIndex = $intIndex
-                Block = $objBlock
-            })
+    }
+    $objVersionMatch = $null
+    $boolHasVersion = $listVersionRecords.Count -gt 0
+    if ($RequiresVersion -or $boolHasVersion) {
+        if ($intH1Index -ge 0 -and $listVersionRecords.Count -eq 1 -and
+            $listVersionRecords[0].BlockIndex -eq $intMetadataIndex -and
+            $listVersionRecords[0].Block.End -eq ($listVersionRecords[0].Block.Start + 1)) {
+            $objVersionMatch = [regex]::Match(
+                $arrLines[$listVersionRecords[0].Block.Start], $strVersionPattern)
+        }
+        if ($null -eq $objVersionMatch -or -not $objVersionMatch.Success) {
+            return [pscustomobject]@{
+                Failure = 'must contain one exact document-level Version paragraph immediately after an H1 within the first 30 body lines.'
+                VersionDate = $null
+                UpdatedDate = $null
+                Revision = $null
+            }
+        }
+        $intMetadataIndex++
     }
 
-    $intH1Index = $listH1Indices[0]
-    if ($listVersionRecords.Count -gt 1) {
+    $strMetadataPlacementFailure = 'must place one document-level metadata list immediately after ' +
+        'the early H1 and optional Version, or at body start after an optional leading markdownlint-disable directive; ' +
+        'an optional Metadata section must be the first H2 immediately after the early H1 and optional Version.'
+    $arrMetadataHeadings = @($listH2Indices | Where-Object { $arrTopLevelBlocks[$_].Text -ceq 'Metadata' })
+    if ($arrMetadataHeadings.Count -gt 0) {
+        if ($intH1Index -lt 0 -or $arrMetadataHeadings.Count -ne 1 -or
+            $listH2Indices[0] -ne $intMetadataIndex -or $arrMetadataHeadings[0] -ne $intMetadataIndex) {
+            return [pscustomobject]@{
+                Failure = $strMetadataPlacementFailure
+                VersionDate = $null
+                UpdatedDate = $null
+                Revision = $null
+            }
+        }
+        $intMetadataIndex++
+    }
+    if ($intMetadataIndex -ge $arrTopLevelBlocks.Count -or
+        $arrTopLevelBlocks[$intMetadataIndex].Type -cne 'bullet_list_open') {
         return [pscustomobject]@{
-            Failure = 'must contain at most one exact document-level Version paragraph immediately after the H1 and within the first 30 body lines.'
+            Failure = $strMetadataPlacementFailure
             VersionDate = $null
             UpdatedDate = $null
             Revision = $null
         }
     }
-    $boolHasVersion = $listVersionRecords.Count -eq 1
-    $objVersionMatch = $null
-    $intExpectedMetadataIndex = $intH1Index + 1
-    if ($boolHasVersion) {
-        if ($listVersionRecords[0].BlockIndex -ne ($intH1Index + 1) -or
-            $listVersionRecords[0].Block.End -ne
-            ($listVersionRecords[0].Block.Start + 1) -or
-            ($listVersionRecords[0].Block.Start - $intBodyStart) -ge 30) {
-            return [pscustomobject]@{
-                Failure = 'must contain at most one exact document-level Version paragraph immediately after the H1 and within the first 30 body lines.'
-                VersionDate = $null
-                UpdatedDate = $null
-                Revision = $null
-            }
-        }
-        $objVersionMatch = [regex]::Match(
-            $arrLines[$listVersionRecords[0].Block.Start],
-            $strVersionPattern
-        )
-        if (-not $objVersionMatch.Success) {
-            return [pscustomobject]@{
-                Failure = 'must contain at most one exact document-level Version paragraph immediately after the H1 and within the first 30 body lines.'
-                VersionDate = $null
-                UpdatedDate = $null
-                Revision = $null
-            }
-        }
-        $intExpectedMetadataIndex = $listVersionRecords[0].BlockIndex + 1
-    }
-
-    $arrMetadataHeadingIndices = @(
-        $listH2Indices |
-        Where-Object { $arrTopLevelBlocks[$_].Text -ceq 'Metadata' }
-    )
-    $boolHasMetadataHeading = $arrMetadataHeadingIndices.Count -gt 0
-    $intMetadataContentStart = -1
-    $intMetadataContentEnd = -1
-    $strMetadataContainerName = 'metadata header block'
-    if ($boolHasMetadataHeading) {
-        $intMetadataIndex = $arrMetadataHeadingIndices[0]
-        $objMetadataBlock = $arrTopLevelBlocks[$intMetadataIndex]
-        if ($arrMetadataHeadingIndices.Count -ne 1 -or
-            $intMetadataIndex -ne $intExpectedMetadataIndex -or
-            ($objMetadataBlock.Start - $intBodyStart) -ge 30) {
-            return [pscustomobject]@{
-                Failure = 'must place Metadata as the first level-two heading immediately after the H1 or optional Version and within the first 30 body lines.'
-                VersionDate = $null
-                UpdatedDate = $null
-                Revision = $null
-            }
-        }
-
-        $intMetadataContentStart = $objMetadataBlock.Start
-        $intMetadataContentEnd = $arrLines.Count
-        $strMetadataContainerName = 'Metadata section'
-        foreach ($intH2Index in $listH2Indices) {
-            if ($intH2Index -gt $intMetadataIndex) {
-                $intMetadataContentEnd = $arrTopLevelBlocks[$intH2Index].Start
-                break
-            }
-        }
-    }
-    else {
-        if ($intExpectedMetadataIndex -ge $arrTopLevelBlocks.Count) {
-            return [pscustomobject]@{
-                Failure = 'must place the metadata header block immediately after the H1 or optional Version and within the first 30 body lines.'
-                VersionDate = $null
-                UpdatedDate = $null
-                Revision = $null
-            }
-        }
-
-        $objMetadataBlock = $arrTopLevelBlocks[$intExpectedMetadataIndex]
-        if ($objMetadataBlock.Type -cne 'bullet_list_open' -or
-            $objMetadataBlock.Tag -cne 'ul' -or
-            ($objMetadataBlock.Start - $intBodyStart) -ge 30) {
-            return [pscustomobject]@{
-                Failure = 'must place the metadata header block immediately after the H1 or optional Version and within the first 30 body lines.'
-                VersionDate = $null
-                UpdatedDate = $null
-                Revision = $null
-            }
-        }
-
-        $intMetadataContentStart = $objMetadataBlock.Start - 1
-        $intMetadataContentEnd = $objMetadataBlock.End
-    }
-
+    $objMetadataList = $arrTopLevelBlocks[$intMetadataIndex]
     $arrRequiredFields = @(
         [pscustomobject]@{
             Name = 'Status'
-            Pattern = '^- \*\*Status:\*\* (?<Value>' +
-                (($script:arrAllowedMetadataStatuses |
-                        ForEach-Object { [regex]::Escape($_) }) -join '|') + ')$'
+            Pattern = '^- \*\*Status:\*\* ' +
+                '(?<Value>Draft|Proposed|Active|Accepted|Superseded|Deprecated)$'
         },
         [pscustomobject]@{
             Name = 'Owner'
@@ -4366,21 +6384,21 @@ function Get-DocumentMetadataContext {
     $hashtableFieldMatches = @{}
     $hashtableFieldLineIndices = @{}
     foreach ($objField in $arrRequiredFields) {
+        $strFieldLabelPattern = '^' +
+            (($objField.Name.Split(' ') | ForEach-Object { [regex]::Escape($_) }) -join '\s+') + '\s*:'
         $arrFieldRecords = @(
             $arrTopLevelListItems |
                 Where-Object {
+                    $_.Start -ge $objMetadataList.Start -and
+                    $_.Start -lt $intHeaderRegionEnd -and
                     $_.Text -is [string] -and
-                    $_.Text.StartsWith(
-                        "$($objField.Name):",
-                        [System.StringComparison]::Ordinal
-                    ) -and
-                    $_.Start -gt $intMetadataContentStart -and
-                    $_.Start -lt $intMetadataContentEnd -and
-                    ($_.Start - $intBodyStart) -lt 30
+                    [regex]::IsMatch($_.Text, $strFieldLabelPattern,
+                        ([Text.RegularExpressions.RegexOptions]::IgnoreCase -bor
+                            [Text.RegularExpressions.RegexOptions]::CultureInvariant))
                 }
         )
         $strFieldFailure = "must contain one exact top-level $($objField.Name) " +
-            "list item in the $strMetadataContainerName and within the first 30 body lines."
+            'list item in the document-level metadata list.'
         $boolFieldHasContinuation = $false
         if ($arrFieldRecords.Count -eq 1) {
             for ($intLine = $arrFieldRecords[0].Start + 1;
@@ -4392,7 +6410,9 @@ function Get-DocumentMetadataContext {
                 }
             }
         }
-        if ($arrFieldRecords.Count -ne 1 -or $boolFieldHasContinuation) {
+        if ($arrFieldRecords.Count -ne 1 -or $boolFieldHasContinuation -or
+            $arrFieldRecords[0].Start -lt $objMetadataList.Start -or
+            $arrFieldRecords[0].End -gt $objMetadataList.End) {
             return [pscustomobject]@{
                 Failure = $strFieldFailure
                 VersionDate = $null
@@ -4419,165 +6439,84 @@ function Get-DocumentMetadataContext {
 
     return [pscustomobject]@{
         Failure = $null
-        HasVersion = $boolHasVersion
         Status = $hashtableFieldMatches['Status'].Groups['Value'].Value
-        Major = if ($boolHasVersion) { $objVersionMatch.Groups['Major'].Value } else { $null }
-        Minor = if ($boolHasVersion) { $objVersionMatch.Groups['Minor'].Value } else { $null }
-        VersionDate = if ($boolHasVersion) { $objVersionMatch.Groups['Date'].Value } else { $null }
+        Major = if ($boolHasVersion) {
+            $objVersionMatch.Groups['Major'].Value
+        } else {
+            $null
+        }
+        Minor = if ($boolHasVersion) {
+            $objVersionMatch.Groups['Minor'].Value
+        } else {
+            $null
+        }
+        VersionDate = if ($boolHasVersion) {
+            $objVersionMatch.Groups['Date'].Value
+        } else {
+            $null
+        }
         UpdatedDate = $objUpdatedMatch.Groups['Date'].Value
-        Revision = if ($boolHasVersion) { $objVersionMatch.Groups['Revision'].Value } else { $null }
+        Revision = if ($boolHasVersion) {
+            $objVersionMatch.Groups['Revision'].Value
+        } else {
+            $null
+        }
         VersionLineIndex = if ($boolHasVersion) {
             $listVersionRecords[0].Block.Start
-        }
-        else {
+        } else {
             -1
         }
         UpdatedLineIndex = $hashtableFieldLineIndices['Last Updated']
-        MetadataContentStart = $intMetadataContentStart
-        MetadataContentEnd = $intMetadataContentEnd
+        MetadataListStart = $objMetadataList.Start
+        MetadataListEnd = $objMetadataList.End
+        StatusLineIndex = $hashtableFieldLineIndices['Status']
+        MarkdownParseContext = $objParseContext
     }
 }
 
-function Test-DocumentMetadataHeaderIntent {
+function Get-PublishedEndpointMetadataFailure {
     # .SYNOPSIS
-    # Tests whether a Markdown document intentionally carries metadata.
+    # Finds metadata failures in one document transition.
     #
     # .DESCRIPTION
-    # Uses the locked Markdown parser to distinguish an operative document header
-    # from fenced, quoted, deleted, nested, or otherwise non-operative examples.
-    # A Metadata heading near the top of the body or an operative top-level
-    # metadata field identifies an optional metadata header that must be validated.
-    #
-    # .PARAMETER Content
-    # The Markdown document text.
-    #
-    # .EXAMPLE
-    # Test-DocumentMetadataHeaderIntent -Content $strReadmeContent
-    #
-    # # Returns true when README.md intentionally carries document metadata.
-    #
-    # .INPUTS
-    # None. You can't pipe objects to this function.
-    #
-    # .OUTPUTS
-    # [bool] True when the document carries an operative metadata-header signal.
-    #
-    # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260912.0
-    [CmdletBinding(PositionalBinding = $false)]
-    [OutputType([bool])]
-    param(
-        [Parameter(Mandatory)]
-        [AllowEmptyString()]
-        [string] $Content
-    )
-
-    $strMetadataSignalPattern =
-        '(?m)^(?:## Metadata|- \*\*(?:Status|Owner|Last Updated|Scope):\*\*)'
-    if ($Content -cnotmatch $strMetadataSignalPattern) {
-        return $false
-    }
-
-    $arrLines = [regex]::Split($Content, '\r\n|\r|\n')
-    $arrParserLines = [string[]]$arrLines.Clone()
-    $intBodyStart = 0
-    if ($arrLines.Count -gt 0 -and $arrLines[0] -ceq '---') {
-        $intFrontMatterEnd = -1
-        for ($intLine = 1; $intLine -lt $arrLines.Count; $intLine++) {
-            if ($arrLines[$intLine] -ceq '---') {
-                $intFrontMatterEnd = $intLine
-                break
-            }
-        }
-        if ($intFrontMatterEnd -lt 0) {
-            return $true
-        }
-        for ($intLine = 0; $intLine -le $intFrontMatterEnd; $intLine++) {
-            $arrParserLines[$intLine] = ''
-        }
-        $intBodyStart = $intFrontMatterEnd + 1
-    }
-
-    $objParseContext = Get-MarkdownParseContext `
-        -Content ($arrParserLines -join "`n") `
-        -LineCount $arrLines.Count
-    foreach ($objBlock in @($objParseContext.TopLevelBlocks)) {
-        if ($objBlock.Type -ceq 'heading_open' -and
-            $objBlock.Tag -ceq 'h2' -and
-            $objBlock.Text -ceq 'Metadata' -and
-            ($objBlock.Start - $intBodyStart) -lt 30) {
-            return $true
-        }
-    }
-    foreach ($objListItem in @($objParseContext.TopLevelListItems)) {
-        if ($objListItem.Text -is [string] -and
-            $objListItem.Text -cmatch '^(?:Status|Owner|Last Updated|Scope):') {
-            return $true
-        }
-    }
-    return $false
-}
-
-function Get-DocumentMetadataTransitionFailure {
-    # .SYNOPSIS
-    # Finds metadata-policy failures in one document transition.
-    #
-    # .DESCRIPTION
-    # Compares current and parent metadata with squash-safe anti-rollback rules.
+    # Validates structure, dates, version order, rendered changes, and the
+    # optional expected UTC date for current and parent content.
     #
     # .PARAMETER Name
-    # The governed document name used in failure records.
+    # The document name for diagnostics.
     #
     # .PARAMETER CurrentContent
-    # The document text at the current revision.
+    # The current Markdown content.
     #
     # .PARAMETER ParentContent
-    # The document text at the parent revision, or null for no comparison.
+    # The parent content, or null for creation.
     #
     # .PARAMETER ExpectedUtcDate
-    # The required UTC date after a rendered-content change.
+    # The optional authenticated yyyy-MM-dd date.
     #
     # .PARAMETER IsNewDocumentTransition
-    # Indicates that an absent parent is a governed-document addition.
+    # True when null parent content means document creation.
     #
     # .PARAMETER RequireExpectedUtcDateForRenderedChange
-    # Indicates that changed content must use the transition commit's UTC date.
-    #
-    # .PARAMETER RequirePublishedRevisionConvention
-    # Indicates that changed content must recompute its revision from the
-    # published baseline. Inherited merge results disable only this computation.
-    #
-    # .PARAMETER MetadataRequired
-    # Indicates that the current document must carry metadata. When false, a
-    # document without metadata passes and a document with metadata receives the
-    # complete shape and transition validation.
+    # True to require the expected date after rendered changes.
     #
     # .EXAMPLE
-    # Get-DocumentMetadataTransitionFailure -Name 'AGENTS.md' `
-    #     -CurrentContent $strCurrent -ParentContent $strParent `
-    #     -ExpectedUtcDate '2026-08-19' -IsNewDocumentTransition $false `
-    #     -RequireExpectedUtcDateForRenderedChange $true
-    #
-    # # Writes one string for each metadata-policy failure.
+    # $arrFailure = @(Get-PublishedEndpointMetadataFailure `
+    #     -Name 'AGENTS.md' -CurrentContent $strCurrent `
+    #     -ParentContent $strParent -ExpectedUtcDate '2026-08-27' `
+    #     -IsNewDocumentTransition $false)
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None.
     #
     # .OUTPUTS
-    # [string] One record for each metadata-transition failure.
+    # [string] Zero or more failure diagnostics.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.8.20260912.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -4599,63 +6538,19 @@ function Get-DocumentMetadataTransitionFailure {
         [bool] $IsNewDocumentTransition,
 
         [Parameter()]
-        [bool] $RequireExpectedUtcDateForRenderedChange = $true,
-
-        [Parameter()]
-        [bool] $RequirePublishedRevisionConvention = $true,
-
-        [Parameter()]
-        [bool] $MetadataRequired = $true
+        [bool] $RequireExpectedUtcDateForRenderedChange = $true
     )
-
-    if (-not $MetadataRequired -and
-        -not (Test-DocumentMetadataHeaderIntent -Content $CurrentContent)) {
-        return
-    }
-
-    $objParentMetadata = $null
-    if (-not $MetadataRequired -and
-        -not [string]::IsNullOrEmpty($ParentContent)) {
-        if (-not (Test-DocumentMetadataHeaderIntent -Content $ParentContent)) {
-            $ParentContent = $null
-            $IsNewDocumentTransition = $true
-        }
-        else {
-            $objParentMetadata = Get-DocumentMetadataContext -Content $ParentContent
-            if ($null -ne $objParentMetadata.Failure) {
-                $ParentContent = $null
-                $IsNewDocumentTransition = $true
-                $objParentMetadata = $null
-            }
-        }
-    }
 
     $objCurrentMetadata = Get-DocumentMetadataContext -Content $CurrentContent
     if ($null -ne $objCurrentMetadata.Failure) {
         Write-Output "$Name $($objCurrentMetadata.Failure)"
         return
     }
-    if (@(Get-GovernedDecisionDocumentPath -CandidatePath @($Name)).Count -eq 1) {
-        $arrDecisionRecordFailures = @(
-            Get-DecisionRecordContractFailure `
-                -Name $Name `
-                -Content $CurrentContent `
-                -MetadataContext $objCurrentMetadata
-        )
-        if ($arrDecisionRecordFailures.Count -gt 0) {
-            Write-Output $arrDecisionRecordFailures
-            return
-        }
-    }
 
+    $strCurrentVersionDate = $objCurrentMetadata.VersionDate
     $strCurrentUpdatedDate = $objCurrentMetadata.UpdatedDate
-    if (-not (Test-MetadataCalendarDate -Date $strCurrentUpdatedDate)) {
-        Write-Output "$Name Last Updated must contain one real calendar date."
-        return
-    }
-    if ($objCurrentMetadata.HasVersion -and
-        -not (Test-MetadataCalendarDatePair `
-            -VersionDate $objCurrentMetadata.VersionDate `
+    if (-not (Test-MetadataCalendarDatePair `
+            -VersionDate $strCurrentVersionDate `
             -UpdatedDate $strCurrentUpdatedDate)) {
         Write-Output "$Name Version and Last Updated must contain one real matching calendar date."
         return
@@ -4671,55 +6566,51 @@ function Get-DocumentMetadataTransitionFailure {
         return
     }
 
+    $intCurrentMajor = [int64] 0
+    $intCurrentMinor = [int64] 0
+    $intCurrentRevision = [int64] 0
+    if (-not [int64]::TryParse($objCurrentMetadata.Major, [ref] $intCurrentMajor) -or
+        -not [int64]::TryParse($objCurrentMetadata.Minor, [ref] $intCurrentMinor) -or
+        -not [int64]::TryParse($objCurrentMetadata.Revision, [ref] $intCurrentRevision)) {
+        Write-Output "$Name Version major, minor, and revision must fit in signed 64-bit integers."
+        return
+    }
+
     if ([string]::IsNullOrEmpty($ParentContent)) {
         if (-not $IsNewDocumentTransition) {
             return
         }
-        if ($objCurrentMetadata.HasVersion -and $RequirePublishedRevisionConvention) {
-            $intNewDocumentRevision = [int64] 0
-            if (-not [int64]::TryParse(
-                    $objCurrentMetadata.Revision,
-                    [ref] $intNewDocumentRevision
-                )) {
-                Write-Output "$Name Version revision must fit in a signed 64-bit integer."
+        if ($RequireExpectedUtcDateForRenderedChange) {
+            if ([string]::IsNullOrEmpty($ExpectedUtcDate) -or
+                -not (Test-MetadataCalendarDatePair `
+                    -VersionDate $ExpectedUtcDate.Replace('-', '') `
+                    -UpdatedDate $ExpectedUtcDate)) {
+                Write-Output "The expected UTC date for $Name is unavailable or invalid."
                 return
             }
-            if ($intNewDocumentRevision -ne 0) {
-                Write-Output "$Name Version revision must be 0 when no published baseline exists."
-                return
+            if ($strCurrentUpdatedDate -cne $ExpectedUtcDate) {
+                Write-Output (
+                    "$Name Last Updated must be $ExpectedUtcDate after a rendered-content change."
+                )
             }
         }
-        if (-not $RequireExpectedUtcDateForRenderedChange) {
-            return
-        }
-        if ([string]::IsNullOrEmpty($ExpectedUtcDate) -or
-            -not (Test-MetadataCalendarDate -Date $ExpectedUtcDate)) {
-            Write-Output "The expected UTC date for $Name is unavailable or invalid."
-            return
-        }
-        if ($strCurrentUpdatedDate -cne $ExpectedUtcDate) {
+        if ($intCurrentRevision -ne 0) {
             Write-Output (
-                "$Name Last Updated must be $ExpectedUtcDate after a rendered-content change."
+                "$Name Version revision must be exactly 0 when no published baseline exists."
             )
         }
         return
     }
 
-    if ($null -eq $objParentMetadata) {
-        $objParentMetadata = Get-DocumentMetadataContext -Content $ParentContent
-    }
+    $objParentMetadata = Get-DocumentMetadataContext -Content $ParentContent
     if ($null -ne $objParentMetadata.Failure) {
         Write-Output "The parent of $Name $($objParentMetadata.Failure)"
         return
     }
+    $strParentVersionDate = $objParentMetadata.VersionDate
     $strParentUpdatedDate = $objParentMetadata.UpdatedDate
-    if (-not (Test-MetadataCalendarDate -Date $strParentUpdatedDate)) {
-        Write-Output "The parent of $Name Last Updated must contain one real calendar date."
-        return
-    }
-    if ($objParentMetadata.HasVersion -and
-        -not (Test-MetadataCalendarDatePair `
-            -VersionDate $objParentMetadata.VersionDate `
+    if (-not (Test-MetadataCalendarDatePair `
+            -VersionDate $strParentVersionDate `
             -UpdatedDate $strParentUpdatedDate)) {
         Write-Output "The parent of $Name must contain one real matching calendar date."
         return
@@ -4734,86 +6625,81 @@ function Get-DocumentMetadataTransitionFailure {
         )
         return
     }
-    if ((-not $objCurrentMetadata.HasVersion -or
-            -not $objParentMetadata.HasVersion) -and
-        [string]::CompareOrdinal(
-            $strCurrentUpdatedDate,
-            $strParentUpdatedDate
-        ) -lt 0) {
+
+    $intParentMajor = [int64] 0
+    $intParentMinor = [int64] 0
+    $intParentRevision = [int64] 0
+    if (-not [int64]::TryParse($objParentMetadata.Major, [ref] $intParentMajor) -or
+        -not [int64]::TryParse($objParentMetadata.Minor, [ref] $intParentMinor) -or
+        -not [int64]::TryParse($objParentMetadata.Revision, [ref] $intParentRevision)) {
         Write-Output (
-            "$Name Last Updated must not move backward from " +
-            "$strParentUpdatedDate to $strCurrentUpdatedDate."
+            "The published baseline $Name Version major, minor, and revision must fit " +
+            'in signed 64-bit integers.'
         )
         return
     }
 
+    $intVersionDateComparison = [string]::CompareOrdinal(
+        $strCurrentVersionDate,
+        $strParentVersionDate
+    )
+    $intMajorMinorComparison = if ($intCurrentMajor -ne $intParentMajor) {
+        $intCurrentMajor.CompareTo($intParentMajor)
+    } elseif ($intCurrentMinor -ne $intParentMinor) {
+        $intCurrentMinor.CompareTo($intParentMinor)
+    } else {
+        0
+    }
     $strCurrentComparison = ConvertTo-MetadataComparisonText `
         -Content $CurrentContent -MetadataContext $objCurrentMetadata
     $strParentComparison = ConvertTo-MetadataComparisonText `
         -Content $ParentContent -MetadataContext $objParentMetadata
     $boolRenderedContentChanged = $strCurrentComparison -cne $strParentComparison
-    $intCurrentRevision = [int64] 0
-    $intParentRevision = [int64] 0
-    $boolSameVersionIdentity = $false
-    if ($objCurrentMetadata.HasVersion) {
-        if (-not [int64]::TryParse(
-                $objCurrentMetadata.Revision,
-                [ref] $intCurrentRevision
-            )) {
-            Write-Output "$Name Version revision must fit in a signed 64-bit integer."
-            return
-        }
-        if ($objParentMetadata.HasVersion) {
-            if (-not [int64]::TryParse(
-                    $objParentMetadata.Revision,
-                    [ref] $intParentRevision
-                )) {
-                Write-Output "$Name Version revision must fit in a signed 64-bit integer."
-                return
-            }
-            $strCurrentVersionIdentity =
-                "$($objCurrentMetadata.Major).$($objCurrentMetadata.Minor)." +
-                $objCurrentMetadata.VersionDate
-            $strParentVersionIdentity =
-                "$($objParentMetadata.Major).$($objParentMetadata.Minor)." +
-                $objParentMetadata.VersionDate
-            $boolSameVersionIdentity =
-                $strCurrentVersionIdentity -ceq $strParentVersionIdentity
-            $intVersionDateComparison = [string]::CompareOrdinal(
-                $objCurrentMetadata.VersionDate,
-                $objParentMetadata.VersionDate
-            )
-            if ($intVersionDateComparison -lt 0) {
-                Write-Output (
-                    "$Name Version date must not move backward from " +
-                    "$($objParentMetadata.VersionDate) to " +
-                    "$($objCurrentMetadata.VersionDate)."
-                )
-            }
-            elseif ($boolSameVersionIdentity -and
-                $intCurrentRevision -lt $intParentRevision) {
-                Write-Output (
-                    "$Name Version revision must not decrease from " +
-                    "$intParentRevision to $intCurrentRevision."
-                )
-            }
-        }
-        elseif ($RequirePublishedRevisionConvention -and $intCurrentRevision -ne 0) {
-            Write-Output (
-                "$Name Version revision must be 0 when Version is added to an " +
-                "unversioned published baseline; current revision is $intCurrentRevision."
-            )
-        }
+    if ($intVersionDateComparison -lt 0) {
+        Write-Output (
+            "$Name Version date must not move backward from $strParentVersionDate to " +
+            "$strCurrentVersionDate."
+        )
+        return
+    }
+    if ($intMajorMinorComparison -lt 0) {
+        Write-Output (
+            "$Name Version major and minor tuple must not move backward from " +
+            "$intParentMajor.$intParentMinor to $intCurrentMajor.$intCurrentMinor."
+        )
+        return
+    }
+    $boolSameVersionTuple = $intMajorMinorComparison -eq 0 -and
+        $intVersionDateComparison -eq 0
+    if ($boolSameVersionTuple -and $intCurrentRevision -lt $intParentRevision) {
+        Write-Output (
+            "$Name Version revision must not decrease from $intParentRevision to " +
+            "$intCurrentRevision."
+        )
+        return
     }
 
-    if ($RequirePublishedRevisionConvention -and
-        $objCurrentMetadata.HasVersion -and
-        $objParentMetadata.HasVersion -and
-        -not $boolSameVersionIdentity -and
-        $intCurrentRevision -ne 0) {
+    $boolRevisionChanged = $intCurrentRevision -ne $intParentRevision
+    if ($boolSameVersionTuple -and
+        ($boolRenderedContentChanged -or $boolRevisionChanged)) {
+        if ($intParentRevision -eq [int64]::MaxValue) {
+            Write-Output (
+                "The published baseline $Name Version revision cannot be incremented safely."
+            )
+            return
+        }
+        $intExpectedRevision = $intParentRevision + 1
+        if ($intCurrentRevision -ne $intExpectedRevision) {
+            Write-Output (
+                "$Name Version revision must be exactly $intExpectedRevision after a " +
+                'published change with an unchanged published-baseline major, minor, ' +
+                'and date tuple.'
+            )
+        }
+    } elseif (-not $boolSameVersionTuple -and $intCurrentRevision -ne 0) {
         Write-Output (
-            "$Name Version revision must be 0 when major, minor, or date changes; " +
-            "current revision is $intCurrentRevision."
+            "$Name Version revision must be exactly 0 when a published-baseline " +
+            'major, minor, or date segment changes.'
         )
     }
 
@@ -4822,8 +6708,9 @@ function Get-DocumentMetadataTransitionFailure {
     }
 
     if ($RequireExpectedUtcDateForRenderedChange) {
-        if ([string]::IsNullOrEmpty($ExpectedUtcDate) -or
-            -not (Test-MetadataCalendarDate -Date $ExpectedUtcDate)) {
+        if (-not (Test-MetadataCalendarDatePair `
+                -VersionDate $ExpectedUtcDate.Replace('-', '') `
+                -UpdatedDate $ExpectedUtcDate)) {
             Write-Output "The expected UTC date for $Name is unavailable or invalid."
             return
         }
@@ -4834,28 +6721,6 @@ function Get-DocumentMetadataTransitionFailure {
         }
     }
 
-    if (-not $objCurrentMetadata.HasVersion -or
-        -not $objParentMetadata.HasVersion) {
-        return
-    }
-    if (-not $RequirePublishedRevisionConvention) {
-        return
-    }
-    if ($boolSameVersionIdentity) {
-        if ($intParentRevision -eq [int64]::MaxValue) {
-            Write-Output "The parent $Name Version revision cannot be incremented safely."
-        }
-        else {
-            $intExpectedRevision = $intParentRevision + 1
-            if ($intCurrentRevision -ne $intExpectedRevision) {
-                Write-Output (
-                    "$Name Version revision must be $intExpectedRevision after a content " +
-                    "change with unchanged major, minor, and date; baseline revision is " +
-                    "$intParentRevision."
-                )
-            }
-        }
-    }
 }
 
 function Get-TomlSemanticStatementContext {
@@ -4881,12 +6746,10 @@ function Get-TomlSemanticStatementContext {
     # [pscustomobject] One semantic TOML statement and source offset.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260819.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
@@ -4905,7 +6768,7 @@ function Get-TomlSemanticStatementContext {
         $strLine = $Content.Substring($intLineStart, $intLineEnd - $intLineStart)
         $strTrimmedLine = $strLine.TrimStart()
         if ($strTrimmedLine.Length -gt 0 -and
-            -not $strTrimmedLine.StartsWith('#', [System.StringComparison]::Ordinal)) {
+            -not $strTrimmedLine.StartsWith('#', [StringComparison]::Ordinal)) {
             Write-Output ([pscustomobject]@{
                     Text = $strLine
                     Index = $intLineStart
@@ -4919,8 +6782,7 @@ function Get-TomlSemanticStatementContext {
             ($intLineEnd + 1) -lt $Content.Length -and
             $Content[$intLineEnd + 1] -eq "`n") {
             $intLineStart = $intLineEnd + 2
-        }
-        else {
+        } else {
             $intLineStart = $intLineEnd + 1
         }
     }
@@ -4928,33 +6790,30 @@ function Get-TomlSemanticStatementContext {
 
 function Get-GitHubPluginEnablementContext {
     # .SYNOPSIS
-    # Gets GitHub plugin enablement locations from TOML.
+    # Gets the validated GitHub plugin enablement context.
     #
     # .DESCRIPTION
-    # Uses parser-confirmed statement identities and returns the matching table
-    # count, enablement count, value, and value location.
+    # Parses the Codex configuration and locates the exact GitHub plugin enablement assignment.
     #
     # .PARAMETER Content
-    # The project TOML text to inspect.
+    # The trusted input text to parse or transform.
     #
     # .EXAMPLE
-    # Get-GitHubPluginEnablementContext -Content $strCodexConfigContent
+    # Get-GitHubPluginEnablementContext @hashtableArguments
     #
-    # # Returns the table and enabled-value match context.
+    # # Runs with validated named arguments.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. No pipeline input.
     #
     # .OUTPUTS
-    # [pscustomobject] Counts, value, and source location for plugin enablement.
+    # [System.Management.Automation.PSCustomObject] One validated context object described in the function description.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.1.20260820.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
@@ -4997,33 +6856,30 @@ function Get-GitHubPluginEnablementContext {
 
 function ConvertTo-DisabledGitHubPluginMutation {
     # .SYNOPSIS
-    # Creates a disabled GitHub plugin mutation.
+    # Creates a configuration mutation that disables the GitHub plugin.
     #
     # .DESCRIPTION
-    # Replaces the unique enabled value in valid project TOML with false. It
-    # rejects ambiguous input and verifies that the mutation changes the text.
+    # Uses the validated enablement context to replace the active GitHub plugin value with false while preserving all unrelated text.
     #
     # .PARAMETER Content
-    # The project TOML text to mutate.
+    # The trusted input text to parse or transform.
     #
     # .EXAMPLE
-    # ConvertTo-DisabledGitHubPluginMutation -Content $strCodexConfigContent
+    # ConvertTo-DisabledGitHubPluginMutation @hashtableArguments
     #
-    # # Returns TOML with the GitHub plugin disabled.
+    # # Runs with validated named arguments.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. No pipeline input.
     #
     # .OUTPUTS
-    # [string] The disabled-plugin TOML mutation.
+    # [System.String] The configuration text with the GitHub plugin disabled.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260819.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260830.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -5059,49 +6915,45 @@ function Get-AgentInstructionFailure {
     # Finds violations of the shared agent-instruction contract.
     #
     # .DESCRIPTION
-    # Validates project TOML, capacity, operative Markdown capabilities, placement
-    # safety, deferral policy, reviewer controls, and document metadata.
+    # Validates the combined AGENTS, Claude, and Codex configuration contract.
     #
     # .PARAMETER AgentsContent
-    # The current AGENTS.md text.
+    # The root AGENTS.md content to validate.
     #
     # .PARAMETER ClaudeContent
-    # The current CLAUDE.md text.
+    # The root CLAUDE.md content to validate.
     #
     # .PARAMETER CodexConfigContent
-    # The current .codex/config.toml text.
+    # The Codex configuration content to validate.
     #
     # .PARAMETER ParentAgentsContent
-    # The parent AGENTS.md text, or null for no metadata comparison.
+    # The optional parent AGENTS.md content used by the fixture.
     #
     # .PARAMETER ParentClaudeContent
-    # The parent CLAUDE.md text, or null for no metadata comparison.
+    # The optional parent CLAUDE.md content used by the fixture.
     #
     # .PARAMETER AgentsExpectedUtcDate
-    # The required AGENTS.md UTC metadata date after a content change.
+    # The expected AGENTS.md metadata date in UTC.
     #
     # .PARAMETER ClaudeExpectedUtcDate
-    # The required CLAUDE.md UTC metadata date after a content change.
+    # The expected CLAUDE.md metadata date in UTC.
     #
     # .EXAMPLE
-    # Get-AgentInstructionFailure -AgentsContent $strAgents `
-    #     -ClaudeContent $strClaude -CodexConfigContent $strConfig
+    # Get-AgentInstructionFailure @hashtableArguments
     #
-    # # Writes one string for each contract failure.
+    # # Runs with validated named arguments.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. No pipeline input.
     #
     # .OUTPUTS
-    # [string] One record for each agent-instruction contract failure.
+    # [System.String] Zero or more validated values or diagnostics described in the function description.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.1.20260908.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20261003.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -5157,11 +7009,9 @@ function Get-AgentInstructionFailure {
     if (-not $objTomlParseContext.CapacityPresent -or
         $objTomlParseContext.CapacityType -cne 'int') {
         Write-Output 'project_doc_max_bytes must be an integer.'
-    }
-    elseif (-not $objTomlParseContext.CapacityFitsInt64) {
+    } elseif (-not $objTomlParseContext.CapacityFitsInt64) {
         Write-Output 'project_doc_max_bytes must fit in a signed 64-bit integer.'
-    }
-    else {
+    } else {
         $intConfiguredMaximumBytes = $objTomlParseContext.CapacityValue
         if ($intConfiguredMaximumBytes -lt 65536) {
             Write-Output 'project_doc_max_bytes must be at least 65536.'
@@ -5173,8 +7023,7 @@ function Get-AgentInstructionFailure {
         Write-Output (
             'The project configuration must declare [plugins."github@openai-curated"] exactly once.'
         )
-    }
-    elseif (-not $objTomlParseContext.PluginEnabledPresent -or
+    } elseif (-not $objTomlParseContext.PluginEnabledPresent -or
         $objTomlParseContext.PluginEnabledType -cne 'bool' -or
         -not $objTomlParseContext.PluginEnabledValue) {
         Write-Output (
@@ -5182,13 +7031,27 @@ function Get-AgentInstructionFailure {
         )
     }
 
-    $intAgentsBytes = [System.Text.Encoding]::UTF8.GetByteCount($AgentsContent)
+    if (-not $objTomlParseContext.FeatureTablePresent -or
+        $objTomlParseContext.FeatureTableType -cne 'dict') {
+        Write-Output 'The project configuration must declare [features] exactly once.'
+    } elseif (-not $objTomlParseContext.MultiAgentPresent -or
+        $objTomlParseContext.MultiAgentType -cne 'bool' -or
+        -not $objTomlParseContext.MultiAgentValue) {
+        Write-Output 'The [features] table must declare multi_agent = true exactly once.'
+    }
+
+    $intAgentsBytes = [Text.Encoding]::UTF8.GetByteCount($AgentsContent)
+    if ($intAgentsBytes -gt 32768) {
+        Write-Output 'AGENTS.md must not exceed the ordinary 32768-byte Codex limit.'
+    }
     if (($intConfiguredMaximumBytes - $intAgentsBytes) -lt 16384) {
         Write-Output 'Configured AGENTS.md capacity must retain at least 16384 bytes of reserve.'
     }
 
     $objAgentsMarkdownContext = Get-OperativeMarkdownContext -Content $AgentsContent
     $objClaudeMarkdownContext = Get-OperativeMarkdownContext -Content $ClaudeContent
+    Get-AgentBootstrapCommandFailure -Name 'AGENTS.md' -MarkdownContext $objAgentsMarkdownContext
+    Get-AgentBootstrapCommandFailure -Name 'CLAUDE.md' -MarkdownContext $objClaudeMarkdownContext
     $strAgentsOperativeContent = $objAgentsMarkdownContext.Text
     $strClaudeOperativeContent = $objClaudeMarkdownContext.Text
     $objAgentsPlacementContext = Get-MarkdownLevelTwoSectionContext `
@@ -5203,6 +7066,11 @@ function Get-AgentInstructionFailure {
     $objClaudeReviewContext = Get-MarkdownLevelTwoSectionContext `
         -MarkdownContext $objClaudeMarkdownContext `
         -Heading 'Handling Code Review Comments'
+    foreach ($strImportFailure in @(Get-ClaudeImportFailure `
+            -Name 'CLAUDE.md' `
+            -MarkdownContext $objClaudeMarkdownContext)) {
+        Write-Output $strImportFailure
+    }
     $arrDocuments = @(
         [pscustomobject]@{
             Name = 'AGENTS.md'
@@ -5219,7 +7087,6 @@ function Get-AgentInstructionFailure {
             PlacementProseContent = $objAgentsPlacementContext.ProseText
             SafetyContent = $objAgentsSafetyContext.Text
             SafetyProseContent = $objAgentsSafetyContext.ProseText
-            CodeSpans = [string[]]@($objAgentsMarkdownContext.ProseBlocks.Code)
         },
         [pscustomobject]@{
             Name = 'CLAUDE.md'
@@ -5236,28 +7103,10 @@ function Get-AgentInstructionFailure {
             PlacementProseContent = $objClaudeLoopContext.ProseText
             SafetyContent = $objClaudeLoopContext.Text
             SafetyProseContent = $objClaudeLoopContext.ProseText
-            CodeSpans = [string[]]@($objClaudeMarkdownContext.ProseBlocks.Code)
         }
     )
 
     foreach ($objDocument in $arrDocuments) {
-        $arrWorkflowPolicyCommands = @(
-            $objDocument.CodeSpans |
-                Where-Object {
-                    $_.StartsWith(
-                        $script:strWorkflowPolicyCommandPrefix,
-                        [System.StringComparison]::Ordinal
-                    )
-                }
-        )
-        if ($arrWorkflowPolicyCommands.Count -ne 1 -or
-            $arrWorkflowPolicyCommands[0] -cne $script:strWorkflowPolicyCommand) {
-            Write-Output (
-                "$($objDocument.Name) must contain one exact workflow-policy command: " +
-                $script:strWorkflowPolicyCommand
-            )
-        }
-
         $intDeferringWorkHeadingCount = @(
             $objDocument.LevelTwoHeadings |
                 Where-Object Text -CEQ 'Deferring Work'
@@ -5273,7 +7122,7 @@ function Get-AgentInstructionFailure {
                 Where-Object {
                     $null -ne $_.Text -and $_.Text.StartsWith(
                         $objDocument.InventoryPrefix,
-                        [System.StringComparison]::Ordinal
+                        [StringComparison]::Ordinal
                     )
                 }
         )
@@ -5282,7 +7131,7 @@ function Get-AgentInstructionFailure {
                 Where-Object {
                     $_.Text.StartsWith(
                         $objDocument.SyntheticPrefix,
-                        [System.StringComparison]::Ordinal
+                        [StringComparison]::Ordinal
                     )
                 }
         )
@@ -5291,8 +7140,7 @@ function Get-AgentInstructionFailure {
             $arrOwners = @(
                 if ($intMarker -lt 3) {
                     $arrInventoryOwners
-                }
-                else {
+                } else {
                     $arrSyntheticOwners
                 }
             )
@@ -5301,8 +7149,7 @@ function Get-AgentInstructionFailure {
                     $arrOwners[0].Code |
                         Where-Object { $_ -ceq $strLiteral.Trim([char]96) }
                 ).Count
-            }
-            else {
+            } else {
                 0
             }
             if ($intLiteralCount -ne 1) {
@@ -5312,7 +7159,7 @@ function Get-AgentInstructionFailure {
         foreach ($strLiteral in $script:arrSharedProseLiterals) {
             if (-not $objDocument.ProseContent.Contains(
                     $strLiteral,
-                    [System.StringComparison]::Ordinal
+                    [StringComparison]::Ordinal
                 )) {
                 Write-Output "$($objDocument.Name) is missing required capability marker: $strLiteral"
             }
@@ -5332,7 +7179,7 @@ function Get-AgentInstructionFailure {
             'The agent MUST NOT ask the owner for that additional authorization.'
         if (-not $objDocument.PlacementProseContent.Contains(
                 $strNoAdditionalAuthorizationRequest,
-                [System.StringComparison]::Ordinal
+                [StringComparison]::Ordinal
             )) {
             Write-Output (
                 "$($objDocument.Name) must contain the no-additional-authorization rule as prose."
@@ -5354,14 +7201,14 @@ function Get-AgentInstructionFailure {
         foreach ($strLiteral in $script:arrPlacementProseLiterals) {
             if (-not $objDocument.PlacementProseContent.Contains(
                     $strLiteral,
-                    [System.StringComparison]::Ordinal
+                    [StringComparison]::Ordinal
                 )) {
                 Write-Output "$($objDocument.Name) is missing required direct-placement safety marker: $strLiteral"
             }
         }
 
         foreach ($strLiteral in $script:arrObsoletePlacementLiterals) {
-            if ($objDocument.Content.Contains($strLiteral, [System.StringComparison]::Ordinal)) {
+            if ($objDocument.Content.Contains($strLiteral, [StringComparison]::Ordinal)) {
                 Write-Output (
                     "$($objDocument.Name) contains obsolete session-specific " +
                     "direct-placement authorization: $strLiteral"
@@ -5393,7 +7240,7 @@ function Get-AgentInstructionFailure {
         }
 
         foreach ($strLiteral in $script:arrObsoleteDeferralLiterals) {
-            if ($objDocument.Content.Contains($strLiteral, [System.StringComparison]::Ordinal)) {
+            if ($objDocument.Content.Contains($strLiteral, [StringComparison]::Ordinal)) {
                 Write-Output "$($objDocument.Name) contains an obsolete blanket Issue rule: $strLiteral"
             }
         }
@@ -5423,8 +7270,7 @@ function Get-AgentInstructionFailure {
     foreach ($objContract in $script:arrAgentsNormativeProseContracts) {
         $arrCandidateOwners = if ($objContract.OwnerKind -ceq 'ListItem') {
             $objAgentsPlacementContext.TopLevelListItems
-        }
-        else {
+        } else {
             $objAgentsPlacementContext.ProseBlocks
         }
         $arrOwners = @(
@@ -5432,14 +7278,14 @@ function Get-AgentInstructionFailure {
                 Where-Object {
                     $null -ne $_.Text -and $_.Text.StartsWith(
                         $objContract.OwnerPrefix,
-                        [System.StringComparison]::Ordinal
+                        [StringComparison]::Ordinal
                     )
                 }
         )
         if ($arrOwners.Count -ne 1 -or
             -not $arrOwners[0].Text.Contains(
                 $objContract.Literal,
-                [System.StringComparison]::Ordinal
+                [StringComparison]::Ordinal
             )) {
             Write-Output (
                 'AGENTS.md must contain required policy as prose: ' +
@@ -5457,7 +7303,7 @@ function Get-AgentInstructionFailure {
     }
     if (-not $objClaudeMarkdownContext.ProseText.Contains(
             $script:strClaudeTechnicalProse,
-            [System.StringComparison]::Ordinal
+            [StringComparison]::Ordinal
         )) {
         Write-Output (
             'CLAUDE.md is missing required Claude marker: ' +
@@ -5484,7 +7330,7 @@ function Get-AgentInstructionFailure {
     }
 
     foreach ($objDocument in $arrDocuments) {
-        $arrMetadataFailures = @(Get-DocumentMetadataTransitionFailure `
+        $arrMetadataFailures = @(Get-PublishedEndpointMetadataFailure `
                 -Name $objDocument.Name `
                 -CurrentContent $objDocument.RawContent `
                 -ParentContent $objDocument.ParentContent `
@@ -5499,78 +7345,72 @@ function Get-AgentInstructionFailure {
     }
 }
 
-function Assert-MutationRejected {
+function Assert-Failure {
     # .SYNOPSIS
     # Confirms that an agent-instruction mutation fails closed.
     #
     # .DESCRIPTION
-    # Evaluates one complete in-memory fixture and verifies that its failures
-    # contain the required text. Expected validation failures do not escape.
+    # Applies one mutated agent-instruction fixture and confirms that validation returns the exact expected failure.
     #
     # .PARAMETER Name
-    # The mutation name used in self-test failures.
+    # The fixture or document name to use in diagnostics.
     #
     # .PARAMETER AgentsContent
-    # The mutated or control AGENTS.md text.
+    # The root AGENTS.md content to validate.
     #
     # .PARAMETER ClaudeContent
-    # The mutated or control CLAUDE.md text.
+    # The root CLAUDE.md content to validate.
     #
     # .PARAMETER CodexConfigContent
-    # The mutated or control project TOML text.
+    # The Codex configuration content to validate.
     #
-    # .PARAMETER ExpectedFailure
-    # The failure text that the validator must produce.
+    # .PARAMETER Failure
+    # The exact diagnostic that the fixture must produce.
     #
     # .PARAMETER ParentAgentsContent
-    # The parent AGENTS.md text, or null for no metadata comparison.
+    # The optional parent AGENTS.md content used by the fixture.
     #
     # .PARAMETER ParentClaudeContent
-    # The parent CLAUDE.md text, or null for no metadata comparison.
+    # The optional parent CLAUDE.md content used by the fixture.
     #
     # .PARAMETER AgentsExpectedUtcDate
-    # The required AGENTS.md UTC metadata date after a content change.
+    # The expected AGENTS.md metadata date in UTC.
     #
     # .PARAMETER ClaudeExpectedUtcDate
-    # The required CLAUDE.md UTC metadata date after a content change.
+    # The expected CLAUDE.md metadata date in UTC.
     #
     # .EXAMPLE
-    # Assert-MutationRejected -Name 'disabled plugin' `
-    #     -AgentsContent $strAgents -ClaudeContent $strClaude `
-    #     -CodexConfigContent $strMutation -ExpectedFailure 'enabled = true'
+    # Assert-Failure @hashtableArguments
     #
-    # # Returns no output when the mutation is rejected for the expected reason.
+    # # Runs with validated named arguments.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. No pipeline input.
     #
     # .OUTPUTS
     # None.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260820.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([void])]
     param(
-        [Parameter(Mandatory)]
-        [string] $Name,
+        [Parameter()][string] $Name,
+
+        [Parameter()]
+        [string] $AgentsContent = $script:strAgentsContent,
+
+        [Parameter()]
+        [string] $ClaudeContent = $script:strClaudeContent,
+
+        [Parameter()]
+        [string] $CodexConfigContent = $script:strCodexConfigContent,
 
         [Parameter(Mandatory)]
-        [string] $AgentsContent,
-
-        [Parameter(Mandatory)]
-        [string] $ClaudeContent,
-
-        [Parameter(Mandatory)]
-        [string] $CodexConfigContent,
-
-        [Parameter(Mandatory)]
-        [string] $ExpectedFailure,
+        [string] $Failure,
 
         [Parameter()]
         [AllowNull()]
@@ -5589,7 +7429,11 @@ function Assert-MutationRejected {
         [string] $ClaudeExpectedUtcDate = ''
     )
 
-    Write-Verbose "Testing rejected mutation: $Name"
+    if ([string]::IsNullOrEmpty($Name)) {
+        Write-Verbose "Testing rejected mutation: $Failure"
+    } else {
+        Write-Verbose "Testing rejected mutation '$Name': $Failure"
+    }
     $arrFailures = @(Get-AgentInstructionFailure `
             -AgentsContent $AgentsContent `
             -ClaudeContent $ClaudeContent `
@@ -5599,10 +7443,10 @@ function Assert-MutationRejected {
             -AgentsExpectedUtcDate $AgentsExpectedUtcDate `
             -ClaudeExpectedUtcDate $ClaudeExpectedUtcDate)
     if ($arrFailures.Count -eq 0) {
-        throw "Mutation '$Name' did not fail closed."
+        throw "Mutation for '$Failure' did not fail closed."
     }
-    if (-not ($arrFailures -match [regex]::Escape($ExpectedFailure))) {
-        throw "Mutation '$Name' failed for the wrong reason. Failures: $($arrFailures -join '; ')"
+    if (-not ($arrFailures -match [regex]::Escape($Failure))) {
+        throw "Mutation for '$Failure' failed for the wrong reason. Failures: $($arrFailures -join '; ')"
     }
 }
 
@@ -5611,66 +7455,61 @@ function Assert-FixtureAccepted {
     # Confirms that an agent-instruction fixture is accepted.
     #
     # .DESCRIPTION
-    # Evaluates one complete in-memory fixture and throws if any contract failure
-    # is returned.
+    # Applies one valid agent-instruction fixture and confirms that validation returns no diagnostics.
     #
     # .PARAMETER Name
-    # The fixture name used in self-test failures.
+    # The fixture or document name to use in diagnostics.
     #
     # .PARAMETER AgentsContent
-    # The control AGENTS.md text.
+    # The root AGENTS.md content to validate.
     #
     # .PARAMETER ClaudeContent
-    # The control CLAUDE.md text.
+    # The root CLAUDE.md content to validate.
     #
     # .PARAMETER CodexConfigContent
-    # The control project TOML text.
+    # The Codex configuration content to validate.
     #
     # .PARAMETER ParentAgentsContent
-    # The parent AGENTS.md text, or null for no metadata comparison.
+    # The optional parent AGENTS.md content used by the fixture.
     #
     # .PARAMETER ParentClaudeContent
-    # The parent CLAUDE.md text, or null for no metadata comparison.
+    # The optional parent CLAUDE.md content used by the fixture.
     #
     # .PARAMETER AgentsExpectedUtcDate
-    # The required AGENTS.md UTC metadata date after a content change.
+    # The expected AGENTS.md metadata date in UTC.
     #
     # .PARAMETER ClaudeExpectedUtcDate
-    # The required CLAUDE.md UTC metadata date after a content change.
+    # The expected CLAUDE.md metadata date in UTC.
     #
     # .EXAMPLE
-    # Assert-FixtureAccepted -Name 'baseline' -AgentsContent $strAgents `
-    #     -ClaudeContent $strClaude -CodexConfigContent $strConfig
+    # Assert-FixtureAccepted @hashtableArguments
     #
-    # # Returns no output when the fixture passes the contract.
+    # # Runs with validated named arguments.
     #
     # .INPUTS
-    # None. You can't pipe objects to this function.
+    # None. No pipeline input.
     #
     # .OUTPUTS
     # None.
     #
     # .NOTES
-    # PRIVATE/INTERNAL HELPER - This function is not part of the
-    # public API surface. Parameters, return shape, and positional
-    # contract may change without notice.
-    #
-    # This function does not support positional parameters.
-    # Version: 1.0.20260820.0
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20260914.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([void])]
     param(
-        [Parameter(Mandatory)]
-        [string] $Name,
+        [Parameter()][string] $Name,
 
-        [Parameter(Mandatory)]
-        [string] $AgentsContent,
+        [Parameter()]
+        [string] $AgentsContent = $script:strAgentsContent,
 
-        [Parameter(Mandatory)]
-        [string] $ClaudeContent,
+        [Parameter()]
+        [string] $ClaudeContent = $script:strClaudeContent,
 
-        [Parameter(Mandatory)]
-        [string] $CodexConfigContent,
+        [Parameter()]
+        [string] $CodexConfigContent = $script:strCodexConfigContent,
 
         [Parameter()]
         [AllowNull()]
@@ -5689,7 +7528,11 @@ function Assert-FixtureAccepted {
         [string] $ClaudeExpectedUtcDate = ''
     )
 
-    Write-Verbose "Testing accepted fixture: $Name"
+    if ([string]::IsNullOrEmpty($Name)) {
+        Write-Verbose 'Testing accepted fixture.'
+    } else {
+        Write-Verbose "Testing accepted fixture: $Name."
+    }
     $arrFailures = @(Get-AgentInstructionFailure `
             -AgentsContent $AgentsContent `
             -ClaudeContent $ClaudeContent `
@@ -5699,7 +7542,7 @@ function Assert-FixtureAccepted {
             -AgentsExpectedUtcDate $AgentsExpectedUtcDate `
             -ClaudeExpectedUtcDate $ClaudeExpectedUtcDate)
     if ($arrFailures.Count -gt 0) {
-        throw "Accepted fixture '$Name' failed validation: $($arrFailures -join '; ')"
+        throw "Accepted fixture failed validation: $($arrFailures -join '; ')"
     }
 }
 
@@ -5708,183 +7551,161 @@ function Assert-FixtureAccepted {
 #region Repository validation
 
 $strWorkflowsDirectoryPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($PSScriptRoot)
-$strGitHubDirectoryPath = [System.IO.Path]::GetDirectoryName($strWorkflowsDirectoryPath)
-$strRepositoryRootPath = [System.IO.Path]::GetDirectoryName($strGitHubDirectoryPath)
+$strGitHubDirectoryPath = [IO.Path]::GetDirectoryName($strWorkflowsDirectoryPath)
+$strRepositoryRootPath = [IO.Path]::GetDirectoryName($strGitHubDirectoryPath)
 $strAgentsPath = Join-Path -Path $strRepositoryRootPath -ChildPath 'AGENTS.md'
 $strClaudePath = Join-Path -Path $strRepositoryRootPath -ChildPath 'CLAUDE.md'
 $strCodexConfigPath = Join-Path -Path $strRepositoryRootPath -ChildPath '.codex/config.toml'
-$strDocumentClassificationPath = Join-Path `
-    -Path $strRepositoryRootPath `
-    -ChildPath '.github/document-metadata-classification.json'
 $strDocsInstructionsPath = Join-Path `
     -Path $strRepositoryRootPath `
     -ChildPath '.github/instructions/docs.instructions.md'
-$arrAgentSetupInputSpecs = @(
-    [pscustomobject]@{ Path = '.github/workflows/agent-instructions.yml'; MaximumBytes = 65536 }
-    [pscustomobject]@{ Path = 'package.json'; MaximumBytes = 16384 }
-    [pscustomobject]@{ Path = '.github/workflows/package.json'; MaximumBytes = 16384 }
-    [pscustomobject]@{
-        Path = '.github/workflows/package-lock.json'
-        MaximumBytes = 131072
-    }
-    [pscustomobject]@{
-        Path = '.github/workflows/copilot-setup-steps.yml'
-        MaximumBytes = 65536
-    }
-    [pscustomobject]@{
-        Path = '.github/workflows/lint-staged-markdown.mjs'
-        MaximumBytes = 32768
-    }
-    [pscustomobject]@{ Path = '.husky/pre-commit'; MaximumBytes = 16384 }
-    [pscustomobject]@{ Path = '.pre-commit-config.yaml'; MaximumBytes = 16384 }
-    [pscustomobject]@{
-        Path = '.github/workflows/scripts-README.md'
-        MaximumBytes = 32768
-    }
-    [pscustomobject]@{ Path = 'requirements-dev.txt'; MaximumBytes = 16384 }
-)
 $arrGovernedInstructionDocuments = @(
     [pscustomobject]@{
         Path = 'AGENTS.md'
         MaximumBytes = $intAgentsMaximumInputBytes
         RequiresMetadata = $true
+        RequiresVersion = $true
     },
     [pscustomobject]@{
         Path = 'CLAUDE.md'
         MaximumBytes = $intClaudeMaximumInputBytes
         RequiresMetadata = $true
+        RequiresVersion = $true
     },
     [pscustomobject]@{
         Path = '.github/copilot-instructions.md'
         MaximumBytes = $intInstructionDocumentMaximumInputBytes
         RequiresMetadata = $false
+        RequiresVersion = $false
     },
     [pscustomobject]@{
         Path = '.github/instructions/docs.instructions.md'
         MaximumBytes = $intDocsInstructionsMaximumInputBytes
         RequiresMetadata = $true
+        RequiresVersion = $true
     },
     [pscustomobject]@{
         Path = '.github/instructions/yaml.instructions.md'
         MaximumBytes = $intInstructionDocumentMaximumInputBytes
         RequiresMetadata = $true
+        RequiresVersion = $true
     }
 )
-$arrGovernedNonInstructionDocuments = @(
+$arrGovernedMetadataDocuments = @($arrGovernedInstructionDocuments) + @(
     [pscustomobject]@{
-        Path = '.github/workflows/MARKDOWN-LINTING-IMPLEMENTATION.md'
-        MaximumBytes = 32768
+        Path = 'docs/ISSUE_EVALUATION_PROMPT.md'
+        MaximumBytes = $intInstructionDocumentMaximumInputBytes
         RequiresMetadata = $true
-    },
-    [pscustomobject]@{
-        Path = '.github/workflows/scripts-README.md'
-        MaximumBytes = 32768
-        RequiresMetadata = $true
-    },
-    [pscustomobject]@{
-        Path = '.claude/commands/review-loop.md'
-        MaximumBytes = 16384
-        RequiresMetadata = $true
-    },
-    [pscustomobject]@{
-        Path = 'STYLE_GUIDE.md'
-        MaximumBytes = 262144
-        RequiresMetadata = $true
+        RequiresVersion = $false
     },
     [pscustomobject]@{
         Path = 'STYLE_GUIDE_RATIONALE.md'
-        MaximumBytes = 131072
+        MaximumBytes = $intStyleGuideRationaleMaximumInputBytes
         RequiresMetadata = $true
-    },
-    [pscustomobject]@{
-        Path = 'docs/ISSUE_EVALUATION_PROMPT.md'
-        MaximumBytes = 16384
-        RequiresMetadata = $true
-    },
-    [pscustomobject]@{
-        Path = 'docs/T1-SUPPLY-FREEZE-v1.md'
-        MaximumBytes = 131072
-        RequiresMetadata = $true
+        RequiresVersion = $false
     }
 )
+$arrGovernedMetadataDocuments += @(
+    $script:arrOperationalLintGuidePaths | ForEach-Object {
+        [pscustomobject]@{
+        Path = $_
+        MaximumBytes = $intInstructionDocumentMaximumInputBytes
+        RequiresMetadata = $true
+        RequiresVersion = $false
+        }
+    }
+)
+if ($RequireStagedInputMatch -and ($MetadataClassificationOnly -or $FinalizeMetadataNow -or
+        $ProposedPolicy -or -not [string]::IsNullOrEmpty($InputRevision) -or
+        -not [string]::IsNullOrEmpty($PublishedBaselineRevision))) {
+    throw 'Staged-input matching cannot be combined with revision validation or endpoint modes.'
+}
 $strValidatedInputRevision = $InputRevision
+$strEffectivePublishedBaselineRevision = $PublishedBaselineRevision
+$PublishedFinalRevision = $InputRevision
 $boolPublishedEndpointsRequested = -not [string]::IsNullOrEmpty($PublishedBaselineRevision)
-if ($boolPublishedEndpointsRequested -and -not $InputRevision) {
+if ($ProposedPolicy -and ($SelfTest -or $MetadataClassificationOnly -or $FinalizeMetadataNow -or
+        -not $boolPublishedEndpointsRequested -or [string]::IsNullOrEmpty($InputRevision) -or
+        $InputRevision -ceq $PublishedBaselineRevision -or
+        $InputRevision -ceq ('0' * 40) -or $PublishedBaselineRevision -ceq ('0' * 40))) {
+    throw 'ProposedPolicy requires distinct nonzero exact B/H endpoints and cannot combine other modes.'
+}
+if ($MetadataClassificationOnly -and ($SelfTest -or -not $boolPublishedEndpointsRequested)) {
+    throw 'MetadataClassificationOnly requires exact B/H endpoints and cannot run with SelfTest.'
+}
+if ($FinalizeMetadataNow -and ($SelfTest -or $MetadataClassificationOnly -or
+        -not $boolPublishedEndpointsRequested)) {
+    throw 'FinalizeMetadataNow requires exact B/H endpoints and cannot run with other modes.'
+}
+if ($boolPublishedEndpointsRequested -and [string]::IsNullOrEmpty($InputRevision)) {
     throw 'An exact published baseline requires an exact input commit.'
 }
 foreach ($strRevision in @($InputRevision, $PublishedBaselineRevision)) {
-    if (-not $strRevision) { continue }
-    if ($strRevision -cnotmatch '^[0-9a-f]{40}$') { throw 'A full lowercase commit hash is required.' }
-    $strResolved = [string] (& git -C $strRepositoryRootPath rev-parse --verify "$strRevision`^{commit}")
-    if ($LASTEXITCODE -ne 0 -or $strResolved.Trim() -cne $strRevision) { throw 'The input commit is unavailable.' }
+    if ([string]::IsNullOrEmpty($strRevision)) { continue }
+    if ($strRevision -cnotmatch '^[0-9a-f]{40}$') {
+        throw 'Instruction validation requires a full lowercase commit hash.'
+    }
+    $strResolvedRevision = [string] (& git -C $strRepositoryRootPath rev-parse --verify "$strRevision`^{commit}")
+    if ($LASTEXITCODE -ne 0 -or $strResolvedRevision.Trim() -cne $strRevision) {
+        throw "The instruction input commit is unavailable: $strRevision"
+    }
 }
 $strCheckedOutRevision = [string] (& git -C $strRepositoryRootPath rev-parse --verify 'HEAD^{commit}')
 if ($LASTEXITCODE -ne 0 -or $strCheckedOutRevision.Trim() -cnotmatch '^[0-9a-f]{40}$') {
-    throw 'The checked-out trusted revision is unavailable.'
+    throw 'The checked-out instruction policy revision is unavailable.'
 }
 $strCheckedOutRevision = $strCheckedOutRevision.Trim()
-if ($boolPublishedEndpointsRequested -and $strCheckedOutRevision -cne $PublishedBaselineRevision) {
+if ($ProposedPolicy) {
+    if ($strCheckedOutRevision -cne $InputRevision) {
+        throw 'The proposed instruction checker must be checked out at the exact candidate head.'
+    }
+    Write-Output ("PROPOSED_POLICY_TRANSITION: B=$PublishedBaselineRevision H=$InputRevision. " +
+        'Candidate checker code supplies diagnostics, not accepted-policy, owner or merge authority.')
+} elseif ($boolPublishedEndpointsRequested -and $strCheckedOutRevision -cne $PublishedBaselineRevision) {
     throw 'The trusted instruction checker must be checked out at the accepted baseline.'
 }
-$setStagedInputPaths = [System.Collections.Generic.HashSet[string]]::new(
-    [System.StringComparer]::Ordinal
-)
+
+$setStagedInputPaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 if ($RequireStagedInputMatch) {
-    $arrStagedInputPaths = @(
-        Invoke-GitNulRecordQuery `
-            -RepositoryRootPath $strRepositoryRootPath `
-            -Argument @(
-                'diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z',
-                '--'
-            ) `
-            -DisplayName 'staged validator inputs'
-    )
-    foreach ($strStagedInputPath in $arrStagedInputPaths) {
-        [void]$setStagedInputPaths.Add($strStagedInputPath)
+    foreach ($strStagedPath in @(Read-GitStagedInputPath -RepositoryRootPath $strRepositoryRootPath `
+            -MaximumBytes $intGitPathListMaximumBytes)) {
+        [void]$setStagedInputPaths.Add($strStagedPath)
+    }
+    foreach ($strExecutableInputPath in @('.github/workflows/Test-AgentInstructions.ps1',
+            '.github/workflows/Test-AgentInstructions.SelfTest.ps1')) {
+        if ($setStagedInputPaths.Contains($strExecutableInputPath)) {
+            $null = Read-RepositoryInputData -Path (Join-Path $strRepositoryRootPath $strExecutableInputPath) `
+                -RepositoryRootPath $strRepositoryRootPath -RepositoryRelativePath $strExecutableInputPath `
+                -DisplayName $strExecutableInputPath -MaximumBytes $intGitPathListMaximumBytes `
+                -RequireIndexContentMatch
+        }
     }
 }
-$strLocalWorktreeBaselineRevision = if ($strValidatedInputRevision) { '' } else { $strCheckedOutRevision }
 
-if ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
-    $arrTrackedRepositoryPaths = @(
-        Invoke-GitNulRecordQuery `
-            -RepositoryRootPath $strRepositoryRootPath `
-            -Argument @('ls-files', '--cached', '-z') `
-            -DisplayName 'tracked repository paths'
-    )
-}
-else {
-    $arrTrackedRepositoryPaths = @(
-        Invoke-GitNulRecordQuery `
-            -RepositoryRootPath $strRepositoryRootPath `
-            -Argument @(
-                'ls-tree', '-r', '--name-only', '-z',
-                $strValidatedInputRevision
-            ) `
-            -DisplayName 'revision repository paths'
-    )
-}
-$strDocumentClassificationContent = if (
-    [string]::IsNullOrEmpty($strValidatedInputRevision)
-) {
+$arrTrackedRepositoryPaths = @(Read-GitTrackedPath `
+        -RepositoryRootPath $strRepositoryRootPath `
+        -Revision $strValidatedInputRevision `
+        -MaximumBytes $intGitPathListMaximumBytes)
+
+# Classification is candidate data. Use only the existing bounded safe readers.
+$strDocumentClassificationRelativePath = '.github/document-metadata-classification.json'
+$strDocumentClassificationPath = Join-Path -Path $strRepositoryRootPath `
+    -ChildPath $strDocumentClassificationRelativePath
+$strDocumentClassificationContent = if ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
     ConvertFrom-StrictUtf8Data `
         -Bytes (Read-RepositoryInputData `
             -Path $strDocumentClassificationPath `
             -RepositoryRootPath $strRepositoryRootPath `
-            -RepositoryRelativePath '.github/document-metadata-classification.json' `
-            -DisplayName '.github/document-metadata-classification.json' `
+            -RepositoryRelativePath $strDocumentClassificationRelativePath `
+            -DisplayName $strDocumentClassificationRelativePath `
             -MaximumBytes $intDocumentClassificationMaximumInputBytes `
-            -RequireIndexContentMatch:($RequireStagedInputMatch -and
-                $setStagedInputPaths.Contains(
-                    '.github/document-metadata-classification.json'
-                ))) `
-        -DisplayName '.github/document-metadata-classification.json'
-}
-else {
+            -RequireIndexContentMatch:($RequireStagedInputMatch -and $setStagedInputPaths.Contains($strDocumentClassificationRelativePath))) `
+        -DisplayName $strDocumentClassificationRelativePath
+} else {
     Read-GitRevisionText `
         -RepositoryRootPath $strRepositoryRootPath `
         -Revision $strValidatedInputRevision `
-        -RepositoryRelativePath '.github/document-metadata-classification.json' `
+        -RepositoryRelativePath $strDocumentClassificationRelativePath `
         -MaximumBytes $intDocumentClassificationMaximumInputBytes `
         -RequireRegularFile
 }
@@ -5894,196 +7715,150 @@ $objDocumentClassificationContext = Get-DocumentMetadataClassificationContext `
 if ($null -ne $objDocumentClassificationContext.Failure) {
     throw $objDocumentClassificationContext.Failure
 }
-$strDocumentClassificationBaselineRevision = if (
-    -not [string]::IsNullOrEmpty($strLocalWorktreeBaselineRevision)
-) {
-    $strLocalWorktreeBaselineRevision
-}
-else {
+$strDocumentClassificationBaselineRevision = if ($boolPublishedEndpointsRequested) {
     $PublishedBaselineRevision
-}
+} elseif (-not [string]::IsNullOrEmpty($strValidatedInputRevision)) {
+    $strValidatedInputRevision
+} else { $strCheckedOutRevision }
 $boolHasTrustedBaselineClassificationManifest = $false
 $arrTrustedBaselineClassificationExemptPaths = @()
+$arrTrustedBaselineClassificationGeneratedPaths = @()
 $arrTrustedBaselineClassificationAuthorizedExemptionPaths = @()
-if (-not [string]::IsNullOrEmpty($strDocumentClassificationBaselineRevision) -and
-    $strDocumentClassificationBaselineRevision -notmatch '^(?:0{40}|0{64})$') {
-    if ($strDocumentClassificationBaselineRevision -notmatch
-        '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$') {
-        throw 'The document classification baseline revision is invalid.'
-    }
-    & git -C $strRepositoryRootPath cat-file -e `
-        "$strDocumentClassificationBaselineRevision`^{commit}" 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        throw 'The document classification baseline commit is unavailable.'
-    }
-    $arrBaselineClassificationEntries = @(
-        & git -C $strRepositoryRootPath ls-tree `
-            $strDocumentClassificationBaselineRevision -- `
-            '.github/document-metadata-classification.json'
-    )
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Could not inspect the document classification baseline.'
-    }
-    if ($arrBaselineClassificationEntries.Count -gt 0) {
-        $arrBaselineTrackedRepositoryPaths = @(
-            Invoke-GitNulRecordQuery `
-                -RepositoryRootPath $strRepositoryRootPath `
-                -Argument @(
-                    'ls-tree', '-r', '--name-only', '-z',
-                    $strDocumentClassificationBaselineRevision
-                ) `
-                -DisplayName 'document classification baseline paths'
-        )
+if (-not [string]::IsNullOrEmpty($strDocumentClassificationBaselineRevision)) {
+    $arrBaselineClassificationTrackedPaths = @(Read-GitTrackedPath `
+        -RepositoryRootPath $strRepositoryRootPath `
+        -Revision $strDocumentClassificationBaselineRevision `
+        -MaximumBytes $intGitPathListMaximumBytes)
+    if ($arrBaselineClassificationTrackedPaths -ccontains $strDocumentClassificationRelativePath) {
         $strBaselineDocumentClassificationContent = Read-GitRevisionText `
             -RepositoryRootPath $strRepositoryRootPath `
             -Revision $strDocumentClassificationBaselineRevision `
-            -RepositoryRelativePath '.github/document-metadata-classification.json' `
+            -RepositoryRelativePath $strDocumentClassificationRelativePath `
             -MaximumBytes $intDocumentClassificationMaximumInputBytes `
             -RequireRegularFile
-        $objBaselineDocumentClassificationContext =
-            Get-DocumentMetadataClassificationContext `
-                -Content $strBaselineDocumentClassificationContent `
-                -TrackedPath $arrBaselineTrackedRepositoryPaths
+        $objBaselineDocumentClassificationContext = Get-DocumentMetadataClassificationContext `
+            -Content $strBaselineDocumentClassificationContent `
+            -TrackedPath $arrBaselineClassificationTrackedPaths
         if ($null -ne $objBaselineDocumentClassificationContext.Failure) {
-            throw (
-                'The trusted baseline document classification is invalid: ' +
-                $objBaselineDocumentClassificationContext.Failure
-            )
+            throw ('The trusted baseline document classification is invalid: ' +
+                $objBaselineDocumentClassificationContext.Failure)
         }
         $boolHasTrustedBaselineClassificationManifest = $true
         $arrTrustedBaselineClassificationExemptPaths = @(
-            $objBaselineDocumentClassificationContext.ExemptPaths
-        )
+            $objBaselineDocumentClassificationContext.ExemptPaths)
+        $arrTrustedBaselineClassificationGeneratedPaths = @(
+            $objBaselineDocumentClassificationContext.GeneratedPaths)
         $arrTrustedBaselineClassificationAuthorizedExemptionPaths = @(
-            $objBaselineDocumentClassificationContext.AuthorizedExemptionPaths
-        )
+            $objBaselineDocumentClassificationContext.AuthorizedExemptionPaths)
     }
 }
-$arrDocumentClassificationExpansionFailures = @(
-    Get-DocumentMetadataClassificationExpansionFailure `
-        -HasTrustedBaselineManifest `
-            $boolHasTrustedBaselineClassificationManifest `
-        -TrustedBaselineExemptPath `
-            $arrTrustedBaselineClassificationExemptPaths `
-        -TrustedBaselineAuthorizedExemptionPath `
-            $arrTrustedBaselineClassificationAuthorizedExemptionPaths `
-        -CandidateExemptPath $objDocumentClassificationContext.ExemptPaths
-)
-if ($arrDocumentClassificationExpansionFailures.Count -gt 0) {
-    throw (
-        'Document classification expansion failed:' +
-        [Environment]::NewLine + '- ' +
-        ($arrDocumentClassificationExpansionFailures -join
-            ([Environment]::NewLine + '- '))
-    )
+$strTrustedBaselineValidatorSha256 = ''
+if (-not $boolHasTrustedBaselineClassificationManifest -and
+    -not [string]::IsNullOrEmpty($strDocumentClassificationBaselineRevision)) {
+    $strTrustedPriorValidator = Read-GitRevisionText `
+        -RepositoryRootPath $strRepositoryRootPath `
+        -Revision $strDocumentClassificationBaselineRevision `
+        -RepositoryRelativePath '.github/workflows/Test-AgentInstructions.ps1' `
+        -MaximumBytes 573440 -RequireRegularFile
+    $objPriorValidatorSha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $strTrustedBaselineValidatorSha256 = ([BitConverter]::ToString(
+                $objPriorValidatorSha256.ComputeHash([Text.Encoding]::UTF8.GetBytes(
+                        $strTrustedPriorValidator)))).Replace('-', '').ToLowerInvariant()
+    } finally { $objPriorValidatorSha256.Dispose() }
 }
-$arrMetadataExemptMarkdownDocuments = @(
-    $objDocumentClassificationContext.ExemptPaths
-)
-$listGovernedDecisionCandidatePaths = [System.Collections.Generic.List[string]]::new()
-foreach ($strTrackedRepositoryPath in $arrTrackedRepositoryPaths) {
-    $listGovernedDecisionCandidatePaths.Add([string]$strTrackedRepositoryPath)
-}
-$strDecisionInventoryBaseRevision = if (
-    -not [string]::IsNullOrEmpty($strLocalWorktreeBaselineRevision)
-) {
-    $strLocalWorktreeBaselineRevision
-}
-else {
-    $PublishedBaselineRevision
-}
-$strDecisionInventoryHeadRevision = if (
-    -not [string]::IsNullOrEmpty($strLocalWorktreeBaselineRevision)
-) {
-    $strCheckedOutRevision
-}
-else {
-    $strValidatedInputRevision
-}
-if (-not [string]::IsNullOrEmpty($strDecisionInventoryBaseRevision) -and
-    -not [string]::IsNullOrEmpty($strDecisionInventoryHeadRevision)) {
-    $strDecisionObjectIdPattern = '^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$'
-    $strDecisionZeroObjectIdPattern = '^(?:0{40}|0{64})$'
-    if ($strDecisionInventoryBaseRevision -notmatch $strDecisionObjectIdPattern -or
-        $strDecisionInventoryHeadRevision -notmatch $strDecisionObjectIdPattern -or
-        $strDecisionInventoryHeadRevision -match $strDecisionZeroObjectIdPattern) {
-        throw 'The decision-record inventory range contains an invalid object ID.'
-    }
-    $boolDecisionInventoryBaseIsZero =
-        $strDecisionInventoryBaseRevision -match $strDecisionZeroObjectIdPattern
-    if (-not $boolDecisionInventoryBaseIsZero) {
-        $arrBaselineDecisionPaths = @(
-            Invoke-GitNulRecordQuery `
-                -RepositoryRootPath $strRepositoryRootPath `
-                -Argument @(
-                    'ls-tree', '-r', '--name-only', '-z',
-                    $strDecisionInventoryBaseRevision
-                ) `
-                -DisplayName 'published-baseline decision records'
-        )
-        foreach ($strBaselineDecisionPath in $arrBaselineDecisionPaths) {
-            $listGovernedDecisionCandidatePaths.Add([string]$strBaselineDecisionPath)
-        }
-    }
 
+$arrDocumentClassificationExpansionFailures = @(if ($boolHasTrustedBaselineClassificationManifest) {
+    @(Get-DocumentMetadataClassificationExpansionFailure `
+        -HasTrustedBaselineManifest $true `
+        -TrustedBaselineExemptPath $arrTrustedBaselineClassificationExemptPaths `
+        -TrustedBaselineAuthorizedExemptionPath $arrTrustedBaselineClassificationAuthorizedExemptionPaths `
+        -CandidateExemptPath $objDocumentClassificationContext.ExemptPaths `
+        -TrustedBaselineGeneratedPath $arrTrustedBaselineClassificationGeneratedPaths `
+        -CandidateGeneratedPath $objDocumentClassificationContext.GeneratedPaths)
+} else {
+    @(Get-InitialDocumentMetadataClassificationFailure `
+        -BaselineRevision $strDocumentClassificationBaselineRevision `
+        -TrustedBaselineValidatorSha256 $strTrustedBaselineValidatorSha256 `
+        -CandidateContext $objDocumentClassificationContext)
+})
+if ($arrDocumentClassificationExpansionFailures.Count -gt 0) {
+    throw ('Document classification expansion failed:' + [Environment]::NewLine + '- ' +
+        ($arrDocumentClassificationExpansionFailures -join ([Environment]::NewLine + '- ')))
 }
-$arrGovernedDecisionPaths = @(
-    Get-GovernedDecisionDocumentPath `
-        -CandidatePath $listGovernedDecisionCandidatePaths.ToArray()
-)
-foreach ($strGovernedDecisionPath in $arrGovernedDecisionPaths) {
-    $arrGovernedNonInstructionDocuments += [pscustomobject]@{
-        Path = $strGovernedDecisionPath
-        MaximumBytes = 32768
-        RequiresMetadata = $true
+# Generated exemption affects metadata content only, not candidate Git type.
+foreach ($strGeneratedMetadataPath in $objDocumentClassificationContext.GeneratedPaths) {
+    $null = Get-GitRegularFileBlobId -RepositoryRootPath $strRepositoryRootPath `
+        -Revision $strValidatedInputRevision -RepositoryRelativePath $strGeneratedMetadataPath
+}
+if ($MetadataClassificationOnly) {
+    Write-Output ("Metadata classification data validated: B=$PublishedBaselineRevision H=$InputRevision. " +
+        'This is not first-install, owner or merge authority.')
+    return
+}
+
+$hashtableAgentSetupContent = Read-AgentSetupInputContent -RepositoryRootPath $strRepositoryRootPath `
+    -Revision $strValidatedInputRevision -StagedInputPaths $setStagedInputPaths
+
+$arrBootstrapFailures = @(Get-MarkdownParserBootstrapFailure `
+        -RepositoryRootPath $strRepositoryRootPath)
+if ($arrBootstrapFailures.Count -gt 0) {
+    throw ($arrBootstrapFailures -join [Environment]::NewLine)
+}
+
+$arrPublishedBaselinePaths = @()
+$arrPublishedChangedPaths = @()
+if ($boolPublishedEndpointsRequested) {
+    if (-not [string]::IsNullOrEmpty(
+            $strEffectivePublishedBaselineRevision
+        )) {
+        $arrPublishedBaselinePaths = @(Read-GitTrackedPath `
+            -RepositoryRootPath $strRepositoryRootPath `
+            -Revision $strEffectivePublishedBaselineRevision `
+            -MaximumBytes $intGitPathListMaximumBytes)
     }
+    $arrPublishedChangedPaths = @(Read-GitPublishedEndpointChangedPath `
+        -RepositoryRootPath $strRepositoryRootPath `
+        -BaselineRevision $PublishedBaselineRevision `
+        -FinalRevision $PublishedFinalRevision `
+        -MaximumBytes $intGitPathListMaximumBytes) | Sort-Object -Unique
 }
-$arrDiscoveredGovernedMarkdownPaths = @(
-    Get-DiscoveredGovernedMarkdownDocumentPath `
-        -CandidatePath $arrTrackedRepositoryPaths `
-        -KnownGovernedPath @(
-            @($arrGovernedInstructionDocuments.Path) +
-            @($arrGovernedNonInstructionDocuments.Path)
-        ) `
-        -ExemptPath $arrMetadataExemptMarkdownDocuments
+$arrPublishedDecisionPaths = @(
+    @($arrPublishedBaselinePaths + $arrTrackedRepositoryPaths +
+        $arrPublishedChangedPaths) |
+        Where-Object { $_ -cmatch $script:strDecisionRecordDirectoryPathPattern }
 )
-foreach ($strDiscoveredGovernedMarkdownPath in
-    $arrDiscoveredGovernedMarkdownPaths) {
-    $arrGovernedNonInstructionDocuments += [pscustomobject]@{
-        Path = $strDiscoveredGovernedMarkdownPath
-        MaximumBytes = $intInstructionDocumentMaximumInputBytes
-        RequiresMetadata = $true
-    }
-}
-foreach ($strMetadataOptionalMarkdownDocument in
-    $arrMetadataExemptMarkdownDocuments) {
-    $arrGovernedNonInstructionDocuments += [pscustomobject]@{
-        Path = $strMetadataOptionalMarkdownDocument
-        MaximumBytes = $intValidatorMaximumInputBytes
-        RequiresMetadata = $false
-    }
-}
-$arrGovernedMetadataDocuments = @(
-    $arrGovernedInstructionDocuments
-    $arrGovernedNonInstructionDocuments
+$arrPublishedGovernedInstructionPaths = @(
+    @($arrPublishedBaselinePaths + $arrTrackedRepositoryPaths +
+        $arrPublishedChangedPaths) |
+        Where-Object {
+            Test-GovernedInstructionInventoryPath `
+                -RepositoryRelativePath ([string]$_)
+        }
 )
-$arrGovernedRootPaths = @(
-    'AGENTS.md',
-    'CLAUDE.md',
-    'GEMINI.md',
-    '.hermes.md',
-    '.github/copilot-instructions.md'
+$arrDecisionRecordInventoryPaths = @(
+    @($arrTrackedRepositoryPaths + $arrPublishedDecisionPaths) |
+        Where-Object { $_ -cmatch $script:strDecisionRecordDirectoryPathPattern } |
+        Sort-Object -Unique
+)
+$arrGovernedMetadataDocuments += @(
+    $arrDecisionRecordInventoryPaths |
+        ForEach-Object {
+            [pscustomobject]@{
+                Path = $_
+                MaximumBytes = $intInstructionDocumentMaximumInputBytes
+                RequiresMetadata = $true
+                RequiresVersion = $false
+            }
+        }
 )
 $arrTrackedGovernedInstructionPaths = @(
-    $arrTrackedRepositoryPaths |
+    @($arrTrackedRepositoryPaths + $arrPublishedGovernedInstructionPaths) |
         Where-Object {
-            $strTrackedPath = [string] $_
-            $arrGovernedRootPaths -ccontains $strTrackedPath -or
-            $strTrackedPath -cmatch '(?:^|/)AGENTS\.md$' -or
-            $strTrackedPath -cmatch `
-                '^\.github/instructions/(?:[^/]+/)*[^/]+\.instructions\.md$' -or
-            $strTrackedPath -cmatch '^\.cursor/rules/(?:[^/]+/)*[^/]+\.mdc$'
-        }
+            Test-GovernedInstructionInventoryPath `
+                -RepositoryRelativePath ([string] $_)
+        } |
+        Sort-Object -Unique
 )
 $arrGovernedInstructionInventoryFailures = @(
     Get-GovernedInstructionInventoryFailure `
@@ -6097,19 +7872,42 @@ if ($arrGovernedInstructionInventoryFailures.Count -gt 0) {
     )
 }
 
+$arrGovernedMetadataDocuments += [pscustomobject]@{
+    Path = 'STYLE_GUIDE.md'
+    MaximumBytes = 262144
+    RequiresMetadata = $true
+    RequiresVersion = $true
+}
+$arrDiscoveredGovernedMarkdownPaths = @(
+    Get-DiscoveredGovernedMarkdownDocumentPath `
+        -CandidatePath $arrTrackedRepositoryPaths `
+        -KnownGovernedPath @($arrGovernedMetadataDocuments.Path) `
+        -ExemptPath $objDocumentClassificationContext.ExemptPaths)
+foreach ($strDiscoveredGovernedMarkdownPath in $arrDiscoveredGovernedMarkdownPaths) {
+    $arrGovernedMetadataDocuments += [pscustomobject]@{
+        Path = $strDiscoveredGovernedMarkdownPath
+        MaximumBytes = $intInstructionDocumentMaximumInputBytes
+        RequiresMetadata = $true
+        RequiresVersion = $false
+    }
+}
+foreach ($strOptionalMetadataPath in $objDocumentClassificationContext.Tier2Paths) {
+    $arrGovernedMetadataDocuments += [pscustomobject]@{
+        Path = $strOptionalMetadataPath
+        MaximumBytes = $intInstructionDocumentMaximumInputBytes
+        RequiresMetadata = $false
+        RequiresVersion = $false
+    }
+}
+
 if ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
-    $arrRequiredPaths = @(
-        $strCodexConfigPath,
-        $strDocumentClassificationPath
-    )
+    $arrRequiredPaths = @($strCodexConfigPath)
     $arrRequiredPaths += @(
         $arrGovernedMetadataDocuments |
-            ForEach-Object {
-                Join-Path -Path $strRepositoryRootPath -ChildPath $_.Path
-            }
-    )
-    $arrRequiredPaths += @(
-        $arrAgentSetupInputSpecs |
+            Where-Object {
+                $arrPublishedChangedPaths -cnotcontains $_.Path -or
+                $arrTrackedRepositoryPaths -ccontains $_.Path
+            } |
             ForEach-Object {
                 Join-Path -Path $strRepositoryRootPath -ChildPath $_.Path
             }
@@ -6129,11 +7927,9 @@ $strAgentsContent = if ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
             -RepositoryRelativePath 'AGENTS.md' `
             -DisplayName 'AGENTS.md' `
             -MaximumBytes $intAgentsMaximumInputBytes `
-            -RequireIndexContentMatch:($RequireStagedInputMatch -and
-                $setStagedInputPaths.Contains('AGENTS.md'))) `
+            -RequireIndexContentMatch:($RequireStagedInputMatch -and $setStagedInputPaths.Contains('AGENTS.md'))) `
         -DisplayName 'AGENTS.md'
-}
-else {
+} else {
     Read-GitRevisionText `
         -RepositoryRootPath $strRepositoryRootPath `
         -Revision $strValidatedInputRevision `
@@ -6149,11 +7945,9 @@ $strClaudeContent = if ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
             -RepositoryRelativePath 'CLAUDE.md' `
             -DisplayName 'CLAUDE.md' `
             -MaximumBytes $intClaudeMaximumInputBytes `
-            -RequireIndexContentMatch:($RequireStagedInputMatch -and
-                $setStagedInputPaths.Contains('CLAUDE.md'))) `
+            -RequireIndexContentMatch:($RequireStagedInputMatch -and $setStagedInputPaths.Contains('CLAUDE.md'))) `
         -DisplayName 'CLAUDE.md'
-}
-else {
+} else {
     Read-GitRevisionText `
         -RepositoryRootPath $strRepositoryRootPath `
         -Revision $strValidatedInputRevision `
@@ -6169,11 +7963,9 @@ $strCodexConfigContent = if ([string]::IsNullOrEmpty($strValidatedInputRevision)
             -RepositoryRelativePath '.codex/config.toml' `
             -DisplayName '.codex/config.toml' `
             -MaximumBytes $intCodexConfigMaximumInputBytes `
-            -RequireIndexContentMatch:($RequireStagedInputMatch -and
-                $setStagedInputPaths.Contains('.codex/config.toml'))) `
+            -RequireIndexContentMatch:($RequireStagedInputMatch -and $setStagedInputPaths.Contains('.codex/config.toml'))) `
         -DisplayName '.codex/config.toml'
-}
-else {
+} else {
     Read-GitRevisionText `
         -RepositoryRootPath $strRepositoryRootPath `
         -Revision $strValidatedInputRevision `
@@ -6189,13 +7981,9 @@ $strDocsInstructionsContent = if ([string]::IsNullOrEmpty($strValidatedInputRevi
             -RepositoryRelativePath '.github/instructions/docs.instructions.md' `
             -DisplayName '.github/instructions/docs.instructions.md' `
             -MaximumBytes $intDocsInstructionsMaximumInputBytes `
-            -RequireIndexContentMatch:($RequireStagedInputMatch -and
-                $setStagedInputPaths.Contains(
-                    '.github/instructions/docs.instructions.md'
-                ))) `
+            -RequireIndexContentMatch:($RequireStagedInputMatch -and $setStagedInputPaths.Contains('.github/instructions/docs.instructions.md'))) `
         -DisplayName '.github/instructions/docs.instructions.md'
-}
-else {
+} else {
     Read-GitRevisionText `
         -RepositoryRootPath $strRepositoryRootPath `
         -Revision $strValidatedInputRevision `
@@ -6203,49 +7991,24 @@ else {
         -MaximumBytes $intDocsInstructionsMaximumInputBytes `
         -RequireRegularFile
 }
-$hashtableAgentSetupInputContent = @{}
-foreach ($objAgentSetupInputSpec in $arrAgentSetupInputSpecs) {
-    $strAgentSetupInputPath = Join-Path `
-        -Path $strRepositoryRootPath `
-        -ChildPath $objAgentSetupInputSpec.Path
-    $strAgentSetupInputContent = if ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
-        ConvertFrom-StrictUtf8Data `
-            -Bytes (Read-RepositoryInputData `
-                -Path $strAgentSetupInputPath `
-                -RepositoryRootPath $strRepositoryRootPath `
-                -RepositoryRelativePath $objAgentSetupInputSpec.Path `
-                -DisplayName $objAgentSetupInputSpec.Path `
-                -MaximumBytes $objAgentSetupInputSpec.MaximumBytes `
-                -RequireIndexContentMatch:($RequireStagedInputMatch -and
-                    $setStagedInputPaths.Contains(
-                        $objAgentSetupInputSpec.Path
-                    ))) `
-            -DisplayName $objAgentSetupInputSpec.Path
-    }
-    else {
-        Read-GitRevisionText `
-            -RepositoryRootPath $strRepositoryRootPath `
-            -Revision $strValidatedInputRevision `
-            -RepositoryRelativePath $objAgentSetupInputSpec.Path `
-            -MaximumBytes $objAgentSetupInputSpec.MaximumBytes `
-            -RequireRegularFile
-    }
-    $hashtableAgentSetupInputContent[$objAgentSetupInputSpec.Path] =
-        $strAgentSetupInputContent
-}
-$hashtableGovernedDocumentContent = @{
+$hashtableGovernedInstructionContent = @{
     'AGENTS.md' = $strAgentsContent
     'CLAUDE.md' = $strClaudeContent
     '.github/instructions/docs.instructions.md' = $strDocsInstructionsContent
 }
 foreach ($objDocumentSpec in $arrGovernedMetadataDocuments) {
-    if ($hashtableGovernedDocumentContent.ContainsKey($objDocumentSpec.Path)) {
+    if ($hashtableGovernedInstructionContent.ContainsKey($objDocumentSpec.Path)) {
         continue
     }
     $strDocumentPath = Join-Path `
         -Path $strRepositoryRootPath `
         -ChildPath $objDocumentSpec.Path
-    $strDocumentContent = if ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
+    $boolPublishedBaselineOnlyDocument =
+        $arrPublishedBaselinePaths -ccontains $objDocumentSpec.Path -and
+        $arrTrackedRepositoryPaths -cnotcontains $objDocumentSpec.Path
+    $strDocumentContent = if ($boolPublishedBaselineOnlyDocument) {
+        $null
+    } elseif ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
         ConvertFrom-StrictUtf8Data `
             -Bytes (Read-RepositoryInputData `
                 -Path $strDocumentPath `
@@ -6253,11 +8016,9 @@ foreach ($objDocumentSpec in $arrGovernedMetadataDocuments) {
                 -RepositoryRelativePath $objDocumentSpec.Path `
                 -DisplayName $objDocumentSpec.Path `
                 -MaximumBytes $objDocumentSpec.MaximumBytes `
-                -RequireIndexContentMatch:($RequireStagedInputMatch -and
-                    $setStagedInputPaths.Contains($objDocumentSpec.Path))) `
+            -RequireIndexContentMatch:($RequireStagedInputMatch -and $setStagedInputPaths.Contains($objDocumentSpec.Path))) `
             -DisplayName $objDocumentSpec.Path
-    }
-    else {
+    } else {
         Read-GitRevisionText `
             -RepositoryRootPath $strRepositoryRootPath `
             -Revision $strValidatedInputRevision `
@@ -6265,1292 +8026,1002 @@ foreach ($objDocumentSpec in $arrGovernedMetadataDocuments) {
             -MaximumBytes $objDocumentSpec.MaximumBytes `
             -RequireRegularFile
     }
-    $hashtableGovernedDocumentContent[$objDocumentSpec.Path] = $strDocumentContent
+    $hashtableGovernedInstructionContent[$objDocumentSpec.Path] = $strDocumentContent
 }
 
-$listGovernedDocumentContexts = [System.Collections.Generic.List[pscustomobject]]::new()
+$listGovernedDocumentContexts = [Collections.Generic.List[pscustomobject]]::new()
 foreach ($objDocumentSpec in $arrGovernedMetadataDocuments) {
-    $objParentContext = Get-GovernedDocumentParentContext `
-        -RepositoryRootPath $strRepositoryRootPath `
-        -RepositoryRelativePath $objDocumentSpec.Path `
-        -MaximumBytes $objDocumentSpec.MaximumBytes `
-        -Revision $strValidatedInputRevision `
-        -LocalBaselineRevision $strLocalWorktreeBaselineRevision `
-        -PublishedBaselineRevision $PublishedBaselineRevision
+    $objParentContext = if ($boolPublishedEndpointsRequested) {
+        $strPublishedBaselineContent = $null
+        $strMetadataBaselineRevision =
+            $strEffectivePublishedBaselineRevision
+        if (-not [string]::IsNullOrEmpty($strMetadataBaselineRevision)) {
+            & git -C $strRepositoryRootPath cat-file -e `
+                "$strMetadataBaselineRevision`:$($objDocumentSpec.Path)" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                $strPublishedBaselineContent = Read-PublishedBaselineDocumentText `
+                    -RepositoryRootPath $strRepositoryRootPath `
+                    -Revision $strMetadataBaselineRevision `
+                    -RepositoryRelativePath $objDocumentSpec.Path `
+                    -CurrentMaximumBytes $objDocumentSpec.MaximumBytes
+            }
+        }
+        [pscustomobject]@{
+            ParentContent = $strPublishedBaselineContent
+            ExpectedUtcDate = ''
+            ParentRevision = $strMetadataBaselineRevision
+            IsWorktreeTransition = $false
+        }
+    } elseif ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
+        Get-PublishedBaselineDocumentContext `
+            -RepositoryRootPath $strRepositoryRootPath `
+            -RepositoryRelativePath $objDocumentSpec.Path `
+            -MaximumBytes $objDocumentSpec.MaximumBytes
+    } else {
+        [pscustomobject]@{
+            ParentContent = $hashtableGovernedInstructionContent[$objDocumentSpec.Path]
+            ExpectedUtcDate = ''
+            ParentRevision = $strValidatedInputRevision
+            IsWorktreeTransition = $false
+        }
+    }
+    if ($FinalizeMetadataNow) {
+        $objParentContext.ExpectedUtcDate = $script:strMaximumMetadataUtcDate
+    }
+    $boolInitialMetadataCoverage = $false
+    $objMetadataParentContent = $objParentContext.ParentContent
+    $boolValidateMetadata = $objDocumentSpec.RequiresMetadata
+    if (-not $boolValidateMetadata -and
+        $null -ne $hashtableGovernedInstructionContent[$objDocumentSpec.Path]) {
+        $boolValidateMetadata = Test-DocumentMetadataHeaderIntent `
+            -Content $hashtableGovernedInstructionContent[$objDocumentSpec.Path]
+    }
+    if ($boolValidateMetadata -and -not $objDocumentSpec.RequiresVersion -and
+        $null -ne $objMetadataParentContent) {
+        $boolPriorMetadataIntent = Test-DocumentMetadataHeaderIntent -Content $objMetadataParentContent
+        if (-not $boolPriorMetadataIntent) {
+            $boolInitialMetadataCoverage = -not $objDocumentSpec.RequiresMetadata -or
+                (Test-InitialMetadataCoveragePath `
+                    -HasTrustedBaselineManifest $boolHasTrustedBaselineClassificationManifest `
+                    -TrustedBaselineExemptPath $arrTrustedBaselineClassificationExemptPaths `
+                    -RepositoryRelativePath $objDocumentSpec.Path)
+            if ($boolInitialMetadataCoverage) { $objMetadataParentContent = $null }
+        }
+    }
     $listGovernedDocumentContexts.Add([pscustomobject]@{
             Path = $objDocumentSpec.Path
             MaximumBytes = $objDocumentSpec.MaximumBytes
-            RequiresMetadata = $objDocumentSpec.RequiresMetadata
-            Content = $hashtableGovernedDocumentContent[$objDocumentSpec.Path]
+            Content = $hashtableGovernedInstructionContent[$objDocumentSpec.Path]
             ParentContent = $objParentContext.ParentContent
+            MetadataParentContent = $objMetadataParentContent
+            IsInitialMetadataCoverage = $boolInitialMetadataCoverage
             ExpectedUtcDate = $objParentContext.ExpectedUtcDate
             IsWorktreeTransition = $objParentContext.IsWorktreeTransition
+            RequireFinalizationDate = ($objParentContext.IsWorktreeTransition -or $FinalizeMetadataNow)
+            RequiresMetadata = $boolValidateMetadata
+            RequiresVersion = $objDocumentSpec.RequiresVersion
+            RequiredDocument = $arrDecisionRecordInventoryPaths -cnotcontains `
+                $objDocumentSpec.Path
         })
 }
 
-$arrRepositoryFailures = @(Get-AgentInstructionFailure `
+$listRepositoryFailures = [Collections.Generic.List[string]]::new()
+$listRepositoryFailures.AddRange([string[]] @(Get-AgentSetupContractFailure -Content $hashtableAgentSetupContent))
+$listRepositoryFailures.AddRange([string[]] @(Get-AgentInstructionFailure `
         -AgentsContent $strAgentsContent `
         -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent)
-$arrRepositoryFailures += @(Get-ProhibitedTrackedClaudeLocalFailure `
-        -TrackedPaths $arrTrackedRepositoryPaths)
-$arrRepositoryFailures += @(Get-HuskySetupContractFailure `
-        -RootPackageContent $hashtableAgentSetupInputContent['package.json'] `
-        -WorkflowPackageContent `
-            $hashtableAgentSetupInputContent['.github/workflows/package.json'] `
-        -HookContent $hashtableAgentSetupInputContent['.husky/pre-commit'] `
-        -CopilotSetupContent `
-            $hashtableAgentSetupInputContent['.github/workflows/copilot-setup-steps.yml'] `
-        -PreCommitConfigContent `
-            $hashtableAgentSetupInputContent['.pre-commit-config.yaml'])
-$arrRepositoryFailures += @(Get-PreCommitBootstrapContractFailure `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
-        -ScriptIndexContent `
-            $hashtableAgentSetupInputContent['.github/workflows/scripts-README.md'] `
-        -RequirementsContent $hashtableAgentSetupInputContent['requirements-dev.txt'])
-foreach ($objDocumentContext in $listGovernedDocumentContexts) {
-    $arrRepositoryFailures += @(Get-DocumentMetadataTransitionFailure `
-        -Name $objDocumentContext.Path `
-        -CurrentContent $objDocumentContext.Content `
-        -ParentContent $objDocumentContext.ParentContent `
-        -ExpectedUtcDate $objDocumentContext.ExpectedUtcDate `
-        -IsNewDocumentTransition ($null -eq $objDocumentContext.ParentContent -and
-            ($boolPublishedEndpointsRequested -or $objDocumentContext.IsWorktreeTransition)) `
-        -RequireExpectedUtcDateForRenderedChange $objDocumentContext.IsWorktreeTransition `
-        -MetadataRequired $objDocumentContext.RequiresMetadata)
+        -CodexConfigContent $strCodexConfigContent))
+$strGitIgnoreContent = if ([string]::IsNullOrEmpty($strValidatedInputRevision)) {
+    ConvertFrom-StrictUtf8Data `
+        -Bytes (Read-RepositoryInputData `
+            -Path (Join-Path $strRepositoryRootPath '.gitignore') `
+            -RepositoryRootPath $strRepositoryRootPath `
+            -RepositoryRelativePath '.gitignore' `
+            -DisplayName '.gitignore' `
+            -MaximumBytes $intGitIgnoreMaximumInputBytes `
+            -RequireIndexContentMatch:($RequireStagedInputMatch -and $setStagedInputPaths.Contains('.gitignore'))) `
+        -DisplayName '.gitignore'
+} else {
+    Read-GitRevisionText `
+        -RepositoryRootPath $strRepositoryRootPath `
+        -Revision $strValidatedInputRevision `
+        -RepositoryRelativePath '.gitignore' `
+        -MaximumBytes $intGitIgnoreMaximumInputBytes `
+        -RequireRegularFile
 }
-if ($arrRepositoryFailures.Count -gt 0) {
-    throw "Agent-instruction contract failed:`n- $($arrRepositoryFailures -join "`n- ")"
+if (-not (Test-RecursivePersonalMemoryIgnoreContract `
+        -GitIgnoreContent $strGitIgnoreContent -TrackedPath $arrTrackedRepositoryPaths)) {
+    $listRepositoryFailures.AddRange([string[]] (
+        'The root .gitignore must exclude CLAUDE.local.md at every depth with ' +
+        'CLAUDE.local.md or **/CLAUDE.local.md after all negations. ' +
+        'Nested or case-alias ignore files require a separately validated contract.'
+    ))
+}
+foreach ($strPersonalMemoryPath in @('CLAUDE.local.md', 'nested/CLAUDE.local.md', 'tools/project/CLAUDE.local.md')) {
+    if (-not (Test-GitIgnorePathEffective `
+            -GitIgnoreContent $strGitIgnoreContent `
+            -RepositoryRelativePath $strPersonalMemoryPath)) {
+        $listRepositoryFailures.AddRange([string[]] (
+            "The personal CLAUDE.local.md ignore rule is ineffective: $strPersonalMemoryPath"))
+    }
+}
+foreach ($strPublicInstructionPath in @('CLAUDE.md', 'nested/CLAUDE.md', 'tools/project/CLAUDE.md')) {
+    if (Test-GitIgnorePathEffective `
+            -GitIgnoreContent $strGitIgnoreContent `
+            -RepositoryRelativePath $strPublicInstructionPath) {
+        $listRepositoryFailures.AddRange([string[]] (
+            "The public instruction file must not be ignored: $strPublicInstructionPath"))
+    }
+}
+$listRepositoryFailures.AddRange([string[]] @(Get-DocumentationClaimFailure `
+        -Content $strDocsInstructionsContent `
+        -TrackedPaths $arrTrackedRepositoryPaths))
+$listRepositoryFailures.AddRange([string[]] @(Get-DecisionLifecyclePolicyFailure `
+        -Content $strDocsInstructionsContent))
+$arrCanonicalDecisionGuideLinks = @(
+    '../../STYLE_GUIDE.md',
+    '../../STYLE_GUIDE_RATIONALE.md'
+)
+foreach ($objDecisionContext in @(
+        $listGovernedDocumentContexts |
+            Where-Object { $_.Path -cmatch $script:strDecisionRecordDirectoryPathPattern }
+    )) {
+    $listRepositoryFailures.AddRange([string[]] @(Get-DecisionRecordPathFailure `
+            -RepositoryRelativePath $objDecisionContext.Path))
+    if ($null -eq $objDecisionContext.Content) {
+        continue
+    }
+    $listRepositoryFailures.AddRange([string[]] @(Get-DecisionRecordLifecycleFailure `
+            -Name $objDecisionContext.Path `
+            -CurrentContent $objDecisionContext.Content `
+            -BaselineContent $objDecisionContext.ParentContent))
+    $objDecisionMarkdownContext = Get-OperativeMarkdownContext `
+        -Content $objDecisionContext.Content
+    $arrDecisionLinks = [string[]]@(
+        $objDecisionMarkdownContext.ProseBlocks.Links
+    )
+    foreach ($strGuideLink in $arrCanonicalDecisionGuideLinks) {
+        if ($arrDecisionLinks -cnotcontains $strGuideLink) {
+            $listRepositoryFailures.AddRange([string[]] "$($objDecisionContext.Path) must contain an operative link to $strGuideLink")
+        }
+    }
+}
+$listRepositoryFailures.AddRange([string[]] @(Get-NestedClaudeImportFailure `
+        -DocumentContexts @(
+            $listGovernedDocumentContexts |
+                Where-Object { $arrGovernedInstructionDocuments.Path -ccontains $_.Path }
+        )))
+foreach ($objDocumentContext in $listGovernedDocumentContexts) {
+    if (-not $objDocumentContext.RequiresMetadata) {
+        continue
+    }
+    if ($null -eq $objDocumentContext.Content) {
+        if ($objDocumentContext.RequiredDocument) {
+            $listRepositoryFailures.AddRange([string[]] "$($objDocumentContext.Path) is required in the published final state.")
+        }
+        continue
+    }
+    if ($objDocumentContext.RequiresVersion) {
+        $listRepositoryFailures.AddRange([string[]] @(Get-PublishedEndpointMetadataFailure `
+                -Name $objDocumentContext.Path `
+                -CurrentContent $objDocumentContext.Content `
+                -ParentContent $objDocumentContext.ParentContent `
+                -ExpectedUtcDate $objDocumentContext.ExpectedUtcDate `
+                -IsNewDocumentTransition ($null -eq $objDocumentContext.ParentContent) `
+                -RequireExpectedUtcDateForRenderedChange `
+                    $objDocumentContext.RequireFinalizationDate))
+    } else {
+        $listRepositoryFailures.AddRange([string[]] @(Get-PublishedEndpointLastUpdatedFailure `
+                -Name $objDocumentContext.Path `
+                -CurrentContent $objDocumentContext.Content `
+                -BaseContent $objDocumentContext.MetadataParentContent `
+                -TrustedEventUtcDate $objDocumentContext.ExpectedUtcDate `
+                -RequireCurrentMaximumDateForRenderedChange `
+                    $objDocumentContext.RequireFinalizationDate))
+    }
+}
+if ($listRepositoryFailures.Count -gt 0) {
+    throw "Agent-instruction contract failed:`n- $($listRepositoryFailures -join "`n- ")"
 }
 
-Write-Output 'Agent-instruction contract passed.'
+Write-Output 'Agent-instruction content contract passed; maintenance authority is checked separately.'
+if ($FinalizeMetadataNow) {
+    Write-Output ("Author finalization UTC date checked: $script:strMaximumMetadataUtcDate; " +
+        "B=$PublishedBaselineRevision H=$InputRevision.")
+} elseif ($boolPublishedEndpointsRequested) {
+    Write-Output ("Finalization date not verified by this invocation; " +
+        "structural, calendar, baseline and version checks passed: B=$PublishedBaselineRevision H=$InputRevision.")
+} else {
+    Write-Output 'Finalization date not verified for committed input; local changed-worktree date checks remain applicable.'
+}
+
+
+if ($ProposedPolicy) {
+    Write-Output "Proposed-policy transition checks passed: B=$PublishedBaselineRevision H=$InputRevision."
+}
 
 #endregion Repository validation
 
 if ($SelfTest) {
     #region Mutation self-tests
 
-    $objExplicitEndpointContext = Get-GovernedDocumentParentContext `
-        -RepositoryRootPath $strRepositoryRootPath `
-        -RepositoryRelativePath 'AGENTS.md' `
-        -MaximumBytes $intAgentsMaximumInputBytes `
-        -Revision $strCheckedOutRevision `
-        -PublishedBaselineRevision $strCheckedOutRevision
-    $strExactBaselineAgents = Read-GitRevisionText `
-        -RepositoryRootPath $strRepositoryRootPath `
-        -RepositoryRelativePath 'AGENTS.md' `
-        -MaximumBytes $intAgentsMaximumInputBytes `
-        -Revision $strCheckedOutRevision `
-        -RequireRegularFile
-    if ($objExplicitEndpointContext.ParentContent -cne $strExactBaselineAgents -or
-        $objExplicitEndpointContext.ExpectedUtcDate -cne '' -or
-        $objExplicitEndpointContext.IsWorktreeTransition) {
-        throw 'Final endpoint context must use exact baseline bytes without a commit-derived date.'
-    }
-    $objShapeOnlyContext = Get-GovernedDocumentParentContext `
-        -RepositoryRootPath $strRepositoryRootPath `
-        -RepositoryRelativePath 'AGENTS.md' `
-        -MaximumBytes $intAgentsMaximumInputBytes `
-        -Revision $strCheckedOutRevision
-    if ($null -ne $objShapeOnlyContext.ParentContent -or
-        $objShapeOnlyContext.ExpectedUtcDate -cne '') {
-        throw 'An unspecified published baseline must not reconstruct intermediate history.'
-    }
-
-    $strLockedPythonHookPath = Join-Path `
-        -Path $strRepositoryRootPath `
-        -ChildPath '.github/workflows/Invoke-LockedPythonHook.ps1'
-    $scriptblockInvokeLockedPythonHookFixture = {
-        param([string] $PathValue)
-
-        $objStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
-        $objStartInfo.FileName = [Environment]::ProcessPath
-        $objStartInfo.WorkingDirectory = $strRepositoryRootPath
-        $objStartInfo.UseShellExecute = $false
-        $objStartInfo.CreateNoWindow = $true
-        $objStartInfo.RedirectStandardOutput = $true
-        $objStartInfo.RedirectStandardError = $true
-        $objStartInfo.StandardOutputEncoding =
-            [System.Text.UTF8Encoding]::new($false)
-        $objStartInfo.StandardErrorEncoding =
-            [System.Text.UTF8Encoding]::new($false)
-        $objStartInfo.Environment['PATH'] = $PathValue
-        foreach ($strArgument in @(
-                '-NoLogo',
-                '-NoProfile',
-                '-NonInteractive',
-                '-File',
-                $strLockedPythonHookPath,
-                '-Module',
-                'pre_commit_hooks.check_json',
-                'package.json'
-            )) {
-            $objStartInfo.ArgumentList.Add($strArgument)
+    foreach ($strGeneratedMetadataPath in $objDocumentClassificationContext.GeneratedPaths) {
+        if (@($listGovernedDocumentContexts | Where-Object Path -CEQ $strGeneratedMetadataPath).Count -ne 0) {
+            throw 'Generated aggregate metadata was promoted into optional document validation.'
         }
-
-        $objProcess = [System.Diagnostics.Process]::new()
-        $objProcess.StartInfo = $objStartInfo
-        try {
-            if (-not $objProcess.Start()) {
-                throw 'Could not start a locked Python hook fixture.'
-            }
-            $objStandardOutputTask = $objProcess.StandardOutput.ReadToEndAsync()
-            $objStandardErrorTask = $objProcess.StandardError.ReadToEndAsync()
-            $objProcess.WaitForExit()
-            return [pscustomobject]@{
-                ExitCode = $objProcess.ExitCode
-                StandardOutput = $objStandardOutputTask.GetAwaiter().GetResult()
-                StandardError = $objStandardErrorTask.GetAwaiter().GetResult()
-            }
-        }
-        finally {
-            $objProcess.Dispose()
+    }
+    foreach ($strOptionalMetadataPath in $objDocumentClassificationContext.Tier2Paths) {
+        if (@($listGovernedDocumentContexts | Where-Object Path -CEQ $strOptionalMetadataPath).Count -ne 1) {
+            throw 'A retained Tier2 document is missing its optional metadata context.'
         }
     }
 
-    $objMissingRuntimeResult = & $scriptblockInvokeLockedPythonHookFixture `
-        -PathValue ''
-    $strExpectedLockedPythonHookError =
-        'Python 3.12 is required to run the locked pre-commit hook.'
-    if ($objMissingRuntimeResult.ExitCode -ne 2 -or
-        -not [string]::IsNullOrEmpty($objMissingRuntimeResult.StandardOutput) -or
-        $objMissingRuntimeResult.StandardError.TrimEnd([char[]] "`r`n") -cne
-            $strExpectedLockedPythonHookError) {
-        throw (
-            'The locked Python hook missing-runtime fixture must exit 2, ' +
-            'write no stdout, and write only its required stderr diagnostic.'
-        )
-    }
-
-    $objLiveLauncherPython = Get-Python312CommandContext `
-        -WindowsPlatform ([bool]$IsWindows)
-    if ($null -eq $objLiveLauncherPython) {
-        throw 'The locked Python launcher flag fixture requires Python 3.12.'
-    }
-    $arrLiveLauncherFlagOutput = @(
-        & $objLiveLauncherPython.Path `
-            @($objLiveLauncherPython.PrefixArgument) `
-            -E -P -c `
-            'import sys; print(int(sys.flags.ignore_environment), int(sys.flags.safe_path), int(sys.flags.no_user_site), int(sys.flags.isolated))'
-    )
-    $intLiveLauncherFlagExitCode = $LASTEXITCODE
-    if ($intLiveLauncherFlagExitCode -ne 0 -or
-        $arrLiveLauncherFlagOutput.Count -ne 1 -or
-        $arrLiveLauncherFlagOutput[0] -cne '1 1 0 0') {
-        throw (
-            'The locked Python launcher flags must ignore Python environment ' +
-            'variables and unsafe paths without disabling the user site.'
-        )
-    }
-
-    $objPythonSelectionFixtureDirectory =
-        [System.IO.Directory]::CreateTempSubdirectory(
-            'terraform-style-guide-python-selection-'
-        )
+    $strExtractedSelfTestPath = '.github/workflows/Test-AgentInstructions.SelfTest.ps1'
+    $boolSavedWindowsPython = $hashtableRuntimeContext.WindowsPlatform
+    $arrSavedPythonNames = $hashtableRuntimeContext.PythonPathNames
     try {
-        if ($IsWindows) {
-            [System.IO.File]::WriteAllText(
-                (Join-Path $objPythonSelectionFixtureDirectory.FullName 'py.cmd'),
-                (@(
-                        '@echo off'
-                        'if "%~1"=="-3.12" if "%~2"=="-E" if "%~3"=="-P" if "%~4"=="-c" ('
-                        '  if "%~6"=="" ('
-                        '    echo 3.12'
-                        '    exit /b 0'
-                        '  )'
-                        '  exit /b 1'
-                        ')'
-                        'exit /b 97'
-                    ) -join "`r`n") + "`r`n",
-                [System.Text.UTF8Encoding]::new($false)
-            )
-            [System.IO.File]::WriteAllText(
-                (Join-Path `
-                        $objPythonSelectionFixtureDirectory.FullName `
-                        'python3.12.cmd'),
-                (@(
-                        '@echo off'
-                        'if "%~1"=="-E" if "%~2"=="-P" if "%~3"=="-c" ('
-                        '  if "%~5"=="" echo 3.12'
-                        '  exit /b 0'
-                        ')'
-                        'if "%~1"=="-E" if "%~2"=="-P" if "%~3"=="-m" ('
-                        '  echo selected-equivalent'
-                        '  exit /b 0'
-                        ')'
-                        'exit /b 98'
-                    ) -join "`r`n") + "`r`n",
-                [System.Text.UTF8Encoding]::new($false)
-            )
+        $hashtableRuntimeContext.WindowsPlatform = $false
+        $hashtableRuntimeContext.PythonPathNames = @('python3.12', 'python3', 'python')
+        if ((Get-TomlParseContext -Content $strCodexConfigContent).Failure) {
+            throw 'A compatible PATH Python 3.12 interpreter was rejected.'
         }
-        else {
-            $strMissingModuleApplicationPath = Join-Path `
-                $objPythonSelectionFixtureDirectory.FullName `
-                'python3.12'
-            $strValidEquivalentApplicationPath = Join-Path `
-                $objPythonSelectionFixtureDirectory.FullName `
-                'python3'
-            [System.IO.File]::WriteAllText(
-                $strMissingModuleApplicationPath,
-                (@(
-                        '#!/bin/sh'
-                        'if [ "$1" = "-E" ] && [ "$2" = "-P" ] && [ "$3" = "-c" ] && [ "$#" -eq 4 ]; then'
-                        '  printf "3.12\n"'
-                        '  exit 0'
-                        'fi'
-                        'if [ "$1" = "-E" ] && [ "$2" = "-P" ] && [ "$3" = "-c" ] && [ "$#" -eq 5 ]; then'
-                        '  exit 1'
-                        'fi'
-                        'exit 97'
-                    ) -join "`n") + "`n",
-                [System.Text.UTF8Encoding]::new($false)
-            )
-            [System.IO.File]::WriteAllText(
-                $strValidEquivalentApplicationPath,
-                (@(
-                        '#!/bin/sh'
-                        'if [ "$1" = "-E" ] && [ "$2" = "-P" ] && [ "$3" = "-c" ]; then'
-                        '  if [ "$#" -eq 4 ]; then printf "3.12\n"; fi'
-                        '  exit 0'
-                        'fi'
-                        'if [ "$1" = "-E" ] && [ "$2" = "-P" ] && [ "$3" = "-m" ]; then'
-                        '  printf "selected-equivalent\n"'
-                        '  exit 0'
-                        'fi'
-                        'exit 98'
-                    ) -join "`n") + "`n",
-                [System.Text.UTF8Encoding]::new($false)
-            )
-            $objExecutableMode =
-                [System.IO.UnixFileMode]::UserRead -bor
-                [System.IO.UnixFileMode]::UserWrite -bor
-                [System.IO.UnixFileMode]::UserExecute
-            [System.IO.File]::SetUnixFileMode(
-                $strMissingModuleApplicationPath,
-                $objExecutableMode
-            )
-            [System.IO.File]::SetUnixFileMode(
-                $strValidEquivalentApplicationPath,
-                $objExecutableMode
-            )
-        }
-
-        $objPythonSelectionResult = & $scriptblockInvokeLockedPythonHookFixture `
-            -PathValue $objPythonSelectionFixtureDirectory.FullName
-        if ($objPythonSelectionResult.ExitCode -ne 0 -or
-            $objPythonSelectionResult.StandardOutput.TrimEnd([char[]] "`r`n") -cne
-                'selected-equivalent' -or
-            -not [string]::IsNullOrEmpty($objPythonSelectionResult.StandardError)) {
-            throw (
-                'The locked Python hook must skip an exact Python 3.12 without ' +
-                'the requested module and run the valid equivalent interpreter.'
-            )
-        }
-    }
-    finally {
-        $strPythonSelectionFixturePath =
-            $objPythonSelectionFixtureDirectory.FullName
-        $strTemporaryDirectoryPath = [System.IO.Path]::GetFullPath(
-            [System.IO.Path]::GetTempPath()
-        )
-        if (-not $strPythonSelectionFixturePath.StartsWith(
-                $strTemporaryDirectoryPath,
-                [System.StringComparison]::OrdinalIgnoreCase
-            )) {
-            throw 'The Python selection fixture cleanup path is outside the temporary directory.'
-        }
-        [System.IO.Directory]::Delete($strPythonSelectionFixturePath, $true)
-    }
-
-    $objValidatorBoundaryStream = [System.IO.MemoryStream]::new(
-        [byte[]]::new($intValidatorMaximumInputBytes),
-        $false
-    )
-    try {
-        [byte[]] $arrValidatorBoundaryBytes = Read-BoundedStreamData `
-            -Stream $objValidatorBoundaryStream `
-            -MaximumBytes $intValidatorMaximumInputBytes `
-            -DisplayName 'validator boundary control'
-        if ($arrValidatorBoundaryBytes.Count -ne $intValidatorMaximumInputBytes) {
-            throw 'The validator byte boundary rejected its exact maximum.'
-        }
-    }
-    finally {
-        $objValidatorBoundaryStream.Dispose()
-    }
-    $objValidatorOversizeStream = [System.IO.MemoryStream]::new(
-        [byte[]]::new($intValidatorMaximumInputBytes + 1),
-        $false
-    )
-    try {
-        [void](Read-BoundedStreamData `
-                -Stream $objValidatorOversizeStream `
-                -MaximumBytes $intValidatorMaximumInputBytes `
-                -DisplayName 'validator oversized mutation')
-        throw 'The validator byte boundary accepted one excess byte.'
-    }
-    catch [System.IO.InvalidDataException] {
-        $strExpectedValidatorOversizeFailure =
-            "validator oversized mutation must not exceed " +
-            "$intValidatorMaximumInputBytes bytes."
-        if ($_.Exception.Message -cne $strExpectedValidatorOversizeFailure) {
-            throw (
-                'The validator oversized mutation returned an unexpected failure: ' +
-                $_.Exception.Message
-            )
-        }
-    }
-    finally {
-        $objValidatorOversizeStream.Dispose()
-    }
-
-    $objSetupInputSpec = $arrAgentSetupInputSpecs | Where-Object {
-        $_.Path -ceq '.github/workflows/copilot-setup-steps.yml'
-    }
-    foreach ($intExtraSetupByte in @(0, 1)) {
-        $intSetupFixtureBytes = $objSetupInputSpec.MaximumBytes + $intExtraSetupByte
-        $objSetupBoundaryStream = [System.IO.MemoryStream]::new(
-            [byte[]]::new($intSetupFixtureBytes),
-            $false
-        )
-        try {
-            [byte[]] $arrSetupBoundaryBytes = Read-BoundedStreamData `
-                -Stream $objSetupBoundaryStream `
-                -MaximumBytes $objSetupInputSpec.MaximumBytes `
-                -DisplayName 'Copilot setup boundary'
-            if ($intExtraSetupByte -ne 0 -or
-                $arrSetupBoundaryBytes.Count -ne $intSetupFixtureBytes) {
-                throw 'The Copilot setup reader did not enforce its exact byte boundary.'
+        foreach ($strRejectedPythonName in @(
+                'pwsh', 'missing-python312')) {
+            $hashtableRuntimeContext.PythonPathNames = @($strRejectedPythonName)
+            if ((Get-TomlParseContext -Content $strCodexConfigContent).Failure -cne
+                $strPythonPrerequisite) {
+                throw "Python candidate was accepted: $strRejectedPythonName"
             }
         }
-        catch [System.IO.InvalidDataException] {
-            $strExpectedSetupFailure = 'Copilot setup boundary must not exceed ' +
-                $objSetupInputSpec.MaximumBytes + ' bytes.'
-            if ($intExtraSetupByte -ne 1 -or
-                $_.Exception.Message -cne $strExpectedSetupFailure) {
-                throw
-            }
-        }
-        finally {
-            $objSetupBoundaryStream.Dispose()
-        }
+    } finally {
+        $hashtableRuntimeContext.WindowsPlatform = $boolSavedWindowsPython
+        $hashtableRuntimeContext.PythonPathNames = $arrSavedPythonNames
     }
 
-    $strRootPackageContent = $hashtableAgentSetupInputContent['package.json']
-    $strWorkflowPackageContent =
-        $hashtableAgentSetupInputContent['.github/workflows/package.json']
-    $strCopilotSetupContent =
-        $hashtableAgentSetupInputContent['.github/workflows/copilot-setup-steps.yml']
-    $strHuskyHookContent = $hashtableAgentSetupInputContent['.husky/pre-commit']
-    $strPreCommitConfigContent =
-        $hashtableAgentSetupInputContent['.pre-commit-config.yaml']
-    $strScriptIndexContent =
-        $hashtableAgentSetupInputContent['.github/workflows/scripts-README.md']
-    $strRequirementsContent =
-        $hashtableAgentSetupInputContent['requirements-dev.txt']
-
-    $arrPreCommitBootstrapControlFailures = @(
-        Get-PreCommitBootstrapContractFailure `
-            -AgentsContent $strAgentsContent `
-            -ClaudeContent $strClaudeContent `
-            -ScriptIndexContent $strScriptIndexContent `
-            -RequirementsContent $strRequirementsContent
+    $strMissingBootstrapFixture = [IO.Path]::Combine(
+        [IO.Path]::GetTempPath(),
+        ('agent-instruction-bootstrap-{0}' -f [Guid]::NewGuid().ToString('N'))
     )
-    if ($arrPreCommitBootstrapControlFailures.Count -ne 0) {
-        throw (
-            'The pre-commit bootstrap control fixture failed: ' +
-            ($arrPreCommitBootstrapControlFailures -join '; ')
-        )
-    }
-    $hashtableMutablePreCommitRevision = [ordered]@{
-        '011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7' = 'v1.7.12'
-    }
-    foreach ($objMutableRevision in $hashtableMutablePreCommitRevision.GetEnumerator()) {
-        $strMutableRevisionConfig = $strPreCommitConfigContent.Replace(
-            'rev: "' + $objMutableRevision.Key + '"',
-            'rev: "' + $objMutableRevision.Value + '"'
-        )
-        if ($strMutableRevisionConfig -ceq $strPreCommitConfigContent) {
-            throw "Could not create the $($objMutableRevision.Value) revision mutation."
-        }
-        $arrMutableRevisionFailures = @(Get-HuskySetupContractFailure `
-                -RootPackageContent $strRootPackageContent `
-                -WorkflowPackageContent $strWorkflowPackageContent `
-                -HookContent $strHuskyHookContent `
-                -CopilotSetupContent $strCopilotSetupContent `
-                -PreCommitConfigContent $strMutableRevisionConfig
-    )
-        if (-not ($arrMutableRevisionFailures -match
-                'must use reviewed full commit')) {
-            throw "Mutable pre-commit revision $($objMutableRevision.Value) did not fail closed."
-        }
-    }
-    $strRemotePythonHookMutation = $strPreCommitConfigContent.Replace(
-        "  - repo: local`n    hooks:`n      - id: check-json",
-        "  - repo: https://github.com/pre-commit/pre-commit-hooks`n" +
-            "    rev: `"v6.0.0`"`n    hooks:`n      - id: check-json"
-    )
-    if ($strRemotePythonHookMutation -ceq $strPreCommitConfigContent) {
-        throw 'Could not create the remote Python hook mutation.'
-    }
-    $arrRemotePythonHookFailures = @(Get-HuskySetupContractFailure `
-            -RootPackageContent $strRootPackageContent `
-            -WorkflowPackageContent $strWorkflowPackageContent `
-            -HookContent $strHuskyHookContent `
-            -CopilotSetupContent $strCopilotSetupContent `
-            -PreCommitConfigContent $strRemotePythonHookMutation
-    )
-    if ($arrRemotePythonHookFailures -cnotcontains
-        'Pre-commit must use two local hook groups and only one reviewed remote hook repository.') {
-        throw 'The remote Python hook mutation did not fail closed.'
-    }
-    $strSeparatePythonEnvironmentMutation = $strPreCommitConfigContent.Replace(
-        '          -Module pre_commit_hooks.check_json' + "`n" +
-            '        language: system',
-        '          -Module pre_commit_hooks.check_json' + "`n" +
-            '        language: python'
-    )
-    if ($strSeparatePythonEnvironmentMutation -ceq $strPreCommitConfigContent) {
-        throw 'Could not create the separate Python environment mutation.'
-    }
-    $arrSeparatePythonEnvironmentFailures = @(Get-HuskySetupContractFailure `
-            -RootPackageContent $strRootPackageContent `
-            -WorkflowPackageContent $strWorkflowPackageContent `
-            -HookContent $strHuskyHookContent `
-            -CopilotSetupContent $strCopilotSetupContent `
-            -PreCommitConfigContent $strSeparatePythonEnvironmentMutation
-    )
-    if ($arrSeparatePythonEnvironmentFailures -cnotcontains
-        'Python pre-commit hooks must not resolve separate environments.') {
-        throw 'The separate Python environment mutation did not fail closed.'
-    }
-    foreach ($strYamlHookId in @('check-yaml', 'yamllint')) {
-        $objYamlSelectorPattern = [regex]::new(
-            "(?ms)(^      - id: $([regex]::Escape($strYamlHookId))\r?\n" +
-            '.*?^        files: )\^\.\*\\\.ya\?ml\$$'
-        )
-        $strYamlSelectorMutation = $objYamlSelectorPattern.Replace(
-            $strPreCommitConfigContent,
-            '${1}^\.github/.*\.ya?ml$',
-            1
-        )
-        if ($strYamlSelectorMutation -ceq $strPreCommitConfigContent) {
-            throw "Could not create the $strYamlHookId selector mutation."
-        }
-        $arrYamlSelectorFailures = @(Get-HuskySetupContractFailure `
-                -RootPackageContent $strRootPackageContent `
-                -WorkflowPackageContent $strWorkflowPackageContent `
-                -HookContent $strHuskyHookContent `
-                -CopilotSetupContent $strCopilotSetupContent `
-                -PreCommitConfigContent $strYamlSelectorMutation
-    )
-        if ($arrYamlSelectorFailures -cnotcontains
-            "The $strYamlHookId hook must select all repository YAML files.") {
-            throw "$strYamlHookId selector mutation did not fail closed."
-        }
-    }
-    foreach ($strClassificationHookId in @(
-            'check-json',
-            'end-of-file-fixer',
-            'trailing-whitespace'
+    $arrMissingBootstrapFailures = @(Get-MarkdownParserBootstrapFailure `
+            -RepositoryRootPath $strMissingBootstrapFixture)
+    if ($arrMissingBootstrapFailures.Count -ne 1 -or
+        -not $arrMissingBootstrapFailures[0].Contains(
+            'node .github/workflows/NpmTools.mjs install',
+            [StringComparison]::Ordinal
         )) {
-        $objClassificationSelectorPattern = [regex]::new(
-            "(?ms)(^      - id: $([regex]::Escape($strClassificationHookId))\r?\n" +
-            '.*?)(^            \\.github/document-metadata-classification' +
-            '\\.json\r?\n)'
-        )
-        $strClassificationSelectorMutation =
-            $objClassificationSelectorPattern.Replace(
-                $strPreCommitConfigContent,
-                '${1}',
-                1
-            )
-        if ($strClassificationSelectorMutation -ceq $strPreCommitConfigContent) {
-            throw (
-                "Could not create the $strClassificationHookId document " +
-                'classification selector mutation.'
-            )
-        }
-        $arrClassificationSelectorFailures = @(Get-HuskySetupContractFailure `
-                -RootPackageContent $strRootPackageContent `
-                -WorkflowPackageContent $strWorkflowPackageContent `
-                -HookContent $strHuskyHookContent `
-                -CopilotSetupContent $strCopilotSetupContent `
-                -PreCommitConfigContent $strClassificationSelectorMutation
-    )
-        $strExpectedClassificationFailure =
-            "The $strClassificationHookId hook must select " +
-            '.github/document-metadata-classification.json.'
-        if ($arrClassificationSelectorFailures -cnotcontains
-            $strExpectedClassificationFailure) {
-            throw (
-                "$strClassificationHookId document classification selector " +
-                'mutation did not fail closed.'
-            )
-        }
+        throw 'The node_modules-absent bootstrap fixture did not fail actionably.'
     }
-    $strPowerShell7Preflight =
-        "pwsh -NoProfile -Command 'if (`$PSVersionTable." +
-        "PSVersion.Major -lt 7) { exit 1 }'"
-    $strWeakenedPowerShellPreflight = $strPowerShell7Preflight.Replace(
-        '-lt 7',
-        '-lt 6'
-    )
-    $arrPreCommitBootstrapMutations = @(
-        [pscustomobject]@{
-            Name = 'runner pin becomes a range'
-            Agents = $strAgentsContent
-            Claude = $strClaudeContent
-            ScriptIndex = $strScriptIndexContent
-            Requirements = $strRequirementsContent.Replace('pre-commit==4.6.2', 'pre-commit>=4.6.2')
-            Failure = 'complete reviewed binary-only Python 3.12 tool closure'
-        },
-        [pscustomobject]@{
-            Name = 'hash enforcement removed'
-            Agents = $strAgentsContent
-            Claude = $strClaudeContent
-            ScriptIndex = $strScriptIndexContent
-            Requirements = $strRequirementsContent.Replace("--require-hashes`n", '')
-            Failure = 'complete reviewed binary-only Python 3.12 tool closure'
-        },
-        [pscustomobject]@{
-            Name = 'binary-only enforcement removed'
-            Agents = $strAgentsContent
-            Claude = $strClaudeContent
-            ScriptIndex = $strScriptIndexContent
-            Requirements = $strRequirementsContent.Replace("--only-binary=:all:`n", '')
-            Failure = 'complete reviewed binary-only Python 3.12 tool closure'
-        },
-        [pscustomobject]@{
-            Name = 'locked artifact hash removed'
-            Agents = $strAgentsContent
-            Claude = $strClaudeContent
-            ScriptIndex = $strScriptIndexContent
-            Requirements = $strRequirementsContent.Replace(
-                '    --hash=sha256:a8dc6b26ad22ff227d2634a65cb388215ce6cc96bbcc5cfde7641ae87e8dacc0' +
-                "`n",
-                ''
-            )
-            Failure = 'complete reviewed binary-only Python 3.12 tool closure'
-        },
-        [pscustomobject]@{
-            Name = 'unreviewed package added'
-            Agents = $strAgentsContent
-            Claude = $strClaudeContent
-            ScriptIndex = $strScriptIndexContent
-            Requirements = $strRequirementsContent +
-                "pip==26.0.1 \\`n" +
-                '    --hash=sha256:0000000000000000000000000000000000000000000000000000000000000000' +
-                "`n"
-            Failure = 'complete reviewed binary-only Python 3.12 tool closure'
-        },
-        [pscustomobject]@{
-            Name = 'locked hook package removed'
-            Agents = $strAgentsContent
-            Claude = $strClaudeContent
-            ScriptIndex = $strScriptIndexContent
-            Requirements = [regex]::Replace(
-                $strRequirementsContent,
-                '(?m)^check-jsonschema==0\.37\.4 \\\r?\n' +
-                    '    --hash=sha256:[0-9a-f]{64}\r?\n',
-                '',
-                1
-            )
-            Failure = 'complete reviewed binary-only Python 3.12 tool closure'
-        },
-        [pscustomobject]@{
-            Name = 'AGENTS PowerShell preflight weakened'
-            Agents = $strAgentsContent.Replace(
-                $strPowerShell7Preflight,
-                $strWeakenedPowerShellPreflight
-            )
-            Claude = $strClaudeContent
-            ScriptIndex = $strScriptIndexContent
-            Requirements = $strRequirementsContent
-            Failure = 'AGENTS.md must contain this setup command exactly once'
-        },
-        [pscustomobject]@{
-            Name = 'CLAUDE PowerShell preflight weakened'
-            Agents = $strAgentsContent
-            Claude = $strClaudeContent.Replace(
-                $strPowerShell7Preflight,
-                $strWeakenedPowerShellPreflight
-            )
-            ScriptIndex = $strScriptIndexContent
-            Requirements = $strRequirementsContent
-            Failure = 'CLAUDE.md must contain this setup command exactly once'
-        },
-        [pscustomobject]@{
-            Name = 'script index PowerShell preflight weakened'
-            Agents = $strAgentsContent
-            Claude = $strClaudeContent
-            ScriptIndex = $strScriptIndexContent.Replace(
-                $strPowerShell7Preflight,
-                $strWeakenedPowerShellPreflight
-            )
-            Requirements = $strRequirementsContent
-            Failure = '.github/workflows/scripts-README.md must contain this setup command exactly once'
-        },
-        [pscustomobject]@{
-            Name = 'AGENTS Windows install command changed'
-            Agents = $strAgentsContent.Replace(
-                'py -3.12 -m pip install --requirement requirements-dev.txt',
-                'pip install pre-commit'
-            )
-            Claude = $strClaudeContent
-            ScriptIndex = $strScriptIndexContent
-            Requirements = $strRequirementsContent
-            Failure = 'AGENTS.md must contain this setup command exactly once'
-        },
-        [pscustomobject]@{
-            Name = 'CLAUDE POSIX install command changed'
-            Agents = $strAgentsContent
-            Claude = $strClaudeContent.Replace(
-                'python3.12 -m pip install --requirement requirements-dev.txt',
-                'pip install pre-commit'
-            )
-            ScriptIndex = $strScriptIndexContent
-            Requirements = $strRequirementsContent
-            Failure = 'CLAUDE.md must contain this setup command exactly once'
-        },
-        [pscustomobject]@{
-            Name = 'script index Windows run command changed'
-            Agents = $strAgentsContent
-            Claude = $strClaudeContent
-            ScriptIndex = $strScriptIndexContent.Replace(
-                'py -3.12 -m pre_commit run --all-files',
-                'pre-commit run --all-files'
-            )
-            Requirements = $strRequirementsContent
-            Failure = '.github/workflows/scripts-README.md must contain this setup command exactly once'
-        },
-        [pscustomobject]@{
-            Name = 'script index POSIX run command changed'
-            Agents = $strAgentsContent
-            Claude = $strClaudeContent
-            ScriptIndex = $strScriptIndexContent.Replace(
-                'python3.12 -m pre_commit run --all-files',
-                'pre-commit run --all-files'
-            )
-            Requirements = $strRequirementsContent
-            Failure = '.github/workflows/scripts-README.md must contain this setup command exactly once'
-        }
-    )
-    foreach ($objPreCommitBootstrapMutation in $arrPreCommitBootstrapMutations) {
-        $arrPreCommitBootstrapMutationFailures = @(
-            Get-PreCommitBootstrapContractFailure `
-                -AgentsContent $objPreCommitBootstrapMutation.Agents `
-                -ClaudeContent $objPreCommitBootstrapMutation.Claude `
-                -ScriptIndexContent $objPreCommitBootstrapMutation.ScriptIndex `
-                -RequirementsContent $objPreCommitBootstrapMutation.Requirements
-        )
-        if (-not ($arrPreCommitBootstrapMutationFailures -match [regex]::Escape(
-                    $objPreCommitBootstrapMutation.Failure
-                ))) {
-            throw (
-                "Pre-commit bootstrap mutation '$($objPreCommitBootstrapMutation.Name)' " +
-                'did not fail closed.'
-            )
+
+    foreach ($objIgnoreFixture in @(
+            [pscustomobject]@{
+                Name = 'effective exact root rule'
+                Content = "/CLAUDE.local.md`n"
+                Expected = $true
+            },
+            [pscustomobject]@{
+                Name = 'later exact negation'
+                Content = "/CLAUDE.local.md`n!/CLAUDE.local.md`n"
+                Expected = $false
+            },
+            [pscustomobject]@{
+                Name = 'later broad negation'
+                Content = "/CLAUDE.local.md`n!/*.local.md`n"
+                Expected = $false
+            },
+            [pscustomobject]@{
+                Name = 'unrelated later negation'
+                Content = "/CLAUDE.local.md`n!/README.local.md`n"
+                Expected = $true
+            }
+        )) {
+        $boolIgnoreResult = Test-GitIgnorePathEffective `
+            -GitIgnoreContent $objIgnoreFixture.Content `
+            -RepositoryRelativePath 'CLAUDE.local.md'
+        if ($boolIgnoreResult -ne $objIgnoreFixture.Expected) {
+            throw "Effective-ignore fixture failed: $($objIgnoreFixture.Name)"
         }
     }
 
-    $objRootOuterLintMutation = $strRootPackageContent | ConvertFrom-Json
-    $objRootOuterLintMutation.scripts.'lint:md' = 'markdownlint-cli2 "**/*.md"'
-    $strRootOuterLintMutation = $objRootOuterLintMutation | ConvertTo-Json -Depth 10
-
-    $objRootNestedLintMutation = $strRootPackageContent | ConvertFrom-Json
-    $objRootNestedLintMutation.scripts.'lint:md:nested' =
-        'node .github/workflows/lint-nested-markdown.js'
-    $strRootNestedLintMutation = $objRootNestedLintMutation | ConvertTo-Json -Depth 10
-
-    $objWorkflowOuterLintMutation = $strWorkflowPackageContent | ConvertFrom-Json
-    $objWorkflowOuterLintMutation.scripts.'lint:md' =
-        'cd ../.. && markdownlint-cli2 "**/*.md" "**/*.mdc" ' +
-        '"#node_modules"'
-    $strWorkflowOuterLintMutation =
-        $objWorkflowOuterLintMutation | ConvertTo-Json -Depth 10
-
-    $objRootAgentTestMutation = $strRootPackageContent | ConvertFrom-Json
-    $objRootAgentTestMutation.scripts.'test:agent-instructions' = 'true'
-    $strRootAgentTestMutation = $objRootAgentTestMutation | ConvertTo-Json -Depth 10
-
-    $objRootMarkdownlintDependencyMutation = $strRootPackageContent | ConvertFrom-Json
-    $objRootMarkdownlintDependencyMutation.devDependencies | Add-Member `
-        -NotePropertyName 'markdownlint' `
-        -NotePropertyValue '0.41.0'
-    $strRootMarkdownlintDependencyMutation =
-        $objRootMarkdownlintDependencyMutation | ConvertTo-Json -Depth 10
-
-    $objRootMarkdownlintCliDependencyMutation = $strRootPackageContent | ConvertFrom-Json
-    $objRootMarkdownlintCliDependencyMutation.devDependencies | Add-Member `
-        -NotePropertyName 'markdownlint-cli2' `
-        -NotePropertyValue '0.23.2'
-    $strRootMarkdownlintCliDependencyMutation =
-        $objRootMarkdownlintCliDependencyMutation | ConvertTo-Json -Depth 10
-
-    $arrHuskyMutations = @(
-        ,@(
-            'root outer lint stops delegating'
-            $strRootOuterLintMutation
-            $strWorkflowPackageContent
-            $strHuskyHookContent
-            'Root lint:md must delegate'
+    $arrDocumentationClaimFailures = @(Get-DocumentationClaimFailure `
+            -Content $strDocsInstructionsContent `
+            -TrackedPaths $arrTrackedRepositoryPaths)
+    if ($arrDocumentationClaimFailures.Count -ne 0) {
+        throw (
+            'The documentation claim baseline failed validation: ' +
+            ($arrDocumentationClaimFailures -join '; ')
         )
-        ,@(
-            'root nested lint stops delegating'
-            $strRootNestedLintMutation
-            $strWorkflowPackageContent
-            $strHuskyHookContent
-            'Root lint:md:nested must delegate'
-        )
-        ,@(
-            'workflow outer lint drifts from the reviewed command'
-            $strRootPackageContent
-            $strWorkflowOuterLintMutation
-            $strHuskyHookContent
-            'Workflow lint:md must run only the reviewed outer Markdown lint phase'
-        )
-        ,@(
-            'root agent test becomes a no-op'
-            $strRootAgentTestMutation
-            $strWorkflowPackageContent
-            $strHuskyHookContent
-            'Root test:agent-instructions must invoke'
-        )
-        ,@(
-            'root adds direct markdownlint dependency'
-            $strRootMarkdownlintDependencyMutation
-            $strWorkflowPackageContent
-            $strHuskyHookContent
-            'must not declare direct markdownlint because'
-        )
-        ,@(
-            'root adds direct markdownlint-cli2 dependency'
-            $strRootMarkdownlintCliDependencyMutation
-            $strWorkflowPackageContent
-            $strHuskyHookContent
-            'must not declare direct markdownlint-cli2 because'
-        )
-        ,@(
-            'bootstrap bypasses isolated installer'
-            $strRootPackageContent.Replace(
-                'node .github/workflows/NpmTools.mjs install',
-                'npm ci'
-            )
-            $strWorkflowPackageContent
-            $strHuskyHookContent
-            'configuration-isolated locked installer'
-        )
-        ,@(
-            'prepare hides failure'
-            $strRootPackageContent
-            $strWorkflowPackageContent.Replace('node install-husky.mjs', 'node install-husky.mjs || true')
-            $strHuskyHookContent
-            'expose failure'
-        )
-        ,@(
-            'hook omits mdc'
-            $strRootPackageContent
-            $strWorkflowPackageContent
-            $strHuskyHookContent.Replace(" '*.mdc'", '')
-            'ACMR .md and .mdc'
-        )
-        ,@(
-            'hook omits rename'
-            $strRootPackageContent
-            $strWorkflowPackageContent
-            $strHuskyHookContent.Replace(
-                '--diff-filter=ACMR',
-                '--diff-filter=ACM'
-            )
-            'ACMR .md and .mdc'
-        )
-        ,@(
-            'hook omits staged-index lint'
-            $strRootPackageContent
-            $strWorkflowPackageContent
-            $strHuskyHookContent.Replace(
-                'if node .github/workflows/lint-staged-markdown.mjs; then',
-                'if true; then'
-            )
-            'lint-staged-markdown.mjs'
-        )
-        ,@(
-            'hook omits retained nested worktree lint'
-            $strRootPackageContent
-            $strWorkflowPackageContent
-            $strHuskyHookContent.Replace(
-                'if npm --prefix .github/workflows run lint:md:nested; then',
-                'if true; then'
-            )
-            'lint:md:nested'
-        )
-    )
-    foreach ($arrHuskyMutation in $arrHuskyMutations) {
-        $arrHuskyMutationFailures = @(Get-HuskySetupContractFailure `
-                -RootPackageContent $arrHuskyMutation[1] `
-                -WorkflowPackageContent $arrHuskyMutation[2] `
-                -HookContent $arrHuskyMutation[3] `
-                -CopilotSetupContent $strCopilotSetupContent `
-                -PreCommitConfigContent $strPreCommitConfigContent
-    )
-        if (-not ($arrHuskyMutationFailures -match [regex]::Escape(
-                    $arrHuskyMutation[4]
-                ))) {
-            throw "Husky mutation '$($arrHuskyMutation[0])' did not fail closed."
-        }
     }
-
-    $strStagedInputEntryMutation = $strPreCommitConfigContent.Replace(
-        ' -RequireStagedInputMatch',
-        ''
-    )
-    if ($strStagedInputEntryMutation -ceq $strPreCommitConfigContent) {
-        throw 'Could not construct the staged-input hook mutation.'
+    $arrDecisionLifecycleFailures = @(Get-DecisionLifecyclePolicyFailure `
+            -Content $strDocsInstructionsContent)
+    if ($arrDecisionLifecycleFailures.Count -ne 0) {
+        throw (
+            'The decision lifecycle baseline failed validation: ' +
+            ($arrDecisionLifecycleFailures -join '; ')
+        )
     }
-    $arrStagedInputEntryMutationFailures = @(Get-HuskySetupContractFailure `
-            -RootPackageContent $strRootPackageContent `
-            -WorkflowPackageContent $strWorkflowPackageContent `
-            -HookContent $strHuskyHookContent `
-            -CopilotSetupContent $strCopilotSetupContent `
-            -PreCommitConfigContent $strStagedInputEntryMutation
+    $strGenericDecisionStatusMutation = $strDocsInstructionsContent.Replace(
+        'Proposed | Accepted | Superseded | Deprecated',
+        'Draft | Proposed | Active | Accepted | Superseded | Deprecated'
     )
-    if ($arrStagedInputEntryMutationFailures -cnotcontains
-        'The agent-instruction hook must require staged input matching.') {
-        throw 'Removal of staged-input matching did not fail closed.'
+    if ($strGenericDecisionStatusMutation -ceq $strDocsInstructionsContent -or
+        @(Get-DecisionLifecyclePolicyFailure `
+                -Content $strGenericDecisionStatusMutation) -cnotcontains
+            ('Decision record Status must allow exactly ' +
+                'Proposed | Accepted | Superseded | Deprecated.')) {
+        throw 'A generic decision Status set did not fail closed.'
     }
-
-    $arrStagedMarkdownSelectorMutationFailures = @(Get-HuskySetupContractFailure `
-            -RootPackageContent $strRootPackageContent `
-            -WorkflowPackageContent $strWorkflowPackageContent `
-            -HookContent $strHuskyHookContent `
-            -CopilotSetupContent $strCopilotSetupContent `
-            -PreCommitConfigContent $strPreCommitConfigContent.Replace(
-                '^(\.github/workflows/lint-staged-markdown\.mjs|.*\.(md|mdc))$',
-                '\.(md|mdc)$'
-            )
+    $strDuplicateDecisionStatusMutation = $strDocsInstructionsContent.Replace(
+        'A decision record MUST NOT add a separate narrative status field or section.',
+        ('A second **Status** representation records decision history. ' +
+            'A decision record MUST NOT add a separate narrative status field or section.')
     )
-    if ($arrStagedMarkdownSelectorMutationFailures -cnotcontains
-        'The staged-Markdown hook must select Markdown and helper-only changes.') {
-        throw 'The staged-Markdown helper selector mutation did not fail closed.'
+    if ($strDuplicateDecisionStatusMutation -ceq $strDocsInstructionsContent -or
+        @(Get-DecisionLifecyclePolicyFailure `
+                -Content $strDuplicateDecisionStatusMutation) -cnotcontains
+            'Decision records must use exactly one Tier 1 Status representation.') {
+        throw 'A duplicate decision Status representation did not fail closed.'
     }
-
-    if ([regex]::Matches(
-            $strCopilotSetupContent,
-            [regex]::Escape("    env:`n      GIT_CONFIG_NOSYSTEM:")
-        ).Count -ne 1) {
-        throw 'The Copilot credential fixture requires one exact job environment context.'
-    }
-    $arrPythonFixtures = @(
-        [pscustomobject]@{
-            Name = 'valid first alias'; Windows = $false
-            Commands = @{ 'python3.12' = @('Application', '/opt/python3.12') }
-            Valid = @('/opt/python3.12'); Expected = '/opt/python3.12'
-        }
-        [pscustomobject]@{
-            Name = 'older alias before valid alias'; Windows = $false
-            Commands = @{
-                python3 = @('Application', '/usr/bin/python3')
-                python = @('Application', '/opt/python')
-            }
-            Valid = @('/opt/python'); Expected = '/opt/python'
-        }
-        [pscustomobject]@{
-            Name = 'no candidates'; Windows = $false
-            Commands = @{}; Valid = @(); Expected = ''
-        }
-        [pscustomobject]@{
-            Name = 'wrong command type'; Windows = $false
-            Commands = @{ 'python3.12' = @('Alias', '/opt/python3.12') }
-            Valid = @('/opt/python3.12'); Expected = ''
-        }
-        [pscustomobject]@{
-            Name = 'only wrong versions'; Windows = $false
-            Commands = @{
-                'python3.12' = @('Application', '/wrong/python3.12')
-                python3 = @('Application', '/wrong/python3')
-                python = @('Application', '/wrong/python')
-            }
-            Valid = @(); Expected = ''
-        }
+    $strNarrativeDecisionStatusMutation = $strDocsInstructionsContent.Replace(
+        'A decision record MUST NOT add a separate narrative status field or section.',
+        'A decision record MAY add a separate narrative status field or section.'
     )
-    foreach ($objPythonFixture in $arrPythonFixtures) {
-        $hashtableCommands = $objPythonFixture.Commands
-        $arrValidPaths = @($objPythonFixture.Valid)
-        $boolWindowsFixture = $objPythonFixture.Windows
-        $scriptblockResolver = {
-            param([string] $Name)
-            if (-not $hashtableCommands.ContainsKey($Name)) { return @() }
-            $arrCommand = $hashtableCommands[$Name]
-            return [pscustomobject]@{ CommandType = $arrCommand[0]; Path = $arrCommand[1] }
-        }.GetNewClosure()
-        $scriptblockProbe = {
-            param([string] $Path, [string[]] $PrefixArgument)
-            $boolPrefixValid = -not $boolWindowsFixture -or
-                ($PrefixArgument.Count -eq 1 -and $PrefixArgument[0] -ceq '-3.12')
-            return $boolPrefixValid -and $arrValidPaths -ccontains $Path
-        }.GetNewClosure()
-        $objPythonResolution = Get-Python312CommandContext `
-            -WindowsPlatform $objPythonFixture.Windows `
-            -CommandResolver $scriptblockResolver `
-            -VersionProbe $scriptblockProbe
-        $strResolvedPath = if ($null -eq $objPythonResolution) {
-            ''
-        }
-        else {
-            $objPythonResolution.Path
-        }
-        if ($strResolvedPath -cne $objPythonFixture.Expected) {
-            throw "Python fixture failed: $($objPythonFixture.Name)."
-        }
+    if ($strNarrativeDecisionStatusMutation -ceq $strDocsInstructionsContent -or
+        @(Get-DecisionLifecyclePolicyFailure `
+                -Content $strNarrativeDecisionStatusMutation) -cnotcontains
+            'Decision records must prohibit a separate narrative status representation.') {
+        throw 'A permitted narrative decision Status did not fail closed.'
     }
-
-    $strNodeFixtureRoot = [System.IO.Path]::GetFullPath(
-        (Join-Path -Path $PSScriptRoot -ChildPath 'node-runtime-fixture')
+    $strPermanentLegacyDecisionMutation = $strDocsInstructionsContent.Replace(
+        'while their bytes remain unchanged.',
+        'without a required migration boundary.'
     )
-    $strNodeDirectPath = Join-Path -Path $strNodeFixtureRoot -ChildPath 'node-direct'
-    $strNodeWrapperPath = Join-Path -Path $strNodeFixtureRoot -ChildPath 'node-wrapper'
-    $strNodeFallbackPath = Join-Path -Path $strNodeFixtureRoot -ChildPath 'node-fallback'
-    $strMissingNodePath = Join-Path -Path $strNodeFixtureRoot -ChildPath 'node-missing'
-    $arrNodeFixtures = @(
-        [pscustomobject]@{
-            Name = 'direct runtime'
-            Candidates = @([pscustomobject]@{
-                    CommandType = 'Application'; Path = $strNodeDirectPath
-                })
-            Probes = @{
-                $strNodeDirectPath = [pscustomobject]@{
-                    ExitCode = 0
-                    Output = (@{
-                            execPath = $strNodeDirectPath; nodeVersion = '24.18.0'
-                        } | ConvertTo-Json -Compress)
-                    Error = ''
-                }
-            }
-            Applications = @{
-                $strNodeDirectPath = @([pscustomobject]@{
-                        CommandType = 'Application'; Path = $strNodeDirectPath
-                    })
-            }
-            Expected = $strNodeDirectPath
-        }
-        [pscustomobject]@{
-            Name = 'wrapper reports direct runtime'
-            Candidates = @([pscustomobject]@{
-                    CommandType = 'Application'; Path = $strNodeWrapperPath
-                })
-            Probes = @{
-                $strNodeWrapperPath = [pscustomobject]@{
-                    ExitCode = 0
-                    Output = (@{
-                            execPath = $strNodeDirectPath; nodeVersion = '24.18.0'
-                        } | ConvertTo-Json -Compress)
-                    Error = ''
-                }
-            }
-            Applications = @{
-                $strNodeDirectPath = @([pscustomobject]@{
-                        CommandType = 'Application'; Path = $strNodeDirectPath
-                    })
-            }
-            Expected = $strNodeDirectPath
-        }
-        [pscustomobject]@{
-            Name = 'invalid probe output'
-            Candidates = @([pscustomobject]@{
-                    CommandType = 'Application'; Path = $strNodeWrapperPath
-                })
-            Probes = @{
-                $strNodeWrapperPath = [pscustomobject]@{
-                    ExitCode = 0; Output = 'not-json'; Error = ''
-                }
-            }
-            Applications = @{}
-            Expected = ''
-        }
-        [pscustomobject]@{
-            Name = 'reported path is missing'
-            Candidates = @([pscustomobject]@{
-                    CommandType = 'Application'; Path = $strNodeWrapperPath
-                })
-            Probes = @{
-                $strNodeWrapperPath = [pscustomobject]@{
-                    ExitCode = 0
-                    Output = (@{
-                            execPath = $strMissingNodePath; nodeVersion = '24.18.0'
-                        } | ConvertTo-Json -Compress)
-                    Error = ''
-                }
-            }
-            Applications = @{}
-            Expected = ''
-        }
-        [pscustomobject]@{
-            Name = 'reported path has wrong command type'
-            Candidates = @([pscustomobject]@{
-                    CommandType = 'Application'; Path = $strNodeWrapperPath
-                })
-            Probes = @{
-                $strNodeWrapperPath = [pscustomobject]@{
-                    ExitCode = 0
-                    Output = (@{
-                            execPath = $strNodeDirectPath; nodeVersion = '24.18.0'
-                        } | ConvertTo-Json -Compress)
-                    Error = ''
-                }
-            }
-            Applications = @{
-                $strNodeDirectPath = @([pscustomobject]@{
-                        CommandType = 'Alias'; Path = $strNodeDirectPath
-                    })
-            }
-            Expected = ''
-        }
-        [pscustomobject]@{
-            Name = 'old runtime falls back to supported runtime'
-            Candidates = @(
-                [pscustomobject]@{
-                    CommandType = 'Application'; Path = $strNodeWrapperPath
-                }
-                [pscustomobject]@{
-                    CommandType = 'Application'; Path = $strNodeFallbackPath
-                }
-            )
-            Probes = @{
-                $strNodeWrapperPath = [pscustomobject]@{
-                    ExitCode = 0
-                    Output = (@{
-                            execPath = $strNodeDirectPath; nodeVersion = '20.20.0'
-                        } | ConvertTo-Json -Compress)
-                    Error = ''
-                }
-                $strNodeFallbackPath = [pscustomobject]@{
-                    ExitCode = 0
-                    Output = (@{
-                            execPath = $strNodeFallbackPath; nodeVersion = '24.18.0'
-                        } | ConvertTo-Json -Compress)
-                    Error = ''
-                }
-            }
-            Applications = @{
-                $strNodeFallbackPath = @([pscustomobject]@{
-                        CommandType = 'Application'; Path = $strNodeFallbackPath
-                    })
-            }
-            Expected = $strNodeFallbackPath
-        }
-    )
-    foreach ($objNodeFixture in $arrNodeFixtures) {
-        $arrFixtureCandidates = @($objNodeFixture.Candidates)
-        $hashtableNodeProbes = $objNodeFixture.Probes
-        $hashtableNodeApplications = $objNodeFixture.Applications
-        $scriptblockNodeCommandResolver = {
-            param([string] $Name)
-            if ($Name -cne 'node') { return @() }
-            return $arrFixtureCandidates
-        }.GetNewClosure()
-        $scriptblockNodeRuntimeProbe = {
-            param([string] $Path)
-            if (-not $hashtableNodeProbes.ContainsKey($Path)) {
-                return [pscustomobject]@{ ExitCode = -1; Output = ''; Error = '' }
-            }
-            return $hashtableNodeProbes[$Path]
-        }.GetNewClosure()
-        $scriptblockNodeApplicationResolver = {
-            param([string] $Path)
-            if (-not $hashtableNodeApplications.ContainsKey($Path)) { return @() }
-            return $hashtableNodeApplications[$Path]
-        }.GetNewClosure()
-        $objNodeResolution = Get-NodeApplicationContext `
-            -CommandResolver $scriptblockNodeCommandResolver `
-            -RuntimeProbe $scriptblockNodeRuntimeProbe `
-            -ApplicationResolver $scriptblockNodeApplicationResolver
-        $strResolvedNodePath = if ($null -eq $objNodeResolution) {
-            ''
-        }
-        else {
-            $objNodeResolution.Path
-        }
-        if ($strResolvedNodePath -cne $objNodeFixture.Expected) {
-            throw "Node fixture failed: $($objNodeFixture.Name)."
-        }
+    if ($strPermanentLegacyDecisionMutation -ceq $strDocsInstructionsContent -or
+        @(Get-DecisionLifecyclePolicyFailure `
+                -Content $strPermanentLegacyDecisionMutation) -cnotcontains
+            'Decision records must document the unchanged legacy migration boundary.') {
+        throw 'A permanent legacy decision exception did not fail closed.'
     }
-
-    $strOptionalUpdatedDate = $script:strMaximumMetadataUtcDate
-    $strOptionalVersionDate = $strOptionalUpdatedDate.Replace('-', '')
-    $strOptionalNoMetadata = @(
-        '# Optional metadata fixture'
-        ''
-        'Body.'
-    ) -join "`n"
-    $strOptionalValidMetadata = @(
-        '# Optional metadata fixture'
-        ''
-        "**Version:** 1.0.$strOptionalVersionDate.0"
-        ''
+    $strOptionalLegacyMigrationMutation = $strDocsInstructionsContent.Replace(
+        'The next change to such a record MUST migrate it',
+        'The next change to such a record MAY migrate it'
+    )
+    if ($strOptionalLegacyMigrationMutation -ceq $strDocsInstructionsContent -or
+        @(Get-DecisionLifecyclePolicyFailure `
+                -Content $strOptionalLegacyMigrationMutation) -cnotcontains
+            'Decision records must document the unchanged legacy migration boundary.') {
+        throw 'An optional legacy decision migration did not fail closed.'
+    }
+    $strLegacyDecisionRecord = @(
+        '# Decision 0001: Legacy fixture'
         '## Metadata'
-        ''
         '- **Status:** Active'
         '- **Owner:** Repository Maintainers'
-        "- **Last Updated:** $strOptionalUpdatedDate"
-        '- **Scope:** Optional metadata transition fixture.'
-        ''
-        'Body.'
+        '- **Last Updated:** 2026-08-30'
+        '- **Scope:** Tests transition-aware ADR lifecycle enforcement.'
+        '## Status'
+        'Accepted before the lifecycle migration.'
+        '## Context'
+        'Legacy context.'
     ) -join "`n"
-    $strOptionalFencedExample = @(
-        '# Optional metadata fixture'
-        ''
-        '```markdown'
-        '## Metadata'
-        ''
-        '- **Status:** Invalid'
-        '- **Owner:** Example'
-        '- **Last Updated:** 2000-01-01'
-        '- **Scope:** Example only.'
-        '```'
-    ) -join "`n"
-    foreach ($objOptionalMetadataAbsenceFixture in @(
-            [pscustomobject]@{
-                Name = 'document without metadata'
-                Content = $strOptionalNoMetadata
-            }
-            [pscustomobject]@{
-                Name = 'fenced metadata example'
-                Content = $strOptionalFencedExample
-            }
-        )) {
-        if (Test-DocumentMetadataHeaderIntent `
-                -Content $objOptionalMetadataAbsenceFixture.Content) {
-            throw (
-                'Optional metadata intent was detected in a ' +
-                "$($objOptionalMetadataAbsenceFixture.Name)."
-            )
-        }
-        $arrOptionalMetadataAbsenceFailures = @(
-            Get-DocumentMetadataTransitionFailure `
-                -Name 'README.md' `
-                -CurrentContent $objOptionalMetadataAbsenceFixture.Content `
-                -ParentContent $strOptionalValidMetadata `
-                -ExpectedUtcDate $strOptionalUpdatedDate `
-                -IsNewDocumentTransition $false `
-                -MetadataRequired $false
-        )
-        if ($arrOptionalMetadataAbsenceFailures.Count -ne 0) {
-            throw (
-                'A valid metadata-optional absence fixture failed: ' +
-                $objOptionalMetadataAbsenceFixture.Name
-            )
-        }
+    if (@(Get-DecisionRecordLifecycleFailure `
+            -Name 'docs/decisions/0001-legacy.md' `
+            -CurrentContent $strLegacyDecisionRecord `
+            -BaselineContent $strLegacyDecisionRecord).Count -ne 0) {
+        throw 'An unchanged published legacy ADR did not remain valid.'
     }
-    if (-not (Test-DocumentMetadataHeaderIntent `
-            -Content $strOptionalValidMetadata)) {
-        throw 'An operative optional metadata header was not detected.'
-    }
-    $arrOptionalAdoptionFailures = @(
-        Get-DocumentMetadataTransitionFailure `
-            -Name 'README.md' `
-            -CurrentContent $strOptionalValidMetadata `
-            -ParentContent $strOptionalNoMetadata `
-            -ExpectedUtcDate $strOptionalUpdatedDate `
-            -IsNewDocumentTransition $false `
-            -MetadataRequired $false
+    $strChangedLegacyDecisionRecord = $strLegacyDecisionRecord.Replace(
+        'Legacy context.',
+        'Changed legacy context.'
     )
-    if ($arrOptionalAdoptionFailures.Count -ne 0) {
-        throw 'A valid optional metadata adoption failed.'
+    $arrChangedLegacyDecisionFailures = @(Get-DecisionRecordLifecycleFailure `
+            -Name 'docs/decisions/0001-legacy.md' `
+            -CurrentContent $strChangedLegacyDecisionRecord `
+            -BaselineContent $strLegacyDecisionRecord)
+    foreach ($strExpectedFailure in @(
+            ('docs/decisions/0001-legacy.md Status must be Proposed, Accepted, ' +
+                'Superseded, or Deprecated.'),
+            ('docs/decisions/0001-legacy.md must not contain a separate operative ' +
+                'Status section.')
+        )) {
+        if ($arrChangedLegacyDecisionFailures -cnotcontains $strExpectedFailure) {
+            throw (
+                'A changed legacy ADR did not require lifecycle migration: ' +
+                ($arrChangedLegacyDecisionFailures -join '; ')
+            )
+        }
     }
-    $strOptionalInvalidStatus = $strOptionalValidMetadata.Replace(
+    $strCompliantDecisionRecord = $strChangedLegacyDecisionRecord.Replace(
         '- **Status:** Active',
-        '- **Status:** Invalid'
-    )
-    $strOptionalMissingScope = $strOptionalValidMetadata.Replace(
-        "- **Scope:** Optional metadata transition fixture.`n",
+        '- **Status:** Accepted'
+    ).Replace(
+        "## Status`nAccepted before the lifecycle migration.`n",
         ''
     )
-    $strOptionalMismatchedVersion = $strOptionalValidMetadata.Replace(
-        "**Version:** 1.0.$strOptionalVersionDate.0",
-        '**Version:** 1.0.20000101.0'
-    )
-    foreach ($objInvalidOptionalMetadataFixture in @(
-            [pscustomobject]@{
-                Name = 'invalid status'
-                Content = $strOptionalInvalidStatus
-                Failure = 'Status'
+    if (@(Get-DecisionRecordLifecycleFailure `
+            -Name 'docs/decisions/0001-legacy.md' `
+            -CurrentContent $strCompliantDecisionRecord `
+            -BaselineContent $strLegacyDecisionRecord).Count -ne 0) {
+        throw 'A changed ADR with one valid lifecycle Status did not pass.'
+    }
+    # The same canonical Status exemption must apply to headed and direct metadata.
+    $strDirectDecisionRecord = $strCompliantDecisionRecord.Replace("## Metadata`n", '')
+    foreach ($strDecisionForm in @($strCompliantDecisionRecord, $strDirectDecisionRecord)) {
+        foreach ($strLifecycleState in @('Proposed', 'Accepted', 'Superseded', 'Deprecated')) {
+            $strStateRecord = $strDecisionForm.Replace(
+                '- **Status:** Accepted', "- **Status:** $strLifecycleState")
+            if (@(Get-DecisionRecordLifecycleFailure `
+                        -Name 'docs/decisions/0001-legacy.md' `
+                        -CurrentContent $strStateRecord -BaselineContent $null).Count -ne 0) {
+                throw "A supported metadata form rejected lifecycle state $strLifecycleState."
             }
-            [pscustomobject]@{
-                Name = 'missing Scope'
-                Content = $strOptionalMissingScope
-                Failure = 'Scope'
+        }
+        foreach ($strExtraLifecycleField in @(
+                "`nStatus: Accepted`n`n",
+                "- **Decision Status:** Accepted`n",
+                "`n| Field | Value |`n| --- | --- |`n| **decision** ``status`` | *Accepted* |`n`n"
+            )) {
+            $strExtraFieldRecord = $strDecisionForm.Replace(
+                "## Context`n", "$strExtraLifecycleField## Context`n")
+            if (@(Get-DecisionRecordLifecycleFailure `
+                        -Name 'docs/decisions/0001-legacy.md' `
+                        -CurrentContent $strExtraFieldRecord `
+                        -BaselineContent $strLegacyDecisionRecord) -cnotcontains
+                'docs/decisions/0001-legacy.md must not contain a separate operative Status field.') {
+                throw 'A separate lifecycle field escaped the canonical metadata Status exemption.'
             }
-            [pscustomobject]@{
-                Name = 'unsynchronized Version'
-                Content = $strOptionalMismatchedVersion
-                Failure = 'Version and Last Updated'
-            }
-        )) {
-        $arrInvalidOptionalMetadataFailures = @(
-            Get-DocumentMetadataTransitionFailure `
-                -Name 'README.md' `
-                -CurrentContent $objInvalidOptionalMetadataFixture.Content `
-                -ParentContent $strOptionalNoMetadata `
-                -ExpectedUtcDate $strOptionalUpdatedDate `
-                -IsNewDocumentTransition $false `
-                -MetadataRequired $false
-        )
-        if (-not ($arrInvalidOptionalMetadataFailures -match
-                [regex]::Escape($objInvalidOptionalMetadataFixture.Failure))) {
-            throw (
-                'An invalid optional metadata fixture did not fail closed: ' +
-                $objInvalidOptionalMetadataFixture.Name
-            )
+        }
+        $strExtraMetadataRecord = $strDecisionForm.Replace(
+            "## Context`n", "- **Related:** An ordinary supporting reference.`n## Context`n")
+        if (@(Get-DecisionRecordLifecycleFailure `
+                    -Name 'docs/decisions/0001-legacy.md' `
+                    -CurrentContent $strExtraMetadataRecord `
+                    -BaselineContent $strLegacyDecisionRecord).Count -ne 0) {
+            throw 'Ordinary extra metadata caused a lifecycle false positive.'
         }
     }
-    $strOptionalPastUpdatedDate =
-        $script:objValidationUtcNow.AddDays(-1).ToString('yyyy-MM-dd')
-    $strOptionalPastVersionDate = $strOptionalPastUpdatedDate.Replace('-', '')
-    $strOptionalPastMetadata = $strOptionalValidMetadata.Replace(
-        $strOptionalVersionDate,
-        $strOptionalPastVersionDate
-    ).Replace(
-        $strOptionalUpdatedDate,
-        $strOptionalPastUpdatedDate
-    )
-    $arrOptionalStaleTransitionFailures = @(
-        Get-DocumentMetadataTransitionFailure `
-            -Name 'README.md' `
-            -CurrentContent ($strOptionalPastMetadata + "`n`nChanged body.") `
-            -ParentContent $strOptionalPastMetadata `
-            -ExpectedUtcDate $strOptionalUpdatedDate `
-            -IsNewDocumentTransition $false `
-            -MetadataRequired $false
-    )
-    if (-not ($arrOptionalStaleTransitionFailures -match
-            'Last Updated must be')) {
-        throw 'An optional metadata transition with a stale date was accepted.'
+    $strBodyStartDecisionRecord = $strDirectDecisionRecord.Replace(
+        "# Decision 0001: Legacy fixture`n", '')
+    foreach ($strMappedDecisionRecord in @(
+            $strBodyStartDecisionRecord,
+            "<!-- markdownlint-disable MD013 -->`n$strBodyStartDecisionRecord",
+            "---`nkind: decision`n---`n$strDirectDecisionRecord",
+            "<!-- Leading`nmultiline comment -->`n$strDirectDecisionRecord",
+            "<!-- Leading`nmultiline comment -->`n$strCompliantDecisionRecord"
+        )) {
+        if (@(Get-DecisionRecordLifecycleFailure `
+                    -Name 'docs/decisions/0001-legacy.md' `
+                    -CurrentContent $strMappedDecisionRecord -BaselineContent $null).Count -ne 0) {
+            throw 'A supported metadata placement failed canonical Status validation.'
+        }
+        $strMappedExtraFieldRecord = $strMappedDecisionRecord.Replace(
+            'Changed legacy context.', 'Status: Accepted')
+        if (@(Get-DecisionRecordLifecycleFailure `
+                    -Name 'docs/decisions/0001-legacy.md' `
+                    -CurrentContent $strMappedExtraFieldRecord -BaselineContent $null) -cnotcontains
+            'docs/decisions/0001-legacy.md must not contain a separate operative Status field.') {
+            throw 'Metadata source-coordinate mapping hid a separate lifecycle field.'
+        }
     }
-    $arrOptionalRemovalFailures = @(
-        Get-DocumentMetadataTransitionFailure `
-            -Name 'README.md' `
-            -CurrentContent $strOptionalNoMetadata `
-            -ParentContent $strOptionalValidMetadata `
-            -ExpectedUtcDate $strOptionalUpdatedDate `
-            -IsNewDocumentTransition $false `
-            -MetadataRequired $false
-    )
-    if ($arrOptionalRemovalFailures.Count -ne 0) {
-        throw 'A valid removal of optional metadata failed.'
+    $strDirectLegacyDecisionRecord = $strLegacyDecisionRecord.Replace("## Metadata`n", '')
+    if (@(Get-DecisionRecordLifecycleFailure `
+                -Name 'docs/decisions/0001-legacy.md' `
+                -CurrentContent $strDirectLegacyDecisionRecord `
+                -BaselineContent $strDirectLegacyDecisionRecord).Count -ne 0) {
+        throw 'An unchanged direct-form legacy ADR lost its migration boundary.'
     }
-    $arrOptionalLegacyRepairFailures = @(
-        Get-DocumentMetadataTransitionFailure `
-            -Name 'README.md' `
-            -CurrentContent $strOptionalValidMetadata `
-            -ParentContent $strOptionalInvalidStatus `
-            -ExpectedUtcDate $strOptionalUpdatedDate `
-            -IsNewDocumentTransition $false `
-            -MetadataRequired $false
+    $strChangedDirectLegacyDecisionRecord = $strDirectLegacyDecisionRecord.Replace(
+        'Legacy context.', 'Changed legacy context.')
+    $arrDirectLegacyFailures = @(Get-DecisionRecordLifecycleFailure `
+            -Name 'docs/decisions/0001-legacy.md' `
+            -CurrentContent $strChangedDirectLegacyDecisionRecord `
+            -BaselineContent $strDirectLegacyDecisionRecord)
+    foreach ($strExpectedDirectLegacyFailure in @(
+            'docs/decisions/0001-legacy.md Status must be Proposed, Accepted, Superseded, or Deprecated.',
+            'docs/decisions/0001-legacy.md must not contain a separate operative Status section.'
+        )) {
+        if ($arrDirectLegacyFailures -cnotcontains $strExpectedDirectLegacyFailure) {
+            throw 'A changed direct-form legacy ADR did not require lifecycle migration.'
+        }
+    }
+
+    foreach ($strAcceptedStatusLabel in @(
+            'Status', 'status', 'Decision Status', " Decision`tStatus "
+        )) {
+        if (-not (Test-DecisionLifecycleStatusLabel `
+                -Label $strAcceptedStatusLabel)) {
+            throw "Exact lifecycle label was rejected: $strAcceptedStatusLabel"
+        }
+    }
+    foreach ($strRejectedStatusLabel in @(
+            '', 'HTTP Status Codes', 'Deployment Status',
+            'Deployment Status Checks', 'Status Check'
+        )) {
+        if (Test-DecisionLifecycleStatusLabel -Label $strRejectedStatusLabel) {
+            throw "Unrelated lifecycle label was accepted: $strRejectedStatusLabel"
+        }
+    }
+    $strDecisionStatusSectionRecord = $strCompliantDecisionRecord.Replace(
+        "## Context`n",
+        "## Decision Status`nAccepted.`n## Context`n"
     )
-    if ($arrOptionalLegacyRepairFailures.Count -ne 0) {
-        throw 'A valid repair of malformed optional metadata failed.'
+    if (@(Get-DecisionRecordLifecycleFailure `
+            -Name 'docs/decisions/0001-legacy.md' `
+            -CurrentContent $strDecisionStatusSectionRecord `
+            -BaselineContent $strLegacyDecisionRecord) -cnotcontains
+        ('docs/decisions/0001-legacy.md must not contain a separate operative ' +
+            'Status section.')) {
+        throw 'A Decision Status section escaped lifecycle validation.'
+    }
+    $arrSubordinateStatusSectionFixtures = @(
+        [pscustomobject]@{
+            Name = 'level-three Decision Status section'
+            Heading = '### Decision Status'
+        },
+        [pscustomobject]@{
+            Name = 'formatted level-three Decision Status section'
+            Heading = '### Decision **Status**'
+        },
+        [pscustomobject]@{
+            Name = 'linked level-four Status section'
+            Heading = '#### Decision [Status](https://example.invalid/status)'
+        },
+        [pscustomobject]@{
+            Name = 'level-five Status section'
+            Heading = '##### Status'
+        },
+        [pscustomobject]@{
+            Name = 'level-six Decision Status section'
+            Heading = '###### Decision Status'
+        }
+    )
+    foreach ($objStatusSectionFixture in $arrSubordinateStatusSectionFixtures) {
+        $strSubordinateStatusSectionRecord = $strCompliantDecisionRecord.Replace(
+            'Changed legacy context.',
+            "Changed legacy context.`n$($objStatusSectionFixture.Heading)`nAccepted."
+        )
+        if (@(Get-DecisionRecordLifecycleFailure `
+                -Name 'docs/decisions/0001-legacy.md' `
+                -CurrentContent $strSubordinateStatusSectionRecord `
+                -BaselineContent $strLegacyDecisionRecord) -cnotcontains
+            ('docs/decisions/0001-legacy.md must not contain a separate operative ' +
+                'Status section.')) {
+            throw "$($objStatusSectionFixture.Name) escaped lifecycle validation."
+        }
+    }
+    foreach ($strUnrelatedStatusHeading in @(
+            '### HTTP Status Codes', '#### Deployment Status Checks'
+        )) {
+        $strUnrelatedStatusHeadingRecord = $strCompliantDecisionRecord.Replace(
+            'Changed legacy context.',
+            "Changed legacy context.`n$strUnrelatedStatusHeading`nNo lifecycle field."
+        )
+        if (@(Get-DecisionRecordLifecycleFailure `
+                -Name 'docs/decisions/0001-legacy.md' `
+                -CurrentContent $strUnrelatedStatusHeadingRecord `
+                -BaselineContent $strLegacyDecisionRecord).Count -ne 0) {
+            throw "Unrelated heading caused a lifecycle finding: $strUnrelatedStatusHeading"
+        }
+    }
+    $arrNonOperativeStatusHeadingFixtures = @(
+        [pscustomobject]@{
+            Name = 'quoted level-three Status heading'
+            Payload = '> ### Decision Status'
+        },
+        [pscustomobject]@{
+            Name = 'listed level-four Status heading'
+            Payload = "- Example`n  #### Status"
+        },
+        [pscustomobject]@{
+            Name = 'fenced level-three Status heading example'
+            Payload = @(
+                '```markdown'
+                '### Decision Status'
+                '```'
+            ) -join "`n"
+        },
+        [pscustomobject]@{
+            Name = 'indented level-three Status heading example'
+            Payload = '    ### Decision Status'
+        },
+        [pscustomobject]@{
+            Name = 'commented level-three Status heading example'
+            Payload = '<!-- ### Decision Status -->'
+        },
+        [pscustomobject]@{
+            Name = 'inline-code-only level-three Status heading example'
+            Payload = '### `Decision Status`'
+        },
+        [pscustomobject]@{
+            Name = 'raw-HTML-only level-three Status heading example'
+            Payload = '### <span>Decision Status</span>'
+        }
+    )
+    foreach ($objStatusHeadingFixture in $arrNonOperativeStatusHeadingFixtures) {
+        $strNonOperativeStatusHeadingRecord = $strCompliantDecisionRecord.Replace(
+            'Changed legacy context.',
+            "Changed legacy context.`n$($objStatusHeadingFixture.Payload)"
+        )
+        if (@(Get-DecisionRecordLifecycleFailure `
+                -Name 'docs/decisions/0001-legacy.md' `
+                -CurrentContent $strNonOperativeStatusHeadingRecord `
+                -BaselineContent $strLegacyDecisionRecord).Count -ne 0) {
+            throw "$($objStatusHeadingFixture.Name) caused a false lifecycle finding."
+        }
+    }
+    $strDecisionStatusFieldRecord = $strCompliantDecisionRecord.Replace(
+        "## Context`n",
+        "## Context`n- **Decision Status:** Accepted`n"
+    )
+    if (@(Get-DecisionRecordLifecycleFailure `
+            -Name 'docs/decisions/0001-legacy.md' `
+            -CurrentContent $strDecisionStatusFieldRecord `
+            -BaselineContent $strLegacyDecisionRecord) -cnotcontains
+        ('docs/decisions/0001-legacy.md must not contain a separate operative ' +
+            'Status field.')) {
+        throw 'A Decision Status field escaped lifecycle validation.'
+    }
+    $strStatusFieldRecord = $strCompliantDecisionRecord.Replace(
+        'Changed legacy context.',
+        'Status: Accepted'
+    )
+    if (@(Get-DecisionRecordLifecycleFailure `
+            -Name 'docs/decisions/0001-legacy.md' `
+            -CurrentContent $strStatusFieldRecord `
+            -BaselineContent $strLegacyDecisionRecord) -cnotcontains
+        ('docs/decisions/0001-legacy.md must not contain a separate operative ' +
+            'Status field.')) {
+        throw 'A Status prose field escaped lifecycle validation.'
+    }
+    $strLaterListStatusFieldRecord = $strCompliantDecisionRecord.Replace(
+        'Changed legacy context.',
+        @(
+            '- Example paragraph.'
+            ''
+            '  Status: Accepted'
+        ) -join "`n"
+    )
+    if (@(Get-DecisionRecordLifecycleFailure `
+            -Name 'docs/decisions/0001-legacy.md' `
+            -CurrentContent $strLaterListStatusFieldRecord `
+            -BaselineContent $strLegacyDecisionRecord) -cnotcontains
+        ('docs/decisions/0001-legacy.md must not contain a separate operative ' +
+            'Status field.')) {
+        throw 'A later direct top-level list-item Status field escaped lifecycle validation.'
+    }
+    $arrNonOperativeListStatusFieldFixtures = @(
+        [pscustomobject]@{
+            Name = 'nested-list Status field example'
+            Payload = @(
+                '- Example paragraph.'
+                '  - Status: Accepted'
+            ) -join "`n"
+        },
+        [pscustomobject]@{
+            Name = 'list-item blockquoted Status field example'
+            Payload = @(
+                '- Example paragraph.'
+                ''
+                '  > Status: Accepted'
+            ) -join "`n"
+        }
+    )
+    foreach ($objStatusFieldFixture in $arrNonOperativeListStatusFieldFixtures) {
+        $strNonOperativeListStatusFieldRecord = $strCompliantDecisionRecord.Replace(
+            'Changed legacy context.',
+            $objStatusFieldFixture.Payload
+        )
+        if (@(Get-DecisionRecordLifecycleFailure `
+                -Name 'docs/decisions/0001-legacy.md' `
+                -CurrentContent $strNonOperativeListStatusFieldRecord `
+                -BaselineContent $strLegacyDecisionRecord).Count -ne 0) {
+            throw "$($objStatusFieldFixture.Name) caused a false lifecycle finding."
+        }
+    }
+    $strQuotedStatusFieldRecord = $strCompliantDecisionRecord.Replace(
+        'Changed legacy context.',
+        '> **Status:** Proposed'
+    )
+    if (@(Get-DecisionRecordLifecycleFailure `
+            -Name 'docs/decisions/0001-legacy.md' `
+            -CurrentContent $strQuotedStatusFieldRecord `
+            -BaselineContent $strLegacyDecisionRecord).Count -ne 0) {
+        throw 'A blockquoted Status example caused a false lifecycle finding.'
+    }
+    $arrTableStatusFailureFixtures = @(
+        [pscustomobject]@{
+            Name = 'exact two-cell Status data row'
+            Content = $strCompliantDecisionRecord.Replace(
+                "## Context`n",
+                (@(
+                        '## Context'
+                        '| Field | Value |'
+                        '| --- | --- |'
+                        '| Status | Accepted |'
+                    ) -join "`n") + "`n"
+            )
+        },
+        [pscustomobject]@{
+            Name = 'body Decision Status field with alignment and inline formatting'
+            Content = $strCompliantDecisionRecord.Replace(
+                "## Context`n",
+                (@(
+                        '## Context'
+                        '| Field | Value |'
+                        '| :--- | ---: |'
+                        '| **decision** `status` | *Accepted* |'
+                    ) -join "`n") + "`n"
+            )
+        }
+    )
+    foreach ($objTableStatusFixture in $arrTableStatusFailureFixtures) {
+        if (@(Get-DecisionRecordLifecycleFailure `
+                -Name 'docs/decisions/0001-legacy.md' `
+                -CurrentContent $objTableStatusFixture.Content `
+                -BaselineContent $strLegacyDecisionRecord) -cnotcontains
+            ('docs/decisions/0001-legacy.md must not contain a separate operative ' +
+                'Status field.')) {
+            throw "$($objTableStatusFixture.Name) escaped lifecycle validation."
+        }
+    }
+    $arrTableStatusAcceptedFixtures = @(
+        [pscustomobject]@{
+            Name = 'header-only Status row'
+            Content = $strCompliantDecisionRecord.Replace(
+                'Changed legacy context.',
+                (@(
+                        'Changed legacy context.'
+                        '| STATUS | Accepted |'
+                        '| --- | --- |'
+                    ) -join "`n")
+            )
+        },
+        [pscustomobject]@{
+            Name = 'ordinary three-column option table'
+            Content = $strCompliantDecisionRecord.Replace(
+                'Changed legacy context.',
+                (@(
+                        'Changed legacy context.'
+                        '| Option | Status | Rationale |'
+                        '| --- | --- | --- |'
+                        '| Keep | Accepted | Least churn |'
+                    ) -join "`n")
+            )
+        },
+        [pscustomobject]@{
+            Name = 'multi-column Status data row'
+            Content = $strCompliantDecisionRecord.Replace(
+                'Changed legacy context.',
+                (@(
+                        'Changed legacy context.'
+                        '| Field | Value | Rationale |'
+                        '| --- | --- | --- |'
+                        '| Status | Accepted | Current decision |'
+                    ) -join "`n")
+            )
+        },
+        [pscustomobject]@{
+            Name = 'blockquoted two-cell Status table'
+            Content = $strCompliantDecisionRecord.Replace(
+                'Changed legacy context.',
+                (@(
+                        'Changed legacy context.'
+                        '> | Field | Value |'
+                        '> | --- | --- |'
+                        '> | Status | Accepted |'
+                    ) -join "`n")
+            )
+        },
+        [pscustomobject]@{
+            Name = 'listed two-cell Status table'
+            Content = $strCompliantDecisionRecord.Replace(
+                'Changed legacy context.',
+                (@(
+                        'Changed legacy context.'
+                        '- Example:'
+                        ''
+                        '  | Field | Value |'
+                        '  | --- | --- |'
+                        '  | Status | Accepted |'
+                    ) -join "`n")
+            )
+        },
+        [pscustomobject]@{
+            Name = 'nested-list two-cell Status table'
+            Content = $strCompliantDecisionRecord.Replace(
+                'Changed legacy context.',
+                (@(
+                        'Changed legacy context.'
+                        '- Outer'
+                        '  - Inner:'
+                        ''
+                        '    | Field | Value |'
+                        '    | --- | --- |'
+                        '    | Status | Accepted |'
+                    ) -join "`n")
+            )
+        },
+        [pscustomobject]@{
+            Name = 'fenced table example'
+            Content = $strCompliantDecisionRecord.Replace(
+                'Changed legacy context.',
+                (@(
+                        'Changed legacy context.'
+                        '```markdown'
+                        '| Status | Accepted |'
+                        '| --- | --- |'
+                        '```'
+                    ) -join "`n")
+            )
+        },
+        [pscustomobject]@{
+            Name = 'commented table example'
+            Content = $strCompliantDecisionRecord.Replace(
+                'Changed legacy context.',
+                (@(
+                        'Changed legacy context.'
+                        '<!--'
+                        '| Status | Accepted |'
+                        '| --- | --- |'
+                        '-->'
+                    ) -join "`n")
+            )
+        },
+        [pscustomobject]@{
+            Name = 'unrelated table'
+            Content = $strCompliantDecisionRecord.Replace(
+                'Changed legacy context.',
+                (@(
+                        'Changed legacy context.'
+                        '| State | Owner |'
+                        '| --- | --- |'
+                        '| Accepted | Maintainers |'
+                    ) -join "`n")
+            )
+        },
+        [pscustomobject]@{
+            Name = 'unrelated exact two-cell Deployment Status data row'
+            Content = $strCompliantDecisionRecord.Replace(
+                'Changed legacy context.',
+                (@(
+                        'Changed legacy context.'
+                        '| Field | Value |'
+                        '| --- | --- |'
+                        '| Deployment Status | healthy |'
+                    ) -join "`n")
+            )
+        },
+        [pscustomobject]@{
+            Name = 'empty Status table value'
+            Content = $strCompliantDecisionRecord.Replace(
+                'Changed legacy context.',
+                (@(
+                        'Changed legacy context.'
+                        '| Field | Value |'
+                        '| --- | --- |'
+                        '| Status | |'
+                    ) -join "`n")
+            )
+        }
+    )
+    foreach ($objTableStatusFixture in $arrTableStatusAcceptedFixtures) {
+        if (@(Get-DecisionRecordLifecycleFailure `
+                -Name 'docs/decisions/0001-legacy.md' `
+                -CurrentContent $objTableStatusFixture.Content `
+                -BaselineContent $strLegacyDecisionRecord).Count -ne 0) {
+            throw "$($objTableStatusFixture.Name) caused a false lifecycle finding."
+        }
+    }
+    $strDecisionStatusProseRecord = $strCompliantDecisionRecord.Replace(
+        'Changed legacy context.',
+        'The decision status remains accepted in ordinary prose.'
+    )
+    if (@(Get-DecisionRecordLifecycleFailure `
+            -Name 'docs/decisions/0001-legacy.md' `
+            -CurrentContent $strDecisionStatusProseRecord `
+            -BaselineContent $strLegacyDecisionRecord).Count -ne 0) {
+        throw 'Ordinary decision status prose was rejected as a second representation.'
+    }
+    foreach ($strUnrelatedStatusField in @(
+            'Deployment Status: healthy', 'HTTP Status Codes: 200 and 204'
+        )) {
+        $strUnrelatedStatusFieldRecord = $strCompliantDecisionRecord.Replace(
+            'Changed legacy context.',
+            $strUnrelatedStatusField
+        )
+        if (@(Get-DecisionRecordLifecycleFailure `
+                -Name 'docs/decisions/0001-legacy.md' `
+                -CurrentContent $strUnrelatedStatusFieldRecord `
+                -BaselineContent $strLegacyDecisionRecord).Count -ne 0) {
+            throw "Unrelated prose field caused a lifecycle finding: $strUnrelatedStatusField"
+        }
+    }
+    if (@(Get-DecisionRecordLifecycleFailure `
+            -Name 'docs/decisions/0003-new.md' `
+            -CurrentContent $strLegacyDecisionRecord `
+            -BaselineContent $null).Count -ne 2) {
+        throw 'A new ADR accepted the legacy two-status representation.'
+    }
+    foreach ($strOwnerPath in $script:arrDocumentationClaimOwnerPaths) {
+        $arrMissingOwnerFailures = @(Get-DocumentationClaimFailure `
+                -Content $strDocsInstructionsContent `
+                -TrackedPaths @(
+                    $arrTrackedRepositoryPaths |
+                        Where-Object { $_ -cne $strOwnerPath }
+                ))
+        $strExpectedOwnerFailure =
+            'Documentation claim owner is not tracked at the validation ' +
+            "revision: $strOwnerPath"
+        if ($arrMissingOwnerFailures -cnotcontains $strExpectedOwnerFailure) {
+            throw "A missing documentation claim owner did not fail closed: $strOwnerPath"
+        }
+    }
+    $strFalseDocumentationClaimMutation = $strDocsInstructionsContent +
+        [Environment]::NewLine + [Environment]::NewLine +
+        'The absent `.github/workflows/check-placeholders.yml` enforces this rule.'
+    $arrFalseDocumentationClaimFailures = @(Get-DocumentationClaimFailure `
+            -Content $strFalseDocumentationClaimMutation `
+            -TrackedPaths $arrTrackedRepositoryPaths)
+    if (-not ($arrFalseDocumentationClaimFailures -match [regex]::Escape(
+                'Documentation instructions name an absent repository-specific source'
+            ))) {
+        throw 'A false documentation enforcement claim did not fail closed.'
+    }
+
+    $arrClaudeImportMutations = @(
+        [pscustomobject]@{ Name = 'relative import'; Text = '@docs/claude-policy.md' },
+        [pscustomobject]@{ Name = 'absolute import'; Text = '@/etc/claude-policy.md' },
+        [pscustomobject]@{ Name = 'home import'; Text = '@~/claude-policy.md' },
+        [pscustomobject]@{ Name = 'traversal import'; Text = '@../claude-policy.md' },
+        [pscustomobject]@{ Name = 'single-file import'; Text = '@policy.md' },
+        [pscustomobject]@{ Name = 'extensionless bare import'; Text = '@README' },
+        [pscustomobject]@{
+            Name = 'recursive and multiple imports'
+            Text = "@docs/recursive/CLAUDE.md`n@docs/second-policy.md"
+        }
+    )
+    foreach ($objImportMutation in $arrClaudeImportMutations) {
+        Assert-Failure `
+            -ClaudeContent (
+                $strClaudeContent + [Environment]::NewLine +
+                $objImportMutation.Text
+            ) `
+            -Failure $script:strClaudeImportFailure
+    }
+
+    $arrNestedClaudeImportFailures = @(Get-NestedClaudeImportFailure `
+            -DocumentContexts @(
+                [pscustomobject]@{
+                    Path = 'tools/CLAUDE.md'
+                    Content = '@README'
+                }
+            ))
+    if ($arrNestedClaudeImportFailures -cnotcontains `
+        'tools/CLAUDE.md must not contain active @path imports.') {
+        throw 'A nested governed CLAUDE.md extensionless import did not fail closed.'
+    }
+
+    $arrAcceptedClaudeImportLikeFixtures = @(
+        [pscustomobject]@{
+            Name = 'Claude import-like inline code'
+            Text = '`@docs/claude-policy.md`'
+        },
+        [pscustomobject]@{
+            Name = 'Claude import-like fenced code'
+            Text = '```text' + [Environment]::NewLine +
+                '@docs/claude-policy.md' + [Environment]::NewLine + '```'
+        },
+        [pscustomobject]@{
+            Name = 'ordinary Claude and Codex mentions'
+            Text = "@claude resume review loop`n`n@codex review"
+        }
+    )
+    foreach ($objAcceptedFixture in $arrAcceptedClaudeImportLikeFixtures) {
+        Assert-FixtureAccepted `
+            -ClaudeContent (
+                $strClaudeContent + [Environment]::NewLine +
+                $objAcceptedFixture.Text
+            ) `
+            -CodexConfigContent $strCodexConfigContent
     }
 
     $strDocsStaleMetadataMutation = $strDocsInstructionsContent +
@@ -7560,31 +9031,6 @@ if ($SelfTest) {
         -Content $strDocsInstructionsContent
     if ($null -ne $objDocsMetadataContext.Failure) {
         throw 'Could not parse documentation instructions metadata for mutation tests.'
-    }
-    $objNewDocumentVersionMatch = [regex]::Match(
-        $strDocsInstructionsContent,
-        '(?m)^\*\*Version:\*\* (?<Prefix>\d+\.\d+\.\d{8}\.)\d+$'
-    )
-    if (-not $objNewDocumentVersionMatch.Success) {
-        throw 'New-document Version fixture is missing.'
-    }
-    $strNewDocumentRevisionMutation = $strDocsInstructionsContent.Remove(
-        $objNewDocumentVersionMatch.Index,
-        $objNewDocumentVersionMatch.Length
-    ).Insert(
-        $objNewDocumentVersionMatch.Index,
-        '**Version:** ' + $objNewDocumentVersionMatch.Groups['Prefix'].Value + '1'
-    )
-    $arrNewDocumentRevisionFailures = @(Get-DocumentMetadataTransitionFailure `
-            -Name '.github/instructions/docs.instructions.md' `
-            -CurrentContent $strNewDocumentRevisionMutation `
-            -ParentContent $null `
-            -ExpectedUtcDate $objDocsMetadataContext.UpdatedDate `
-            -IsNewDocumentTransition $true)
-    if (-not ($arrNewDocumentRevisionFailures -match [regex]::Escape(
-                'Version revision must be 0 when no published baseline exists.'
-            ))) {
-        throw 'A nonzero initial revision was accepted.'
     }
     $objDocsExpectedUtcDate = [DateTime]::ParseExact(
         $objDocsMetadataContext.UpdatedDate,
@@ -7609,7 +9055,7 @@ if ($SelfTest) {
             "- **Last Updated:** $($objDocsMetadataContext.UpdatedDate)",
             "- **Last Updated:** $strNewDocumentDate"
         )
-        $arrNewDocumentFailures = @(Get-DocumentMetadataTransitionFailure `
+        $arrNewDocumentFailures = @(Get-PublishedEndpointMetadataFailure `
                 -Name '.github/instructions/docs.instructions.md' `
                 -CurrentContent $strNewDocumentMutation `
                 -ParentContent $null `
@@ -7619,22 +9065,20 @@ if ($SelfTest) {
             throw "A new document with date $strNewDocumentDate did not fail closed."
         }
     }
-
-    $arrDocsStaleMetadataFailures = @(Get-DocumentMetadataTransitionFailure `
+    $arrDocsStaleMetadataFailures = @(Get-PublishedEndpointMetadataFailure `
             -Name '.github/instructions/docs.instructions.md' `
             -CurrentContent $strDocsStaleMetadataMutation `
             -ParentContent $strDocsInstructionsContent `
             -ExpectedUtcDate $objDocsMetadataContext.UpdatedDate `
             -IsNewDocumentTransition $false)
     if (-not ($arrDocsStaleMetadataFailures -match [regex]::Escape(
-                '.github/instructions/docs.instructions.md Version revision must be'
+                '.github/instructions/docs.instructions.md Version revision must be exactly'
             ))) {
         throw 'The docs-only stale-metadata mutation did not fail closed.'
     }
 
     $arrNewlyCoveredPaths = @(
-        '.github/instructions/yaml.instructions.md',
-        'STYLE_GUIDE.md'
+        '.github/instructions/yaml.instructions.md'
     )
     foreach ($strNewlyCoveredPath in $arrNewlyCoveredPaths) {
         $objDocumentContext = $listGovernedDocumentContexts |
@@ -7650,784 +9094,318 @@ if ($SelfTest) {
         $strStaleMetadataMutation = $objDocumentContext.Content +
             [Environment]::NewLine + [Environment]::NewLine +
             'Rendered governed-instruction metadata mutation.'
-        $arrStaleMetadataFailures = @(Get-DocumentMetadataTransitionFailure `
+        $arrStaleMetadataFailures = @(Get-PublishedEndpointMetadataFailure `
                 -Name $strNewlyCoveredPath `
                 -CurrentContent $strStaleMetadataMutation `
                 -ParentContent $objDocumentContext.Content `
                 -ExpectedUtcDate $objMetadataContext.UpdatedDate `
                 -IsNewDocumentTransition $false)
-        $strExpectedFailure = "$strNewlyCoveredPath Version revision must be"
+        $strFailure = "$strNewlyCoveredPath Version revision must be exactly"
         if (-not ($arrStaleMetadataFailures -match [regex]::Escape(
-                    $strExpectedFailure
+                    $strFailure
                 ))) {
             throw "$strNewlyCoveredPath stale-metadata mutation did not fail closed."
         }
     }
 
-    $arrNewlyCoveredUnversionedPaths = @(
-        '.claude/commands/review-loop.md',
-        'STYLE_GUIDE_RATIONALE.md',
-        'docs/ISSUE_EVALUATION_PROMPT.md',
-        'docs/T1-SUPPLY-FREEZE-v1.md'
-    )
-    $arrNewlyCoveredUnversionedPaths += $arrGovernedDecisionPaths
-    foreach ($strNewlyCoveredPath in $arrNewlyCoveredUnversionedPaths) {
-        $objDocumentContext = $listGovernedDocumentContexts |
-            Where-Object { $_.Path -ceq $strNewlyCoveredPath }
-        if ($null -eq $objDocumentContext) {
-            throw "Could not locate newly covered metadata input: $strNewlyCoveredPath"
-        }
-        $objMetadataContext = Get-DocumentMetadataContext `
-            -Content $objDocumentContext.Content
-        if ($null -ne $objMetadataContext.Failure -or
-            $objMetadataContext.HasVersion) {
-            throw "Could not parse unversioned metadata input: $strNewlyCoveredPath"
-        }
-        $objUpdatedDate = [DateTime]::ParseExact(
-            $objMetadataContext.UpdatedDate,
-            'yyyy-MM-dd',
-            [System.Globalization.CultureInfo]::InvariantCulture
-        )
-        $strStaleUpdatedDate = $objUpdatedDate.AddDays(-1).ToString(
-            'yyyy-MM-dd',
-            [System.Globalization.CultureInfo]::InvariantCulture
-        )
-        $strMetadataOnlyRollbackMutation = $objDocumentContext.Content.Replace(
-            "- **Last Updated:** $($objMetadataContext.UpdatedDate)",
-            "- **Last Updated:** $strStaleUpdatedDate"
-        )
-        $strExpectedRollbackFailure =
-            "$strNewlyCoveredPath Last Updated must not move backward from " +
-            "$($objMetadataContext.UpdatedDate) to $strStaleUpdatedDate."
-        $arrMetadataOnlyRollbackFailures = @(Get-DocumentMetadataTransitionFailure `
-                -Name $strNewlyCoveredPath `
-                -CurrentContent $strMetadataOnlyRollbackMutation `
-                -ParentContent $objDocumentContext.Content `
-                -ExpectedUtcDate $objMetadataContext.UpdatedDate `
-                -IsNewDocumentTransition $false)
-        if ($arrMetadataOnlyRollbackFailures -cnotcontains $strExpectedRollbackFailure) {
-            throw "$strNewlyCoveredPath metadata-only date rollback did not fail closed."
-        }
-        $strStaleMetadataMutation = $strMetadataOnlyRollbackMutation +
-            [Environment]::NewLine + [Environment]::NewLine +
-            'Rendered governed-document metadata mutation.'
-        $arrStaleMetadataFailures = @(Get-DocumentMetadataTransitionFailure `
-                -Name $strNewlyCoveredPath `
-                -CurrentContent $strStaleMetadataMutation `
-                -ParentContent $objDocumentContext.Content `
-                -ExpectedUtcDate $objMetadataContext.UpdatedDate `
-                -IsNewDocumentTransition $false)
-        if ($arrStaleMetadataFailures -cnotcontains $strExpectedRollbackFailure) {
-            throw "$strNewlyCoveredPath stale-metadata mutation did not fail closed."
-        }
+    if ($arrTrackedGovernedInstructionPaths -cnotcontains 'CLAUDE.md' -or
+        @($arrGovernedInstructionDocuments.Path) -cnotcontains 'CLAUDE.md') {
+        throw 'The supported root CLAUDE.md instruction is not cataloged.'
     }
-
-    foreach ($strFutureInstructionPath in @(
-            '.github/instructions/future.instructions.md',
-            '.github/instructions/terraform/naming.instructions.md',
-            'module/nested/AGENTS.md',
-            '.cursor/rules/terraform/naming.mdc'
+    foreach ($strProhibitedClaudeLocalPath in @(
+            'CLAUDE.local.md',
+            'tools/CLAUDE.local.md',
+            'CLAUDE.LOCAL.md',
+            'tools/claude.Local.MD'
         )) {
-        $arrInventoryMutationFailures = @(
+        if (-not (Test-ProhibitedClaudeLocalPath `
+                    -RepositoryRelativePath $strProhibitedClaudeLocalPath) -or
+            -not (Test-AgentInstructionWorkflowPath `
+                    -RepositoryRelativePath $strProhibitedClaudeLocalPath) -or
+            -not (Test-GovernedInstructionInventoryPath `
+                    -RepositoryRelativePath $strProhibitedClaudeLocalPath)) {
+            throw "Prohibited Claude local memory escaped a validator surface: $strProhibitedClaudeLocalPath"
+        }
+        $arrProhibitedClaudeLocalFailures = @(
             Get-GovernedInstructionInventoryFailure `
                 -CatalogPaths @($arrGovernedInstructionDocuments.Path) `
                 -TrackedPaths @(
-                    $arrTrackedGovernedInstructionPaths + $strFutureInstructionPath
+                    $arrTrackedGovernedInstructionPaths + $strProhibitedClaudeLocalPath
                 )
         )
-        $strExpectedInventoryFailure =
-            "Tracked governed instruction is missing from the catalog: $strFutureInstructionPath"
-        if (-not ($arrInventoryMutationFailures -ccontains $strExpectedInventoryFailure)) {
-            throw (
-                'The governed-instruction inventory mutation did not fail closed: ' +
-                $strFutureInstructionPath
-            )
+        if (-not ($arrProhibitedClaudeLocalFailures -ccontains (
+                    'Tracked CLAUDE.local.md is prohibited operative project memory: ' +
+                    $strProhibitedClaudeLocalPath
+                ))) {
+            throw "Tracked Claude local memory was not explicitly rejected: $strProhibitedClaudeLocalPath"
         }
     }
-
-    $arrDecisionInventoryFixture = @(Get-GovernedDecisionDocumentPath `
-            -CandidatePath @(
-                '.github/decisions/0006-workflow.md',
-                'architecture/decisions/0005-design.md',
-                'docs/decisions/0004-future-record.md',
-                'docs/decisions/archive/0003-old-record.md',
-                'docs/user/decisions/provider-selection.md',
-                'docs/decisions/0005-not-markdown.txt',
-                'docs/decisions/0004-future-record.md'
-            ))
-    if ($arrDecisionInventoryFixture.Count -ne 2 -or
-        $arrDecisionInventoryFixture[0] -cne
-        'docs/decisions/0004-future-record.md' -or
-        $arrDecisionInventoryFixture[1] -cne
-        'docs/decisions/archive/0003-old-record.md') {
-        throw 'The decision inventory did not select only the configured recursive root.'
+    if (Test-ProhibitedClaudeLocalPath -RepositoryRelativePath 'CLAUDE.local.md.bak') {
+        throw 'A Claude local-memory near miss was prohibited.'
     }
-    $strOrdinaryDecisionsPath = 'docs/user/decisions/provider-selection.md'
-    $arrOrdinaryDecisionsSelection = @(Get-GovernedDecisionDocumentPath `
-            -CandidatePath @($strOrdinaryDecisionsPath))
-    $arrOrdinaryDecisionsDiscovery = @(
-        Get-DiscoveredGovernedMarkdownDocumentPath `
-            -CandidatePath @($strOrdinaryDecisionsPath) `
-            -KnownGovernedPath $arrOrdinaryDecisionsSelection `
-            -ExemptPath @($strOrdinaryDecisionsPath)
-    )
-    if ($arrOrdinaryDecisionsSelection.Count -ne 0 -or
-        $arrOrdinaryDecisionsDiscovery.Count -ne 0) {
-        throw 'An ordinary Tier 2 decisions-directory document was promoted.'
+    $strExtractedSelfTestRevision = if (
+        [string]::IsNullOrEmpty($strValidatedInputRevision)
+    ) {
+        $strCheckedOutRevision
+    } else {
+        $strValidatedInputRevision
     }
-
-    $arrDiscoveredMarkdownFixture = @(
-        Get-DiscoveredGovernedMarkdownDocumentPath `
-            -CandidatePath @(
-                'README.md',
-                'AGENTS.md',
-                '.hidden/policy.mdc',
-                'docs/RELEASE-RUNBOOK.md',
-                'src/module.ps1'
-            ) `
-            -KnownGovernedPath @('AGENTS.md') `
-            -ExemptPath @('README.md')
-    )
-    if ($arrDiscoveredMarkdownFixture.Count -ne 2 -or
-        $arrDiscoveredMarkdownFixture[0] -cne '.hidden/policy.mdc' -or
-        $arrDiscoveredMarkdownFixture[1] -cne 'docs/RELEASE-RUNBOOK.md') {
-        throw 'The Markdown inventory did not discover nested Tier 1 candidates.'
+    & (Join-Path $strRepositoryRootPath $strExtractedSelfTestPath) `
+        -RuntimeContext $hashtableRuntimeContext `
+        -RepositoryRootPath $strRepositoryRootPath `
+        -Revision $strExtractedSelfTestRevision `
+        -MaximumBytes $intGitPathListMaximumBytes `
+        -MaximumMetadataUtcDate $script:strMaximumMetadataUtcDate
+    foreach ($strExactValidatorInputPath in $script:arrPushGovernedExactPaths) {
+        if (-not (Test-AgentInstructionWorkflowPath `
+                    -RepositoryRelativePath $strExactValidatorInputPath)) {
+            throw "An exact validator input escaped push applicability: $strExactValidatorInputPath"
+        }
     }
-    $objClassificationFixture = Get-DocumentMetadataClassificationContext `
-        -Content $strDocumentClassificationContent `
-        -TrackedPath $arrTrackedRepositoryPaths
-    if ($null -ne $objClassificationFixture.Failure -or
-        $objClassificationFixture.ExemptPaths.Count -ne 9 -or
-        $objClassificationFixture.AuthorizedExemptionPaths.Count -ne 0) {
-        throw 'The repository document classification manifest is not canonical.'
+    $strRationalePath = 'STYLE_GUIDE_RATIONALE.md'
+    $arrRationaleSpecs = @($arrGovernedMetadataDocuments |
+            Where-Object { $_.Path -ceq $strRationalePath })
+    $arrRationaleContexts = @($listGovernedDocumentContexts |
+            Where-Object { $_.Path -ceq $strRationalePath })
+    if (@($script:arrPushGovernedExactPaths |
+            Where-Object { $_ -ceq $strRationalePath }).Count -ne 1 -or
+        $arrRationaleSpecs.Count -ne 1 -or
+        $arrRationaleContexts.Count -ne 1 -or
+        $arrRationaleSpecs[0].MaximumBytes -ne
+            $intStyleGuideRationaleMaximumInputBytes -or
+        -not $arrRationaleSpecs[0].RequiresMetadata -or
+        $arrRationaleSpecs[0].RequiresVersion -or
+        $intStyleGuideRationaleMaximumInputBytes -ne 196608 -or
+        [Text.Encoding]::UTF8.GetByteCount($arrRationaleContexts[0].Content) -gt
+            $intStyleGuideRationaleMaximumInputBytes) {
+        throw 'The canonical rationale lacks exact bounded Tier 1 catalog enforcement.'
     }
-    $strClassificationNewLine = if ($strDocumentClassificationContent.Contains(
-            "`r`n",
-            [System.StringComparison]::Ordinal
+    foreach ($strLintGuidePath in $script:arrOperationalLintGuidePaths) {
+        $arrLintGuideContexts = @($listGovernedDocumentContexts |
+                Where-Object { $_.Path -ceq $strLintGuidePath })
+        if ($arrLintGuideContexts.Count -ne 1) {
+            throw "Lint guide is outside Tier 1 policy: $strLintGuidePath"
+        }
+    }
+    foreach ($strValidatorInputNearMiss in @(
+            '.github/.gitignore',
+            '.github/workflows/MARKDOWN-LINTING-IMPLEMENTATION.md.bak',
+            '.github/workflows/scripts-README.md.bak',
+            'docs/ISSUE_EVALUATION_PROMPT.md.bak'
         )) {
-        "`r`n"
-    }
-    else {
-        "`n"
-    }
-    $arrClassificationMutations = @(
-        [pscustomobject]@{
-            Name = 'wrong schema version'
-            Content = $strDocumentClassificationContent.Replace(
-                '"schemaVersion": 2',
-                '"schemaVersion": 3'
-            )
-            Expected = 'schemaVersion must be integer 2'
-        },
-        [pscustomobject]@{
-            Name = 'unknown property'
-            Content = $strDocumentClassificationContent.Replace(
-                '"schemaVersion": 2,',
-                '"unknown": true, "schemaVersion": 2,'
-            )
-            Expected = 'unknown property'
-        },
-        [pscustomobject]@{
-            Name = 'duplicate property'
-            Content = $strDocumentClassificationContent.Replace(
-                '"schemaVersion": 2,',
-                '"schemaVersion": 2, "schemaVersion": 2,'
-            )
-            Expected = 'duplicate property'
-        },
-        [pscustomobject]@{
-            Name = 'non-string path'
-            Content = $strDocumentClassificationContent.Replace(
-                '"ACKNOWLEDGMENTS.md"',
-                '1'
-            )
-            Expected = 'entries must be strings'
-        },
-        [pscustomobject]@{
-            Name = 'unsafe path'
-            Content = $strDocumentClassificationContent.Replace(
-                '"ACKNOWLEDGMENTS.md"',
-                '"../unsafe.md"'
-            )
-            Expected = 'unsafe path'
-        },
-        [pscustomobject]@{
-            Name = 'untracked path'
-            Content = $strDocumentClassificationContent.Replace(
-                '"ACKNOWLEDGMENTS.md"',
-                '"AAA-UNTRACKED.md"'
-            )
-            Expected = 'path is not tracked'
-        },
-        [pscustomobject]@{
-            Name = 'unsorted paths'
-            Content = $strDocumentClassificationContent.Replace(
-                '"ACKNOWLEDGMENTS.md",' + $strClassificationNewLine +
-                    '    "CONTRIBUTING.md"',
-                '"CONTRIBUTING.md",' + $strClassificationNewLine +
-                    '    "ACKNOWLEDGMENTS.md"'
-            )
-            Expected = 'strictly ordinal-sorted'
-        },
-        [pscustomobject]@{
-            Name = 'cross-category duplicate'
-            Content = $strDocumentClassificationContent.Replace(
-                '"generatedPaths": [',
-                '"generatedPaths": [' + $strClassificationNewLine +
-                    '    "README.md",'
-            )
-            Expected = 'repeats a path'
-        },
-        [pscustomobject]@{
-            Name = 'active authorization overlap'
-            Content = $strDocumentClassificationContent.Replace(
-                '"authorizedExemptionPaths": []',
-                '"authorizedExemptionPaths": ["README.md"]'
-            )
-            Expected = 'repeats a path'
-        },
-        [pscustomobject]@{
-            Name = 'unsafe authorization path'
-            Content = $strDocumentClassificationContent.Replace(
-                '"authorizedExemptionPaths": []',
-                '"authorizedExemptionPaths": ["../future.md"]'
-            )
-            Expected = 'unsafe path'
-        },
-        [pscustomobject]@{
-            Name = 'trailing comma'
-            Content = $strDocumentClassificationContent.Replace(
-                '"terraform.instructions.md"',
-                '"terraform.instructions.md",'
-            )
-            Expected = 'not strict JSON'
+        if (Test-AgentInstructionWorkflowPath `
+                -RepositoryRelativePath $strValidatorInputNearMiss) {
+            throw "A validator-input near miss selected push validation: $strValidatorInputNearMiss"
         }
+    }
+    $strCanonicalDecisionPath = 'docs/decisions/0003-new-policy.md'
+    if (@(Get-DecisionRecordPathFailure `
+                -RepositoryRelativePath $strCanonicalDecisionPath).Count -ne 0 -or
+        -not (Test-AgentInstructionWorkflowPath `
+                -RepositoryRelativePath $strCanonicalDecisionPath)) {
+        throw 'A canonical decision-record path was not accepted and governed.'
+    }
+    foreach ($objDecisionPathMutation in @(
+            [pscustomobject]@{ Find = '0003-new-policy.md'; Replace = 'security.md' },
+            [pscustomobject]@{ Find = 'new'; Replace = 'New' },
+            [pscustomobject]@{ Find = '.md'; Replace = '.txt' }
+        )) {
+        $intMutationCount = [regex]::Matches(
+            $strCanonicalDecisionPath,
+            [regex]::Escape($objDecisionPathMutation.Find)
+        ).Count
+        $strDecisionPathMutation = $strCanonicalDecisionPath.Replace(
+            $objDecisionPathMutation.Find,
+            $objDecisionPathMutation.Replace
+        )
+        $arrDecisionPathFailures = @(Get-DecisionRecordPathFailure `
+                -RepositoryRelativePath $strDecisionPathMutation)
+        if ($intMutationCount -ne 1 -or
+            $strDecisionPathMutation -ceq $strCanonicalDecisionPath -or
+            -not (Test-AgentInstructionWorkflowPath `
+                    -RepositoryRelativePath $strDecisionPathMutation) -or
+            $arrDecisionPathFailures.Count -ne 1 -or
+            $arrDecisionPathFailures[0] -cne
+                "$strDecisionPathMutation must use docs/decisions/NNNN-short-title.md.") {
+            throw "A noncanonical decision path did not fail closed exactly: $strDecisionPathMutation"
+        }
+    }
+    $strNestedDecisionNearMiss = "$strCanonicalDecisionPath/nested"
+    $arrNestedDecisionFailures = @(Get-DecisionRecordPathFailure `
+            -RepositoryRelativePath $strNestedDecisionNearMiss)
+    if (-not (Test-AgentInstructionWorkflowPath `
+                -RepositoryRelativePath $strNestedDecisionNearMiss) -or
+        $arrNestedDecisionFailures.Count -ne 1 -or
+        $arrNestedDecisionFailures[0] -cne
+            "$strNestedDecisionNearMiss must use docs/decisions/NNNN-short-title.md.") {
+        throw 'A nested decision path escaped explicit canonical rejection.'
+    }
+    foreach ($strHierarchicalGeminiPath in @(
+            'GEMINI.md',
+            'tools/GEMINI.md',
+            'tools/deep/GEMINI.md'
+        )) {
+        if (-not (Test-GovernedInstructionPath `
+                    -RepositoryRelativePath $strHierarchicalGeminiPath `
+                    -GovernedRootPaths $script:arrGovernedInstructionRootPaths) -or
+            -not (Test-AgentInstructionWorkflowPath `
+                    -RepositoryRelativePath $strHierarchicalGeminiPath)) {
+            throw "A hierarchical Gemini context escaped governance: $strHierarchicalGeminiPath"
+        }
+    }
+    foreach ($strGeminiNearMissPath in @(
+            'tools/Gemini.md',
+            'tools/GEMINI.md.bak',
+            './GEMINI.md',
+            '../GEMINI.md',
+            'tools/../GEMINI.md',
+            'tools//GEMINI.md'
+        )) {
+        if (Test-GovernedInstructionPath `
+                -RepositoryRelativePath $strGeminiNearMissPath `
+                -GovernedRootPaths $script:arrGovernedInstructionRootPaths) {
+            throw "A Gemini near-miss path entered governance: $strGeminiNearMissPath"
+        }
+    }
+
+    $arrCaseFoldedGovernedPaths = @(
+        'agents.md',
+        'tools/agents.md',
+        'AGENTS.Override.md',
+        'claude.md',
+        'gemini.md',
+        '.GitHub/instructions/sample.instructions.md',
+        '.Cursor/rules/sample.mdc',
+        '.Claude/rules/sample.md',
+        '.github/Workflows/agent-instructions.yml',
+        '.Github/workflows/Test-AgentInstructions.ps1'
     )
-    foreach ($objClassificationMutation in $arrClassificationMutations) {
-        if ($objClassificationMutation.Content -ceq
-            $strDocumentClassificationContent) {
+    foreach ($strCaseFoldedGovernedPath in $arrCaseFoldedGovernedPaths) {
+        if ((Test-GovernedInstructionPath `
+                    -RepositoryRelativePath $strCaseFoldedGovernedPath `
+                    -GovernedRootPaths $script:arrGovernedInstructionRootPaths) -or
+            -not (Test-AgentInstructionWorkflowPath `
+                    -RepositoryRelativePath $strCaseFoldedGovernedPath)) {
+            throw "Canonical acceptance changed for case near-match: $strCaseFoldedGovernedPath"
+        }
+        $boolCaseMismatch = if (Test-ExactPathCaseMismatch `
+                -RepositoryRelativePath $strCaseFoldedGovernedPath `
+                -CanonicalPaths $script:arrPushGovernedExactPaths) {
+            $true
+        } else {
+            Test-GovernedInstructionPathCaseMismatch `
+                -RepositoryRelativePath $strCaseFoldedGovernedPath `
+                -GovernedRootPaths $script:arrGovernedInstructionRootPaths
+        }
+        if (-not $boolCaseMismatch) {
+            throw "A case-folded governed path was not detected: $strCaseFoldedGovernedPath"
+        }
+        if (-not (Test-GovernedInstructionInventoryPath `
+                    -RepositoryRelativePath $strCaseFoldedGovernedPath)) {
+            throw "A case-folded path escaped the production inventory selector: $strCaseFoldedGovernedPath"
+        }
+    }
+    foreach ($strCanonicalGovernedPath in @(
+            'AGENTS.md',
+            'tools/AGENTS.md',
+            'AGENTS.override.md',
+            'CLAUDE.md',
+            'GEMINI.md',
+            '.github/instructions/sample.instructions.md',
+            '.cursor/rules/sample.mdc',
+            '.claude/rules/sample.md',
+            '.github/workflows/agent-instructions.yml'
+        )) {
+        if (-not (Test-AgentInstructionWorkflowPath `
+                    -RepositoryRelativePath $strCanonicalGovernedPath)) {
+            throw "A canonical governed control was rejected: $strCanonicalGovernedPath"
+        }
+        if (Test-GovernedInstructionPathCaseMismatch `
+                -RepositoryRelativePath $strCanonicalGovernedPath `
+                -GovernedRootPaths $script:arrGovernedInstructionRootPaths) {
+            throw "A canonical governed control was reported as a case mismatch: $strCanonicalGovernedPath"
+        }
+    }
+
+    $arrUncatalogedGovernedInstructionPaths = @(
+        '.github/instructions/future.instructions.md',
+        '.github/instructions/team/future.instructions.md',
+        '.cursor/rules/future.mdc',
+        '.cursor/rules/team/future.mdc',
+        '.hermes.md',
+        'GEMINI.md',
+        'tools/GEMINI.md',
+        'tools/deep/GEMINI.md',
+        'tools/AGENTS.md',
+        'AGENTS.override.md',
+        'tools/AGENTS.override.md',
+        '.claude/CLAUDE.md',
+        'tools/CLAUDE.md',
+        '.claude/rules/base.md',
+        '.claude/rules/frontend/base.md'
+    )
+    foreach (
+        $strUncatalogedGovernedInstructionPath in
+            $arrUncatalogedGovernedInstructionPaths
+    ) {
+        if (-not (Test-GovernedInstructionPath `
+                    -RepositoryRelativePath $strUncatalogedGovernedInstructionPath `
+                    -GovernedRootPaths $script:arrGovernedInstructionRootPaths)) {
             throw (
-                'The document classification mutation fixture is unavailable: ' +
-                $objClassificationMutation.Name
+                'The governed-instruction selector omitted a documented surface: ' +
+                $strUncatalogedGovernedInstructionPath
             )
         }
-        $objMutatedClassificationContext =
-            Get-DocumentMetadataClassificationContext `
-                -Content $objClassificationMutation.Content `
-                -TrackedPath $arrTrackedRepositoryPaths
-        if ($null -eq $objMutatedClassificationContext.Failure -or
-            -not $objMutatedClassificationContext.Failure.Contains(
-                $objClassificationMutation.Expected,
-                [System.StringComparison]::Ordinal
+
+        $arrGovernedInstructionInventoryFailures = @(
+            Get-GovernedInstructionInventoryFailure `
+                -CatalogPaths @($arrGovernedInstructionDocuments.Path) `
+                -TrackedPaths @(
+                    $arrTrackedGovernedInstructionPaths +
+                        $strUncatalogedGovernedInstructionPath
+                )
+        )
+        $strExpectedGovernedInstructionFailure =
+            'Tracked governed instruction is missing from the catalog: ' +
+            $strUncatalogedGovernedInstructionPath
+        if (-not (
+                $arrGovernedInstructionInventoryFailures -ccontains `
+                    $strExpectedGovernedInstructionFailure
             )) {
             throw (
-                'The document classification mutation did not fail closed: ' +
-                $objClassificationMutation.Name
-            )
-        }
-    }
-    $strUntrackedAuthorizationPath = 'docs/future-end-user-guide.md'
-    $strAuthorizationFixtureContent = $strDocumentClassificationContent.Replace(
-        '"authorizedExemptionPaths": []',
-        '"authorizedExemptionPaths": ["' +
-            $strUntrackedAuthorizationPath + '"]'
-    )
-    $objAuthorizationFixture = Get-DocumentMetadataClassificationContext `
-        -Content $strAuthorizationFixtureContent `
-        -TrackedPath $arrTrackedRepositoryPaths
-    if ($null -ne $objAuthorizationFixture.Failure -or
-        $objAuthorizationFixture.AuthorizedExemptionPaths.Count -ne 1 -or
-        $objAuthorizationFixture.AuthorizedExemptionPaths[0] -cne
-            $strUntrackedAuthorizationPath) {
-        throw 'An inert future exemption authorization was rejected.'
-    }
-    $arrClassificationExpansionBaseline = @('README.md', 'templates/README.md')
-    $arrUnchangedClassificationExpansionFailures = @(
-        Get-DocumentMetadataClassificationExpansionFailure `
-            -HasTrustedBaselineManifest $true `
-            -TrustedBaselineExemptPath $arrClassificationExpansionBaseline `
-            -TrustedBaselineAuthorizedExemptionPath @() `
-            -CandidateExemptPath $arrClassificationExpansionBaseline
-    )
-    if ($arrUnchangedClassificationExpansionFailures.Count -ne 0) {
-        throw 'An unchanged document classification was treated as an expansion.'
-    }
-    $arrClassificationRemovalFailures = @(
-        Get-DocumentMetadataClassificationExpansionFailure `
-            -HasTrustedBaselineManifest $true `
-            -TrustedBaselineExemptPath $arrClassificationExpansionBaseline `
-            -TrustedBaselineAuthorizedExemptionPath @() `
-            -CandidateExemptPath @('README.md')
-    )
-    if ($arrClassificationRemovalFailures.Count -ne 0) {
-        throw 'A document classification exemption removal was rejected.'
-    }
-    $arrClassificationAdditionFailures = @(
-        Get-DocumentMetadataClassificationExpansionFailure `
-            -HasTrustedBaselineManifest $true `
-            -TrustedBaselineExemptPath $arrClassificationExpansionBaseline `
-            -TrustedBaselineAuthorizedExemptionPath @() `
-            -CandidateExemptPath @(
-                'README.md',
-                'docs/RELEASE-RUNBOOK.md',
-                'templates/README.md'
-            )
-    )
-    if ($arrClassificationAdditionFailures.Count -ne 1 -or
-        $arrClassificationAdditionFailures[0] -cne
-            ('The document classification adds an unauthenticated metadata ' +
-             'exemption: docs/RELEASE-RUNBOOK.md. Add the exact path to ' +
-             'authorizedExemptionPaths in a separate change and publish that ' +
-             'authorization before activating the exemption.')) {
-        throw 'A document classification exemption addition did not fail closed.'
-    }
-    $arrAuthorizedClassificationAdditionFailures = @(
-        Get-DocumentMetadataClassificationExpansionFailure `
-            -HasTrustedBaselineManifest $true `
-            -TrustedBaselineExemptPath $arrClassificationExpansionBaseline `
-            -TrustedBaselineAuthorizedExemptionPath @(
-                'docs/RELEASE-RUNBOOK.md'
-            ) `
-            -CandidateExemptPath @(
-                'README.md',
-                'docs/RELEASE-RUNBOOK.md',
-                'templates/README.md'
-            )
-    )
-    if ($arrAuthorizedClassificationAdditionFailures.Count -ne 0) {
-        throw 'A published exemption authorization was not consumable.'
-    }
-    $arrClassificationBootstrapFailures = @(
-        Get-DocumentMetadataClassificationExpansionFailure `
-            -HasTrustedBaselineManifest $false `
-            -TrustedBaselineExemptPath @() `
-            -TrustedBaselineAuthorizedExemptionPath @() `
-            -CandidateExemptPath @('README.md', 'docs/RELEASE-RUNBOOK.md')
-    )
-    if ($arrClassificationBootstrapFailures.Count -ne 0) {
-        throw 'The one-time document classification bootstrap was rejected.'
-    }
-    foreach ($objUnsafeMarkdownInventoryFixture in @(
-            [pscustomobject]@{
-                Name = 'newline path'
-                Candidate = @("docs/unsafe`nname.md")
-                Known = @()
-                Exempt = @()
-                Expected = 'unsafe Markdown path'
-            },
-            [pscustomobject]@{
-                Name = 'duplicate candidate'
-                Candidate = @('docs/repeated.md', 'docs/repeated.md')
-                Known = @()
-                Exempt = @()
-                Expected = 'duplicate path'
-            },
-            [pscustomobject]@{
-                Name = 'stale exemption'
-                Candidate = @('docs/active.md')
-                Known = @()
-                Exempt = @('README.md')
-                Expected = 'exception is not tracked'
-            },
-            [pscustomobject]@{
-                Name = 'overlapping classification'
-                Candidate = @('README.md')
-                Known = @('README.md')
-                Exempt = @('README.md')
-                Expected = 'both governed and exempt'
-            }
-        )) {
-        $boolInventoryFixtureRejected = $false
-        try {
-            Get-DiscoveredGovernedMarkdownDocumentPath `
-                -CandidatePath $objUnsafeMarkdownInventoryFixture.Candidate `
-                -KnownGovernedPath $objUnsafeMarkdownInventoryFixture.Known `
-                -ExemptPath $objUnsafeMarkdownInventoryFixture.Exempt
-        }
-        catch {
-            $boolInventoryFixtureRejected = $_.Exception.Message.Contains(
-                $objUnsafeMarkdownInventoryFixture.Expected,
-                [System.StringComparison]::Ordinal
-            )
-        }
-        if (-not $boolInventoryFixtureRejected) {
-            throw (
-                'The Markdown inventory mutation did not fail closed: ' +
-                $objUnsafeMarkdownInventoryFixture.Name
+                'The uncataloged governed instruction mutation did not fail closed: ' +
+                $strUncatalogedGovernedInstructionPath
             )
         }
     }
 
-    $strValidDiscoveredMetadata = @'
-# Release Runbook
-
-## Metadata
-
-- **Status:** Active
-- **Owner:** Repository Maintainers
-- **Last Updated:** 2026-09-10
-- **Scope:** Covers release operations.
-'@
-    if ($null -ne (
-            Get-DocumentMetadataContext -Content $strValidDiscoveredMetadata
-        ).Failure) {
-        throw 'A discovered Tier 1 document with valid metadata was rejected.'
-    }
-    foreach ($objInvalidDiscoveredMetadataFixture in @(
-            [pscustomobject]@{
-                Name = 'missing metadata'
-                Content = "# Release Runbook`n`nRelease steps."
-            },
-            [pscustomobject]@{
-                Name = 'fenced fake metadata'
-                Content = @'
-# Release Runbook
-
-```markdown
-- **Status:** Active
-- **Owner:** Repository Maintainers
-- **Last Updated:** 2026-09-10
-- **Scope:** Covers release operations.
-```
-'@
-            }
-        )) {
-        if ($null -eq (
-                Get-DocumentMetadataContext `
-                    -Content $objInvalidDiscoveredMetadataFixture.Content
-            ).Failure) {
-            throw (
-                'The discovered Tier 1 metadata fixture was accepted: ' +
-                $objInvalidDiscoveredMetadataFixture.Name
-            )
-        }
-    }
-    $strRepresentativeDecisionPath = @($arrGovernedDecisionPaths)[0]
-    $objRepresentativeDecision = $listGovernedDocumentContexts |
-        Where-Object { $_.Path -ceq $strRepresentativeDecisionPath }
-    if ($null -eq $objRepresentativeDecision) {
-        throw 'Could not locate a representative governed decision record.'
-    }
-    $objRepresentativeDecisionMetadata = Get-DocumentMetadataContext `
-        -Content $objRepresentativeDecision.Content
-    if ($null -ne $objRepresentativeDecisionMetadata.Failure) {
-        throw 'Could not parse the representative governed decision record.'
-    }
-    $strRepresentativeDecisionStatusLine = [regex]::Match(
-        $objRepresentativeDecision.Content,
-        '(?m)^- \*\*Status:\*\* [^\r\n]+$'
-    ).Value
-    $strRepresentativeDecisionDateLine = [regex]::Match(
-        $objRepresentativeDecision.Content,
-        '(?m)^- \*\*Date:\*\* [^\r\n]+$'
-    ).Value
-    if ([string]::IsNullOrEmpty($strRepresentativeDecisionDateLine)) {
-        throw 'The representative decision record has no Date fixture.'
-    }
-    foreach ($strAllowedDecisionStatus in $script:arrAllowedDecisionRecordStatuses) {
-        $strAllowedDecisionContent = $objRepresentativeDecision.Content.Replace(
-            $strRepresentativeDecisionStatusLine,
-            "- **Status:** $strAllowedDecisionStatus"
-        )
-        $arrAllowedDecisionFailures = @(Get-DocumentMetadataTransitionFailure `
-                -Name $strRepresentativeDecisionPath `
-                -CurrentContent $strAllowedDecisionContent `
-                -ParentContent $objRepresentativeDecision.Content `
-                -ExpectedUtcDate $objRepresentativeDecisionMetadata.UpdatedDate `
-                -IsNewDocumentTransition $false)
-        if ($arrAllowedDecisionFailures.Count -ne 0) {
-            throw "Governed decision status failed: $strAllowedDecisionStatus"
-        }
-    }
-    foreach ($strRejectedDecisionStatus in @('Draft', 'Active')) {
-        $strRejectedDecisionContent = $objRepresentativeDecision.Content.Replace(
-            $strRepresentativeDecisionStatusLine,
-            "- **Status:** $strRejectedDecisionStatus"
-        )
-        $arrRejectedDecisionFailures = @(Get-DocumentMetadataTransitionFailure `
-                -Name $strRepresentativeDecisionPath `
-                -CurrentContent $strRejectedDecisionContent `
-                -ParentContent $objRepresentativeDecision.Content `
-                -ExpectedUtcDate $objRepresentativeDecisionMetadata.UpdatedDate `
-                -IsNewDocumentTransition $false)
-        $strExpectedDecisionStatusFailure =
-            "$strRepresentativeDecisionPath Status must be one of " +
-            ($script:arrAllowedDecisionRecordStatuses -join ', ') +
-            ' for a governed decision record.'
-        if ($arrRejectedDecisionFailures -cnotcontains
-            $strExpectedDecisionStatusFailure) {
-            throw "Governed decision status passed: $strRejectedDecisionStatus"
-        }
-    }
-    $strNestedDecisionPath = 'docs/decisions/archive/0003-old-record.md'
-    $strNestedDecisionDraftContent = $objRepresentativeDecision.Content.Replace(
-        $strRepresentativeDecisionStatusLine,
-        '- **Status:** Draft'
+    $arrCatalogedNestedGeminiFailures = @(
+        Get-GovernedInstructionInventoryFailure `
+            -CatalogPaths @($arrGovernedInstructionDocuments.Path +
+                'tools/GEMINI.md') `
+            -TrackedPaths @($arrTrackedGovernedInstructionPaths +
+                'tools/GEMINI.md')
     )
-    $arrNestedDecisionDraftFailures = @(Get-DocumentMetadataTransitionFailure `
-            -Name $strNestedDecisionPath `
-            -CurrentContent $strNestedDecisionDraftContent `
-            -ParentContent $objRepresentativeDecision.Content `
-            -ExpectedUtcDate $objRepresentativeDecisionMetadata.UpdatedDate `
+    if ($arrCatalogedNestedGeminiFailures.Count -ne 0) {
+        throw 'A cataloged nested GEMINI.md did not enter the governed inventory.'
+    }
+    $arrNestedGeminiMetadataFailures = @(Get-PublishedEndpointMetadataFailure `
+            -Name 'tools/GEMINI.md' `
+            -CurrentContent $strDocsStaleMetadataMutation `
+            -ParentContent $strDocsInstructionsContent `
+            -ExpectedUtcDate $objDocsMetadataContext.UpdatedDate `
             -IsNewDocumentTransition $false)
-    $strExpectedNestedDecisionStatusFailure =
-        "$strNestedDecisionPath Status must be one of " +
-        ($script:arrAllowedDecisionRecordStatuses -join ', ') +
-        ' for a governed decision record.'
-    if ($arrNestedDecisionDraftFailures -cnotcontains
-        $strExpectedNestedDecisionStatusFailure) {
-        throw 'A nested governed decision record accepted a non-decision status.'
+    if (-not ($arrNestedGeminiMetadataFailures -match [regex]::Escape(
+                'tools/GEMINI.md Version revision must be exactly'
+            ))) {
+        throw 'A cataloged nested GEMINI.md bypassed rendered metadata transition.'
     }
 
-    $arrValidDecisionContractFailures = @(
-        Get-DecisionRecordContractFailure `
-            -Name $strRepresentativeDecisionPath `
-            -Content $objRepresentativeDecision.Content `
-            -MetadataContext $objRepresentativeDecisionMetadata
-    )
-    if ($arrValidDecisionContractFailures.Count -ne 0) {
-        throw 'A valid decision-record contract was rejected.'
-    }
-    $strBareDecisionMetadataContent = [regex]::Replace(
-        $objRepresentativeDecision.Content,
-        '(?m)^## Metadata\r?\n',
-        '',
-        1
-    )
-    $objBareDecisionMetadataContext = Get-DocumentMetadataContext `
-        -Content $strBareDecisionMetadataContent
-    if ($null -ne $objBareDecisionMetadataContext.Failure -or
-        @(Get-DecisionRecordContractFailure `
-                -Name $strRepresentativeDecisionPath `
-                -Content $strBareDecisionMetadataContent `
-                -MetadataContext $objBareDecisionMetadataContext).Count -ne 0) {
-        throw 'A valid bare-list decision metadata header was rejected.'
-    }
-    $arrInvalidDecisionContractFixtures = @(
-        [pscustomobject]@{
-            Name = 'invalid leaf name'
-            Path = 'docs/decisions/example.md'
-            Content = $objRepresentativeDecision.Content
-            Expected = 'must use the decision-record leaf name NNNN-short-title.md.'
-        },
-        [pscustomobject]@{
-            Name = 'missing Date'
-            Path = $strRepresentativeDecisionPath
-            Content = $objRepresentativeDecision.Content.Replace(
-                $strRepresentativeDecisionDateLine,
-                ''
-            )
-            Expected = 'must contain one exact Date: YYYY-MM-DD list item in Metadata.'
-        },
-        [pscustomobject]@{
-            Name = 'impossible Date'
-            Path = $strRepresentativeDecisionPath
-            Content = $objRepresentativeDecision.Content.Replace(
-                $strRepresentativeDecisionDateLine,
-                '- **Date:** 2026-02-30'
-            )
-            Expected = 'must contain one exact Date: YYYY-MM-DD list item in Metadata.'
-        },
-        [pscustomobject]@{
-            Name = 'fenced Date'
-            Path = $strRepresentativeDecisionPath
-            Content = $objRepresentativeDecision.Content.Replace(
-                $strRepresentativeDecisionDateLine,
-                (@(
-                        '```markdown'
-                        $strRepresentativeDecisionDateLine
-                        '```'
-                    ) -join [Environment]::NewLine)
-            )
-            Expected = 'must contain one exact Date: YYYY-MM-DD list item in Metadata.'
-        },
-        [pscustomobject]@{
-            Name = 'Date outside Metadata'
-            Path = $strRepresentativeDecisionPath
-            Content = $objRepresentativeDecision.Content.Replace(
-                $strRepresentativeDecisionDateLine,
-                ''
-            ) + [Environment]::NewLine + $strRepresentativeDecisionDateLine
-            Expected = 'must contain one exact Date: YYYY-MM-DD list item in Metadata.'
-        },
-        [pscustomobject]@{
-            Name = 'missing Context heading'
-            Path = $strRepresentativeDecisionPath
-            Content = [regex]::Replace(
-                $objRepresentativeDecision.Content,
-                '(?m)^## (?:(?:\d+)\. )?Context$',
-                '### Context',
-                1
-            )
-            Expected = 'must contain one operative level-two Context heading.'
-        },
-        [pscustomobject]@{
-            Name = 'duplicate Decision heading'
-            Path = $strRepresentativeDecisionPath
-            Content = $objRepresentativeDecision.Content +
-                [Environment]::NewLine + '## Decision' +
-                [Environment]::NewLine + [Environment]::NewLine +
-                'Duplicate decision fixture.'
-            Expected = 'must contain one operative level-two Decision heading.'
-        },
-        [pscustomobject]@{
-            Name = 'comment-hidden Consequences heading'
-            Path = $strRepresentativeDecisionPath
-            Content = [regex]::Replace(
-                $objRepresentativeDecision.Content,
-                '(?m)^## (?:(?:\d+)\. )?Consequences$',
-                '<!-- ## Consequences -->',
-                1
-            )
-            Expected = 'must contain one operative level-two Consequences heading.'
-        },
-        [pscustomobject]@{
-            Name = 'raw-HTML-hidden Decision heading'
-            Path = $strRepresentativeDecisionPath
-            Content = [regex]::Replace(
-                $objRepresentativeDecision.Content,
-                '(?m)^## (?:(?:\d+)\. )?Decision$',
-                (@(
-                        '<div>'
-                        '## Decision'
-                        '</div>'
-                    ) -join [Environment]::NewLine),
-                1
-            )
-            Expected = 'must contain one operative level-two Decision heading.'
-        },
-        [pscustomobject]@{
-            Name = 'fenced Alternatives heading'
-            Path = $strRepresentativeDecisionPath
-            Content = [regex]::Replace(
-                $objRepresentativeDecision.Content,
-                '(?m)^## (?:(?:\d+)\. )?Alternatives Considered$',
-                (@(
-                        '```markdown'
-                        '## Alternatives Considered'
-                        '```'
-                    ) -join [Environment]::NewLine),
-                1
-            )
-            Expected = 'must contain one operative level-two Alternatives Considered heading.'
-        }
-    )
-    foreach ($objInvalidDecisionContractFixture in
-        $arrInvalidDecisionContractFixtures) {
-        if ($objInvalidDecisionContractFixture.Content -ceq
-            $objRepresentativeDecision.Content -and
-            $objInvalidDecisionContractFixture.Path -ceq
-            $strRepresentativeDecisionPath) {
-            throw (
-                'A decision-record contract mutation fixture was unavailable: ' +
-                $objInvalidDecisionContractFixture.Name
-            )
-        }
-        $arrInvalidDecisionContractFailures = @(
-            Get-DecisionRecordContractFailure `
-                -Name $objInvalidDecisionContractFixture.Path `
-                -Content $objInvalidDecisionContractFixture.Content `
-                -MetadataContext $objRepresentativeDecisionMetadata
-        )
-        if (-not ($arrInvalidDecisionContractFailures -match
-                [regex]::Escape($objInvalidDecisionContractFixture.Expected))) {
-            throw (
-                'The decision-record contract mutation did not fail closed: ' +
-                $objInvalidDecisionContractFixture.Name
-            )
-        }
-    }
-
-    $arrAcceptedClaudeLocalInventoryFailures = @(
-        Get-ProhibitedTrackedClaudeLocalFailure -TrackedPaths @(
-            'CLAUDE-local.md',
-            'CLAUDE.local.MD',
-            'module/CLAUDE.md',
-            'module/CLAUDE.local.md.bak'
-        )
-    )
-    if ($arrAcceptedClaudeLocalInventoryFailures.Count -ne 0) {
-        throw 'A similar non-prohibited Claude path failed validation.'
-    }
-    $arrRejectedClaudeLocalInventoryFailures = @(
-        Get-ProhibitedTrackedClaudeLocalFailure -TrackedPaths @(
-            'CLAUDE.local.md',
-            'module/CLAUDE.local.md',
-            'module/nested/CLAUDE.local.md'
-        )
-    )
-    $arrExpectedClaudeLocalInventoryFailures = @(
-        'Tracked personal Claude project memory is prohibited: CLAUDE.local.md',
-        'Tracked personal Claude project memory is prohibited: module/CLAUDE.local.md',
-        'Tracked personal Claude project memory is prohibited: module/nested/CLAUDE.local.md'
-    )
-    if ($arrRejectedClaudeLocalInventoryFailures.Count -ne
-        $arrExpectedClaudeLocalInventoryFailures.Count) {
-        throw 'The Claude local-memory inventory mutation count was not exact.'
-    }
-    foreach ($strExpectedClaudeLocalInventoryFailure in
-        $arrExpectedClaudeLocalInventoryFailures) {
-        if ($arrRejectedClaudeLocalInventoryFailures -cnotcontains
-            $strExpectedClaudeLocalInventoryFailure) {
-            throw (
-                'The Claude local-memory inventory mutation did not fail closed: ' +
-                $strExpectedClaudeLocalInventoryFailure
-            )
-        }
-    }
-
-    $arrMetadataOptionalContexts = @(
-        $listGovernedDocumentContexts |
-            Where-Object { -not $_.RequiresMetadata }
-    )
-    $arrExpectedMetadataOptionalPaths = @(
-        '.github/copilot-instructions.md'
-        $arrMetadataExemptMarkdownDocuments
-    ) | Select-Object -Unique
-    if ($arrMetadataOptionalContexts.Count -ne
-        $arrExpectedMetadataOptionalPaths.Count) {
-        throw 'The governed metadata-optional document count is not exact.'
-    }
-    foreach ($strExpectedMetadataOptionalPath in
-        $arrExpectedMetadataOptionalPaths) {
-        if (@(
-                $arrMetadataOptionalContexts |
-                    Where-Object { $_.Path -ceq $strExpectedMetadataOptionalPath }
-            ).Count -ne 1) {
-            throw (
-                'A governed metadata-optional document is missing or duplicated: ' +
-                $strExpectedMetadataOptionalPath
-            )
-        }
-    }
-    $arrUnexpectedMetadataRequirements = @(
-        $listGovernedDocumentContexts |
-            Where-Object {
-                $arrExpectedMetadataOptionalPaths -cnotcontains $_.Path -and
-                -not $_.RequiresMetadata
-            }
-    )
-    if ($arrUnexpectedMetadataRequirements.Count -ne 0) {
-        throw 'A metadata-required governed document was marked optional.'
-    }
-
-    $listMetadataSelfTestContexts = [System.Collections.Generic.List[pscustomobject]]::new()
+    $arrRequiredFieldNames = @('Status', 'Owner', 'Last Updated', 'Scope')
     foreach ($objDocumentContext in @(
             $listGovernedDocumentContexts |
                 Where-Object { $_.RequiresMetadata }
         )) {
-        $objMetadataContext = Get-DocumentMetadataContext `
-            -Content $objDocumentContext.Content
-        if ($null -eq $objMetadataContext.Failure) {
-            $listMetadataSelfTestContexts.Add($objDocumentContext)
-        }
-        else {
-            throw "Unexpected unversioned governed document: $($objDocumentContext.Path)"
-        }
-    }
-
-    $arrRequiredFieldNames = @('Status', 'Owner', 'Scope')
-    foreach ($objDocumentContext in $listMetadataSelfTestContexts) {
         foreach ($strFieldName in $arrRequiredFieldNames) {
             $objFieldLineMatch = [regex]::Match(
                 $objDocumentContext.Content,
@@ -8440,12 +9418,18 @@ if ($SelfTest) {
                 $objFieldLineMatch.Index,
                 $objFieldLineMatch.Length
             )
-            $arrFieldFailures = @(Get-DocumentMetadataTransitionFailure `
-                    -Name $objDocumentContext.Path `
-                    -CurrentContent $strFieldDeletion `
-                    -ParentContent $objDocumentContext.Content `
-                    -ExpectedUtcDate $objDocumentContext.ExpectedUtcDate `
-                    -IsNewDocumentTransition $false)
+            $arrFieldFailures = if ($objDocumentContext.RequiresVersion) {
+                @(Get-PublishedEndpointMetadataFailure -Name $objDocumentContext.Path `
+                        -CurrentContent $strFieldDeletion `
+                        -ParentContent $objDocumentContext.Content `
+                        -ExpectedUtcDate $objDocumentContext.ExpectedUtcDate `
+                        -IsNewDocumentTransition $false)
+            } else {
+                @(Get-PublishedEndpointLastUpdatedFailure -Name $objDocumentContext.Path `
+                        -CurrentContent $strFieldDeletion `
+                        -BaseContent $objDocumentContext.Content `
+                        -TrustedEventUtcDate $objDocumentContext.ExpectedUtcDate)
+            }
             $strExpectedFieldFailure = "$($objDocumentContext.Path) must contain " +
                 "one exact top-level $strFieldName list item"
             if (-not ($arrFieldFailures -match [regex]::Escape(
@@ -8457,80 +9441,6 @@ if ($SelfTest) {
     }
 
     $objRepresentativeDocument = $listGovernedDocumentContexts[0]
-    $objMetadataHeadingPattern = [regex]::new(
-        '(?m)^## Metadata\r?\n(?:\r?\n)?'
-    )
-    $strBareMetadataListMutation = $objMetadataHeadingPattern.Replace(
-        $objRepresentativeDocument.Content,
-        '',
-        1
-    )
-    if ([string]::Equals(
-            $strBareMetadataListMutation,
-            $objRepresentativeDocument.Content,
-            [System.StringComparison]::Ordinal
-        )) {
-        throw 'Could not construct the bare metadata-list mutation.'
-    }
-    $objBareMetadataListContext = Get-DocumentMetadataContext `
-        -Content $strBareMetadataListMutation
-    if ($null -ne $objBareMetadataListContext.Failure) {
-        throw (
-            'A documented direct metadata list failed validation: ' +
-            $objBareMetadataListContext.Failure
-        )
-    }
-    $strInterveningMetadataListMutation = $objMetadataHeadingPattern.Replace(
-        $objRepresentativeDocument.Content,
-        "Intervening paragraph.`n`n",
-        1
-    )
-    $objInterveningMetadataListContext = Get-DocumentMetadataContext `
-        -Content $strInterveningMetadataListMutation
-    if ($objInterveningMetadataListContext.Failure -notmatch
-        'must place the metadata header block') {
-        throw 'An intervening paragraph before a direct metadata list did not fail closed.'
-    }
-    $strMixedMetadataLayoutMutation = $objMetadataHeadingPattern.Replace(
-        $objRepresentativeDocument.Content,
-        "- **Status:** Active`n`n## Metadata`n`n",
-        1
-    )
-    $objMixedMetadataLayoutContext = Get-DocumentMetadataContext `
-        -Content $strMixedMetadataLayoutMutation
-    if ($objMixedMetadataLayoutContext.Failure -notmatch
-        'must place Metadata as the first level-two heading') {
-        throw 'A mixed direct-list and Metadata-heading layout did not fail closed.'
-    }
-    $strStatusLine = [regex]::Match(
-        $objRepresentativeDocument.Content,
-        '(?m)^- \*\*Status:\*\* [^\r\n]+$'
-    ).Value
-    foreach ($strAllowedStatus in $script:arrAllowedMetadataStatuses) {
-        $strAllowedStatusContent = $objRepresentativeDocument.Content.Replace(
-            $strStatusLine,
-            "- **Status:** $strAllowedStatus"
-        )
-        $objAllowedStatusContext = Get-DocumentMetadataContext `
-            -Content $strAllowedStatusContent
-        if ($null -ne $objAllowedStatusContext.Failure) {
-            throw "Status failed: $strAllowedStatus"
-        }
-    }
-    foreach ($strInvalidStatusLine in @(
-            '- **Status:** Complete',
-            '- **Status:** active',
-            '- **Status:**'
-        )) {
-        $objInvalidStatusContext = Get-DocumentMetadataContext `
-            -Content $objRepresentativeDocument.Content.Replace(
-                $strStatusLine,
-                $strInvalidStatusLine
-            )
-        if ($null -eq $objInvalidStatusContext.Failure) {
-            throw "Invalid Status passed: $strInvalidStatusLine"
-        }
-    }
     $arrRepresentativeFieldMutations = @(
         [pscustomobject]@{
             Field = 'Status'
@@ -8554,7 +9464,7 @@ if ($SelfTest) {
             $objFieldLineMatch.Index,
             $objFieldLineMatch.Length
         ).Insert($objFieldLineMatch.Index, $objFieldMutation.Replacement)
-        $arrFieldFailures = @(Get-DocumentMetadataTransitionFailure `
+        $arrFieldFailures = @(Get-PublishedEndpointMetadataFailure `
                 -Name $objRepresentativeDocument.Path `
                 -CurrentContent $strFieldMutation `
                 -ParentContent $objRepresentativeDocument.Content `
@@ -8569,191 +9479,40 @@ if ($SelfTest) {
         }
     }
 
-    foreach ($strHiddenStatus in @(
-            "<div>`n$strStatusLine`n</div>",
-            "- Wrapper`n  $strStatusLine"
+    $strStatusLine = [regex]::Match(
+        $objRepresentativeDocument.Content,
+        '(?m)^- \*\*Status:\*\* [^\r\n]+$'
+    ).Value
+    foreach ($objHiddenStatusCase in @(
+            [pscustomobject]@{ Content = "<div>`n$strStatusLine`n</div>";
+                ExpectedFailure = 'must place one document-level metadata list immediately' },
+            [pscustomobject]@{ Content = "- Wrapper`n  $strStatusLine";
+                ExpectedFailure = 'one exact top-level Status list item' }
         )) {
         $strHiddenStatusMutation = $objRepresentativeDocument.Content.Replace(
             $strStatusLine,
-            $strHiddenStatus
+            $objHiddenStatusCase.Content
         )
-        $arrFieldFailures = @(Get-DocumentMetadataTransitionFailure `
+        $arrFieldFailures = @(Get-PublishedEndpointMetadataFailure `
                 -Name $objRepresentativeDocument.Path `
                 -CurrentContent $strHiddenStatusMutation `
                 -ParentContent $objRepresentativeDocument.Content `
                 -ExpectedUtcDate $objRepresentativeDocument.ExpectedUtcDate `
                 -IsNewDocumentTransition $false)
-        if (-not ($arrFieldFailures -match 'one exact top-level Status list item')) {
-            throw 'A non-operative Status mutation was accepted.'
+        if ($arrFieldFailures.Count -eq 0 -or -not ($arrFieldFailures -match
+                [regex]::Escape($objHiddenStatusCase.ExpectedFailure))) {
+            throw ("Non-operative Status mutation did not produce its intended failure: " +
+                "$($objHiddenStatusCase.ExpectedFailure). Actual: $($arrFieldFailures -join '; ')")
         }
     }
 
-    Assert-RepositoryInputMetadataMutationRejected `
-        -Name 'missing Git index entry mutation' `
-        -GitIndexEntryCount 0 `
-        -ExpectedFailure 'missing Git index entry mutation must have exactly one Git index entry.'
-
-    Assert-RepositoryInputMetadataMutationRejected `
-        -Name 'Git symlink mode mutation' `
-        -GitMode '120000' `
-        -ExpectedFailure 'Git symlink mode mutation must be a stage-0 regular file with Git mode 100644.'
-
-    Assert-RepositoryInputMetadataMutationRejected `
-        -Name 'nonzero Git stage mutation' `
-        -GitStage '2' `
-        -ExpectedFailure 'nonzero Git stage mutation must be a stage-0 regular file with Git mode 100644.'
-
-    Assert-RepositoryInputMetadataMutationRejected `
-        -Name 'non-file worktree item mutation' `
-        -IsFileInfo $false `
-        -ExpectedFailure 'non-file worktree item mutation must be a regular worktree file.'
-
-    Assert-RepositoryInputMetadataMutationRejected `
-        -Name 'reparse-point mutation' `
-        -Attributes ([System.IO.FileAttributes]::Normal -bor [System.IO.FileAttributes]::ReparsePoint) `
-        -ExpectedFailure 'reparse-point mutation must not be a symbolic link or reparse point.'
-
-    Assert-RepositoryInputMetadataMutationRejected `
-        -Name 'link-type mutation' `
-        -LinkType 'SymbolicLink' `
-        -ExpectedFailure 'link-type mutation must not have a link type.'
-
-    Assert-RepositoryInputMetadataMutationRejected `
-        -Name 'Unix device mutation' `
-        -UnixMode 'crw-rw-rw-' `
-        -ExpectedFailure 'Unix device mutation must have a regular Unix file type.'
-
-    $arrDisabledStagedMatchFailures = @(Get-StagedInputMatchFailure `
-            -DisplayName 'disabled staged fixture' `
-            -WorktreeContent 'worktree bytes' `
-            -IndexContent 'index bytes')
-    if ($arrDisabledStagedMatchFailures.Count -ne 0) {
-        throw 'A disabled staged-input match produced a failure.'
-    }
-    $arrEqualStagedMatchFailures = @(Get-StagedInputMatchFailure `
-            -DisplayName 'equal staged fixture' `
-            -RequireMatch `
-            -WorktreeContent 'same bytes' `
-            -IndexContent 'same bytes')
-    if ($arrEqualStagedMatchFailures.Count -ne 0) {
-        throw 'Equal staged and worktree content produced a failure.'
-    }
-    $arrDivergentStagedMatchFailures = @(Get-StagedInputMatchFailure `
-            -DisplayName 'divergent staged fixture' `
-            -RequireMatch `
-            -WorktreeContent 'valid worktree bytes' `
-            -IndexContent 'invalid staged bytes')
-    $strExpectedStagedMatchFailure =
-        'divergent staged fixture worktree content must match its staged Git index blob.'
-    if ($arrDivergentStagedMatchFailures.Count -ne 1 -or
-        $arrDivergentStagedMatchFailures[0] -cne $strExpectedStagedMatchFailure) {
-        throw 'Divergent staged and worktree content did not fail closed.'
-    }
-
-    $strAncestorLinkFixtureRoot = [System.IO.Path]::GetFullPath(
-        [System.IO.Path]::Combine(
-            [System.IO.Path]::GetTempPath(),
-            'agent-instruction-ancestor-link-' + [guid]::NewGuid().ToString('N')
-        )
-    )
-    $strAncestorLinkSystemTempRoot = [System.IO.Path]::GetFullPath(
-        [System.IO.Path]::GetTempPath()
-    )
-    if (-not $strAncestorLinkFixtureRoot.StartsWith(
-            $strAncestorLinkSystemTempRoot,
-            [System.StringComparison]::OrdinalIgnoreCase
-        )) {
-        throw 'The ancestor-link fixture root escaped the system temporary directory.'
-    }
-    $strAncestorLinkRepositoryRoot = Join-Path `
-        -Path $strAncestorLinkFixtureRoot `
-        -ChildPath 'repository'
-    $strAncestorLinkExternalRoot = Join-Path `
-        -Path $strAncestorLinkFixtureRoot `
-        -ChildPath 'external'
-    $strAncestorLinkPath = Join-Path `
-        -Path $strAncestorLinkRepositoryRoot `
-        -ChildPath 'docs'
-    $strAncestorLinkTrackedPath = Join-Path `
-        -Path $strAncestorLinkPath `
-        -ChildPath 'input.md'
-    $strAncestorLinkExternalPath = Join-Path `
-        -Path $strAncestorLinkExternalRoot `
-        -ChildPath 'input.md'
-    try {
-        [void][System.IO.Directory]::CreateDirectory($strAncestorLinkPath)
-        [void][System.IO.Directory]::CreateDirectory($strAncestorLinkExternalRoot)
-        [System.IO.File]::WriteAllText(
-            $strAncestorLinkTrackedPath,
-            'tracked bytes',
-            [System.Text.UTF8Encoding]::new($false)
-        )
-        & git -C $strAncestorLinkRepositoryRoot init --quiet
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Could not initialize the ancestor-link fixture repository.'
-        }
-        & git -C $strAncestorLinkRepositoryRoot add -- docs/input.md
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Could not stage the ancestor-link fixture input.'
-        }
-        [System.IO.File]::Delete($strAncestorLinkTrackedPath)
-        [System.IO.Directory]::Delete($strAncestorLinkPath)
-        [System.IO.File]::WriteAllText(
-            $strAncestorLinkExternalPath,
-            'external bytes',
-            [System.Text.UTF8Encoding]::new($false)
-        )
-        if ([System.OperatingSystem]::IsWindows()) {
-            [void](New-Item `
-                    -ItemType Junction `
-                    -Path $strAncestorLinkPath `
-                    -Target $strAncestorLinkExternalRoot)
-        }
-        else {
-            [void](New-Item `
-                    -ItemType SymbolicLink `
-                    -Path $strAncestorLinkPath `
-                    -Target $strAncestorLinkExternalRoot)
-        }
-        $boolAncestorLinkRejected = $false
-        try {
-            [void](Read-RepositoryInputData `
-                    -Path $strAncestorLinkTrackedPath `
-                    -RepositoryRootPath $strAncestorLinkRepositoryRoot `
-                    -RepositoryRelativePath 'docs/input.md' `
-                    -DisplayName 'ancestor-link fixture' `
-                    -MaximumBytes 1024)
-        }
-        catch {
-            $strExpectedAncestorLinkFailure =
-                "Repository input is unsafe:`n- ancestor-link fixture must not " +
-                'traverse a symbolic link or reparse point: docs.'
-            if ($_.Exception.Message -cne $strExpectedAncestorLinkFailure) {
-                throw (
-                    'The ancestor-link fixture returned an unexpected failure: ' +
-                    $_.Exception.Message
-                )
-            }
-            $boolAncestorLinkRejected = $true
-        }
-        if (-not $boolAncestorLinkRejected) {
-            throw 'The ancestor-link fixture was accepted.'
-        }
-    }
-    finally {
-        if (Test-Path -LiteralPath $strAncestorLinkPath) {
-            Remove-Item -LiteralPath $strAncestorLinkPath -Force
-        }
-        if ([System.IO.Directory]::Exists($strAncestorLinkFixtureRoot) -and
-            $strAncestorLinkFixtureRoot.StartsWith(
-                $strAncestorLinkSystemTempRoot,
-                [System.StringComparison]::OrdinalIgnoreCase
-            )) {
-            Remove-Item -LiteralPath $strAncestorLinkFixtureRoot -Recurse -Force
-        }
-    }
+    # Input metadata and linked-component mutations run in the extracted helper.
 
     Assert-OversizedStreamMutationRejected
+
+    Assert-MarkdownParserTransportCleanup
+
+    Assert-MarkdownParserExactContext
 
     Assert-EncodingMutationRejected `
         -Name 'malformed UTF-8 mutation' `
@@ -8767,76 +9526,63 @@ if ($SelfTest) {
         -Name 'UTF-16LE BOM mutation' `
         -Bytes ([byte[]] @(0xFF, 0xFE, 0x41, 0x00))
 
-    Assert-MutationRejected `
-        -Name 'malformed TOML suffix' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent ($strCodexConfigContent + [Environment]::NewLine +
-            'invalid = [' + [Environment]::NewLine) `
-        -ExpectedFailure 'The project configuration must contain valid TOML.'
-
-    $strWorkflowPolicyCommandFailure =
-        'must contain one exact workflow-policy command: ' +
-        $script:strWorkflowPolicyCommand
-    $strBareWorkflowPolicyCommand = $script:strWorkflowPolicyCommandPrefix +
-        ' build.yml markdownlint.yml'
-    foreach ($strDocumentName in @('AGENTS.md', 'CLAUDE.md')) {
-        $strDocumentContent = if ($strDocumentName -ceq 'AGENTS.md') {
-            $strAgentsContent
+    $arrHostileGovernedPaths = @(
+        "caf$([char]0x00e9)/AGENTS.md", "tab`tname/AGENTS.override.md",
+        'quote"name/CLAUDE.md', 'back\slash/GEMINI.md', "line`nfeed/AGENTS.md",
+        "carriage`rreturn/CLAUDE.md", '-leading/AGENTS.md')
+    $listGitPathBytes = [Collections.Generic.List[byte]]::new()
+    foreach ($strHostilePath in $arrHostileGovernedPaths) {
+        $listGitPathBytes.AddRange([Text.Encoding]::UTF8.GetBytes($strHostilePath))
+        $listGitPathBytes.Add(0)
+    }
+    $arrParsedHostilePaths = @(ConvertFrom-GitPathListData `
+            -Bytes $listGitPathBytes.ToArray())
+    if ($arrParsedHostilePaths.Count -ne $arrHostileGovernedPaths.Count) {
+        throw 'Hostile Git path count changed.'
+    }
+    for ($intPath = 0; $intPath -lt $arrHostileGovernedPaths.Count; $intPath++) {
+        if ($arrParsedHostilePaths[$intPath] -cne $arrHostileGovernedPaths[$intPath] -or
+            -not (Test-GovernedInstructionPath `
+                -RepositoryRelativePath $arrParsedHostilePaths[$intPath] `
+                -GovernedRootPaths $script:arrGovernedInstructionRootPaths)) {
+            throw 'A hostile Git path changed or escaped governance.'
         }
-        else {
-            $strClaudeContent
-        }
-        $arrWorkflowPolicyCommandMutations = @(
-            [pscustomobject]@{
-                Name = 'removed'
-                Content = $strDocumentContent.Replace(
-                    $script:strWorkflowPolicyCommand,
-                    'removed workflow-policy command'
-                )
-            },
-            [pscustomobject]@{
-                Name = 'uses bare workflow paths'
-                Content = $strDocumentContent.Replace(
-                    $script:strWorkflowPolicyCommand,
-                    $strBareWorkflowPolicyCommand
-                )
-            },
-            [pscustomobject]@{
-                Name = 'duplicated'
-                Content = $strDocumentContent + "`n`n" + [char]96 +
-                    $script:strWorkflowPolicyCommand + [char]96
+    }
+    $arrPathDataMutations = @(
+        [pscustomobject]@{Name = 'late empty';Bytes = [Text.Encoding]::UTF8.GetBytes("a`0`0");Failure = 'empty path'},
+        [pscustomobject]@{Name = 'empty';Bytes = [byte[]]@(0);Failure = 'empty path'},
+        [pscustomobject]@{Name = 'UTF-8';Bytes = [byte[]]@(0xC3,0x28,0);Failure = 'valid UTF-8'},
+        [pscustomobject]@{Name = 'unterminated';Bytes = [byte[]]@(0x61);Failure = 'end with a NUL'},
+        [pscustomobject]@{Name = 'duplicate';Bytes = [Text.Encoding]::UTF8.GetBytes("a`0a`0");Failure = 'duplicate path'})
+    foreach ($objPathDataMutation in $arrPathDataMutations) {
+        $listPathPrefix = [Collections.Generic.List[string]]::new()
+        try {
+            ConvertFrom-GitPathListData -Bytes $objPathDataMutation.Bytes |
+                ForEach-Object { $listPathPrefix.Add($_) }
+            throw "Git path mutation passed: $($objPathDataMutation.Name)"
+        } catch [IO.InvalidDataException] {
+            if ($listPathPrefix.Count -ne 0) {
+                throw 'Rejected Git path data emitted a partial result.'
             }
-        )
-        foreach ($objMutation in $arrWorkflowPolicyCommandMutations) {
-            if ($objMutation.Content -ceq $strDocumentContent) {
-                throw (
-                    "Could not create $strDocumentName workflow-policy command " +
-                    "mutation: $($objMutation.Name)."
-                )
-            }
-            if ($strDocumentName -ceq 'AGENTS.md') {
-                Assert-MutationRejected `
-                    -Name "AGENTS workflow-policy command $($objMutation.Name)" `
-                    -AgentsContent $objMutation.Content `
-                    -ClaudeContent $strClaudeContent `
-                    -CodexConfigContent $strCodexConfigContent `
-                    -ExpectedFailure "AGENTS.md $strWorkflowPolicyCommandFailure"
-            }
-            else {
-                Assert-MutationRejected `
-                    -Name "CLAUDE workflow-policy command $($objMutation.Name)" `
-                    -AgentsContent $strAgentsContent `
-                    -ClaudeContent $objMutation.Content `
-                    -CodexConfigContent $strCodexConfigContent `
-                    -ExpectedFailure "CLAUDE.md $strWorkflowPolicyCommandFailure"
+            if (-not $_.Exception.Message.Contains(
+                    $objPathDataMutation.Failure, [StringComparison]::Ordinal)) {
+                throw "Wrong Git path failure: $($objPathDataMutation.Name)"
             }
         }
     }
+    if (@(ConvertFrom-GitPathListData -Bytes ([byte[]] @())).Count -ne 0) {
+        throw 'Empty Git output changed inventory.'
+    }
+    # Index/revision parity and staged-addition tests use the extracted fixture.
+
+    Assert-Failure `
+        -CodexConfigContent ($strCodexConfigContent + [Environment]::NewLine +
+            'invalid = [' + [Environment]::NewLine) `
+        -Failure 'The project configuration must contain valid TOML.'
 
     $objAgentsVersionMatch = [regex]::Match(
         $strAgentsContent,
-        '(?m)^\*\*Version:\*\* (?<Prefix>(?<Major>\d+)\.(?<Minor>\d+)\.)' +
+        '(?m)^\*\*Version:\*\* (?<Prefix>\d+\.\d+\.)' +
             '(?<Date>\d{8})\.(?<Revision>\d+)$'
     )
     $objAgentsUpdatedMatch = [regex]::Match(
@@ -8857,175 +9603,6 @@ if ($SelfTest) {
     )
     if (-not $objClaudeVersionMatch.Success -or -not $objClaudeUpdatedMatch.Success) {
         throw 'Could not parse CLAUDE metadata for structural mutation tests.'
-    }
-
-    $strUnversionedAgentsContent = $strAgentsContent.Remove(
-        $objAgentsVersionMatch.Index,
-        $objAgentsVersionMatch.Length
-    )
-    $arrSameDayFinalEndpointFailures = @(Get-DocumentMetadataTransitionFailure `
-        -Name 'AGENTS.md' `
-        -CurrentContent ($strUnversionedAgentsContent + "`nSame-day final content.") `
-        -ParentContent $strUnversionedAgentsContent `
-        -IsNewDocumentTransition $false `
-        -RequireExpectedUtcDateForRenderedChange $false)
-    if ($arrSameDayFinalEndpointFailures.Count -ne 0) {
-        throw 'A same-day unversioned final endpoint must not require remote timestamp evidence.'
-    }
-    $arrOptionalVersionDirectFixtures = @(
-        [pscustomobject]@{
-            Name = 'versioned to versioned'
-            Current = $strAgentsContent
-            Parent = $strAgentsContent
-            IsNew = $false
-        },
-        [pscustomobject]@{
-            Name = 'unversioned to unversioned'
-            Current = $strUnversionedAgentsContent
-            Parent = $strUnversionedAgentsContent
-            IsNew = $false
-        },
-        [pscustomobject]@{
-            Name = 'unversioned to versioned revision zero'
-            Current = $strAgentsContent
-            Parent = $strUnversionedAgentsContent
-            IsNew = $false
-        },
-        [pscustomobject]@{
-            Name = 'versioned to unversioned'
-            Current = $strUnversionedAgentsContent
-            Parent = $strAgentsContent
-            IsNew = $false
-        },
-        [pscustomobject]@{
-            Name = 'new unversioned document'
-            Current = $strUnversionedAgentsContent
-            Parent = $null
-            IsNew = $true
-        }
-    )
-    foreach ($objOptionalVersionFixture in $arrOptionalVersionDirectFixtures) {
-        $arrOptionalVersionFailures = @(Get-DocumentMetadataTransitionFailure `
-                -Name 'AGENTS.md' `
-                -CurrentContent $objOptionalVersionFixture.Current `
-                -ParentContent $objOptionalVersionFixture.Parent `
-                -ExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-                -IsNewDocumentTransition $objOptionalVersionFixture.IsNew)
-        if ($arrOptionalVersionFailures.Count -ne 0) {
-            throw (
-                "Optional-Version direct fixture '$($objOptionalVersionFixture.Name)' " +
-                "failed: $($arrOptionalVersionFailures -join '; ')"
-            )
-        }
-    }
-    $strHistoricalVersionedAgentsContent = $strAgentsContent.Replace(
-        $objAgentsVersionMatch.Value,
-        '**Version:** ' + $objAgentsVersionMatch.Groups['Prefix'].Value +
-            '20000101.' + $objAgentsVersionMatch.Groups['Revision'].Value
-    ).Replace(
-        $objAgentsUpdatedMatch.Value,
-        '- **Last Updated:** 2000-01-01'
-    )
-    $objHistoricalVersionMatch = [regex]::Match(
-        $strHistoricalVersionedAgentsContent,
-        '(?m)^\*\*Version:\*\* [^\r\n]+$'
-    )
-    if (-not $objHistoricalVersionMatch.Success) {
-        throw 'Could not create the historical optional-Version fixture.'
-    }
-    $strHistoricalUnversionedAgentsContent = $strHistoricalVersionedAgentsContent.Remove(
-        $objHistoricalVersionMatch.Index,
-        $objHistoricalVersionMatch.Length
-    )
-    $arrHistoricalUnversionedRenderedFailures = @(
-        Get-DocumentMetadataTransitionFailure `
-            -Name 'AGENTS.md' `
-            -CurrentContent (
-                $strHistoricalUnversionedAgentsContent +
-                "`nRendered unversioned fixture."
-            ) `
-            -ParentContent $strHistoricalUnversionedAgentsContent `
-            -ExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-            -IsNewDocumentTransition $false
-    )
-    if (-not ($arrHistoricalUnversionedRenderedFailures -match
-            'Last Updated must be .* after a rendered-content change')) {
-        throw 'A rendered unversioned change with stale Last Updated was accepted.'
-    }
-    $arrHistoricalVersionRemovalFailures = @(
-        Get-DocumentMetadataTransitionFailure `
-            -Name 'AGENTS.md' `
-            -CurrentContent $strHistoricalUnversionedAgentsContent `
-            -ParentContent $strHistoricalVersionedAgentsContent `
-            -ExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-            -IsNewDocumentTransition $false
-    )
-    if (-not ($arrHistoricalVersionRemovalFailures -match
-            'Last Updated must be .* after a rendered-content change')) {
-        throw 'A Version removal with stale Last Updated was accepted.'
-    }
-    $strInvalidUnversionedUpdated = $strUnversionedAgentsContent.Replace(
-        $objAgentsUpdatedMatch.Value,
-        '- **Last Updated:** 9999-99-99'
-    )
-    $arrInvalidUnversionedUpdatedFailures = @(
-        Get-DocumentMetadataTransitionFailure `
-            -Name 'AGENTS.md' `
-            -CurrentContent $strInvalidUnversionedUpdated `
-            -ParentContent $strUnversionedAgentsContent `
-            -ExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-            -IsNewDocumentTransition $false
-    )
-    if (-not ($arrInvalidUnversionedUpdatedFailures -match
-            'Last Updated must contain one real calendar date')) {
-        throw 'An unversioned document with an invalid Last Updated date was accepted.'
-    }
-    $strFutureUnversionedUpdated = $strUnversionedAgentsContent.Replace(
-        $objAgentsUpdatedMatch.Value,
-        '- **Last Updated:** 2099-12-31'
-    )
-    $arrFutureUnversionedUpdatedFailures = @(
-        Get-DocumentMetadataTransitionFailure `
-            -Name 'AGENTS.md' `
-            -CurrentContent $strFutureUnversionedUpdated `
-            -ParentContent $strUnversionedAgentsContent `
-            -ExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-            -IsNewDocumentTransition $false
-    )
-    if (-not ($arrFutureUnversionedUpdatedFailures -match
-            'Last Updated 2099-12-31 must not be later than trusted UTC date')) {
-        throw 'An unversioned document with a future Last Updated date was accepted.'
-    }
-    $strIntroducedNonzeroVersion = $strAgentsContent.Replace(
-        $objAgentsVersionMatch.Value,
-        '**Version:** ' + $objAgentsVersionMatch.Groups['Prefix'].Value +
-            $objAgentsVersionMatch.Groups['Date'].Value + '.1'
-    )
-    $arrIntroducedNonzeroFailures = @(Get-DocumentMetadataTransitionFailure `
-            -Name 'AGENTS.md' `
-            -CurrentContent $strIntroducedNonzeroVersion `
-            -ParentContent $strUnversionedAgentsContent `
-            -ExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-            -IsNewDocumentTransition $false)
-    if (-not ($arrIntroducedNonzeroFailures -match
-            'Version revision must be 0 when Version is added')) {
-        throw 'An introduced Version with a nonzero revision was accepted.'
-    }
-    $strUnversionedMissingUpdated = $strUnversionedAgentsContent.Remove(
-        $objAgentsUpdatedMatch.Index - $objAgentsVersionMatch.Length,
-        $objAgentsUpdatedMatch.Length
-    )
-    $arrUnversionedMissingUpdatedFailures = @(
-        Get-DocumentMetadataTransitionFailure `
-            -Name 'AGENTS.md' `
-            -CurrentContent $strUnversionedMissingUpdated `
-            -ParentContent $strUnversionedAgentsContent `
-            -ExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-            -IsNewDocumentTransition $false
-    )
-    if (-not ($arrUnversionedMissingUpdatedFailures -match
-            'one exact top-level Last Updated list item')) {
-        throw 'An unversioned document without Last Updated was accepted.'
     }
 
     $arrMetadataStructureDocuments = @(
@@ -9049,16 +9626,17 @@ if ($SelfTest) {
             throw "Could not locate the $($objDocument.Name) H1 for structural mutation tests."
         }
         $strCodeFence = '```'
-        $strH1Failure = "$($objDocument.Name) must contain exactly one " +
-            'document-level H1 within the first 30 body lines.'
-        $strVersionFailure = "$($objDocument.Name) must contain at most one exact " +
-            'document-level Version paragraph immediately after the H1 and within ' +
-            'the first 30 body lines.'
-        $strMetadataHeadingFailure = "$($objDocument.Name) must place Metadata as " +
-            'the first level-two heading immediately after the H1 or optional Version and within the ' +
-            'first 30 body lines.'
+        $strH1Failure = "$($objDocument.Name) must contain at most one document-level H1."
+        $strVersionFailure = "$($objDocument.Name) must contain one exact " +
+            'document-level Version paragraph immediately after an H1 within the first 30 body lines.'
+        $strMetadataHeadingFailure = "$($objDocument.Name) must place one document-level metadata list immediately after " +
+            'the early H1 and optional Version, or at body start after an optional leading markdownlint-disable directive; ' +
+            'an optional Metadata section must be the first H2 immediately after the early H1 and optional Version.'
         $strUpdatedFailure = "$($objDocument.Name) must contain one exact top-level " +
-            'Last Updated list item in the Metadata section and within the first 30 body lines.'
+            'Last Updated list item in the document-level metadata list.'
+        $strParentVersionFailure = "The parent of $($objDocument.Name) must contain " +
+            'one exact document-level Version paragraph immediately after an H1 within the first 30 body lines.'
+
         $arrMetadataStructureMutations = @(
             [pscustomobject]@{
                 Name = 'duplicate document-level H1'
@@ -9069,12 +9647,12 @@ if ($SelfTest) {
                 Failure = $strH1Failure
             },
             [pscustomobject]@{
-                Name = 'H1 after first 30 lines'
+                Name = 'required Version cannot follow a late H1'
                 Content = $objDocument.Content.Replace(
                     $objDocument.H1Line,
                     (("`n" * 30) + $objDocument.H1Line)
                 )
-                Failure = $strH1Failure
+                Failure = $strVersionFailure
             },
             [pscustomobject]@{
                 Name = 'Version in fenced code'
@@ -9083,7 +9661,7 @@ if ($SelfTest) {
                     ($strCodeFence + "text`n" + $objDocument.VersionLine +
                         "`n" + $strCodeFence)
                 )
-                Failure = $strMetadataHeadingFailure
+                Failure = $strVersionFailure
             },
             [pscustomobject]@{
                 Name = 'Version in multiline HTML comment'
@@ -9091,7 +9669,7 @@ if ($SelfTest) {
                     $objDocument.VersionLine,
                     "<!--`n$($objDocument.VersionLine)`n-->"
                 )
-                Failure = $strMetadataHeadingFailure
+                Failure = $strVersionFailure
             },
             [pscustomobject]@{
                 Name = 'Version in block quote'
@@ -9099,7 +9677,7 @@ if ($SelfTest) {
                     $objDocument.VersionLine,
                     "> $($objDocument.VersionLine)"
                 )
-                Failure = $strMetadataHeadingFailure
+                Failure = $strVersionFailure
             },
             [pscustomobject]@{
                 Name = 'Version in raw HTML block'
@@ -9107,7 +9685,7 @@ if ($SelfTest) {
                     $objDocument.VersionLine,
                     "<div>`n$($objDocument.VersionLine)`n</div>"
                 )
-                Failure = $strMetadataHeadingFailure
+                Failure = $strVersionFailure
             },
             [pscustomobject]@{
                 Name = 'intervening paragraph before Version'
@@ -9210,14 +9788,6 @@ if ($SelfTest) {
                 Failure = $strUpdatedFailure
             },
             [pscustomobject]@{
-                Name = 'Last Updated after first 30 lines'
-                Content = $objDocument.Content.Replace(
-                    $objDocument.UpdatedLine,
-                    (("`n" * 25) + $objDocument.UpdatedLine)
-                )
-                Failure = $strUpdatedFailure
-            },
-            [pscustomobject]@{
                 Name = 'duplicate top-level Last Updated'
                 Content = $objDocument.Content.Replace(
                     $objDocument.UpdatedLine,
@@ -9252,20 +9822,18 @@ if ($SelfTest) {
                 Name = "$($objDocument.Name) $($objMutation.Name)"
                 AgentsContent = if ($objDocument.Name -ceq 'AGENTS.md') {
                     $objMutation.Content
-                }
-                else {
+                } else {
                     $strAgentsContent
                 }
                 ClaudeContent = if ($objDocument.Name -ceq 'CLAUDE.md') {
                     $objMutation.Content
-                }
-                else {
+                } else {
                     $strClaudeContent
                 }
                 CodexConfigContent = $strCodexConfigContent
-                ExpectedFailure = $objMutation.Failure
+                Failure = $objMutation.Failure
             }
-            Assert-MutationRejected @hashtableMutation
+            Assert-Failure @hashtableMutation
         }
 
         $strParentMutation = $objDocument.Content.Replace(
@@ -9278,19 +9846,18 @@ if ($SelfTest) {
             AgentsContent = $strAgentsContent
             ClaudeContent = $strClaudeContent
             CodexConfigContent = $strCodexConfigContent
-            ExpectedFailure = "The parent of $strMetadataHeadingFailure"
+            Failure = $strParentVersionFailure
         }
         if ($objDocument.Name -ceq 'AGENTS.md') {
             $hashtableParentMutation.ParentAgentsContent = $strParentMutation
-        }
-        else {
+        } else {
             $hashtableParentMutation.ParentClaudeContent = $strParentMutation
         }
         Write-Verbose (
             "Testing metadata structure mutation: $($objDocument.Name) parent " +
             'Version in fenced code'
         )
-        Assert-MutationRejected @hashtableParentMutation
+        Assert-Failure @hashtableParentMutation
 
         $strParentUpdatedMutation = $objDocument.Content.Replace(
             $objDocument.UpdatedLine,
@@ -9301,19 +9868,18 @@ if ($SelfTest) {
             AgentsContent = $strAgentsContent
             ClaudeContent = $strClaudeContent
             CodexConfigContent = $strCodexConfigContent
-            ExpectedFailure = "The parent of $strUpdatedFailure"
+            Failure = "The parent of $strUpdatedFailure"
         }
         if ($objDocument.Name -ceq 'AGENTS.md') {
             $hashtableParentUpdatedMutation.ParentAgentsContent = $strParentUpdatedMutation
-        }
-        else {
+        } else {
             $hashtableParentUpdatedMutation.ParentClaudeContent = $strParentUpdatedMutation
         }
         Write-Verbose (
             "Testing metadata structure mutation: $($objDocument.Name) parent " +
             'Last Updated in HTML comment'
         )
-        Assert-MutationRejected @hashtableParentUpdatedMutation
+        Assert-Failure @hashtableParentUpdatedMutation
     }
 
     $intAgentsRevision = [int64] $objAgentsVersionMatch.Groups['Revision'].Value
@@ -9354,14 +9920,11 @@ if ($SelfTest) {
             $objAgentsUpdatedMatch.Value,
             '- **Last Updated:** ' + $objDateFixture.UpdatedDate
         )
-        Assert-MutationRejected `
-            -Name $objDateFixture.Name `
+        Assert-Failure `
             -AgentsContent $strInvalidDateContent `
-            -ClaudeContent $strClaudeContent `
-            -CodexConfigContent $strCodexConfigContent `
             -ParentAgentsContent $strAgentsContent `
-            -ExpectedFailure (
-                'AGENTS.md Last Updated must contain one real calendar date.'
+            -Failure (
+                'AGENTS.md Version and Last Updated must contain one real matching calendar date.'
             )
     }
 
@@ -9372,22 +9935,15 @@ if ($SelfTest) {
         $objAgentsUpdatedMatch.Value,
         '- **Last Updated:** 2099-12-31'
     ) + [Environment]::NewLine + 'Future metadata fixture.'
-    Assert-MutationRejected `
-        -Name 'future current metadata date' `
+    Assert-Failure `
         -AgentsContent $strFutureMetadataContent `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
         -ParentAgentsContent $strAgentsContent `
-        -ExpectedFailure (
+        -Failure (
             'AGENTS.md Last Updated 2099-12-31 must not be later than trusted UTC date'
         )
-    Assert-MutationRejected `
-        -Name 'future parent metadata recovery' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
+    Assert-Failure `
         -ParentAgentsContent $strFutureMetadataContent `
-        -ExpectedFailure (
+        -Failure (
             'The parent of AGENTS.md Last Updated 2099-12-31 must not be later than trusted UTC date'
         )
 
@@ -9406,10 +9962,7 @@ if ($SelfTest) {
         '- **Last Updated:** 2000-01-01'
     )
     Assert-FixtureAccepted `
-        -Name 'valid leap metadata day' `
         -AgentsContent $strValidLeapDateContent `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
         -ParentAgentsContent $strValidLeapDateParent
 
     $strInvalidDateParent = $strAgentsContent.Replace(
@@ -9419,187 +9972,84 @@ if ($SelfTest) {
         $objAgentsUpdatedMatch.Value,
         '- **Last Updated:** 9999-99-99'
     )
-    Assert-MutationRejected `
-        -Name 'impossible parent metadata date' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
+    Assert-Failure `
         -ParentAgentsContent $strInvalidDateParent `
-        -ExpectedFailure 'The parent of AGENTS.md Last Updated must contain one real calendar date.'
+        -Failure 'The parent of AGENTS.md must contain one real matching calendar date.'
 
-    $strRenderedAgentsMutation = $strAgentsContent + [Environment]::NewLine +
+    # Reserve bytes for expanding semantic fixtures without shortening policy text.
+    # Real documents and explicit byte-boundary mutations retain their exact input.
+    $strAgentsFixtureScopePattern = '(?m)^- \*\*Scope:\*\* [^\r\n]+$'
+    if ([regex]::Matches($strAgentsContent, $strAgentsFixtureScopePattern).Count -ne 1) {
+        throw 'Expected one AGENTS Scope value for semantic fixture construction.'
+    }
+    $strAgentsSemanticFixture = [regex]::Replace(
+        $strAgentsContent,
+        $strAgentsFixtureScopePattern,
+        '- **Scope:** Agent-instruction mutation fixtures.'
+    )
+    Assert-FixtureAccepted -AgentsContent $strAgentsSemanticFixture
+
+    $strRenderedAgentsMutation = $strAgentsSemanticFixture + [Environment]::NewLine +
         'A rendered governance note.' + [Environment]::NewLine
-    Assert-MutationRejected `
-        -Name 'impossible expected UTC date' `
+    Assert-Failure `
         -AgentsContent $strRenderedAgentsMutation `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
         -ParentAgentsContent $strAgentsContent `
         -AgentsExpectedUtcDate '9999-99-99' `
-        -ExpectedFailure 'The expected UTC date for AGENTS.md is unavailable or invalid.'
+        -Failure 'The expected UTC date for AGENTS.md is unavailable or invalid.'
 
-    Assert-MutationRejected `
-        -Name 'same-day rendered change with stale revision' `
+    Assert-Failure `
         -AgentsContent $strRenderedAgentsMutation `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
         -ParentAgentsContent $strAgentsContent `
         -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-        -ExpectedFailure ("AGENTS.md Version revision must be $intNextAgentsRevision after " +
-            'a content change with unchanged major, minor, and date')
-
-    $strExactNextRevisionContent = $strRenderedAgentsMutation.Replace(
-        $objAgentsVersionMatch.Value,
-        $strAgentsVersionStem + $intNextAgentsRevision
-    )
-    Assert-FixtureAccepted `
-        -Name 'same-identity exact next revision' `
-        -AgentsContent $strExactNextRevisionContent `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ParentAgentsContent $strAgentsContent `
-        -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value
+        -Failure ("AGENTS.md Version revision must be exactly " +
+            "$intNextAgentsRevision after a published change with an " +
+            'unchanged published-baseline major, minor, and date tuple.')
 
     $strHigherRevisionParent = $strAgentsContent.Replace(
         $objAgentsVersionMatch.Value,
         $strAgentsVersionStem + $intNextAgentsRevision
     )
-    Assert-MutationRejected `
-        -Name 'same-day rendered change with decreasing revision' `
+    Assert-Failure `
         -AgentsContent $strRenderedAgentsMutation `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
         -ParentAgentsContent $strHigherRevisionParent `
         -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-        -ExpectedFailure ("AGENTS.md Version revision must not decrease from " +
-            "$intNextAgentsRevision to $intAgentsRevision.")
+        -Failure ("AGENTS.md Version revision must not decrease from " +
+            "$intNextAgentsRevision to $($intNextAgentsRevision - 1).")
 
-    Assert-MutationRejected `
-        -Name 'metadata-only same-day revision rollback' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
+    Assert-Failure `
         -ParentAgentsContent $strHigherRevisionParent `
         -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-        -ExpectedFailure ("AGENTS.md Version revision must not decrease from " +
-            "$intNextAgentsRevision to $intAgentsRevision.")
+        -Failure ("AGENTS.md Version revision must not decrease from " +
+            "$intNextAgentsRevision to $($intNextAgentsRevision - 1).")
 
     Assert-FixtureAccepted `
-        -Name 'normalized-equal metadata identity' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
         -ParentAgentsContent $strAgentsContent
 
-    $strMaximumRevisionContent = $strAgentsContent.Replace(
+    $strMaximumRevisionContent = $strAgentsSemanticFixture.Replace(
         $objAgentsVersionMatch.Value,
         $strAgentsVersionStem + [int64]::MaxValue
     )
     Assert-FixtureAccepted `
-        -Name 'normalized-equal maximum revision' `
         -AgentsContent $strMaximumRevisionContent `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
         -ParentAgentsContent $strMaximumRevisionContent
 
     $strSameDayRevisionJump = $strRenderedAgentsMutation.Replace(
         $objAgentsVersionMatch.Value,
         $strAgentsVersionStem + $intJumpedAgentsRevision
     )
-    Assert-MutationRejected `
-        -Name 'same-identity revision gap' `
+    Assert-Failure `
         -AgentsContent $strSameDayRevisionJump `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
         -ParentAgentsContent $strAgentsContent `
         -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-        -ExpectedFailure ("AGENTS.md Version revision must be $intNextAgentsRevision after " +
-            'a content change with unchanged major, minor, and date')
+        -Failure ("AGENTS.md Version revision must be exactly " +
+            "$intNextAgentsRevision after a published change with an " +
+            'unchanged published-baseline major, minor, and date tuple.')
 
-    $strMaximumRevisionMutation = $strMaximumRevisionContent +
-        [Environment]::NewLine + 'Maximum revision rendered mutation.'
-    Assert-MutationRejected `
-        -Name 'same-identity maximum revision cannot increment' `
-        -AgentsContent $strMaximumRevisionMutation `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ParentAgentsContent $strMaximumRevisionContent `
-        -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-        -ExpectedFailure 'The parent AGENTS.md Version revision cannot be incremented safely.'
-
-    $intHigherMajor = [int64] $objAgentsVersionMatch.Groups['Major'].Value + 1
-    $intHigherMinor = [int64] $objAgentsVersionMatch.Groups['Minor'].Value + 1
-    $arrHigherVersionFixtures = @(
-        [pscustomobject]@{
-            Name = 'major'
-            Prefix = "$intHigherMajor.0."
-        },
-        [pscustomobject]@{
-            Name = 'minor'
-            Prefix = "$($objAgentsVersionMatch.Groups['Major'].Value).$intHigherMinor."
-        }
-    )
-    foreach ($objHigherVersionFixture in $arrHigherVersionFixtures) {
-        $strHigherVersionStem = '**Version:** ' + $objHigherVersionFixture.Prefix +
-            $objAgentsVersionMatch.Groups['Date'].Value + '.'
-        $strHigherVersionReset = $strRenderedAgentsMutation.Replace(
-            $objAgentsVersionMatch.Value,
-            $strHigherVersionStem + '0'
-        )
-        Assert-FixtureAccepted `
-            -Name "$($objHigherVersionFixture.Name) change resets revision" `
-            -AgentsContent $strHigherVersionReset `
-            -ClaudeContent $strClaudeContent `
-            -CodexConfigContent $strCodexConfigContent `
-            -ParentAgentsContent $strAgentsContent `
-            -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value
-        $strMetadataOnlyHigherVersionReset = $strAgentsContent.Replace(
-            $objAgentsVersionMatch.Value,
-            $strHigherVersionStem + '0'
-        )
-        Assert-FixtureAccepted `
-            -Name "metadata-only $($objHigherVersionFixture.Name) change resets revision" `
-            -AgentsContent $strMetadataOnlyHigherVersionReset `
-            -ClaudeContent $strClaudeContent `
-            -CodexConfigContent $strCodexConfigContent `
-            -ParentAgentsContent $strAgentsContent `
-            -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value
-        Assert-MutationRejected `
-            -Name "metadata-only $($objHigherVersionFixture.Name) change retains nonzero revision" `
-            -AgentsContent $strMetadataOnlyHigherVersionReset.Replace(
-                $strHigherVersionStem + '0',
-                $strHigherVersionStem + '1'
-            ) `
-            -ClaudeContent $strClaudeContent `
-            -CodexConfigContent $strCodexConfigContent `
-            -ParentAgentsContent $strAgentsContent `
-            -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-            -ExpectedFailure (
-                'AGENTS.md Version revision must be 0 when major, minor, or date changes'
-            )
-        Assert-MutationRejected `
-            -Name "$($objHigherVersionFixture.Name) change retains nonzero revision" `
-            -AgentsContent $strHigherVersionReset.Replace(
-                $strHigherVersionStem + '0',
-                $strHigherVersionStem + '1'
-            ) `
-            -ClaudeContent $strClaudeContent `
-            -CodexConfigContent $strCodexConfigContent `
-            -ParentAgentsContent $strAgentsContent `
-            -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-            -ExpectedFailure (
-                'AGENTS.md Version revision must be 0 when major, minor, or date changes'
-            )
-    }
-
-    Assert-MutationRejected `
-        -Name 'rendered change with stale UTC date' `
+    Assert-Failure `
         -AgentsContent $strRenderedAgentsMutation `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
         -ParentAgentsContent $strAgentsContent `
         -AgentsExpectedUtcDate '2099-01-01' `
-        -ExpectedFailure 'AGENTS.md Last Updated must be 2099-01-01 after a rendered-content change.'
+        -Failure 'AGENTS.md Last Updated must be 2099-01-01 after a rendered-content change.'
 
     $strPreviousDateParent = $strAgentsContent.Replace(
         $objAgentsVersionMatch.Value,
@@ -9608,62 +10058,17 @@ if ($SelfTest) {
         $objAgentsUpdatedMatch.Value,
         '- **Last Updated:** 2000-01-01'
     )
-    $strMetadataOnlyNewDayReset = $strAgentsContent.Replace(
-        $objAgentsVersionMatch.Value,
-        $strAgentsVersionStem + '0'
-    )
     Assert-FixtureAccepted `
-        -Name 'metadata-only new-day zero revision' `
-        -AgentsContent $strMetadataOnlyNewDayReset `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ParentAgentsContent $strPreviousDateParent `
-        -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value
-    Assert-MutationRejected `
-        -Name 'metadata-only new-day nonzero revision' `
-        -AgentsContent $strMetadataOnlyNewDayReset.Replace(
-            $strAgentsVersionStem + '0',
-            $strAgentsVersionStem + '1'
-        ) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ParentAgentsContent $strPreviousDateParent `
-        -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-        -ExpectedFailure (
-            'AGENTS.md Version revision must be 0 when major, minor, or date changes'
-        )
-    Assert-FixtureAccepted `
-        -Name 'new-day zero revision' `
         -AgentsContent $strRenderedAgentsMutation `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
         -ParentAgentsContent $strPreviousDateParent `
         -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value
-
-    $strNewDayNonzeroRevision = $strRenderedAgentsMutation.Replace(
-        $objAgentsVersionMatch.Value,
-        $strAgentsVersionStem + '1'
-    )
-    Assert-MutationRejected `
-        -Name 'new-day nonzero revision' `
-        -AgentsContent $strNewDayNonzeroRevision `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ParentAgentsContent $strPreviousDateParent `
-        -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-        -ExpectedFailure (
-            'AGENTS.md Version revision must be 0 when major, minor, or date changes'
-        )
 
     $strNewDayReset = $strRenderedAgentsMutation.Replace(
         $objAgentsVersionMatch.Value,
         $strAgentsVersionStem + '0'
     )
     Assert-FixtureAccepted `
-        -Name 'new-day revision reset' `
         -AgentsContent $strNewDayReset `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
         -ParentAgentsContent $strPreviousDateParent `
         -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value
 
@@ -9675,10 +10080,6 @@ if ($SelfTest) {
         '- **Last Updated:** 2000-01-01'
     )
     Assert-FixtureAccepted `
-        -Name 'metadata-only forward date with preserved revision' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
         -ParentAgentsContent $strMetadataForwardParent
 
     $strRegressedDateContent = $strRenderedAgentsMutation.Replace(
@@ -9688,14 +10089,11 @@ if ($SelfTest) {
         $objAgentsUpdatedMatch.Value,
         '- **Last Updated:** 2000-01-01'
     )
-    Assert-MutationRejected `
-        -Name 'rendered change with regressing metadata date' `
+    Assert-Failure `
         -AgentsContent $strRegressedDateContent `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
         -ParentAgentsContent $strAgentsContent `
         -AgentsExpectedUtcDate '2000-01-01' `
-        -ExpectedFailure ("AGENTS.md Version date must not move backward from " +
+        -Failure ("AGENTS.md Version date must not move backward from " +
             "$($objAgentsVersionMatch.Groups['Date'].Value) to 20000101.")
 
     $strMetadataOnlyRegressedDate = $strAgentsContent.Replace(
@@ -9705,16 +10103,98 @@ if ($SelfTest) {
         $objAgentsUpdatedMatch.Value,
         '- **Last Updated:** 2000-01-01'
     )
-    Assert-MutationRejected `
-        -Name 'metadata-only date rollback' `
+    Assert-Failure `
         -AgentsContent $strMetadataOnlyRegressedDate `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
         -ParentAgentsContent $strAgentsContent `
         -AgentsExpectedUtcDate $objAgentsUpdatedMatch.Groups['Date'].Value `
-        -ExpectedFailure ("AGENTS.md Version date must not move backward from " +
+        -Failure ("AGENTS.md Version date must not move backward from " +
             "$($objAgentsVersionMatch.Groups['Date'].Value) to 20000101.")
 
+    # Published endpoint regressions deliberately ignore intermediate topic commits.
+    $strEndpointBaseline = @(
+        '# Endpoint fixture'
+        '**Version:** 1.0.20260830.0'
+        '## Metadata'
+        '- **Status:** Active'
+        '- **Owner:** Repository Maintainers'
+        '- **Last Updated:** 2026-08-30'
+        '- **Scope:** Endpoint metadata regression.'
+        '## Content'
+        'Published baseline.'
+    ) -join "`n"
+    $strEndpointFinal = @(
+        '# Endpoint fixture'
+        '**Version:** 1.0.20260831.0'
+        '## Metadata'
+        '- **Status:** Active'
+        '- **Owner:** Repository Maintainers'
+        '- **Last Updated:** 2026-08-31'
+        '- **Scope:** Endpoint metadata regression.'
+        '## Content'
+        'Corrected published final state.'
+    ) -join "`n"
+    $strInvalidIntermediate = $strEndpointBaseline.Replace(
+        'Published baseline.',
+        'Intermediate rendered change without metadata advancement.'
+    )
+    if ($strInvalidIntermediate -ceq $strEndpointBaseline) {
+        throw 'The deterministic intermediate fixture changed zero bytes.'
+    }
+    $arrPublishedFinalFailures = @(Get-PublishedEndpointMetadataFailure `
+        -Name 'endpoint-fixture.md' -CurrentContent $strEndpointFinal `
+        -ParentContent $strEndpointBaseline -ExpectedUtcDate '2026-08-31' `
+        -IsNewDocumentTransition $false)
+    if ($arrPublishedFinalFailures.Count -ne 0) {
+        throw ('A corrected multi-commit published final state failed: ' +
+            ($arrPublishedFinalFailures -join '; '))
+    }
+    $strHigherRevisionPublishedFinal = $strEndpointFinal.Replace(
+        '**Version:** 1.0.20260831.0', '**Version:** 1.0.20260831.2')
+    $arrHigherRevisionPublishedFinalFailures = @(Get-PublishedEndpointMetadataFailure `
+        -Name 'endpoint-fixture.md' -CurrentContent $strHigherRevisionPublishedFinal `
+        -ParentContent $strEndpointBaseline -ExpectedUtcDate '2026-08-31' `
+        -IsNewDocumentTransition $false)
+    if ($arrHigherRevisionPublishedFinalFailures -cnotcontains
+        ('endpoint-fixture.md Version revision must be exactly 0 when a ' +
+            'published-baseline major, minor, or date segment changes.')) {
+        throw 'A nonzero revision after a higher-order change did not fail closed.'
+    }
+    $strSameTupleFinal = $strEndpointBaseline.Replace(
+        '**Version:** 1.0.20260830.0', '**Version:** 1.0.20260830.1'
+    ).Replace('Published baseline.', 'Published final on the same tuple.')
+    if (@(Get-PublishedEndpointMetadataFailure -Name 'endpoint-fixture.md' `
+            -CurrentContent $strSameTupleFinal -ParentContent $strEndpointBaseline `
+            -ExpectedUtcDate '2026-08-30' -IsNewDocumentTransition $false).Count -ne 0) {
+        throw 'An exact published-baseline revision increment did not pass.'
+    }
+    $strSkippedRevisionFinal = $strSameTupleFinal.Replace(
+        '**Version:** 1.0.20260830.1', '**Version:** 1.0.20260830.2')
+    if (@(Get-PublishedEndpointMetadataFailure -Name 'endpoint-fixture.md' `
+            -CurrentContent $strSkippedRevisionFinal `
+            -ParentContent $strEndpointBaseline -ExpectedUtcDate '2026-08-30' `
+            -IsNewDocumentTransition $false) -cnotcontains
+        ('endpoint-fixture.md Version revision must be exactly 1 after a ' +
+            'published change with an unchanged published-baseline major, ' +
+            'minor, and date tuple.')) {
+        throw 'A skipped same-tuple published final revision did not fail closed.'
+    }
+    foreach ($strLifecycleStatus in @(
+            'Draft', 'Proposed', 'Active', 'Accepted', 'Superseded', 'Deprecated'
+        )) {
+        $strLifecycleFixture = $strEndpointFinal.Replace(
+            '- **Status:** Active', "- **Status:** $strLifecycleStatus")
+        if ($null -ne (Get-DocumentMetadataContext `
+                -Content $strLifecycleFixture).Failure) {
+            throw "A generic Tier 1 lifecycle status was rejected: $strLifecycleStatus"
+        }
+    }
+    if (@(Read-GitPublishedEndpointChangedPath `
+            -RepositoryRootPath $strRepositoryRootPath `
+            -BaselineRevision $strCheckedOutRevision `
+            -FinalRevision $strCheckedOutRevision `
+            -MaximumBytes $intGitPathListMaximumBytes).Count -ne 0) {
+        throw 'Identical published endpoint trees reported changed paths.'
+    }
     $strMetadataNormalizationBase = @(
         '**Version:** 1.0.20260819.3'
         '- **Last Updated:** 2026-08-19'
@@ -9727,7 +10207,6 @@ if ($SelfTest) {
         ''
     ) -join "`r`n"
     $objMetadataNormalizationContext = [pscustomobject]@{
-        HasVersion = $true
         VersionLineIndex = 0
         UpdatedLineIndex = 1
     }
@@ -9743,21 +10222,6 @@ if ($SelfTest) {
         (ConvertTo-MetadataComparisonText -Content $strMetadataHardBreakMutation `
             -MetadataContext $objMetadataNormalizationContext)) {
         throw 'Metadata normalization incorrectly exempted a Markdown hard-line-break change.'
-    }
-    $strMetadataBackslashHardBreakBase =
-        $strMetadataNormalizationBase.Replace('Body', 'Body\')
-    foreach ($strMetadataBackslashHardBreakMutation in @(
-            $strMetadataBackslashHardBreakBase.Replace('Body\', 'Body\ '),
-            $strMetadataBackslashHardBreakBase.Replace('Body\', "Body\`t")
-        )) {
-        if ((ConvertTo-MetadataComparisonText `
-                -Content $strMetadataBackslashHardBreakBase `
-                -MetadataContext $objMetadataNormalizationContext) -ceq
-            (ConvertTo-MetadataComparisonText `
-                -Content $strMetadataBackslashHardBreakMutation `
-                -MetadataContext $objMetadataNormalizationContext)) {
-            throw 'Metadata normalization incorrectly exempted whitespace after a terminal backslash.'
-        }
     }
     $strMetadataExampleBase = @(
         $strMetadataNormalizationBase
@@ -9789,49 +10253,38 @@ if ($SelfTest) {
     $strAgentsPlacementHeading = '## PR Review Workflow (Codex-adapted)'
     $strRawHtmlAgentsPlacementHeading = '<div>' + [Environment]::NewLine +
         $strAgentsPlacementHeading + [Environment]::NewLine + '</div>'
-    Assert-MutationRejected `
-        -Name 'AGENTS placement heading hidden in raw HTML' `
+    Assert-Failure `
         -AgentsContent $strAgentsContent.Replace(
             $strAgentsPlacementHeading,
             $strRawHtmlAgentsPlacementHeading
         ) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
+        -Failure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
 
     $strClaudeLoopHeading = '## Automated Review Loop'
     $strRawHtmlClaudeLoopHeading = '<div>' + [Environment]::NewLine +
         $strClaudeLoopHeading + [Environment]::NewLine + '</div>'
-    Assert-MutationRejected `
-        -Name 'CLAUDE review-loop heading hidden in raw HTML' `
-        -AgentsContent $strAgentsContent `
+    Assert-Failure `
         -ClaudeContent $strClaudeContent.Replace(
             $strClaudeLoopHeading,
             $strRawHtmlClaudeLoopHeading
         ) `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'CLAUDE.md must contain the standing direct-placement authorization exactly once.'
+        -Failure 'CLAUDE.md must contain the standing direct-placement authorization exactly once.'
 
     $strRawHtmlBoundaryFixture = $strAgentsPlacementHeading +
         [Environment]::NewLine + [Environment]::NewLine + '<div>' +
         [Environment]::NewLine + '## Raw HTML Impostor Boundary' +
         [Environment]::NewLine + '</div>'
     Assert-FixtureAccepted `
-        -Name 'raw HTML heading does not terminate a real section' `
-        -AgentsContent $strAgentsContent.Replace(
+        -AgentsContent $strAgentsSemanticFixture.Replace(
             $strAgentsPlacementHeading,
             $strRawHtmlBoundaryFixture
         ) `
-        -ClaudeContent $strClaudeContent `
         -CodexConfigContent $strCodexConfigContent
 
-    Assert-MutationRejected `
-        -Name 'duplicate parsed AGENTS placement heading' `
+    Assert-Failure `
         -AgentsContent ($strAgentsContent + [Environment]::NewLine +
             $strAgentsPlacementHeading) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
+        -Failure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
 
     $strContraryPlacementRule =
         'The agent must request a new owner approval before each direct PR-head push.'
@@ -9899,20 +10352,13 @@ if ($SelfTest) {
                     [Environment]::NewLine + '      ' + $strContraryPlacementRule
             )
             if ($objStandingDocument.Name -ceq 'AGENTS') {
-                Assert-MutationRejected `
-                    -Name "AGENTS standing placement hidden in $($objDeletionVariant.Name)" `
+                Assert-Failure `
                     -AgentsContent $strDeletedContent `
-                    -ClaudeContent $strClaudeContent `
-                    -CodexConfigContent $strCodexConfigContent `
-                    -ExpectedFailure $objStandingDocument.Failure
-            }
-            else {
-                Assert-MutationRejected `
-                    -Name "CLAUDE standing placement hidden in $($objDeletionVariant.Name)" `
-                    -AgentsContent $strAgentsContent `
+                    -Failure $objStandingDocument.Failure
+            } else {
+                Assert-Failure `
                     -ClaudeContent $strDeletedContent `
-                    -CodexConfigContent $strCodexConfigContent `
-                    -ExpectedFailure $objStandingDocument.Failure
+                    -Failure $objStandingDocument.Failure
             }
         }
     }
@@ -9963,20 +10409,13 @@ if ($SelfTest) {
                     [Environment]::NewLine + '      ' + $strContraryPlacementRule
             )
             if ($objStandingDocument.Name -ceq 'AGENTS') {
-                Assert-MutationRejected `
-                    -Name "AGENTS standing placement hidden in $($objHtmlVariant.Name)" `
+                Assert-Failure `
                     -AgentsContent $strHtmlWrappedContent `
-                    -ClaudeContent $strClaudeContent `
-                    -CodexConfigContent $strCodexConfigContent `
-                    -ExpectedFailure $objStandingDocument.Failure
-            }
-            else {
-                Assert-MutationRejected `
-                    -Name "CLAUDE standing placement hidden in $($objHtmlVariant.Name)" `
-                    -AgentsContent $strAgentsContent `
+                    -Failure $objStandingDocument.Failure
+            } else {
+                Assert-Failure `
                     -ClaudeContent $strHtmlWrappedContent `
-                    -CodexConfigContent $strCodexConfigContent `
-                    -ExpectedFailure $objStandingDocument.Failure
+                    -Failure $objStandingDocument.Failure
             }
         }
     }
@@ -9985,16 +10424,45 @@ if ($SelfTest) {
         -Content 'Visible **operative** prose.'
     if (-not $objVisibleEmphasisContext.ProseText.Contains(
             'Visible operative prose.',
-            [System.StringComparison]::Ordinal
+            [StringComparison]::Ordinal
         )) {
         throw 'Operative Markdown filtering removed ordinary emphasized prose.'
+    }
+
+    $strLinkFence = [string]::new([char]96, 3)
+    $strDecisionLinkFixture = @(
+        '[Guide](../../STYLE_GUIDE.md)',
+        '[Rationale][rationale]',
+        '',
+        '[rationale]: ../../STYLE_GUIDE_RATIONALE.md',
+        '',
+        '~~[Deleted](../../STYLE_GUIDE.md)~~',
+        '<span>[HTML](../../STYLE_GUIDE.md)</span>',
+        '<!-- [Comment](../../STYLE_GUIDE.md) -->',
+        $strLinkFence,
+        '[Fence](../../STYLE_GUIDE.md)',
+        $strLinkFence
+    ) -join "`n"
+    $objDecisionLinkContext = Get-OperativeMarkdownContext `
+        -Content $strDecisionLinkFixture
+    $arrDecisionLinkFixtureActual = [string[]]@(
+        $objDecisionLinkContext.ProseBlocks.Links
+    )
+    $arrDecisionLinkFixtureExpected = [string[]]@(
+        '../../STYLE_GUIDE.md',
+        '../../STYLE_GUIDE_RATIONALE.md'
+    )
+    if ($arrDecisionLinkFixtureActual.Count -ne 2 -or
+        $arrDecisionLinkFixtureActual[0] -cne $arrDecisionLinkFixtureExpected[0] -or
+        $arrDecisionLinkFixtureActual[1] -cne $arrDecisionLinkFixtureExpected[1]) {
+        throw 'Operative Markdown link parsing accepted hidden or rejected visible links.'
     }
 
     $objVoidHtmlContext = Get-OperativeMarkdownContext `
         -Content 'Visible<br> operative prose.'
     if (-not $objVoidHtmlContext.ProseText.Contains(
             'Visible operative prose.',
-            [System.StringComparison]::Ordinal
+            [StringComparison]::Ordinal
         )) {
         throw 'Operative Markdown filtering removed prose adjacent to an HTML void element.'
     }
@@ -10002,11 +10470,10 @@ if ($SelfTest) {
     $boolUnbalancedDeletionRejected = $false
     try {
         [void](Get-OperativeMarkdownContext -Content 'Visible </del> text.')
-    }
-    catch {
+    } catch {
         $boolUnbalancedDeletionRejected = $_.Exception.Message.Contains(
             'locked Markdown parser rejected',
-            [System.StringComparison]::OrdinalIgnoreCase
+            [StringComparison]::OrdinalIgnoreCase
         )
     }
     if (-not $boolUnbalancedDeletionRejected) {
@@ -10016,43 +10483,36 @@ if ($SelfTest) {
     $boolUnbalancedHtmlRejected = $false
     try {
         [void](Get-OperativeMarkdownContext -Content 'Visible </span> text.')
-    }
-    catch {
+    } catch {
         $boolUnbalancedHtmlRejected = $_.Exception.Message.Contains(
             'locked Markdown parser rejected',
-            [System.StringComparison]::OrdinalIgnoreCase
+            [StringComparison]::OrdinalIgnoreCase
         )
     }
     if (-not $boolUnbalancedHtmlRejected) {
         throw 'Unbalanced inline HTML markup did not fail closed.'
     }
 
-    Assert-MutationRejected `
-        -Name 'standing placement hidden in HTML comment' `
+    Assert-Failure `
         -AgentsContent $strAgentsContent.Replace(
             $strAgentsStandingParagraph,
             '<!--' + [Environment]::NewLine +
                 $strAgentsStandingParagraph + [Environment]::NewLine +
                 '-->' + [Environment]::NewLine + $strContraryPlacementRule
         ) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
+        -Failure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
 
     $strInlineCodeMutation = $strAgentsStandingParagraph.Replace(
         $strAgentsStandingParagraph.TrimStart(),
         [string][char]96 + $strAgentsStandingParagraph.TrimStart() + [string][char]96
     )
-    Assert-MutationRejected `
-        -Name 'standing placement hidden in inline code' `
+    Assert-Failure `
         -AgentsContent $strAgentsContent.Replace(
             $strAgentsStandingParagraph,
             $strInlineCodeMutation + [Environment]::NewLine +
                 [Environment]::NewLine + '      ' + $strContraryPlacementRule
         ) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
+        -Failure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
 
     $strTechnicalInlineFixture = 'Use `reviewThreads` to enumerate review threads.'
     $objTechnicalInlineContext = Get-OperativeMarkdownContext `
@@ -10063,7 +10523,7 @@ if ($SelfTest) {
         ).Count -ne 1 -or
         $objTechnicalInlineContext.ProseText.Contains(
             'reviewThreads',
-            [System.StringComparison]::Ordinal
+            [StringComparison]::Ordinal
         )) {
         throw 'Inline Markdown parsing did not separate technical code from policy prose.'
     }
@@ -10123,28 +10583,20 @@ if ($SelfTest) {
             foreach ($objMutation in $arrConcealmentMutations) {
                 $strMutation = $strRemovedContent + [Environment]::NewLine +
                     [Environment]::NewLine + $objMutation.Payload
-                $strExpectedFailure = "$($objContract.Name).md is missing required " +
+                $strFailure = "$($objContract.Name).md is missing required " +
                     $(if ($objContract.Name -ceq 'AGENTS') {
                             'Codex'
-                        }
-                        else {
+                        } else {
                             'Claude'
                         }) + " marker: $strLiteral"
                 if ($objContract.Name -ceq 'AGENTS') {
-                    Assert-MutationRejected `
-                        -Name "AGENTS technical marker in $($objMutation.Name): $strLiteral" `
+                    Assert-Failure `
                         -AgentsContent $strMutation `
-                        -ClaudeContent $strClaudeContent `
-                        -CodexConfigContent $strCodexConfigContent `
-                        -ExpectedFailure $strExpectedFailure
-                }
-                else {
-                    Assert-MutationRejected `
-                        -Name "CLAUDE technical marker in $($objMutation.Name): $strLiteral" `
-                        -AgentsContent $strAgentsContent `
+                        -Failure $strFailure
+                } else {
+                    Assert-Failure `
                         -ClaudeContent $strMutation `
-                        -CodexConfigContent $strCodexConfigContent `
-                        -ExpectedFailure $strExpectedFailure
+                        -Failure $strFailure
                 }
             }
         }
@@ -10166,32 +10618,25 @@ if ($SelfTest) {
         [string][char]96 + $script:strClaudeTechnicalProse + [string][char]96
     )
     foreach ($strPayload in $arrClaudeProseMutations) {
-        Assert-MutationRejected `
-            -Name "Claude readiness marker on non-prose surface: $strPayload" `
-            -AgentsContent $strAgentsContent `
+        Assert-Failure `
             -ClaudeContent ($strRemovedClaudeProse + [Environment]::NewLine +
                 [Environment]::NewLine + $strPayload) `
-            -CodexConfigContent $strCodexConfigContent `
-            -ExpectedFailure (
+            -Failure (
                 'CLAUDE.md is missing required Claude marker: ' +
                 $script:strClaudeTechnicalProse
             )
     }
 
-    Assert-MutationRejected `
-        -Name 'standing placement hidden in fenced example' `
+    Assert-Failure `
         -AgentsContent $strAgentsContent.Replace(
             $strAgentsStandingParagraph,
             $strMarkdownFence + 'text' + [Environment]::NewLine +
                 $strAgentsStandingParagraph + [Environment]::NewLine +
                 $strMarkdownFence + [Environment]::NewLine + $strContraryPlacementRule
         ) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
+        -Failure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
 
-    Assert-MutationRejected `
-        -Name 'standing placement hidden in blockquoted fenced example' `
+    Assert-Failure `
         -AgentsContent $strAgentsContent.Replace(
             $strAgentsStandingParagraph,
             '> ' + $strMarkdownFence + 'text' + [Environment]::NewLine +
@@ -10199,13 +10644,10 @@ if ($SelfTest) {
                 '> ' + $strMarkdownFence + [Environment]::NewLine +
                 $strContraryPlacementRule
         ) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
+        -Failure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
 
     $strMarkdownTildeFence = '~~~'
-    Assert-MutationRejected `
-        -Name 'standing placement hidden in nested blockquoted tilde fence' `
+    Assert-Failure `
         -AgentsContent $strAgentsContent.Replace(
             $strAgentsStandingParagraph,
             '> > ' + $strMarkdownTildeFence + 'text' + [Environment]::NewLine +
@@ -10213,12 +10655,9 @@ if ($SelfTest) {
                 '> > ' + $strMarkdownTildeFence + [Environment]::NewLine +
                 $strContraryPlacementRule
         ) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
+        -Failure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
 
-    Assert-MutationRejected `
-        -Name 'standing placement hidden in list-item fenced example' `
+    Assert-Failure `
         -AgentsContent $strAgentsContent.Replace(
             $strAgentsStandingParagraph,
             '- ' + $strMarkdownFence + 'text' + [Environment]::NewLine +
@@ -10226,41 +10665,31 @@ if ($SelfTest) {
                 '  ' + $strMarkdownFence + [Environment]::NewLine +
                 $strContraryPlacementRule
         ) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
+        -Failure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
 
-    Assert-MutationRejected `
-        -Name 'unclosed blockquoted fence does not swallow operative prose' `
+    Assert-Failure `
         -AgentsContent $strAgentsContent.Replace(
             $strAgentsStandingParagraph,
             '> ' + $strMarkdownFence + 'text' + [Environment]::NewLine +
                 '> ' + $strAgentsStandingParagraph + [Environment]::NewLine +
                 $strContraryPlacementRule
         ) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
+        -Failure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
 
     Assert-FixtureAccepted `
-        -Name 'ordinary blockquoted policy remains operative' `
         -AgentsContent $strAgentsContent.Replace(
             $strAgentsStandingParagraph,
             '    > ' + $strAgentsStandingParagraph.TrimStart()
         ) `
-        -ClaudeContent $strClaudeContent `
         -CodexConfigContent $strCodexConfigContent
 
-    Assert-MutationRejected `
-        -Name 'standing placement hidden in list-item indented code block' `
+    Assert-Failure `
         -AgentsContent $strAgentsContent.Replace(
             $strAgentsStandingParagraph,
             '    ' + $strAgentsStandingParagraph + [Environment]::NewLine +
                 [Environment]::NewLine + '    ' + $strContraryPlacementRule
         ) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
+        -Failure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
 
     $arrIndentedCodeFixtures = @(
         [pscustomobject]@{
@@ -10278,9 +10707,9 @@ if ($SelfTest) {
     )
     foreach ($objFixture in $arrIndentedCodeFixtures) {
         $strOperativeFixture = ConvertTo-OperativeMarkdownText -Content $objFixture.Content
-        if ($strOperativeFixture.Contains('HIDDEN-CODE', [System.StringComparison]::Ordinal) -or
-            -not $strOperativeFixture.Contains('Before', [System.StringComparison]::Ordinal) -or
-            -not $strOperativeFixture.Contains('After', [System.StringComparison]::Ordinal)) {
+        if ($strOperativeFixture.Contains('HIDDEN-CODE', [StringComparison]::Ordinal) -or
+            -not $strOperativeFixture.Contains('Before', [StringComparison]::Ordinal) -or
+            -not $strOperativeFixture.Contains('After', [StringComparison]::Ordinal)) {
             throw "Operative Markdown filtering failed for $($objFixture.Name)."
         }
     }
@@ -10295,7 +10724,7 @@ if ($SelfTest) {
     $strNestedListOperativeText = ConvertTo-OperativeMarkdownText -Content $strNestedListProse
     if (-not $strNestedListOperativeText.Contains(
             'OPERATIVE-NESTED-PROSE',
-            [System.StringComparison]::Ordinal
+            [StringComparison]::Ordinal
         )) {
         throw 'Operative Markdown filtering removed ordinary nested-list prose.'
     }
@@ -10309,27 +10738,20 @@ if ($SelfTest) {
         $strAgentsAutomatedLoopHeading + [Environment]::NewLine +
             $strAgentsStandingParagraph
     )
-    Assert-MutationRejected `
-        -Name 'standing placement moved to wrong section' `
+    Assert-Failure `
         -AgentsContent $strRelocatedStandingPlacement `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
+        -Failure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
 
-    Assert-MutationRejected `
-        -Name 'missing shared inventory marker' `
+    Assert-Failure `
         -AgentsContent $strAgentsContent.Replace('`reviewThreads`', '`reviewThreadz`') `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md is missing required capability marker: `reviewThreads`'
+        -Failure 'AGENTS.md is missing required capability marker: `reviewThreads`'
 
     $arrSharedMarkerSource = @(
         $script:arrSharedStructuralLiterals |
             ForEach-Object {
-                if ($_.StartsWith([string][char]96, [System.StringComparison]::Ordinal)) {
+                if ($_.StartsWith([string][char]96, [StringComparison]::Ordinal)) {
                     $_
-                }
-                else {
+                } else {
                     [char]96 + $_ + [char]96
                 }
             }
@@ -10358,8 +10780,7 @@ if ($SelfTest) {
     foreach ($strDocumentName in @('AGENTS.md', 'CLAUDE.md')) {
         $strDocumentContent = if ($strDocumentName -ceq 'AGENTS.md') {
             $strAgentsContent
-        }
-        else {
+        } else {
             $strClaudeContent
         }
         foreach ($strLiteral in $script:arrSharedStructuralLiterals) {
@@ -10371,23 +10792,16 @@ if ($SelfTest) {
         foreach ($objConcealment in $arrSharedMarkerConcealments) {
             $strMutation = $strDocumentContent + [Environment]::NewLine +
                 [Environment]::NewLine + $objConcealment.Suffix
-            $strExpectedFailure = $strDocumentName +
+            $strFailure = $strDocumentName +
                 ' is missing required capability marker: `reviewThreads`'
             if ($strDocumentName -ceq 'AGENTS.md') {
-                Assert-MutationRejected `
-                    -Name "AGENTS shared markers in $($objConcealment.Name)" `
+                Assert-Failure `
                     -AgentsContent $strMutation `
-                    -ClaudeContent $strClaudeContent `
-                    -CodexConfigContent $strCodexConfigContent `
-                    -ExpectedFailure $strExpectedFailure
-            }
-            else {
-                Assert-MutationRejected `
-                    -Name "CLAUDE shared markers in $($objConcealment.Name)" `
-                    -AgentsContent $strAgentsContent `
+                    -Failure $strFailure
+            } else {
+                Assert-Failure `
                     -ClaudeContent $strMutation `
-                    -CodexConfigContent $strCodexConfigContent `
-                    -ExpectedFailure $strExpectedFailure
+                    -Failure $strFailure
             }
         }
     }
@@ -10395,8 +10809,7 @@ if ($SelfTest) {
     foreach ($strDocumentName in @('AGENTS.md', 'CLAUDE.md')) {
         $strDocumentContent = if ($strDocumentName -ceq 'AGENTS.md') {
             $strAgentsContent
-        }
-        else {
+        } else {
             $strClaudeContent
         }
         $strDeferringWorkHeading = '## Deferring Work'
@@ -10427,23 +10840,16 @@ if ($SelfTest) {
             }
         )
         foreach ($objMutation in $arrDeferringWorkMutations) {
-            $strExpectedFailure =
+            $strFailure =
                 "$strDocumentName must contain one exact level-two Deferring Work heading."
             if ($strDocumentName -ceq 'AGENTS.md') {
-                Assert-MutationRejected `
-                    -Name "AGENTS Deferring Work heading $($objMutation.Name)" `
+                Assert-Failure `
                     -AgentsContent $objMutation.Content `
-                    -ClaudeContent $strClaudeContent `
-                    -CodexConfigContent $strCodexConfigContent `
-                    -ExpectedFailure $strExpectedFailure
-            }
-            else {
-                Assert-MutationRejected `
-                    -Name "CLAUDE Deferring Work heading $($objMutation.Name)" `
-                    -AgentsContent $strAgentsContent `
+                    -Failure $strFailure
+            } else {
+                Assert-Failure `
                     -ClaudeContent $objMutation.Content `
-                    -CodexConfigContent $strCodexConfigContent `
-                    -ExpectedFailure $strExpectedFailure
+                    -Failure $strFailure
             }
         }
     }
@@ -10452,8 +10858,7 @@ if ($SelfTest) {
         foreach ($strDocumentName in @('AGENTS.md', 'CLAUDE.md')) {
             $strDocumentContent = if ($strDocumentName -ceq 'AGENTS.md') {
                 $strAgentsContent
-            }
-            else {
+            } else {
                 $strClaudeContent
             }
             $strMutationToken = ($strLiteral -split ' ')[-1]
@@ -10465,7 +10870,7 @@ if ($SelfTest) {
                 -Content $strRemovedMarkerContent
             if ($objRemovedMarkerContext.ProseText.Contains(
                     $strLiteral,
-                    [System.StringComparison]::Ordinal
+                    [StringComparison]::Ordinal
                 )) {
                 throw "Could not remove shared prose marker for mutation: $strLiteral"
             }
@@ -10484,23 +10889,16 @@ if ($SelfTest) {
                         Content = $strRawHtmlMutation
                     }
                 )) {
-                $strExpectedFailure =
+                $strFailure =
                     "$strDocumentName is missing required capability marker: $strLiteral"
                 if ($strDocumentName -ceq 'AGENTS.md') {
-                    Assert-MutationRejected `
-                        -Name "AGENTS shared marker hidden in $($objMutation.Name): $strLiteral" `
+                    Assert-Failure `
                         -AgentsContent $objMutation.Content `
-                        -ClaudeContent $strClaudeContent `
-                        -CodexConfigContent $strCodexConfigContent `
-                        -ExpectedFailure $strExpectedFailure
-                }
-                else {
-                    Assert-MutationRejected `
-                        -Name "CLAUDE shared marker hidden in $($objMutation.Name): $strLiteral" `
-                        -AgentsContent $strAgentsContent `
+                        -Failure $strFailure
+                } else {
+                    Assert-Failure `
                         -ClaudeContent $objMutation.Content `
-                        -CodexConfigContent $strCodexConfigContent `
-                        -ExpectedFailure $strExpectedFailure
+                        -Failure $strFailure
                 }
             }
         }
@@ -10516,7 +10914,7 @@ if ($SelfTest) {
             -Content $strRemovedMarkerContent
         if ($objRemovedMarkerContext.ProseText.Contains(
                 $strLiteral,
-                [System.StringComparison]::Ordinal
+                [StringComparison]::Ordinal
             )) {
             throw "Could not remove AGENTS normative prose marker for mutation: $strLiteral"
         }
@@ -10542,66 +10940,45 @@ if ($SelfTest) {
                     Content = $strVisibleRelocation
                 }
             )) {
-            Assert-MutationRejected `
-                -Name "AGENTS normative marker hidden in $($objMutation.Name): $strLiteral" `
+            Assert-Failure `
                 -AgentsContent $objMutation.Content `
-                -ClaudeContent $strClaudeContent `
-                -CodexConfigContent $strCodexConfigContent `
-                -ExpectedFailure "AGENTS.md must contain required policy as prose: $strLiteral"
+                -Failure "AGENTS.md must contain required policy as prose: $strLiteral"
         }
     }
 
-    Assert-MutationRejected `
-        -Name 'missing Claude readiness marker' `
-        -AgentsContent $strAgentsContent `
+    Assert-Failure `
         -ClaudeContent $strClaudeContent.Replace('review-readiness gate', 'review readiness gate') `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'CLAUDE.md is missing required Claude marker: review-readiness gate'
+        -Failure 'CLAUDE.md is missing required Claude marker: review-readiness gate'
 
-    Assert-MutationRejected `
-        -Name 'missing AGENTS standing placement authorization' `
+    Assert-Failure `
         -AgentsContent $strAgentsContent.Replace(
             $script:strStandingPlacementAuthorization,
             'An additional direct-push authorization from the owner is required.'
         ) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
+        -Failure 'AGENTS.md must contain the standing direct-placement authorization exactly once.'
 
-    Assert-MutationRejected `
-        -Name 'missing CLAUDE standing placement authorization' `
-        -AgentsContent $strAgentsContent `
+    Assert-Failure `
         -ClaudeContent $strClaudeContent.Replace(
             $script:strStandingPlacementAuthorization,
             'An additional direct-push authorization from the owner is required.'
         ) `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'CLAUDE.md must contain the standing direct-placement authorization exactly once.'
+        -Failure 'CLAUDE.md must contain the standing direct-placement authorization exactly once.'
 
-    Assert-MutationRejected `
-        -Name 'obsolete session-specific placement authorization' `
+    Assert-Failure `
         -AgentsContent ($strAgentsContent + [Environment]::NewLine + $script:arrObsoletePlacementLiterals[0]) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md contains obsolete session-specific direct-placement authorization'
+        -Failure 'AGENTS.md contains obsolete session-specific direct-placement authorization'
 
     foreach ($strLiteral in $script:arrPlacementStructuralLiterals) {
         $strInlineCodeLiteral = '`' + $strLiteral + '`'
-        Assert-MutationRejected `
-            -Name "AGENTS placement structure hidden in inline code: $strLiteral" `
+        Assert-Failure `
             -AgentsContent $strAgentsContent.Replace($strLiteral, $strInlineCodeLiteral) `
-            -ClaudeContent $strClaudeContent `
-            -CodexConfigContent $strCodexConfigContent `
-            -ExpectedFailure (
+            -Failure (
                 'AGENTS.md is missing required direct-placement safety marker: ' +
                 $strLiteral
             )
-        Assert-MutationRejected `
-            -Name "CLAUDE placement structure hidden in inline code: $strLiteral" `
-            -AgentsContent $strAgentsContent `
+        Assert-Failure `
             -ClaudeContent $strClaudeContent.Replace($strLiteral, $strInlineCodeLiteral) `
-            -CodexConfigContent $strCodexConfigContent `
-            -ExpectedFailure (
+            -Failure (
                 'CLAUDE.md is missing required direct-placement safety marker: ' +
                 $strLiteral
             )
@@ -10616,12 +10993,9 @@ if ($SelfTest) {
             '**Outgoing-range audit.**',
             '**Outgoing-range audit.** ' + $strInlineCodeLiteral
         )
-        Assert-MutationRejected `
-            -Name "AGENTS placement prose hidden in inline code: $strLiteral" `
+        Assert-Failure `
             -AgentsContent $strAgentsInlineCodeMutation `
-            -ClaudeContent $strClaudeContent `
-            -CodexConfigContent $strCodexConfigContent `
-            -ExpectedFailure (
+            -Failure (
                 'AGENTS.md is missing required direct-placement safety marker: ' +
                 $strLiteral
             )
@@ -10633,69 +11007,51 @@ if ($SelfTest) {
             '**Outgoing-range audit.**',
             '**Outgoing-range audit.** ' + $strInlineCodeLiteral
         )
-        Assert-MutationRejected `
-            -Name "CLAUDE placement prose hidden in inline code: $strLiteral" `
-            -AgentsContent $strAgentsContent `
+        Assert-Failure `
             -ClaudeContent $strClaudeInlineCodeMutation `
-            -CodexConfigContent $strCodexConfigContent `
-            -ExpectedFailure (
+            -Failure (
                 'CLAUDE.md is missing required direct-placement safety marker: ' +
                 $strLiteral
             )
     }
 
-    Assert-MutationRejected `
-        -Name 'missing AGENTS inline style-guide route' `
+    Assert-Failure `
         -AgentsContent $strAgentsContent.Replace(
             $script:arrStyleGuideRoutingLiterals[0],
             'Post the prompt in the review discussion.'
         ) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure (
+        -Failure (
             'AGENTS.md must contain the style-guide routing marker exactly once: ' +
             $script:arrStyleGuideRoutingLiterals[0]
         )
 
-    Assert-MutationRejected `
-        -Name 'missing CLAUDE body-only style-guide route' `
-        -AgentsContent $strAgentsContent `
+    Assert-Failure `
         -ClaudeContent $strClaudeContent.Replace(
             $script:arrStyleGuideRoutingLiterals[1],
             'Post the prompt in the review discussion.'
         ) `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure (
+        -Failure (
             'CLAUDE.md must contain the style-guide routing marker exactly once: ' +
             $script:arrStyleGuideRoutingLiterals[1]
         )
 
-    Assert-MutationRejected `
-        -Name 'missing AGENTS genuine-deferral Issue rule' `
+    Assert-Failure `
         -AgentsContent $strAgentsContent.Replace(
             $script:strOnlyGenuineDeferredWork,
             'Every non-fix outcome requires a GitHub Issue.'
         ) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md must contain the genuine-deferral Issue rule exactly once.'
+        -Failure 'AGENTS.md must contain the genuine-deferral Issue rule exactly once.'
 
-    Assert-MutationRejected `
-        -Name 'missing CLAUDE genuine-deferral Issue rule' `
-        -AgentsContent $strAgentsContent `
+    Assert-Failure `
         -ClaudeContent $strClaudeContent.Replace(
             $script:strOnlyGenuineDeferredWork,
             'Every non-fix outcome requires a GitHub Issue.'
         ) `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'CLAUDE.md must contain the genuine-deferral Issue rule exactly once.'
+        -Failure 'CLAUDE.md must contain the genuine-deferral Issue rule exactly once.'
 
-    Assert-MutationRejected `
-        -Name 'obsolete blanket Issue rule' `
-        -AgentsContent $strAgentsContent `
+    Assert-Failure `
         -ClaudeContent ($strClaudeContent + [Environment]::NewLine + $script:arrObsoleteDeferralLiterals[0]) `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'CLAUDE.md contains an obsolete blanket Issue rule'
+        -Failure 'CLAUDE.md contains an obsolete blanket Issue rule'
 
     $objMaximumMatch = [regex]::Match(
         $strCodexConfigContent,
@@ -10710,12 +11066,9 @@ if ($SelfTest) {
         $objMaximumBytesGroup.Index,
         '32768'
     )
-    Assert-MutationRejected `
-        -Name 'insufficient configured capacity' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent $strInsufficientCapacityConfig `
-        -ExpectedFailure 'project_doc_max_bytes must be at least 65536.'
+        -Failure 'project_doc_max_bytes must be at least 65536.'
 
     $arrAcceptedCapacityStatements = @(
         [pscustomobject]@{
@@ -10761,9 +11114,6 @@ if ($SelfTest) {
     )
     foreach ($objAcceptedCapacityStatement in $arrAcceptedCapacityStatements) {
         Assert-FixtureAccepted `
-            -Name $objAcceptedCapacityStatement.Name `
-            -AgentsContent $strAgentsContent `
-            -ClaudeContent $strClaudeContent `
             -CodexConfigContent $strCodexConfigContent.Replace(
                 $objMaximumMatch.Value,
                 $objAcceptedCapacityStatement.Statement
@@ -10792,47 +11142,35 @@ if ($SelfTest) {
                 Statement = 'project_doc_max_bytes = { value = 65536 }'
             }
         )) {
-        Assert-MutationRejected `
-            -Name $objInvalidCapacityStatement.Name `
-            -AgentsContent $strAgentsContent `
-            -ClaudeContent $strClaudeContent `
+        Assert-Failure `
             -CodexConfigContent $strCodexConfigContent.Replace(
                 $objMaximumMatch.Value,
                 $objInvalidCapacityStatement.Statement
             ) `
-            -ExpectedFailure 'project_doc_max_bytes must be an integer.'
+            -Failure 'project_doc_max_bytes must be an integer.'
     }
 
-    Assert-MutationRejected `
-        -Name 'capacity exceeds signed 64-bit range' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent $strCodexConfigContent.Replace(
             $objMaximumMatch.Value,
             'project_doc_max_bytes = 9223372036854775808'
         ) `
-        -ExpectedFailure 'project_doc_max_bytes must fit in a signed 64-bit integer.'
+        -Failure 'project_doc_max_bytes must fit in a signed 64-bit integer.'
 
-    Assert-MutationRejected `
-        -Name 'hexadecimal capacity below minimum' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent $strCodexConfigContent.Replace(
             $objMaximumMatch.Value,
             'project_doc_max_bytes = 0x8000'
         ) `
-        -ExpectedFailure 'project_doc_max_bytes must be at least 65536.'
+        -Failure 'project_doc_max_bytes must be at least 65536.'
 
     $strNestedMaximumConfig = @(
         '[codex_self_test]'
         $objMaximumMatch.Value
     ) -join [Environment]::NewLine
-    Assert-MutationRejected `
-        -Name 'nested configured capacity' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent $strNestedMaximumConfig `
-        -ExpectedFailure 'project_doc_max_bytes must be the first semantic TOML statement.'
+        -Failure 'project_doc_max_bytes must be the first semantic TOML statement.'
 
     $strMultilineBasicCapacityConfig = $strCodexConfigContent.Replace(
         $objMaximumMatch.Value,
@@ -10842,12 +11180,9 @@ if ($SelfTest) {
                 '"""'
             ) -join [Environment]::NewLine)
     )
-    Assert-MutationRejected `
-        -Name 'capacity assignment inside multiline basic string' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent $strMultilineBasicCapacityConfig `
-        -ExpectedFailure 'project_doc_max_bytes must be the first semantic TOML statement.'
+        -Failure 'project_doc_max_bytes must be the first semantic TOML statement.'
 
     $strMultilineLiteralCapacityConfig = $strCodexConfigContent.Replace(
         $objMaximumMatch.Value,
@@ -10857,12 +11192,9 @@ if ($SelfTest) {
                 "'''"
             ) -join [Environment]::NewLine)
     )
-    Assert-MutationRejected `
-        -Name 'capacity assignment inside multiline literal string' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent $strMultilineLiteralCapacityConfig `
-        -ExpectedFailure 'project_doc_max_bytes must be the first semantic TOML statement.'
+        -Failure 'project_doc_max_bytes must be the first semantic TOML statement.'
 
     $strGitHubPluginTableHeader = '[plugins."github@openai-curated"]'
     $arrAcceptedPluginTableStatements = @(
@@ -10965,17 +11297,11 @@ if ($SelfTest) {
         '"en\u0061bled" = true'
     )
     Assert-FixtureAccepted `
-        -Name 'combined semantically equivalent quoted TOML keys' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
         -CodexConfigContent $strCombinedQuotedKeyConfig
-    Assert-MutationRejected `
-        -Name 'disabled plugin with combined semantically equivalent quoted TOML keys' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent (ConvertTo-DisabledGitHubPluginMutation `
             -Content $strCombinedQuotedKeyConfig) `
-        -ExpectedFailure 'The github@openai-curated plugin table must declare enabled = true exactly once.'
+        -Failure 'The github@openai-curated plugin table must declare enabled = true exactly once.'
 
     foreach ($objNearMissPluginStatement in @(
             [pscustomobject]@{
@@ -11007,35 +11333,64 @@ if ($SelfTest) {
                     'The github@openai-curated enabled value must be the third semantic TOML statement.'
             }
         )) {
-        Assert-MutationRejected `
-            -Name $objNearMissPluginStatement.Name `
-            -AgentsContent $strAgentsContent `
-            -ClaudeContent $strClaudeContent `
+        Assert-Failure `
             -CodexConfigContent $strCodexConfigContent.Replace(
                 $objNearMissPluginStatement.Search,
                 $objNearMissPluginStatement.Replacement
             ) `
-            -ExpectedFailure $objNearMissPluginStatement.Failure
+            -Failure $objNearMissPluginStatement.Failure
     }
 
-    Assert-MutationRejected `
-        -Name 'missing GitHub plugin declaration' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent $strCodexConfigContent.Replace(
             $strGitHubPluginTableHeader,
             '[plugins."github-disabled-for-self-test"]'
         ) `
-        -ExpectedFailure 'The project configuration must declare [plugins."github@openai-curated"] exactly once.'
+        -Failure 'The project configuration must declare [plugins."github@openai-curated"] exactly once.'
 
     $strDisabledGitHubPluginConfig = ConvertTo-DisabledGitHubPluginMutation `
         -Content $strCodexConfigContent
-    Assert-MutationRejected `
-        -Name 'disabled GitHub plugin declaration' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent $strDisabledGitHubPluginConfig `
-        -ExpectedFailure 'The github@openai-curated plugin table must declare enabled = true exactly once.'
+        -Failure 'The github@openai-curated plugin table must declare enabled = true exactly once.'
+
+    $strConfigNewLine = if ($strCodexConfigContent.Contains("`r`n", [StringComparison]::Ordinal)) {
+        "`r`n"
+    } else {
+        "`n"
+    }
+    $strMultiAgentStatement = 'multi_agent = true'
+    Assert-Failure `
+        -CodexConfigContent $strCodexConfigContent.Replace(
+            $strMultiAgentStatement,
+            'multi_agent = false'
+        ) `
+        -Failure 'The [features] table must declare multi_agent = true exactly once.'
+    Assert-Failure `
+        -CodexConfigContent $strCodexConfigContent.Replace(
+            $strMultiAgentStatement,
+            'multi_agent = "true"'
+        ) `
+        -Failure 'The [features] table must declare multi_agent = true exactly once.'
+    Assert-Failure `
+        -CodexConfigContent $strCodexConfigContent.Replace(
+            $strMultiAgentStatement,
+            '# multi_agent removed'
+        ) `
+        -Failure 'The [features] table must declare multi_agent = true exactly once.'
+    Assert-Failure `
+        -CodexConfigContent $strCodexConfigContent.Replace(
+            "[features]$strConfigNewLine" + 'goals = true' +
+            "$strConfigNewLine$strMultiAgentStatement",
+            '[features.multi_agent]' + "$strConfigNewLine" + 'enabled = true'
+        ) `
+        -Failure 'The [features] table must declare multi_agent = true exactly once.'
+    Assert-Failure `
+        -CodexConfigContent $strCodexConfigContent.Replace(
+            $strMultiAgentStatement,
+            'multi_agent ='
+        ) `
+        -Failure 'The project configuration must contain valid TOML.'
 
     foreach ($objInvalidPluginValue in @(
             [pscustomobject]@{
@@ -11047,23 +11402,14 @@ if ($SelfTest) {
                 Statement = 'enabled = 1'
             }
         )) {
-        Assert-MutationRejected `
-            -Name $objInvalidPluginValue.Name `
-            -AgentsContent $strAgentsContent `
-            -ClaudeContent $strClaudeContent `
+        Assert-Failure `
             -CodexConfigContent $strCodexConfigContent.Replace(
                 'enabled = true',
                 $objInvalidPluginValue.Statement
             ) `
-            -ExpectedFailure 'The github@openai-curated plugin table must declare enabled = true exactly once.'
+            -Failure 'The github@openai-curated plugin table must declare enabled = true exactly once.'
     }
 
-    $strConfigNewLine = if ($strCodexConfigContent.Contains("`r`n", [System.StringComparison]::Ordinal)) {
-        "`r`n"
-    }
-    else {
-        "`n"
-    }
     $strCapacityStatement = $objMaximumMatch.Value.TrimEnd([char[]] "`r`n")
     $strCanonicalConfigPrefix = @(
         $strCapacityStatement
@@ -11077,15 +11423,12 @@ if ($SelfTest) {
         ''
         $strCapacityStatement
     ) -join $strConfigNewLine
-    Assert-MutationRejected `
-        -Name 'plugin table before capacity statement' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent $strCodexConfigContent.Replace(
             $strCanonicalConfigPrefix,
             $strReorderedConfigPrefix
         ) `
-        -ExpectedFailure 'project_doc_max_bytes must be the first semantic TOML statement.'
+        -Failure 'project_doc_max_bytes must be the first semantic TOML statement.'
 
     $objCanonicalPluginContext = Get-GitHubPluginEnablementContext `
         -Content $strCodexConfigContent
@@ -11110,31 +11453,22 @@ if ($SelfTest) {
     if ($arrAlternativePluginFailures.Count -gt 0) {
         throw "Accepted plugin formatting failed validation: $($arrAlternativePluginFailures -join '; ')"
     }
-    Assert-MutationRejected `
-        -Name 'disabled GitHub plugin declaration with accepted formatting' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent (ConvertTo-DisabledGitHubPluginMutation `
             -Content $strAlternativePluginFormattingConfig) `
-        -ExpectedFailure 'The github@openai-curated plugin table must declare enabled = true exactly once.'
+        -Failure 'The github@openai-curated plugin table must declare enabled = true exactly once.'
 
-    Assert-MutationRejected `
-        -Name 'duplicate GitHub plugin declaration' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent ($strCodexConfigContent + [Environment]::NewLine +
             $strGitHubPluginTableHeader + [Environment]::NewLine + 'enabled = true') `
-        -ExpectedFailure 'The project configuration must contain valid TOML.'
+        -Failure 'The project configuration must contain valid TOML.'
 
-    Assert-MutationRejected `
-        -Name 'nested GitHub plugin declaration' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent $strCodexConfigContent.Replace(
             $strGitHubPluginTableHeader,
             '[features.plugins."github@openai-curated"]'
         ) `
-        -ExpectedFailure 'The project configuration must declare [plugins."github@openai-curated"] exactly once.'
+        -Failure 'The project configuration must declare [plugins."github@openai-curated"] exactly once.'
 
     $strBasicStringPluginTableConfig = $strCodexConfigContent.Replace(
         $strGitHubPluginTableHeader,
@@ -11143,12 +11477,9 @@ if ($SelfTest) {
         'enabled = true',
         "enabled = true$strConfigNewLine`"`"`""
     )
-    Assert-MutationRejected `
-        -Name 'plugin table inside multiline basic string' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent $strBasicStringPluginTableConfig `
-        -ExpectedFailure 'The github@openai-curated plugin table must be the second semantic TOML statement.'
+        -Failure 'The github@openai-curated plugin table must be the second semantic TOML statement.'
 
     $strLiteralStringPluginTableConfig = $strCodexConfigContent.Replace(
         $strGitHubPluginTableHeader,
@@ -11157,36 +11488,27 @@ if ($SelfTest) {
         'enabled = true',
         "enabled = true$strConfigNewLine'''"
     )
-    Assert-MutationRejected `
-        -Name 'plugin table inside multiline literal string' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent $strLiteralStringPluginTableConfig `
-        -ExpectedFailure 'The github@openai-curated plugin table must be the second semantic TOML statement.'
+        -Failure 'The github@openai-curated plugin table must be the second semantic TOML statement.'
 
     $strBasicStringPluginEnabledConfig = $strCodexConfigContent.Replace(
         'enabled = true',
         "model = `"`"`"$strConfigNewLine" +
             "enabled = true$strConfigNewLine`"`"`""
     )
-    Assert-MutationRejected `
-        -Name 'plugin enabled value inside multiline basic string' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent $strBasicStringPluginEnabledConfig `
-        -ExpectedFailure 'The github@openai-curated enabled value must be the third semantic TOML statement.'
+        -Failure 'The github@openai-curated enabled value must be the third semantic TOML statement.'
 
     $strLiteralStringPluginEnabledConfig = $strCodexConfigContent.Replace(
         'enabled = true',
         "model = '''$strConfigNewLine" +
             "enabled = true$strConfigNewLine'''"
     )
-    Assert-MutationRejected `
-        -Name 'plugin enabled value inside multiline literal string' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent $strLiteralStringPluginEnabledConfig `
-        -ExpectedFailure 'The github@openai-curated enabled value must be the third semantic TOML statement.'
+        -Failure 'The github@openai-curated enabled value must be the third semantic TOML statement.'
 
     $strLaterBasicStringConfig = $strCodexConfigContent + $strConfigNewLine +
         (@(
@@ -11198,17 +11520,11 @@ if ($SelfTest) {
                 '"""'
             ) -join $strConfigNewLine)
     Assert-FixtureAccepted `
-        -Name 'later multiline basic string contains configuration-like lines' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
         -CodexConfigContent $strLaterBasicStringConfig
-    Assert-MutationRejected `
-        -Name 'disabled plugin with later multiline basic string' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent (ConvertTo-DisabledGitHubPluginMutation `
             -Content $strLaterBasicStringConfig) `
-        -ExpectedFailure 'The github@openai-curated plugin table must declare enabled = true exactly once.'
+        -Failure 'The github@openai-curated plugin table must declare enabled = true exactly once.'
 
     $strLaterLiteralStringConfig = $strCodexConfigContent + $strConfigNewLine +
         (@(
@@ -11220,84 +11536,72 @@ if ($SelfTest) {
                 "'''"
             ) -join $strConfigNewLine)
     Assert-FixtureAccepted `
-        -Name 'later multiline literal string contains configuration-like lines' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
         -CodexConfigContent $strLaterLiteralStringConfig
-    Assert-MutationRejected `
-        -Name 'disabled plugin with later multiline literal string' `
-        -AgentsContent $strAgentsContent `
-        -ClaudeContent $strClaudeContent `
+    Assert-Failure `
         -CodexConfigContent (ConvertTo-DisabledGitHubPluginMutation `
             -Content $strLaterLiteralStringConfig) `
-        -ExpectedFailure 'The github@openai-curated plugin table must declare enabled = true exactly once.'
+        -Failure 'The github@openai-curated plugin table must declare enabled = true exactly once.'
 
-    $intCurrentBytes = [System.Text.Encoding]::UTF8.GetByteCount($strAgentsContent)
+    # Keep the root-command oracle independent of the implementation helper.
+    $arrRootSetupCommands = @(
+        "pwsh -NoProfile -Command 'if (`$PSVersionTable.PSVersion.Major -lt 7) { exit 1 }'"
+        'py -3.12 -m pip --isolated install --require-hashes --only-binary=:all: --index-url https://pypi.org/simple -r requirements-dev.txt'
+        'python3.12 -m pip --isolated install --require-hashes --only-binary=:all: --index-url https://pypi.org/simple -r requirements-dev.txt'
+        'py -3.12 -m pre_commit run --all-files'
+        'python3.12 -m pre_commit run --all-files'
+    )
+    foreach ($objRootDocument in @(
+            [pscustomobject]@{ Name = 'AGENTS.md'; Parameter = 'AgentsContent'; Content = $strAgentsContent }
+            [pscustomobject]@{ Name = 'CLAUDE.md'; Parameter = 'ClaudeContent'; Content = $strClaudeContent }
+        )) {
+        foreach ($strCommand in $arrRootSetupCommands) {
+            $strSpan = [string][char]96 + $strCommand + [string][char]96
+            foreach ($strReplacement in @('', "<!-- $strSpan -->", "~~$strSpan~~", "$strSpan $strSpan")) {
+                $strMutation = $objRootDocument.Content.Replace($strSpan, $strReplacement)
+                if ($strMutation -ceq $objRootDocument.Content) {
+                    throw "Root setup mutation did not change $($objRootDocument.Name): $strCommand"
+                }
+                $hashtableMutation = @{ Failure = "$($objRootDocument.Name) must contain this setup command exactly once: $strCommand" }
+                $hashtableMutation[$objRootDocument.Parameter] = $strMutation
+                Assert-Failure @hashtableMutation
+            }
+        }
+        foreach ($arrNearMiss in @(
+                ,@('--isolated install', 'install', $arrRootSetupCommands[1])
+                ,@('--require-hashes ', '', $arrRootSetupCommands[1])
+                ,@('--only-binary=:all: ', '', $arrRootSetupCommands[1])
+                ,@('https://pypi.org/simple', 'https://example.invalid/simple', $arrRootSetupCommands[1])
+                ,@('-r requirements-dev.txt', '-r other-requirements.txt', $arrRootSetupCommands[1])
+                ,@('py -3.12 -m pip', 'py -3.11 -m pip', $arrRootSetupCommands[1])
+                ,@('python3.12 -m pip', 'python3.11 -m pip', $arrRootSetupCommands[2])
+                ,@('-lt 7', '-lt 6', $arrRootSetupCommands[0])
+            )) {
+            $strMutation = $objRootDocument.Content.Replace($arrNearMiss[0], $arrNearMiss[1])
+            if ($strMutation -ceq $objRootDocument.Content) {
+                throw "Root setup near miss did not change $($objRootDocument.Name): $($arrNearMiss[0])"
+            }
+            $hashtableMutation = @{ Failure = "$($objRootDocument.Name) must contain this setup command exactly once: $($arrNearMiss[2])" }
+            $hashtableMutation[$objRootDocument.Parameter] = $strMutation
+            Assert-Failure @hashtableMutation
+        }
+    }
+
+    $intCurrentBytes = [Text.Encoding]::UTF8.GetByteCount($strAgentsContent)
+    $intDefaultFillerLength = [Math]::Max(1, 32768 - $intCurrentBytes + 1)
+    Assert-Failure `
+        -AgentsContent ($strAgentsContent + ('x' * $intDefaultFillerLength)) `
+        -Failure 'AGENTS.md must not exceed the ordinary 32768-byte Codex limit.'
+
     $intMaximumBytes = [int64]$objMaximumBytesGroup.Value
-    $intReserveBoundaryBytes = $intMaximumBytes - 16384
-    $intAcceptedFillerLength = $intReserveBoundaryBytes - $intCurrentBytes
-    if ($intAcceptedFillerLength -lt 0) {
-        throw 'The current AGENTS.md already exceeds the configured reserve boundary.'
-    }
-    Assert-FixtureAccepted `
-        -Name 'exact configured capacity reserve boundary' `
-        -AgentsContent ($strAgentsContent + ('x' * $intAcceptedFillerLength)) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent
-
-    Assert-MutationRejected `
-        -Name 'configured capacity reserve exceeded by one byte' `
-        -AgentsContent ($strAgentsContent + ('x' * ($intAcceptedFillerLength + 1))) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'Configured AGENTS.md capacity must retain at least 16384 bytes of reserve.'
-
-    $objAgentsBoundaryStream = [System.IO.MemoryStream]::new(
-        [byte[]]::new($intAgentsMaximumInputBytes),
-        $false
-    )
-    try {
-        $arrAgentsBoundaryBytes = @(Read-BoundedStreamData `
-                -Stream $objAgentsBoundaryStream `
-                -MaximumBytes $intAgentsMaximumInputBytes `
-                -DisplayName 'AGENTS.md boundary fixture')
-        if ($arrAgentsBoundaryBytes.Count -ne $intAgentsMaximumInputBytes) {
-            throw 'The exact AGENTS.md read boundary did not preserve every byte.'
-        }
-    }
-    finally {
-        $objAgentsBoundaryStream.Dispose()
-    }
-    $objAgentsOversizedStream = [System.IO.MemoryStream]::new(
-        [byte[]]::new($intAgentsMaximumInputBytes + 1),
-        $false
-    )
-    try {
-        [void](Read-BoundedStreamData `
-                -Stream $objAgentsOversizedStream `
-                -MaximumBytes $intAgentsMaximumInputBytes `
-                -DisplayName 'AGENTS.md oversized fixture')
-        throw 'The one-byte-oversized AGENTS.md read fixture was accepted.'
-    }
-    catch [System.IO.InvalidDataException] {
-        $strExpectedAgentsOversizedFailure =
-            "AGENTS.md oversized fixture must not exceed $intAgentsMaximumInputBytes bytes."
-        if ($_.Exception.Message -cne $strExpectedAgentsOversizedFailure) {
-            throw (
-                'The one-byte-oversized AGENTS.md read fixture returned an ' +
-                "unexpected failure: $($_.Exception.Message)"
-            )
-        }
-    }
-    finally {
-        $objAgentsOversizedStream.Dispose()
-    }
+    $intFillerLength = [Math]::Max(1, $intMaximumBytes - $intCurrentBytes - 16384 + 1)
+    Assert-Failure `
+        -AgentsContent ($strAgentsContent + ('x' * $intFillerLength)) `
+        -Failure 'Configured AGENTS.md capacity must retain at least 16384 bytes of reserve.'
 
     foreach ($objSafetyLimitContract in $script:arrSafetyLimitContracts) {
         $strSafetyDocumentContent = if ($objSafetyLimitContract.DocumentName -ceq 'AGENTS.md') {
             $strAgentsContent
-        }
-        else {
+        } else {
             $strClaudeContent
         }
         $strHtmlOnlySafetyLimit = '<pre>' + [Environment]::NewLine +
@@ -11309,70 +11613,45 @@ if ($SelfTest) {
             $strHtmlOnlySafetyLimit
         )
         if ($objSafetyLimitContract.DocumentName -ceq 'AGENTS.md') {
-            Assert-MutationRejected `
-                -Name "AGENTS safety limit hidden in raw HTML: $($objSafetyLimitContract.ProseLiteral)" `
+            Assert-Failure `
                 -AgentsContent $strSafetyLimitMutation `
-                -ClaudeContent $strClaudeContent `
-                -CodexConfigContent $strCodexConfigContent `
-                -ExpectedFailure $objSafetyLimitContract.Failure
-        }
-        else {
-            Assert-MutationRejected `
-                -Name "CLAUDE safety limit hidden in raw HTML: $($objSafetyLimitContract.ProseLiteral)" `
-                -AgentsContent $strAgentsContent `
+                -Failure $objSafetyLimitContract.Failure
+        } else {
+            Assert-Failure `
                 -ClaudeContent $strSafetyLimitMutation `
-                -CodexConfigContent $strCodexConfigContent `
-                -ExpectedFailure $objSafetyLimitContract.Failure
+                -Failure $objSafetyLimitContract.Failure
         }
     }
 
-    Assert-MutationRejected `
-        -Name 'weakened Codex round cap' `
+    Assert-Failure `
         -AgentsContent $strAgentsContent.Replace('**Maximum rounds:** 8', '**Maximum rounds:** 80') `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md is missing required Codex marker: **Maximum rounds:** 8'
+        -Failure 'AGENTS.md is missing required Codex marker: **Maximum rounds:** 8'
 
-    Assert-MutationRejected `
-        -Name 'weakened Claude round cap' `
-        -AgentsContent $strAgentsContent `
+    Assert-Failure `
         -ClaudeContent $strClaudeContent.Replace('**Maximum rounds:** 80', '**Maximum rounds:** 800') `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'CLAUDE.md is missing the 80-round Claude limit.'
+        -Failure 'CLAUDE.md is missing the 80-round Claude limit.'
 
-    Assert-MutationRejected `
-        -Name 'punctuated Codex round cap' `
+    Assert-Failure `
         -AgentsContent $strAgentsContent.Replace('**Maximum rounds:** 8', '**Maximum rounds:** 8,000') `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md is missing required Codex marker: **Maximum rounds:** 8'
+        -Failure 'AGENTS.md is missing required Codex marker: **Maximum rounds:** 8'
 
-    Assert-MutationRejected `
-        -Name 'qualified Codex wall-clock limit' `
+    Assert-Failure `
         -AgentsContent $strAgentsContent.Replace(
             '**Wall-clock timeout:** 6 hours from cycle start.',
             '**Wall-clock timeout:** 6 hours minimum from cycle start.'
         ) `
-        -ClaudeContent $strClaudeContent `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'AGENTS.md is missing the 6-hour Codex wall-clock limit.'
+        -Failure 'AGENTS.md is missing the 6-hour Codex wall-clock limit.'
 
-    Assert-MutationRejected `
-        -Name 'punctuated Claude round cap' `
-        -AgentsContent $strAgentsContent `
+    Assert-Failure `
         -ClaudeContent $strClaudeContent.Replace('**Maximum rounds:** 80', '**Maximum rounds:** 80,000') `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'CLAUDE.md is missing the 80-round Claude limit.'
+        -Failure 'CLAUDE.md is missing the 80-round Claude limit.'
 
-    Assert-MutationRejected `
-        -Name 'qualified Claude wall-clock limit' `
-        -AgentsContent $strAgentsContent `
+    Assert-Failure `
         -ClaudeContent $strClaudeContent.Replace(
             '**Wall-clock timeout:** 6 hours from loop start.',
             '**Wall-clock timeout:** 6 hours minimum from loop start.'
         ) `
-        -CodexConfigContent $strCodexConfigContent `
-        -ExpectedFailure 'CLAUDE.md is missing the 6-hour Claude wall-clock limit.'
+        -Failure 'CLAUDE.md is missing the 6-hour Claude wall-clock limit.'
 
     Write-Output 'Agent-instruction mutation self-tests passed.'
     #endregion Mutation self-tests

@@ -1,34 +1,30 @@
 <!-- markdownlint-disable MD013 -->
 # Agent Instructions for OpenAI Codex CLI
 
-**Version:** 1.7.20261001.0
+**Version:** 1.7.20261005.0
 
 ## Metadata
 
 - **Status:** Active
 - **Owner:** Repository maintainer (@franklesniak)
-- **Last Updated:** 2026-10-01
-- **Scope:** Agent-specific entry point for OpenAI Codex CLI and compatible AI coding agents operating in TerraformStyleGuide. Mirrors a minimal inline summary of the highest-priority shared rules; `.github/copilot-instructions.md` remains the canonical documentation-authoring source of truth.
+- **Last Updated:** 2026-10-05
+- **Scope:** Codex and compatible agents in TerraformStyleGuide. Brief shared rules and full Codex protocols; `.github/copilot-instructions.md` governs documentation authoring.
 <!-- template-sync: begin markdown-reference-only -->
 - **Related:** [Repository Copilot Instructions](.github/copilot-instructions.md), [Documentation Writing Style](.github/instructions/docs.instructions.md)
 <!-- template-sync: end markdown-reference-only -->
 
-This file provides TerraformStyleGuide-specific instructions for OpenAI Codex CLI and compatible AI coding agents. These instructions apply the repository's Terraform, PowerShell, documentation, safety, and review contracts.
-
 ## Canonical Instructions
 
-The authoritative source of truth for TerraformStyleGuide documentation authoring is **`.github/copilot-instructions.md`**. Its normative-versus-rationale split and generated-artifact rules apply without exception. **Read that file before changing style-guide content.**
+Read **`.github/copilot-instructions.md`** before changing style-guide content. Follow its full documentation-authoring rules, including the normative/rationale split and generated-artifact rules, without exception.
 
-This file intentionally keeps only a minimal inline summary of the highest-priority shared rules so that agents receive critical guidance immediately. The full shared rule set remains in the canonical file above.
-
-**Thin entry point classification:** A thin entry point keeps shared repository rules brief; it does not mean platform-specific or required protocol sections may be discarded. Sections explicitly labeled as platform protocol or required protocol must be preserved unless the repository owner explicitly waives that protocol for the retained agent platform.
+**Thin entry point classification:** Keep shared rules brief. Preserve every section labeled platform protocol or required protocol unless the owner explicitly waives that protocol for the retained agent platform.
 
 ## Codex Execution Model and Interfaces
 
-- **Instruction scope.** Codex builds its instruction chain once per run, from global guidance through the launch working directory. Use bounded discovery for a deeper `AGENTS.md`; the remote reviewer applies the closest file. Restart Codex after an active instruction changes, and do not re-read supplied instructions unless exact bytes matter. See [OpenAI's `AGENTS.md` guidance](https://developers.openai.com/codex/guides/agents-md).
-- **Agents and interfaces.** The local agent implements work; `chatgpt-codex-connector[bot]` is a separate reviewer requested by `@codex review`. Use `rg`, `apply_patch`, and focused validation locally. Prefer the GitHub connector; use authenticated `gh api graphql` for missing thread, pagination, review-body, or inline context, and verify mutations by authenticated readback. Use primary official sources and record their impact. See [OpenAI's Codex GitHub guidance](https://developers.openai.com/codex/integrations/github).
-- **Mutation and delegation.** Preserve unrelated work and keep one writer per worktree. Before mutation or user-requested delegation, pin repository, branch, head, tree, allowed paths, finding inventory, and public actions. Give each subagent one bounded task, the requested model and effort or inherited defaults, and analysis, first-edit, validation, and public-mutation checkpoints. Prevent shared-workspace overlap.
-- **Communication and stopping.** Report useful phase boundaries. Quiet reasoning is not a hang. Stop on an unauthorized path, ambiguous public mutation, changed pinned identity, or user stop; preserve validated decisions and scoped edits first.
+- **Scope.** Once per run, chain: global guidance to launch directory. Discover deeper `AGENTS.md` with bounds; remote review uses the closest file. Restart after active-instruction changes; re-read supplied text only for exact bytes. See [OpenAI](https://developers.openai.com/codex/guides/agents-md).
+- **Interfaces.** Local agents implement; separate `chatgpt-codex-connector[bot]` reviews via `@codex review`. Use `rg`, `apply_patch`, focused checks. Prefer GitHub connector; authenticated `gh api graphql` fills missing thread/pagination/body/inline context. Verify mutations by authenticated readback. Use official primary sources; record impact. See [OpenAI](https://developers.openai.com/codex/integrations/github).
+- **Work.** Preserve unrelated work; one writer per worktree. Before mutation/user-requested delegation, pin repository/branch/head/tree, allowed paths, findings and public actions. Give each subagent one bounded task, requested/inherited model/effort, and analysis/first-edit/validation/public-mutation checkpoints. Prevent overlap.
+- **Stopping.** Report useful phases; quiet reasoning is not a hang. Stop on unauthorized paths, ambiguous public mutation, changed pinned identity or user stop; first preserve validated decisions/scoped edits.
 
 ## Protected Instruction Files
 
@@ -57,22 +53,14 @@ During downstream template adoption and stack selection, perform non-protected c
   - Respect allowlisted file access boundaries; reject path traversal and symlink escapes.
 
 - **Pre-commit and validation**
-  - First install PowerShell 7's `pwsh` on `PATH` ([guide](https://learn.microsoft.com/powershell/scripting/install/install-powershell)); verify: `pwsh -NoProfile -Command 'if ($PSVersionTable.PSVersion.Major -lt 7) { exit 1 }'`.
-  - Install Python 3.12 and the pinned runner: Windows, `py -3.12 -m pip install --requirement requirements-dev.txt`; elsewhere, `python3.12 -m pip install --requirement requirements-dev.txt`. A verified equivalent is allowed.
-  - On clone or lock changes, run `node .github/workflows/NpmTools.mjs install`. See [dependency maintenance](docs/dependency-maintenance.md) for script and hook behavior.
-  - Pre-commit: Windows, `py -3.12 -m pre_commit run --all-files`; elsewhere, `python3.12 -m pre_commit run --all-files`. Use the same equivalent.
-  - Retain Husky's staged-Markdown checks: `npm --prefix .github/workflows run lint:md` and `npm --prefix .github/workflows run lint:md:nested`.
-  - Commit auto-fixes with the related change.
-  - Do not push until pre-commit and required validation pass.
-  - Run the applicable repository commands:
-    - `npm run lint:md`
-    - `npm run lint:md:nested`
-    - `npm run test:agent-instructions`
-  - These module commands use the active hooks in [`.pre-commit-config.yaml`](.pre-commit-config.yaml), the authoritative list.
-  - Retained JSON checks include strict JSON syntax (`check-json`).
-  - Retained YAML checks include YAML parsing (`check-yaml`) and style (`yamllint`).
-  - Retained GitHub Actions checks include GitHub Actions linting (`actionlint`).
-  - CI also runs `node .github/workflows/Validate-WorkflowPolicy.mjs .github/workflows/build.yml .github/workflows/markdownlint.yml` and the artifact generator's zero-drift check.
+  - Require `pwsh` 7 on `PATH`: `pwsh -NoProfile -Command 'if ($PSVersionTable.PSVersion.Major -lt 7) { exit 1 }'`.
+  - Follow [Python 3.12 setup](docs/dependency-maintenance.md), including the Linux virtual environment. From the repository root, install pinned tools: Windows `py -3.12 -m pip --isolated install --require-hashes --only-binary=:all: --index-url https://pypi.org/simple -r requirements-dev.txt`; Linux `python3.12 -m pip --isolated install --require-hashes --only-binary=:all: --index-url https://pypi.org/simple -r requirements-dev.txt`.
+  - Use exact Node/npm from root [package.json](package.json) `engines`. After clone or lock changes: `node .github/workflows/NpmTools.mjs install`.
+  - Before every commit: Windows `py -3.12 -m pre_commit run --all-files`; elsewhere `python3.12 -m pre_commit run --all-files`; verified 3.12 equivalents allowed.
+  - Keep Husky staged checks: `npm --prefix .github/workflows run lint:md`, `npm --prefix .github/workflows run lint:md:nested`.
+  - Run applicable `npm run lint:md`, `npm run lint:md:nested`, `npm run test:agent-instructions`. Commit auto-fixes with changes. Push only after all required validation passes.
+  - [.pre-commit-config.yaml](.pre-commit-config.yaml) governs hooks: strict JSON `check-json`, YAML parse `check-yaml`/style `yamllint`, Actions `actionlint`.
+  - CI: `node .github/workflows/Validate-WorkflowPolicy.mjs .github/workflows/build.yml .github/workflows/markdownlint.yml`; artifact zero-drift checks.
 
 - **Modular instruction files**
   - Read the relevant file under `.github/instructions/` before modifying matching files:
@@ -89,18 +77,15 @@ During downstream template adoption and stack selection, perform non-protected c
 
 ## Compact Execution and Evidence
 
-Use one active task record, one final validation record, and targeted remote readback. Reuse unchanged results. Do not create per-command approvals, duplicate evidence, a per-round ledger, or a separate placement receipt.
+Keep one active task record and one final validation record. Use targeted remote readback. Reuse unchanged-input results only. Require no duplicate command approvals, round ledgers or public placement receipts. Read-only work needs no approval record.
 
-- **R0:** Read-only work needs no approval record.
-- **R1:** The active task authorizes routine reversible work, commits, non-force topic pushes, PR or Issue updates, comments, and review requests.
-- **R2:** Explicit task scope, complete affected-boundary validation, and independent review govern trust roots, protected instructions, privileged workflows, and externally observable behavior.
-- **R3:** Current final readiness governs merges, force, deletion, settings, credentials, permissions, protections, and gate changes. Never infer authority for a force, deletion, settings, credential, permission, protection, override, or bypass action.
+Retain task/path authority, explicit protected-file grants, native baselines, reviewed identities, clocks, counters, terminal results and every review/validation gate. Reconcile pending or possibly accepted mutations. Check readiness and preimages before consequential actions. Infer no force, deletion, settings, credential, permission, protection, admin-override or bypass authority.
 
-The active task authorizes its R0 and R1 work and an R2 action that it expressly requires. A merge is on-plan only when the task names it, identities and scope match, current checks and review pass, no material finding remains, and no control is bypassed. Do not request another approval for an on-plan merge. Ask only for an off-plan merge, a scope expansion, a human-assigned decision, or another R3 action.
+An on-plan merge needs repository/PR/target/head/tree/scope authority, passing current checks/reviews, no material finding and no bypass. Do not ask again. Obtain missing authority for off-plan work, scope expansion or human decisions.
 
 ## GitHub Plugin Usage
 
-This section is retained Codex platform protocol. Thin-entry-point pruning must preserve it unless the repository owner explicitly waives Codex GitHub plugin protocol for the retained Codex entry point.
+Retained Codex platform protocol. Apply the [preservation rule](#canonical-instructions).
 
 Codex can use the OpenAI-curated GitHub plugin (`github@openai-curated`) in this repository when the user has installed and authorized it. The plugin is the preferred mechanism for any operation that touches remote GitHub state.
 
@@ -113,7 +98,7 @@ The `.codex/config.toml` file at the repository root declares `[plugins."github@
 
 ## PR Review Workflow (Codex-adapted)
 
-This section is retained Codex platform protocol. Thin-entry-point pruning must preserve it unless the repository owner explicitly waives Codex PR review protocol for the retained Codex entry point.
+Retained Codex platform protocol. Apply the [preservation rule](#canonical-instructions).
 
 This workflow adapts the Claude-targeted process documented in `CLAUDE.md` for Codex's capabilities and runtime limitations. Use it when responding to review feedback on a pull request. All GitHub-side reads and writes in the steps below SHOULD go through the GitHub plugin first; fall back to `gh`, GraphQL, or manual owner action only when the plugin does not expose the needed capability (see **Fallbacks for unsupported plugin capabilities** below).
 
@@ -142,9 +127,12 @@ Steps 3 through 5 are mandatory for every finding that step 2 confirms is real, 
 
 These terms are the operative protected-file authorization contract for the review-comment workflow below:
 
-- **Protected instruction file:** `.github/copilot-instructions.md`, a root agent entry point, or a file under `.github/instructions/` or `.cursor/rules/`.
-- **Explicit protected-file authorization:** A direct current-task instruction that names the file or bounds the protected change set. A PR, review, generic feedback request, reusable prompt, review loop, or branch-placement authority is not sufficient by itself.
-- Existing PR scope is context, not authorization. A new protected file or a broader protected edit exceeds narrow authority. Treat a secondary style-guide recommendation as a separate protected change.
+- **Protected instruction file:** Any file covered by this document's protected instruction rules, including `.github/copilot-instructions.md`, the root agent entry points (`.hermes.md`, `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`), files under `.github/instructions/`, and files under `.cursor/rules/`.
+- **Explicit protected-file authorization:** A direct maintainer or owner instruction in the current task authorizing the specific protected instruction-file change, either by naming the file or by clearly bounding the protected-file change set. The following are not sufficient on their own: a PR existing, a review comment existing, a generic "address the feedback" request, a reusable prompt, an automated review loop or active review workflow, or generic branch-placement authorization.
+- **Already in the PR's scope:** The protected file appears in the PR's changed-files list or diff against its base branch before the review-driven edit under consideration. This is relevant context, not authorization.
+- **Newly introduced protected file:** A protected file the PR did not modify before the review-driven edit. Introducing one exceeds any authorization scoped to the PR's existing changes and requires the narrow authorization question in step 7.
+- **Within the already-authorized scope:** An edit that resolves the reviewer's comment without expanding the protected file's changes beyond the specific protected-file change the maintainer already explicitly authorized for this task. A larger or more structural change, or one that newly introduces a protected file, exceeds the already-authorized scope.
+- **Secondary style-guide recommendation:** A step-8 recommendation to update a style guide to prevent similar issues in the future, distinct from the selected step-7 fix for the current review comment.
 
 1. **Signal processing (conditional).** If the GitHub plugin (or a documented fallback) supports adding emoji reactions to review comments, add an `eyes` (👀) reaction when work begins on the comment and remove it when the comment is fully processed (after step 9, or after the early-exit path in step 2). The reaction's `content` value is the literal string `eyes` as used by the GitHub Reactions API, not the Markdown shortcode `:eyes:`. If reaction tooling is not available in the current runtime, skip this step silently.
 
@@ -184,7 +172,7 @@ These terms are the operative protected-file authorization contract for the revi
 
       **Outgoing-range audit.** Before the push, inspect the outgoing range from the fetched remote PR-head SHA through the fix once. Confirm that each commit and changed path belongs to the active task, and validate the exact tree. If the range contains unrelated work, construct a clean descendant of the fetched head that contains only authorized fixes, or use the safe fallback.
 
-      Before the push, fetch the remote PR head and verify ancestry. Use an explicit non-force source-to-destination refspec; never use `--force` or a leading `+`. If a condition fails or GitHub rejects the update, use the documented safe fallback and do not bypass policy. After placement, use one authenticated readback to confirm that the intended commit is the PR head. Put that result in the active task record; do not post a separate placement receipt.
+      Fetch the PR head and verify ancestry. Use an explicit non-force source-to-destination refspec; never use `--force` or a leading `+`. For API placement, record returned SHA(s); verify their chain from the fetched head contains only authorized changes and ends at the exact tested tree and modes. Use one authenticated readback to match the actual placed head. Use actual SHA(s) for reachability and review. Stop on mismatch; reconcile before retry. Use the safe fallback; never bypass policy. Record the mapping and result; no separate placement receipt.
 
 8. **Evaluate style guide impact.** Determine whether the relevant language instruction file(s) under `.github/instructions/` should be updated to prevent the same issue in the future. **Read the full applicable style guide(s) before answering** so the recommendation accounts for what the guide already covers and does not duplicate or contradict existing rules. The protected-file authorization checkpoint in step 7 governs selected fixes that would directly change any protected instruction file, including a style guide under `.github/instructions/`. This step governs secondary style-guide recommendations. If such a secondary update is warranted, write a prompt in a Markdown code fence (suitable for sending to GitHub Copilot's coding agent) that describes the style-guide change. For an inline finding, post the prompt as a reply in the same review thread. For a review-body-only finding, post the prompt as a standalone PR-level comment that cites its synthetic key, source review, reviewed commit, and location when available. In either secondary-recommendation case, do **not** modify the style guide directly; if the maintainer later authorizes that change, handle it through the step-7 protected-file authorization checkpoint.
 

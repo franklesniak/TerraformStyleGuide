@@ -32,20 +32,18 @@ for (const [status, expected] of [[0, 0], [1, 1], [2, 2], [17, 2], ['undefined',
     fs.writeFileSync(path.join(f.root, 'example.md'), '# Staged content\n');
     f.git('add', 'example.md');
     fs.writeFileSync(path.join(f.root, 'example.md'), 'Unstaged content must not replace index bytes.\n');
-    const dependency = path.join(f.workflows, 'node_modules/markdownlint-cli2');
-    fs.mkdirSync(dependency, { recursive: true });
-    fs.writeFileSync(path.join(dependency, 'package.json'), JSON.stringify({ type: 'module', exports: './index.mjs' }));
-    fs.writeFileSync(path.join(dependency, 'index.mjs'), `export async function main(options) {
-      const values = Object.values(options.nonFileContents);
-      if (values.length !== 1 || values[0] !== '# Staged content\\n') throw new Error('Wrong staged bytes');
+    fs.writeFileSync(path.join(f.workflows, 'lint-nested-markdown.js'), `exports.loadMarkdownlintConfig = () => ({});
+    exports.lintOuterMarkdownContents = async (root, inputs) => {
+      if (inputs.length !== 1 || inputs[0].filePath !== 'example.md' || inputs[0].content !== '# Staged content\\n') throw new Error('Wrong staged bytes');
+      console.log('fixture: outer status reached');
       return ${status};
-    }`);
-    fs.writeFileSync(path.join(f.workflows, 'lint-nested-markdown.js'), `exports.lintNestedMarkdownContents = inputs => {
+    }; exports.lintNestedMarkdownContents = inputs => {
       if (inputs[0].content !== '# Staged content\\n') throw new Error('Wrong nested staged bytes');
       return { totalBlocks: 0, allResults: [] };
     }; exports.displayResults = () => false;`);
     const result = spawnSync(process.execPath, [path.join(f.workflows, 'lint-staged-markdown.mjs')], { encoding: 'utf8', windowsHide: true });
     assert.equal(result.status, expected, result.stderr);
+    assert.match(result.stdout, /fixture: outer status reached/u);
     assert.equal(fs.readFileSync(path.join(f.root, 'example.md'), 'utf8'), 'Unstaged content must not replace index bytes.\n');
   });
 }
@@ -63,8 +61,6 @@ for (const [stage, outer, nested, expected, commands] of [
     fs.writeFileSync(path.join(f.root, 'example.md'), '# Staged\n'); f.git('add', 'example.md');
     const bin = path.join(f.root, 'bin'); fs.mkdirSync(bin);
     const log = path.join(f.root, 'calls');
-    fs.mkdirSync(path.join(f.workflows, 'node_modules/.bin'), { recursive: true });
-    fs.writeFileSync(path.join(f.workflows, 'node_modules/.bin/markdownlint-cli2'), '');
     fs.writeFileSync(path.join(bin, 'node'), `#!/bin/sh\nprintf '%s\\n' staged >> '${log}'\nexit ${stage}\n`, { mode: 0o700 });
     fs.writeFileSync(path.join(bin, 'npm'), `#!/bin/sh\nprintf '%s\\n' "$4" >> '${log}'\nif [ "$4" = 'lint:md' ]; then exit ${outer}; fi\nexit ${nested}\n`, { mode: 0o700 });
     const result = spawnSync('sh', ['-e', path.join(repository, '.husky/pre-commit')], {

@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { repositoryRoot, runBounded, withNpmEnvironment } from './NpmTools.mjs';
 
+export const expectedRepository = 'franklesniak/TerraformStyleGuide';
+
 const exceptionPath = '.github/workflows/npm-risk-exceptions.json';
 const require = createRequire(import.meta.url);
 const severities = ['info', 'low', 'moderate', 'high', 'critical'];
@@ -193,39 +195,87 @@ function git(args, env, root) {
     '-c', 'credential.helper=', '-c', 'http.extraheader=', ...args], { cwd: root, env, timeout: 30000 });
 }
 
-export function hostedAuthorityReference(environment, event) {
-  if (environment.GITHUB_REPOSITORY !== 'franklesniak/TerraformStyleGuide') fail('Unexpected audit repository.');
-  let reference;
+const commitId = value => typeof value === 'string' && /^[a-f0-9]{40}$/u.test(value) && value !== '0'.repeat(40);
+
+function hostedContext(environment, event) {
+  if (environment.GITHUB_REPOSITORY !== expectedRepository) fail('Unexpected audit repository.');
+  let reference, ref, scopeBase;
   if (environment.GITHUB_EVENT_NAME === 'pull_request') {
-    if (event?.pull_request?.base?.ref !== 'main' || event?.pull_request?.base?.repo?.full_name !== environment.GITHUB_REPOSITORY) fail('Unexpected PR authority repository or branch.');
-    reference = event.pull_request.base.sha;
-  } else if (['push', 'schedule', 'workflow_dispatch'].includes(environment.GITHUB_EVENT_NAME)) {
+    const base = event?.pull_request?.base;
+    if (!text(base?.ref) || base.repo?.full_name !== expectedRepository) fail('Unexpected PR authority repository or branch.');
+    scopeBase = base.sha;
+    if (!commitId(scopeBase)) fail('A full trusted event base is required.');
+    ref = `refs/heads/${base.ref}`;
+    reference = base.ref === 'main' ? scopeBase : 'refs/heads/main';
+  } else if (environment.GITHUB_EVENT_NAME === 'push') {
+    ref = environment.GITHUB_REF;
+    if (typeof ref !== 'string' || !/^refs\/(heads|tags)\/.+/u.test(ref)) fail('A full push branch or tag ref is required.');
+    reference = ref === 'refs/heads/main' ? environment.GITHUB_SHA : 'refs/heads/main';
+  } else if (['schedule', 'workflow_dispatch'].includes(environment.GITHUB_EVENT_NAME)) {
     reference = environment.GITHUB_SHA;
     if (environment.GITHUB_REF !== 'refs/heads/main') fail('Hosted audit authority must be the main branch.');
+    ref = environment.GITHUB_REF;
   } else fail('Unsupported hosted audit event.');
-  if (typeof reference !== 'string' || !/^[a-f0-9]{40}$/u.test(reference)) fail('A full trusted event base is required.');
-  return reference;
+  if (!commitId(environment.GITHUB_SHA)) fail('A full hosted checkout commit is required.');
+  return { reference, ref, scopeBase, head: environment.GITHUB_SHA,
+    source: reference === 'refs/heads/main' ? 'remote-main' : 'event-main' };
 }
 
-export function acceptedBase({ environment = process.env, root = repositoryRoot, hosted = false } = {}) {
-  const env = gitEnvironment();
-  let reference = 'refs/remotes/origin/main';
-  if (hosted) {
-    if (environment.GITHUB_ACTIONS !== 'true') fail('CI audit authority requires a hosted event.');
-    const event = environment.GITHUB_EVENT_NAME === 'pull_request'
-      ? parseJson(readInput(environment.GITHUB_EVENT_PATH, 2 * 1024 * 1024)) : undefined;
-    reference = hostedAuthorityReference(environment, event);
-    const available = git(['cat-file', '-e', `${reference}^{commit}`], env, root);
-    if (available.status !== 0) {
-      const fetched = git(['fetch', '--quiet', '--depth=1', '--no-tags', '--no-recurse-submodules',
-        'https://github.com/franklesniak/TerraformStyleGuide', reference], env, root);
-      if (fetched.status !== 0) fail('Cannot acquire the event authority commit.');
-    }
-  }
+/**
+ * Select the hosted authority reference without fetching or resolving it.
+ * Main push, schedule and dispatch events return GITHUB_SHA; main-target PRs
+ * return their event base SHA. Other admitted pushes, tags and PRs return the
+ * literal refs/heads/main. The hosted audit caller validates the context and
+ * acquires/resolves that reference before using accepted authority.
+ * @param {object} environment - Hosted event environment.
+ * @param {object} [event] - Pull-request event payload, when applicable.
+ * @returns {string} Full event-main commit SHA or the literal refs/heads/main.
+ */
+export function hostedAuthorityReference(environment, event) {
+  return hostedContext(environment, event).reference;
+}
+
+function readHostedContext(environment, root, env) {
+  if (environment.GITHUB_ACTIONS !== 'true') fail('CI audit authority requires a hosted event.');
+  const event = environment.GITHUB_EVENT_NAME === 'pull_request'
+    ? parseJson(readInput(environment.GITHUB_EVENT_PATH, 2 * 1024 * 1024)) : undefined;
+  const context = hostedContext(environment, event);
+  if (git(['check-ref-format', context.ref], env, root).status !== 0) fail('Invalid hosted audit ref.');
+  return context;
+}
+
+function resolvedCommit(reference, env, root) {
   const resolved = git(['rev-parse', '--verify', `${reference}^{commit}`], env, root);
   const sha = resolved.stdout.toString('utf8').trim();
-  if (resolved.status !== 0 || !/^[a-f0-9]{40}$/u.test(sha)) fail('Accepted main/base commit is unavailable. Fetch origin/main before a local audit.');
-  if (hosted && sha !== reference) fail('Event authority commit mismatch.');
+  if (resolved.status !== 0 || !commitId(sha)) fail('Accepted main/base commit is unavailable. Fetch origin/main before a local audit.');
+  return sha;
+}
+
+function fetchCommit(reference, env, root) {
+  const fetched = git(['fetch', '--quiet', '--depth=1', '--no-tags', '--no-recurse-submodules',
+    `https://github.com/${expectedRepository}`, reference], env, root);
+  if (fetched.status !== 0) fail('Cannot acquire the audit authority/base commit.');
+}
+
+function exactCommit(reference, env, root) {
+  if (git(['cat-file', '-e', `${reference}^{commit}`], env, root).status !== 0) fetchCommit(reference, env, root);
+  const sha = resolvedCommit(reference, env, root);
+  if (sha !== reference) fail('Event authority/base commit mismatch.');
+  return sha;
+}
+
+function readAcceptedBase(root, env, context) {
+  let sha;
+  if (context?.source === 'remote-main') {
+    fetchCommit('refs/heads/main', env, root);
+    // Save the fetched main commit now.
+    // A later PR-base fetch in readCiScope can overwrite FETCH_HEAD.
+    sha = resolvedCommit('FETCH_HEAD', env, root);
+  } else if (context) {
+    sha = exactCommit(context.reference, env, root);
+  } else {
+    sha = resolvedCommit('refs/remotes/origin/main', env, root);
+  }
   const listing = git(['ls-tree', '-z', sha, '--', exceptionPath], env, root);
   if (listing.status !== 0) fail('Cannot inspect accepted exception state.');
   let bytes = Buffer.from('{"exceptions":[]}');
@@ -235,9 +285,14 @@ export function acceptedBase({ environment = process.env, root = repositoryRoot,
     if (content.status !== 0) fail('Cannot read accepted exception state.');
     bytes = content.stdout;
   }
-  return { sha, exceptions: parseExceptions(bytes),
-    limitation: hosted ? 'Owner/executor must check known revocations before acceptance.' :
+  return { sha, source: context?.source ?? 'local-origin-main', exceptions: parseExceptions(bytes),
+    limitation: context ? 'Authority is the recorded main snapshot; owner/executor must check known revocations before acceptance.' :
       'Offline authority uses the locally fetched origin/main commit; external revocation and ref freshness are not discovered.' };
+}
+
+export function acceptedBase({ environment = process.env, root = repositoryRoot, hosted = false } = {}) {
+  const env = gitEnvironment();
+  return readAcceptedBase(root, env, hosted ? readHostedContext(environment, root, env) : undefined);
 }
 
 export function readCandidateExceptions(root) {
@@ -273,7 +328,7 @@ export function audit({ root = repositoryRoot, authority = acceptedBase({ root }
     const result = runAuditCommand(runNpm, directory);
     return interpretAudit(result, scope, lock);
   }), { root });
-  return { ...evaluateProposal(findings, authority.exceptions, candidate), authority: authority.sha,
+  return { ...evaluateProposal(findings, authority.exceptions, candidate), authority: authority.sha, authoritySource: authority.source,
     limitation: authority.limitation, installedGraphRoots: installedRoots, findings };
 }
 
@@ -305,29 +360,43 @@ export function documentationOnlyDiff(bytes) {
   return documents;
 }
 
-export function ciScope({ root = repositoryRoot, environment = process.env, authority } = {}) {
-  if (environment.GITHUB_ACTIONS !== 'true') fail('CI audit mode requires a hosted event.');
-  if (environment.GITHUB_EVENT_NAME !== 'pull_request') return { applicable: true };
-  const env = gitEnvironment(), head = environment.GITHUB_SHA;
-  if (!/^[a-f0-9]{40}$/u.test(head ?? '') || !/^[a-f0-9]{40}$/u.test(authority?.sha ?? '')) fail('Invalid CI audit endpoints.');
+function readCiScope(root, env, context) {
+  if (!context.scopeBase) return { applicable: true };
+  const head = context.head, base = exactCommit(context.scopeBase, env, root);
   const current = git(['rev-parse', '--verify', 'HEAD^{commit}'], env, root);
   if (current.status !== 0 || current.stdout.toString('utf8').trim() !== head) fail('CI audit checkout mismatch.');
   const changed = git(['diff', '--raw', '--no-abbrev', '--no-renames', '--no-ext-diff', '--no-textconv',
-    '-z', authority.sha, head, '--'], env, root);
+    '-z', base, head, '--'], env, root);
   if (changed.status !== 0) fail('Cannot read the complete Git change.');
-  return { applicable: !documentationOnlyDiff(changed.stdout), base: authority.sha, head };
+  return { applicable: !documentationOnlyDiff(changed.stdout), base, head };
+}
+
+export function ciScope({ root = repositoryRoot, environment = process.env } = {}) {
+  const env = gitEnvironment();
+  return readCiScope(root, env, readHostedContext(environment, root, env));
 }
 
 export function ciAudit({ root = repositoryRoot, environment = process.env } = {}) {
-  const authority = acceptedBase({ root, environment, hosted: true });
-  const scope = ciScope({ root, environment, authority });
-  return scope.applicable ? audit({ root, authority, installedRoots: ['.github/workflows'] }) : {
-    status: 'NOT_APPLICABLE', ...scope,
+  const env = gitEnvironment(), context = readHostedContext(environment, root, env);
+  const authority = readAcceptedBase(root, env, context);
+  const scope = readCiScope(root, env, context);
+  return scope.applicable ? { ...audit({ root, authority, installedRoots: ['.github/workflows'] }), ...scope } : {
+    status: 'NOT_APPLICABLE', ...scope, authority: authority.sha, authoritySource: authority.source, limitation: authority.limitation,
     reason: 'Only ordinary Markdown changed; no live audit ran. Main and scheduled audits remain applicable.',
   };
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Prefer loader identity; retain direct-call detection on runtimes without this property.
+const isMain = typeof import.meta.main === 'boolean' ? import.meta.main : (() => {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
   try {
     if (process.argv.length > 3 || (process.argv.length === 3 && process.argv[2] !== '--ci')) fail('Usage: node .github/workflows/Check-NpmAudit.mjs [--ci]');
     const result = process.argv[2] === '--ci' ? ciAudit() : audit();

@@ -4,17 +4,17 @@
 
 - **Status:** Active
 - **Owner:** Repository maintainer (@franklesniak)
-- **Last Updated:** 2026-10-01
-- **Scope:** Locked npm tools, the local Markdown hook, and current dependency-risk checks in TerraformStyleGuide.
+- **Last Updated:** 2026-10-05
+- **Scope:** Locked npm and Python tools, the local Markdown hook, and current dependency-risk checks in TerraformStyleGuide.
 
-Setup and audit require the exact Node and bundled npm versions declared in the root [package.json](../package.json). If either version differs, install or select that Node distribution before retrying. Check `node --version` and `npm --version`. From the repository root, run:
+Setup and audit require the exact Node and bundled npm versions declared in the root [package.json](../package.json). If either version differs, install or select that Node distribution before retrying. Check `node --version` and `npm --version`. The Linux CI bootstrap verifies its Node archive with `linuxX64Sha256` in [ci-toolchain.json](../.github/workflows/ci-toolchain.json); the exact versions remain in root `package.json` `engines`. From the repository root, run:
 
 ```text
 node .github/workflows/NpmTools.mjs install
 node .github/workflows/Check-NpmAudit.mjs
 ```
 
-The first command installs both locked package trees with dependency lifecycle scripts disabled. It then runs the Husky installer explicitly, including in CI and production mode. Set `HUSKY=0` to suppress hook installation explicitly. Terraform's Copilot setup requires an installed hook and checks that installation succeeded. A normal contributor clone gets the staged Markdown hook, followed by the retained outer and nested repository lint checks. Terraform's staged hook requires the exact Node version in the root manifest; use that development runtime for installation and validation.
+The first command installs both locked package trees with dependency lifecycle scripts disabled. It then runs the Husky installer explicitly, including in CI and production mode. Set `HUSKY=0` to suppress hook installation explicitly. A normal contributor clone gets staged Markdown validation, followed by the outer and nested repository lint checks. The staged check reads Git-index content, including nested Markdown fences, and requires the exact Node version in the root manifest.
 
 The Node entry removes inherited npm configuration before invoking npm. It uses separate empty user/global configuration files and the public registry, and rejects repository `.npmrc` or shrinkwrap selectors. The existing `npm run bootstrap:agent-instructions` name remains a convenience alias. That outer npm process has already read configuration, so use the direct Node command when configuration isolation is required. No persistent npm setting is changed.
 
@@ -37,4 +37,32 @@ The current [exception record](../.github/workflows/npm-risk-exceptions.json) is
 
 If a compatible repair is unavailable, prepare one scoped proposal with package root/name, advisory identifiers, node/version bounds, owner, reason, controls and UTC expiry. Existing approved bounds may cover fewer findings, but cannot cover a new advisory, node, version or package root. An unused expired record does not block a clean tree. A candidate cannot approve itself, and expiry never renews itself. New or expanded risk needs an authenticated owner decision and the existing independent review. The current implementation does not provide an exceptional merge route around a failing proposal check; resolve its actual required-check behavior before attempting such an admission. Do not bypass the ordinary check or invent a clean result.
 
-CLI 0.23.3 declares Markdown 15.0.1, which falls within the publisher's [smartquotes advisory](https://github.com/markdown-it/markdown-it/security/advisories/GHSA-r7fv-28h4-cvq7). The workflow manifest overrides only that parent's Markdown dependency to patched 15.0.2. Direct parser consumers stay on patched 14.3.2. Remove the scoped override when a reviewed CLI update supplies a patched parser itself. This substitution repairs the dependency; it is not an accepted-risk exception.
+Markdown lint uses the `markdownlint` library for full outer files, exact staged contents and nested snippets. All use the workflow rules file. The root lint commands delegate to the workflow package. The full outer caller runs the existing `--outer` child with a two-minute deadline and a two-MiB output limit. The direct instruction parser and nested extraction stay on patched `markdown-it` 14.3.2. The CLI dependency chains and scoped parser override are removed; no risk exception replaces them.
+
+Run `npm run lint:md`, `npm run lint:md:nested`, and `node --test .github/workflows/lint-markdown.test.mjs` after a lint-tool change. The staged hook checks the index, including nested snippets, even when the worktree differs. Full-file lint discovers hidden `.md`/`.mdc` paths, excludes dependency directories, and validates regular in-repository inputs before the API. An empty discovered set succeeds explicitly. A path whose resolved target escapes the repository or whose leaf is a symlink is a tooling failure.
+
+The supported rules input is `.github/workflows/.markdownlint.jsonc`, with `.markdownlint.json` in that directory as a fallback. JSONC comments are supported. Put rule changes in that file. Alternate or per-directory repository configuration files, CLI2 option files, ignore files and `extends` are refused rather than silently skipped or merged. The API receives explicit parsed rules and named contents; ambient `markdownlint_` environment settings and home/system/ancestor rc selectors are not loaded. Literal filenames are data, including option-shaped or glob-metacharacter names. Introduced patterns cannot enter the removed braces expansion path. This does not provide atomic confinement against a competing filesystem writer.
+
+Lint wrappers return 0 for success, 1 for actual lint findings and 2 for missing tools, invalid inputs or other tooling failures. A full-file child failure reports its native status before normalization; timeout, output-limit and launch failures retain their cause. Correct the reported cause; do not replace an applicable failed check with a different input.
+
+## Install Python hooks
+
+Use Python 3.12 for both installation and pre-commit. On Windows, run:
+
+```powershell
+py -3.12 -m pip --isolated install --require-hashes --only-binary=:all: --index-url https://pypi.org/simple -r requirements-dev.txt
+py -3.12 -m pre_commit run --all-files
+```
+
+On Linux, use a Python 3.12 virtual environment. On Ubuntu 24.04, install its venv support first with `sudo apt-get install python3.12-venv`; see [Ubuntu's Python setup guidance](https://documentation.ubuntu.com/ubuntu-for-developers/howto/python-setup/) for package prerequisites. From the repository root, run these commands in a Bash-compatible shell:
+
+```sh
+python3.12 -m venv .venv
+. .venv/bin/activate
+python3.12 -m pip --isolated install --require-hashes --only-binary=:all: --index-url https://pypi.org/simple -r requirements-dev.txt
+python3.12 -m pre_commit run --all-files
+```
+
+Keep that virtual environment active when running the Python hooks. The launcher selects its `python3.12` application from `PATH`. The virtual environment supplies pip and keeps installed packages separate from Ubuntu's externally managed system Python.
+
+The hashed [requirements closure](../requirements-dev.txt) supplies the Python hooks. The [launcher](../.github/workflows/Invoke-LockedPythonHook.ps1) selects Python 3.12 and invokes only its listed modules. It uses `-E -P` to ignore Python environment variables and exclude the unsafe current-directory import path; it does not attest installed package bytes or exclude every site-package source. Install the closure into the interpreter that the launcher selects. The remote actionlint hook retains its exact reviewed Git revision and checksummed Go dependencies.

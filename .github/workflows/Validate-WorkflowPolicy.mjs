@@ -300,9 +300,9 @@ function parseStrictJson(bytes, limits, category) {
 // maintenance authorization, live-base authentication, or merge approval.
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const POLICY_ROOT = path.resolve(SCRIPT_DIRECTORY, '../..');
-const VALIDATOR_VERSION = '2.0.0'; // Diagnostic only; consumers check schema/success.
-const RESULT_SCHEMA = 'TerraformStyleGuide.WorkflowPolicyResult.v1';
-const PREFLIGHT_SCHEMA = 'TerraformStyleGuide.WorkflowPreflightResult.v1';
+const VALIDATOR_VERSION = '3.0.0'; // Diagnostic only; consumers check schema/success.
+const RESULT_SCHEMA = 'StyleGuide.WorkflowPolicyResult.v1';
+const PREFLIGHT_SCHEMA = 'StyleGuide.WorkflowPreflightResult.v1';
 const LIMITS = Object.freeze({ maximumWorkflowBytes: 131072, maximumJsonBytes: 524288, maximumNodes: 5000, maximumDepth: 32 });
 const FORBIDDEN_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const WORKFLOWS = ['build.yml', 'markdownlint.yml'];
@@ -358,8 +358,10 @@ function hasDuplicateJsonMember(text) {
 
 function readContract() {
   const contract = readJsonBytes(readOrdinaryFile(path.join(SCRIPT_DIRECTORY, 'workflow-policy-contract.json'), LIMITS.maximumJsonBytes, 'contract-file'), 'contract-json');
-  expectExactKeys(contract, ['schema', 'parser', 'actions'], 'contract-shape');
-  if (contract.schema !== 'TerraformStyleGuide.WorkflowPolicyContract.v2') fail('contract-schema');
+  expectExactKeys(contract, ['schema', 'roles', 'parser', 'actions'], 'contract-shape');
+  if (contract.schema !== 'StyleGuide.WorkflowPolicyContract.v3') fail('contract-schema');
+  expectExactKeys(contract.roles, ['artifactVerifier'], 'contract-roles');
+  if (!['verify_generated_artifacts', 'verify'].includes(contract.roles.artifactVerifier)) fail('contract-roles');
   expectExactKeys(contract.parser, ['version', 'resolved', 'integrity', 'treeSha256'], 'contract-parser');
   if (!/^[0-9a-f]{64}$/u.test(contract.parser.treeSha256)) fail('contract-parser');
   validateRegistryPackage(contract.parser, 'contract-parser');
@@ -485,7 +487,7 @@ function validateWorkflowObject(fileName, workflow, contract) {
   expectExactKeys(workflow, ['name', 'on', 'permissions', 'jobs'], 'workflow-shape');
   if (typeof workflow.name !== 'string' || !workflow.name.trim()) fail('workflow-name');
   const build = fileName === 'build.yml';
-  const events = { push: { branches: ['main'] }, pull_request: { branches: ['main'] } };
+  const events = { push: null, pull_request: null };
   if (!build) {
     const schedule = workflow.on?.schedule;
     if (!Array.isArray(schedule) || schedule.length !== 1) fail('workflow-events');
@@ -496,18 +498,19 @@ function validateWorkflowObject(fileName, workflow, contract) {
   }
   expectDeepEqual(workflow.on, events, 'workflow-events');
   expectDeepEqual(workflow.permissions, {}, 'workflow-permissions');
-  const codeJobs = build ? ['verify'] : ['policy', 'markdownlint'];
-  expectExactKeys(workflow.jobs, build ? [...codeJobs, 'publish'] : codeJobs, 'isolation-jobs');
+  const codeJobs = build ? [contract.roles.artifactVerifier] : ['policy', 'markdownlint'];
+  expectExactKeys(workflow.jobs, build ? [...codeJobs, 'publish_committed_artifacts'] : codeJobs, 'isolation-jobs');
   for (const id of codeJobs) {
     const job = workflow.jobs[id];
-    expectExactKeys(job, ['runs-on', 'timeout-minutes', 'permissions', 'steps'], 'code-job-shape');
+    expectExactKeys(job, ['if', 'runs-on', 'timeout-minutes', 'permissions', 'steps'], 'code-job-shape');
+    if (job.if !== "github.event_name != 'push' || github.event.deleted != true") fail('code-job-event');
     expectDeepEqual(job.permissions, {}, 'code-job-permissions');
     if (job['runs-on'] !== 'ubuntu-24.04' || job['timeout-minutes'] !== 30) fail('code-job-execution');
     const roles = [
       ['acquire', null],
       ['verify-checkout-credentials', ['./.github/workflows/Test-CheckoutCredentials.ps1']],
       ...(build ? [] : [['initialize-toolchain', ['./.github/workflows/Initialize-CiToolchain.ps1', '-WorkflowDependencies']]]),
-      build ? ['generate-and-verify', ['./.github/workflows/Test-StyleGuideArtifacts.ps1']]
+      build ? ['generate_style_guide_artifacts', ['./.github/workflows/Test-StyleGuideArtifacts.ps1']]
         : id === 'policy' ? ['validate', null] : ['lint', ['./.github/workflows/Invoke-MarkdownLint.ps1']],
       ...(id === 'markdownlint' ? [['audit', null]] : []),
     ];
@@ -515,17 +518,17 @@ function validateWorkflowObject(fileName, workflow, contract) {
     roles.forEach(([role, call], index) => validateRunStep(job.steps[index], role, call));
   }
   if (!build) return;
-  const publisher = workflow.jobs.publish;
+  const publisher = workflow.jobs.publish_committed_artifacts;
   expectExactKeys(publisher, ['runs-on', 'timeout-minutes', 'permissions', 'needs', 'steps'], 'publisher-shape');
   expectDeepEqual(publisher.permissions, { contents: 'read' }, 'publisher-permissions');
-  if (publisher.needs !== 'verify' || publisher['runs-on'] !== 'ubuntu-24.04' || publisher['timeout-minutes'] !== 10) fail('publisher-execution');
+  if (publisher.needs !== contract.roles.artifactVerifier || publisher['runs-on'] !== 'ubuntu-24.04' || publisher['timeout-minutes'] !== 10) fail('publisher-execution');
   if (!Array.isArray(publisher.steps) || publisher.steps.length !== 2) fail('publisher-steps');
   for (const [index, actionName] of ['checkout', 'uploadArtifact'].entries()) {
     const step = publisher.steps[index];
     const keys = ['id', 'uses', 'with'];
     if (Object.hasOwn(step, 'name')) keys.push('name');
     expectExactKeys(step, keys, 'publisher-step-shape');
-    if (step.id !== (index === 0 ? 'checkout' : 'upload-generated') || step.uses !== contract.actions[actionName].uses) fail('action-identity');
+    if (step.id !== (index === 0 ? 'checkout_repository' : 'publish_committed_style_guide_artifacts') || step.uses !== contract.actions[actionName].uses) fail('action-identity');
     expectDeepEqual(step.with, contract.actions[actionName].inputs, 'action-inputs');
   }
 }
@@ -568,7 +571,17 @@ async function main(args = process.argv.slice(2)) {
 
 export { PolicyError, LIMITS, readContract, readJsonBytes, validatePackagePair, validateParserLock, foldParserTree, assertReviewedParserTree, loadYamlBindings, parseStrictYaml, validateWorkflowObject, readInput, main };
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Prefer loader identity; retain direct-call detection on runtimes without this property.
+const isMain = typeof import.meta.main === 'boolean' ? import.meta.main : (() => {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
   try { process.stdout.write(JSON.stringify(await main()) + '\n'); }
   catch (error) {
     process.stdout.write(JSON.stringify({ schema: process.argv.includes('--preflight') ? PREFLIGHT_SCHEMA : RESULT_SCHEMA, validatorVersion: VALIDATOR_VERSION, success: false, category: error instanceof PolicyError ? error.category : 'tool-failure' }) + '\n');

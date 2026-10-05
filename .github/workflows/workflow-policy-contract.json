@@ -1,5 +1,8 @@
 {
-  "schema": "TerraformStyleGuide.WorkflowPolicyContract.v2",
+  "schema": "StyleGuide.WorkflowPolicyContract.v3",
+  "roles": {
+    "artifactVerifier": "verify"
+  },
   "parser": {
     "version": "2.9.0",
     "resolved": "https://registry.npmjs.org/yaml/-/yaml-2.9.0.tgz",
@@ -27,7 +30,7 @@
     "uploadArtifact": {
       "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
       "inputs": {
-        "name": "style-guide-artifacts",
+        "name": "style-guide-committed-${{ github.run_id }}-${{ github.run_attempt }}",
         "path": "copilot-instructions.md\nterraform.instructions.md\nSTYLE_GUIDE_CHAT.md\nSTYLE_GUIDE_FULL.md\n",
         "if-no-files-found": "error",
         "retention-days": 7,
