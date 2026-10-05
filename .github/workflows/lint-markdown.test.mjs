@@ -432,3 +432,42 @@ test('independent default API calls reload rules and reject newly introduced sel
     assert.throws(() => api.lintNestedMarkdownContents(nested), /Unsupported Markdown lint configuration/u);
   } finally { remove(root); }
 });
+// These controls use a real bounded child and observable execution markers.
+for (const kind of ['regular', 'root-alias', 'leaf-inside', 'leaf-outside', 'broken-link', 'directory', 'missing', 'malformed', 'wrong-version', 'one-mib', 'over-one-mib']) {
+  test(`actual root manifest execution boundary: ${kind}`, async () => {
+    const root = fixture(), outside = `${root}-outside`, alias = `${root}-alias`;
+    const manifest = path.join(root, 'package.json'), marker = path.join(root, 'manifest-child-executed');
+    const value = JSON.stringify({ engines: { node: process.versions.node } });
+    let selectedRoot = root;
+    fs.mkdirSync(outside);
+    try {
+      write(root, '.github/workflows/lint-nested-markdown.js', `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed');`);
+      if (kind.startsWith('leaf-')) {
+        const target = path.join(kind === 'leaf-inside' ? root : outside, 'manifest.json');
+        fs.renameSync(manifest, target); fs.symlinkSync(target, manifest, 'file');
+      } else if (['broken-link', 'directory', 'missing'].includes(kind)) {
+        fs.unlinkSync(manifest);
+        if (kind === 'broken-link') fs.symlinkSync(path.join(outside, 'missing.json'), manifest, 'file');
+        if (kind === 'directory') fs.mkdirSync(manifest);
+      } else if (kind === 'root-alias') {
+        fs.symlinkSync(root, alias, process.platform === 'win32' ? 'junction' : 'dir'); selectedRoot = alias;
+      } else if (kind === 'malformed') fs.writeFileSync(manifest, '{');
+      else if (kind === 'wrong-version') fs.writeFileSync(manifest, '{"engines":{"node":"0.0.0"}}');
+      else if (kind === 'one-mib' || kind === 'over-one-mib') fs.writeFileSync(manifest, value.padEnd(1024 * 1024 + (kind === 'over-one-mib' ? 1 : 0), ' '));
+      const accepted = ['regular', 'root-alias', 'one-mib'].includes(kind);
+      if (accepted) {
+        assert.equal(await lintMarkdownFiles(selectedRoot), 0);
+        assert.equal(fs.readFileSync(marker, 'utf8'), 'executed');
+        fs.unlinkSync(marker);
+      } else {
+        await assert.rejects(lintMarkdownFiles(selectedRoot));
+        assert.equal(fs.existsSync(marker), false);
+      }
+      expect(run(selectedRoot), accepted ? 0 : 2, accepted ? undefined : /Markdown lint tooling:/u);
+      assert.equal(fs.existsSync(marker), accepted);
+    } finally {
+      if (fs.existsSync(alias)) fs.unlinkSync(alias);
+      remove(root); remove(outside);
+    }
+  });
+}

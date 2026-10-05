@@ -8,14 +8,24 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 export function normalizeLintStatus(status) { return status === 0 || status === 1 ? status : 2; }
 
 export async function lintMarkdownFiles(root = repoRoot, run = runBounded) {
-  const required = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).engines?.node;
+  const canonicalRoot = fs.realpathSync(root);
+  const manifest = path.join(root, 'package.json');
+  const manifestLeaf = fs.lstatSync(manifest);
+  if (manifestLeaf.isSymbolicLink() || !manifestLeaf.isFile() || manifestLeaf.size > 1024 * 1024) {
+    throw new Error('Markdown lint requires a non-symlink regular package manifest of at most 1 MiB.');
+  }
+  const canonicalManifest = fs.realpathSync(manifest);
+  const manifestRelative = path.relative(canonicalRoot, canonicalManifest);
+  if (manifestRelative === '..' || manifestRelative.startsWith(`..${path.sep}`) || path.isAbsolute(manifestRelative)) {
+    throw new Error('Markdown lint package manifest resolves outside the repository.');
+  }
+  const required = JSON.parse(fs.readFileSync(canonicalManifest, 'utf8')).engines?.node;
   if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u.test(required ?? '') || required !== process.versions.node) {
     throw new Error(`Markdown lint requires declared Node ${required ?? 'version'}; observed ${process.versions.node}.`);
   }
   const child = path.join(root, '.github/workflows/lint-nested-markdown.js');
   const leaf = fs.lstatSync(child);
   if (leaf.isSymbolicLink() || !leaf.isFile()) throw new Error('Markdown lint requires a non-symlink regular outer child script.');
-  const canonicalRoot = fs.realpathSync(root);
   const canonicalChild = fs.realpathSync(child);
   const relative = path.relative(canonicalRoot, canonicalChild);
   if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {

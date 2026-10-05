@@ -23,7 +23,7 @@
 #
 # .NOTES
 # Positional parameters are not supported.
-# Version: 1.18.20261004.0
+# Version: 1.18.20261005.0
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -5385,6 +5385,8 @@ function Get-DecisionRecordLifecycleFailure {
     # Requires one four-state metadata Status and no separate structured Status
     # field or section for a new or changed ADR. An unchanged published legacy ADR
     # remains valid until its next content change under the migration boundary.
+    # Uses validated parser coordinates to exempt only the canonical Status
+    # list item in either direct or headed metadata.
     #
     # .PARAMETER Name
     # The repository-relative decision-record path.
@@ -5410,7 +5412,7 @@ function Get-DecisionRecordLifecycleFailure {
     # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
     # Parameters, return shape, and positional contract can change without notice.
     # Positional parameters are disabled; internal callers use named arguments.
-    # Version: 1.0.20260914.0.
+    # Version: 1.0.20261005.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
@@ -5436,22 +5438,10 @@ function Get-DecisionRecordLifecycleFailure {
             "$Name Status must be Proposed, Accepted, Superseded, or Deprecated."
         )
     }
-    $objMarkdownContext = Get-OperativeMarkdownContext -Content $CurrentContent
-    $objMetadataHeading = @(
-        $objMarkdownContext.LevelTwoHeadings |
-            Where-Object Text -CEQ 'Metadata'
-    )[0]
-    $intMetadataSectionEnd = $objMarkdownContext.SourceLines.Count
-    foreach ($objLevelTwoHeading in $objMarkdownContext.LevelTwoHeadings) {
-        if ($objLevelTwoHeading.Start -gt $objMetadataHeading.Start) {
-            $intMetadataSectionEnd = $objLevelTwoHeading.Start
-            break
-        }
-    }
+    $objMarkdownContext = $objMetadata.MarkdownParseContext
     if (@($objMarkdownContext.Headings |
             Where-Object {
                 $_.Tag -cne 'h1' -and
-                $_.Start -ne $objMetadataHeading.Start -and
                 (Test-DecisionLifecycleStatusLabel -Label $_.Text)
             }).Count -ne 0) {
         Write-Output "$Name must not contain a separate operative Status section."
@@ -5463,30 +5453,27 @@ function Get-DecisionRecordLifecycleFailure {
     )
     if (@($arrTopLevelLifecycleFieldBlocks |
             Where-Object {
-                $boolOutsideMetadata =
-                    $_.Start -le $objMetadataHeading.Start -or
-                    $_.Start -ge $intMetadataSectionEnd
+                $boolCanonicalMetadataStatus =
+                    $_.Start -eq $objMetadata.StatusLineIndex -and
+                    $_.Start -ge $objMetadata.MetadataListStart -and
+                    $_.End -le $objMetadata.MetadataListEnd
                 $objFieldMatch = [regex]::Match(
                     $_.Text,
                     '^\s*(?<Label>[^:\r\n]+?)\s*:\s*\S'
                 )
-                $boolOutsideMetadata -and
+                -not $boolCanonicalMetadataStatus -and
                     $objFieldMatch.Success -and
                     (Test-DecisionLifecycleStatusLabel `
                         -Label $objFieldMatch.Groups['Label'].Value)
             }).Count -ne 0) {
         Write-Output (
-            "$Name must not contain a separate operative Status field outside Metadata."
+            "$Name must not contain a separate operative Status field."
         )
     }
     if (@($objMarkdownContext.TableRows |
             Where-Object {
-                $boolOutsideMetadata =
-                    $_.Start -le $objMetadataHeading.Start -or
-                    $_.Start -ge $intMetadataSectionEnd
                 $boolHasStatusField = $false
-                if ($boolOutsideMetadata -and
-                    $_.Cells.Count -eq 2 -and
+                if ($_.Cells.Count -eq 2 -and
                     $_.Cells[0].Tag -ceq 'td' -and
                     $_.Cells[1].Tag -ceq 'td') {
                     $strValue = [regex]::Replace(
@@ -5502,7 +5489,7 @@ function Get-DecisionRecordLifecycleFailure {
                 $boolHasStatusField
             }).Count -ne 0) {
         Write-Output (
-            "$Name must not contain a separate operative Status field outside Metadata."
+            "$Name must not contain a separate operative Status field."
         )
     }
 }
@@ -6193,6 +6180,8 @@ function Get-DocumentMetadataContext {
     # or direct metadata at body start after an optional leading directive.
     # Leading YAML front matter is excluded from the 30-line H1 window.
     # Parses any present Version, independently of whether it is required.
+    # Returns validated list and Status coordinates with the same parser context
+    # for private consumers that must identify the canonical metadata field.
     #
     # .PARAMETER Content
     # The trusted input text to parse or transform.
@@ -6215,7 +6204,7 @@ function Get-DocumentMetadataContext {
     # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
     # Parameters, return shape, and positional contract can change without notice.
     # Positional parameters are disabled; internal callers use named arguments.
-    # Version: 1.0.20260914.0.
+    # Version: 1.7.20261005.0.
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
@@ -6478,6 +6467,10 @@ function Get-DocumentMetadataContext {
             -1
         }
         UpdatedLineIndex = $hashtableFieldLineIndices['Last Updated']
+        MetadataListStart = $objMetadataList.Start
+        MetadataListEnd = $objMetadataList.End
+        StatusLineIndex = $hashtableFieldLineIndices['Status']
+        MarkdownParseContext = $objParseContext
     }
 }
 
@@ -8450,6 +8443,87 @@ if ($SelfTest) {
             -BaselineContent $strLegacyDecisionRecord).Count -ne 0) {
         throw 'A changed ADR with one valid lifecycle Status did not pass.'
     }
+    # The same canonical Status exemption must apply to headed and direct metadata.
+    $strDirectDecisionRecord = $strCompliantDecisionRecord.Replace("## Metadata`n", '')
+    foreach ($strDecisionForm in @($strCompliantDecisionRecord, $strDirectDecisionRecord)) {
+        foreach ($strLifecycleState in @('Proposed', 'Accepted', 'Superseded', 'Deprecated')) {
+            $strStateRecord = $strDecisionForm.Replace(
+                '- **Status:** Accepted', "- **Status:** $strLifecycleState")
+            if (@(Get-DecisionRecordLifecycleFailure `
+                        -Name 'docs/decisions/0001-legacy.md' `
+                        -CurrentContent $strStateRecord -BaselineContent $null).Count -ne 0) {
+                throw "A supported metadata form rejected lifecycle state $strLifecycleState."
+            }
+        }
+        foreach ($strExtraLifecycleField in @(
+                "`nStatus: Accepted`n`n",
+                "- **Decision Status:** Accepted`n",
+                "`n| Field | Value |`n| --- | --- |`n| **decision** ``status`` | *Accepted* |`n`n"
+            )) {
+            $strExtraFieldRecord = $strDecisionForm.Replace(
+                "## Context`n", "$strExtraLifecycleField## Context`n")
+            if (@(Get-DecisionRecordLifecycleFailure `
+                        -Name 'docs/decisions/0001-legacy.md' `
+                        -CurrentContent $strExtraFieldRecord `
+                        -BaselineContent $strLegacyDecisionRecord) -cnotcontains
+                'docs/decisions/0001-legacy.md must not contain a separate operative Status field.') {
+                throw 'A separate lifecycle field escaped the canonical metadata Status exemption.'
+            }
+        }
+        $strExtraMetadataRecord = $strDecisionForm.Replace(
+            "## Context`n", "- **Related:** An ordinary supporting reference.`n## Context`n")
+        if (@(Get-DecisionRecordLifecycleFailure `
+                    -Name 'docs/decisions/0001-legacy.md' `
+                    -CurrentContent $strExtraMetadataRecord `
+                    -BaselineContent $strLegacyDecisionRecord).Count -ne 0) {
+            throw 'Ordinary extra metadata caused a lifecycle false positive.'
+        }
+    }
+    $strBodyStartDecisionRecord = $strDirectDecisionRecord.Replace(
+        "# Decision 0001: Legacy fixture`n", '')
+    foreach ($strMappedDecisionRecord in @(
+            $strBodyStartDecisionRecord,
+            "<!-- markdownlint-disable MD013 -->`n$strBodyStartDecisionRecord",
+            "---`nkind: decision`n---`n$strDirectDecisionRecord",
+            "<!-- Leading`nmultiline comment -->`n$strDirectDecisionRecord",
+            "<!-- Leading`nmultiline comment -->`n$strCompliantDecisionRecord"
+        )) {
+        if (@(Get-DecisionRecordLifecycleFailure `
+                    -Name 'docs/decisions/0001-legacy.md' `
+                    -CurrentContent $strMappedDecisionRecord -BaselineContent $null).Count -ne 0) {
+            throw 'A supported metadata placement failed canonical Status validation.'
+        }
+        $strMappedExtraFieldRecord = $strMappedDecisionRecord.Replace(
+            'Changed legacy context.', 'Status: Accepted')
+        if (@(Get-DecisionRecordLifecycleFailure `
+                    -Name 'docs/decisions/0001-legacy.md' `
+                    -CurrentContent $strMappedExtraFieldRecord -BaselineContent $null) -cnotcontains
+            'docs/decisions/0001-legacy.md must not contain a separate operative Status field.') {
+            throw 'Metadata source-coordinate mapping hid a separate lifecycle field.'
+        }
+    }
+    $strDirectLegacyDecisionRecord = $strLegacyDecisionRecord.Replace("## Metadata`n", '')
+    if (@(Get-DecisionRecordLifecycleFailure `
+                -Name 'docs/decisions/0001-legacy.md' `
+                -CurrentContent $strDirectLegacyDecisionRecord `
+                -BaselineContent $strDirectLegacyDecisionRecord).Count -ne 0) {
+        throw 'An unchanged direct-form legacy ADR lost its migration boundary.'
+    }
+    $strChangedDirectLegacyDecisionRecord = $strDirectLegacyDecisionRecord.Replace(
+        'Legacy context.', 'Changed legacy context.')
+    $arrDirectLegacyFailures = @(Get-DecisionRecordLifecycleFailure `
+            -Name 'docs/decisions/0001-legacy.md' `
+            -CurrentContent $strChangedDirectLegacyDecisionRecord `
+            -BaselineContent $strDirectLegacyDecisionRecord)
+    foreach ($strExpectedDirectLegacyFailure in @(
+            'docs/decisions/0001-legacy.md Status must be Proposed, Accepted, Superseded, or Deprecated.',
+            'docs/decisions/0001-legacy.md must not contain a separate operative Status section.'
+        )) {
+        if ($arrDirectLegacyFailures -cnotcontains $strExpectedDirectLegacyFailure) {
+            throw 'A changed direct-form legacy ADR did not require lifecycle migration.'
+        }
+    }
+
     foreach ($strAcceptedStatusLabel in @(
             'Status', 'status', 'Decision Status', " Decision`tStatus "
         )) {
@@ -8583,7 +8657,7 @@ if ($SelfTest) {
             -CurrentContent $strDecisionStatusFieldRecord `
             -BaselineContent $strLegacyDecisionRecord) -cnotcontains
         ('docs/decisions/0001-legacy.md must not contain a separate operative ' +
-            'Status field outside Metadata.')) {
+            'Status field.')) {
         throw 'A Decision Status field escaped lifecycle validation.'
     }
     $strStatusFieldRecord = $strCompliantDecisionRecord.Replace(
@@ -8595,7 +8669,7 @@ if ($SelfTest) {
             -CurrentContent $strStatusFieldRecord `
             -BaselineContent $strLegacyDecisionRecord) -cnotcontains
         ('docs/decisions/0001-legacy.md must not contain a separate operative ' +
-            'Status field outside Metadata.')) {
+            'Status field.')) {
         throw 'A Status prose field escaped lifecycle validation.'
     }
     $strLaterListStatusFieldRecord = $strCompliantDecisionRecord.Replace(
@@ -8611,7 +8685,7 @@ if ($SelfTest) {
             -CurrentContent $strLaterListStatusFieldRecord `
             -BaselineContent $strLegacyDecisionRecord) -cnotcontains
         ('docs/decisions/0001-legacy.md must not contain a separate operative ' +
-            'Status field outside Metadata.')) {
+            'Status field.')) {
         throw 'A later direct top-level list-item Status field escaped lifecycle validation.'
     }
     $arrNonOperativeListStatusFieldFixtures = @(
@@ -8685,7 +8759,7 @@ if ($SelfTest) {
                 -CurrentContent $objTableStatusFixture.Content `
                 -BaselineContent $strLegacyDecisionRecord) -cnotcontains
             ('docs/decisions/0001-legacy.md must not contain a separate operative ' +
-                'Status field outside Metadata.')) {
+                'Status field.')) {
             throw "$($objTableStatusFixture.Name) escaped lifecycle validation."
         }
     }
