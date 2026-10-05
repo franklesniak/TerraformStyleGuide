@@ -1,16 +1,22 @@
 #Requires -Version 7.0
 
-<#
-.SYNOPSIS
-Checks committed Terraform style-guide artifacts against deterministic generation.
+# .SYNOPSIS
+# Checks that committed style-guide artifacts match deterministic generation.
+#
+# .DESCRIPTION
+# Runs in the Linux CI checkout without credentials or publication authority.
+# Checks native results, interface schemas, filesystem changes, Git control data,
+# and runner communication files. Release comments do not select compatibility.
+#
+# .OUTPUTS
+# None. A success diagnostic uses the Information stream; failures terminate.
+#
+# .NOTES
+# Version: 2.0.20261005.0
 
-.DESCRIPTION
-Runs without credentials or publication authority. Checks native results, stable
-interface schemas, filesystem changes, Git controls and runner communication files.
-
-.NOTES
-Version: 1.1.20261001.1
-#>
+[CmdletBinding(PositionalBinding = $false)]
+[OutputType([void])]
+param()
 
 $ErrorActionPreference = 'Stop'
 if (Test-Path Variable:PSNativeCommandUseErrorActionPreference) {
@@ -26,11 +32,18 @@ if (-not [string]::IsNullOrEmpty($env:GITHUB_TOKEN) -or
     -not [string]::IsNullOrEmpty($env:ACTIONS_RUNTIME_TOKEN)) {
     throw 'credential-policy: a token was projected into a code job'
 }
+# BEGIN LANGUAGE DESCRIPTOR
+$script:hashtableArtifactLanguage = @{
+    ScopedId = 'terraform-instructions'
+    ScopedPath = 'terraform.instructions.md'
+    SemanticRole = 'TerraformRecovery'
+}
+# END LANGUAGE DESCRIPTOR
 $arrArtifacts = @(
     'STYLE_GUIDE_CHAT.md'
     'STYLE_GUIDE_FULL.md'
     'copilot-instructions.md'
-    'terraform.instructions.md'
+    $script:hashtableArtifactLanguage.ScopedPath
 )
 
 function Invoke-GitRaw {
@@ -70,12 +83,14 @@ function Invoke-GitRaw {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
     #
     #   Position 0: GitArguments
+    [CmdletBinding(PositionalBinding = $true)]
+    [OutputType([System.Management.Automation.PSCustomObject])]
     param([string[]]$GitArguments)
     $objStartInfo = [System.Diagnostics.ProcessStartInfo]::new()
     # Resolved once before the generator ran, and held in a constant.
@@ -104,7 +119,9 @@ function Invoke-GitRaw {
     $objProcess.StartInfo = $objStartInfo
     $objOutput = [System.IO.MemoryStream]::new()
     try {
-        if (-not $objProcess.Start()) { throw 'native-tool: Git did not start' }
+        if (-not $objProcess.Start()) {
+            throw 'native-tool: Git did not start'
+        }
         # Both redirected pipes must drain concurrently. Reading one to
         # completion first deadlocks when the child fills the other.
         $objCopyTask = $objProcess.StandardOutput.BaseStream.CopyToAsync($objOutput)
@@ -112,7 +129,11 @@ function Invoke-GitRaw {
         [void]$objCopyTask.GetAwaiter().GetResult()
         $strError = $objErrorTask.GetAwaiter().GetResult()
         $objProcess.WaitForExit()
-        return [pscustomobject]@{ ExitCode = $objProcess.ExitCode; Bytes = $objOutput.ToArray(); Error = $strError }
+        return [pscustomobject]@{
+            ExitCode = $objProcess.ExitCode
+            Bytes = $objOutput.ToArray()
+            Error = $strError
+        }
     } finally {
         $objOutput.Dispose()
         $objProcess.Dispose()
@@ -147,35 +168,49 @@ function ConvertFrom-NulPathRecordStream {
     # None. This function does not accept pipeline input.
     #
     # .OUTPUTS
-    # System.Byte[]. Writes one success-stream byte array for each raw path
-    # record. Empty input writes no success-stream object.
+    # System.Byte[]. Writes one byte-array object for each raw path record.
+    # Empty input writes no success-stream object.
     #
     # .NOTES
     # PRIVATE/INTERNAL HELPER - This function is not part of the public API
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
     #
     #   Position 0: PathRecordBytes
+    [CmdletBinding(PositionalBinding = $true)]
+    [OutputType([System.Array])]
     param([byte[]]$PathRecordBytes)
-    if ($PathRecordBytes.Length -eq 0) { return @() }
-    if ($PathRecordBytes[$PathRecordBytes.Length - 1] -ne 0) { throw 'git-paths: missing final NUL' }
-    $listPathRecords = [System.Collections.Generic.List[byte[]]]::new()
+    if ($PathRecordBytes.Length -eq 0) {
+        return
+    }
+    if ($PathRecordBytes[$PathRecordBytes.Length - 1] -ne 0) {
+        throw 'git-paths: missing final NUL'
+    }
+
     $intStart = 0
     for ($intIndex = 0; $intIndex -lt $PathRecordBytes.Length; $intIndex++) {
         if ($PathRecordBytes[$intIndex] -eq 0) {
-            if ($intIndex -eq $intStart) { throw 'git-paths: empty or duplicate record' }
-            $arrRecord = [byte[]]::new($intIndex - $intStart)
-            [System.Array]::Copy($PathRecordBytes, $intStart, $arrRecord, 0, $arrRecord.Length)
-            $listPathRecords.Add($arrRecord)
+            if ($intIndex -eq $intStart) {
+                throw 'git-paths: empty or duplicate record'
+            }
             $intStart = $intIndex + 1
         }
     }
-    return $listPathRecords.ToArray()
+
+    $intStart = 0
+    for ($intIndex = 0; $intIndex -lt $PathRecordBytes.Length; $intIndex++) {
+        if ($PathRecordBytes[$intIndex] -eq 0) {
+            $arrRecord = [byte[]]::new($intIndex - $intStart)
+            [System.Array]::Copy($PathRecordBytes, $intStart, $arrRecord, 0, $arrRecord.Length)
+            Write-Output -NoEnumerate -InputObject $arrRecord
+            $intStart = $intIndex + 1
+        }
+    }
 }
 
 function Assert-AllowedPathSet {
@@ -220,7 +255,7 @@ function Assert-AllowedPathSet {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -228,20 +263,30 @@ function Assert-AllowedPathSet {
     #   Position 0: PathRecords
     #   Position 1: AllowedPaths
     #   Position 2: SurfaceName
+    [CmdletBinding(PositionalBinding = $true)]
+    [OutputType([string])]
     param([byte[][]]$PathRecords, [string[]]$AllowedPaths, [string]$SurfaceName)
     $objUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
     $listObservedPaths = [System.Collections.Generic.List[string]]::new()
     foreach ($arrRecord in $PathRecords) {
-        try { $strPath = $objUtf8.GetString($arrRecord) } catch { throw "git-paths: undecodable $SurfaceName record" }
+        try {
+            $strPath = $objUtf8.GetString($arrRecord)
+        } catch {
+            throw "git-paths: undecodable $SurfaceName record"
+        }
         $arrRoundTrip = $objUtf8.GetBytes($strPath)
         if ([Convert]::ToBase64String($arrRecord) -cne [Convert]::ToBase64String($arrRoundTrip)) {
             throw "git-paths: ambiguous $SurfaceName record"
         }
-        if ($listObservedPaths -ccontains $strPath) { throw "git-paths: duplicate $SurfaceName record" }
-        if ($AllowedPaths -cnotcontains $strPath) { throw "git-paths: unexpected $SurfaceName path" }
+        if ($listObservedPaths -ccontains $strPath) {
+            throw "git-paths: duplicate $SurfaceName record"
+        }
+        if ($AllowedPaths -cnotcontains $strPath) {
+            throw "git-paths: unexpected $SurfaceName path"
+        }
         $listObservedPaths.Add($strPath)
     }
-    return @($listObservedPaths | Sort-Object -CaseSensitive)
+    return $listObservedPaths | Sort-Object -CaseSensitive
 }
 
 # Everything below this line runs after repository-controlled code, so
@@ -251,8 +296,14 @@ function Assert-AllowedPathSet {
 # because a script invoked with the call operator runs in a child
 # scope whose parent is this block and can therefore reassign an
 # ordinary variable here through Set-Variable -Scope 1.
-$strResolvedGit = @('/usr/bin/git', '/bin/git') | Where-Object { [System.IO.File]::Exists($_) } | Select-Object -First 1
-if ([string]::IsNullOrEmpty($strResolvedGit)) { throw 'native-tool: Git application was not resolved' }
+$strResolvedGit = @('/usr/bin/git', '/bin/git') |
+    Where-Object {
+        [System.IO.File]::Exists($_)
+    } |
+    Select-Object -First 1
+if ([string]::IsNullOrEmpty($strResolvedGit)) {
+    throw 'native-tool: Git application was not resolved'
+}
 New-Variable -Name strGitPath -Value $strResolvedGit -Option Constant
 
 # Pinning the executable does not pin what it will do. Git loads
@@ -279,7 +330,9 @@ function Get-GitControlSurfaceDigest {
     # # Records the repository-local configuration and hook state.
     #
     # .EXAMPLE
-    # if ((Get-GitControlSurfaceDigest) -cne $strControlSurfaceBefore) { throw 'git-state changed' }
+    # if ((Get-GitControlSurfaceDigest) -cne $strControlSurfaceBefore) {
+    #     throw 'git-state changed'
+    # }
     # # Compares a later measurement with the recorded digest.
     #
     # .INPUTS
@@ -294,12 +347,16 @@ function Get-GitControlSurfaceDigest {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function declares no parameters.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
     param ()
     $strGitDirectory = [System.IO.Path]::Combine($PWD.Path, '.git')
-    if (-not [System.IO.Directory]::Exists($strGitDirectory)) { throw 'git-state: .git is not a directory' }
+    if (-not [System.IO.Directory]::Exists($strGitDirectory)) {
+        throw 'git-state: .git is not a directory'
+    }
     # Components are collected first, then written length-prefixed.
     # Concatenating them raw would not be injective: renaming
     # pre-commit.sample to pre-commit and prepending '.sample' to its
@@ -325,11 +382,15 @@ function Get-GitControlSurfaceDigest {
     $objBuffer = [System.IO.MemoryStream]::new()
     try {
         $arrCount = [System.BitConverter]::GetBytes([long]$listComponents.Count)
-        if ([System.BitConverter]::IsLittleEndian) { [System.Array]::Reverse($arrCount) }
+        if ([System.BitConverter]::IsLittleEndian) {
+            [System.Array]::Reverse($arrCount)
+        }
         $objBuffer.Write($arrCount, 0, $arrCount.Length)
         foreach ($arrComponent in $listComponents) {
             $arrLength = [System.BitConverter]::GetBytes([long]$arrComponent.Length)
-            if ([System.BitConverter]::IsLittleEndian) { [System.Array]::Reverse($arrLength) }
+            if ([System.BitConverter]::IsLittleEndian) {
+                [System.Array]::Reverse($arrLength)
+            }
             $objBuffer.Write($arrLength, 0, $arrLength.Length)
             $objBuffer.Write($arrComponent, 0, $arrComponent.Length)
         }
@@ -413,9 +474,11 @@ function Get-WorktreeFileDigestMap {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function declares no parameters.
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([System.Collections.Generic.SortedDictionary[string, string]])]
     param ()
     $strRoot = $PWD.Path
     $strGitDirectory = [System.IO.Path]::Combine($strRoot, '.git')
@@ -431,7 +494,9 @@ function Get-WorktreeFileDigestMap {
                     throw 'worktree: the working tree contains a link'
                 }
                 if (($objAttributes -band [System.IO.FileAttributes]::Directory) -ne 0) {
-                    if ($strEntry -cne $strGitDirectory) { $objPending.Push($strEntry) }
+                    if ($strEntry -cne $strGitDirectory) {
+                        $objPending.Push($strEntry)
+                    }
                 } else {
                     $strRelative = $strEntry.Substring($strRoot.Length).TrimStart([System.IO.Path]::DirectorySeparatorChar)
                     # Length comes from stat, which answers for a FIFO
@@ -449,77 +514,150 @@ function Get-WorktreeFileDigestMap {
                         $objStream = [System.IO.File]::OpenRead($strEntry)
                         try {
                             $objDigestMap[$strRelative] = [Convert]::ToBase64String($objSha.ComputeHash($objStream))
-                        } finally { $objStream.Dispose() }
+                        } finally {
+                            $objStream.Dispose()
+                        }
                     }
                 }
             }
         }
-    } finally { $objSha.Dispose() }
+    } finally {
+        $objSha.Dispose()
+    }
     return $objDigestMap
 }
-$objWorktreeBefore = Get-WorktreeFileDigestMap
+function Assert-ChildIntegrity {
+    # .SYNOPSIS
+    # Checks a completed child before another child can hide its effects.
+    #
+    # .DESCRIPTION
+    # Compares Git controls, runner channels and worktree bytes with the snapshot.
+    # Generation may change only the four outputs; the final gate rejects drift.
+    #
+    # .PARAMETER AllowArtifactChanges
+    # Permit the generator's four output paths during this intermediate check.
+    #
+    # .EXAMPLE
+    # Assert-ChildIntegrity
+    #
+    # # Throws if the semantic child changed any observed state.
+    #
+    # .INPUTS
+    # None. Pipeline input is not supported.
+    #
+    # .OUTPUTS
+    # None. Violations terminate with a fixed diagnostic.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - Not public API. Parameters, return shape and
+    # positional contract may change without notice. All parameters are named.
+    #
+    # Version: 1.0.20261005.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([void])]
+    param ([switch]$AllowArtifactChanges)
 
-# The generator runs in its own process, not in this session. In-session
-# it could shadow a cmdlet with a function, reassign a variable in this
-# scope, or prepend a directory to PATH, and every check below would
-# then be reading what it chose. A process boundary removes the class
-# rather than naming its members: a child process cannot reach this
-# session's functions, variables, or environment.
+    if ((Get-GitControlSurfaceDigest) -cne $strControlSurfaceBefore) {
+        throw 'git-state: a child changed repository Git configuration or hooks'
+    }
+    foreach ($strChannel in $arrChannelPaths) {
+        if ([string]::IsNullOrEmpty($strChannel) -or [System.IO.FileInfo]::new($strChannel).Length -ne 0) {
+            throw 'runner-state: a child changed a runner step communication file'
+        }
+    }
+    $objCurrent = Get-WorktreeFileDigestMap
+    foreach ($strPath in @($objWorktreeBefore.Keys) + @($objCurrent.Keys)) {
+        if ($AllowArtifactChanges -and $arrArtifacts -ccontains $strPath) {
+            continue
+        }
+        if (-not $objCurrent.ContainsKey($strPath) -or -not $objWorktreeBefore.ContainsKey($strPath) -or
+            $objCurrent[$strPath] -cne $objWorktreeBefore[$strPath]) {
+            throw 'git-state: a child changed a path outside the four permitted generated artifacts'
+        }
+    }
+}
+
+# Resolve every executable before any repository child can change the checkout.
 try {
     $strPowerShellPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
 } catch {
-    # Any MainModule resolution failure falls through to the deterministic guard below.
+    # A fixed failure below handles unavailable process metadata.
     $strPowerShellPath = $null
 }
-if ([string]::IsNullOrEmpty($strPowerShellPath) -or
-    -not [System.IO.File]::Exists($strPowerShellPath)) {
+if ([string]::IsNullOrEmpty($strPowerShellPath) -or -not [System.IO.File]::Exists($strPowerShellPath)) {
     throw 'The current PowerShell executable could not be resolved.'
 }
+$strSemanticNodePath = $null
+if ($script:hashtableArtifactLanguage.SemanticRole -eq 'TerraformRecovery') {
+    $objNodeCommand = Get-Command -Name 'node' -CommandType Application -All -TotalCount 1 -ErrorAction Stop
+    $strSemanticNodePath = $objNodeCommand.Source
+} elseif ($script:hashtableArtifactLanguage.SemanticRole -ne 'PowerShellExamples') {
+    throw 'Unsupported semantic role.'
+}
 
-# Resolve the runtime before any repository child runs. Keep the recovery
-# harness inside the same integrity snapshots as the generator and verifier.
-$objNodeCommand = Get-Command -Name 'node' -CommandType Application -All -TotalCount 1 -ErrorAction Stop
-if (-not [System.IO.File]::Exists($objNodeCommand.Source)) {
-    throw 'state-recovery: the Node executable could not be resolved'
-}
-$objRecoveryStart = [System.Diagnostics.ProcessStartInfo]::new()
-$objRecoveryStart.FileName = $objNodeCommand.Source
-$objRecoveryStart.UseShellExecute = $false
-$objRecoveryStart.RedirectStandardOutput = $true
-$objRecoveryStart.RedirectStandardError = $true
-$objRecoveryStart.ArgumentList.Add('./.github/workflows/Test-StateRecoveryExamples.mjs')
-$objRecoveryProcess = [System.Diagnostics.Process]::new()
-$objRecoveryProcess.StartInfo = $objRecoveryStart
-$intRecoveryExit = -1
-$boolRecoveryTimedOut = $false
-try {
-    if (-not $objRecoveryProcess.Start()) {
-        throw 'state-recovery: the test process did not start'
+$objWorktreeBefore = Get-WorktreeFileDigestMap
+
+# Both semantic roles run inside the same integrity envelope.
+if ($script:hashtableArtifactLanguage.SemanticRole -eq 'PowerShellExamples') {
+    $arrSemanticResult = @(& $strPowerShellPath `
+        -NoLogo `
+        -NoProfile `
+        -NonInteractive `
+        -File './.github/workflows/Test-BlankLineExamples.ps1')
+    $intSemanticExit = $LASTEXITCODE
+    if ($intSemanticExit -isnot [int] -or $intSemanticExit -ne 0) {
+        throw 'The blank-line semantic check failed.'
     }
-    $objRecoveryOutput = $objRecoveryProcess.StandardOutput.ReadToEndAsync()
-    $objRecoveryError = $objRecoveryProcess.StandardError.ReadToEndAsync()
-    if (-not $objRecoveryProcess.WaitForExit(300000)) {
-        $boolRecoveryTimedOut = $true
-        $objRecoveryProcess.Kill($true)
-        $objRecoveryProcess.WaitForExit()
+    if ($arrSemanticResult.Count -ne 1 -or
+        $arrSemanticResult[0] -cne 'Blank-line example semantics passed, including focused mutation checks.') {
+        throw 'The blank-line semantic check returned an unexpected result.'
     }
-    $intRecoveryExit = $objRecoveryProcess.ExitCode
-    # Drain both streams without exposing fixture payloads in a failed run.
-    $null = $objRecoveryOutput.GetAwaiter().GetResult()
-    $null = $objRecoveryError.GetAwaiter().GetResult()
-} finally {
-    $objRecoveryProcess.Dispose()
+} else {
+    $objRecoveryStart = [System.Diagnostics.ProcessStartInfo]::new()
+    $objRecoveryStart.FileName = $strSemanticNodePath
+    $objRecoveryStart.UseShellExecute = $false
+    $objRecoveryStart.RedirectStandardOutput = $true
+    $objRecoveryStart.RedirectStandardError = $true
+    $objRecoveryStart.ArgumentList.Add('./.github/workflows/Test-StateRecoveryExamples.mjs')
+    $objRecoveryProcess = [System.Diagnostics.Process]::new()
+    $objRecoveryProcess.StartInfo = $objRecoveryStart
+    $intRecoveryExit = -1
+    $boolRecoveryTimedOut = $false
+    try {
+        if (-not $objRecoveryProcess.Start()) {
+            throw 'state-recovery: the test process did not start'
+        }
+        $objRecoveryOutput = $objRecoveryProcess.StandardOutput.ReadToEndAsync()
+        $objRecoveryError = $objRecoveryProcess.StandardError.ReadToEndAsync()
+        if (-not $objRecoveryProcess.WaitForExit(300000)) {
+            $boolRecoveryTimedOut = $true
+            $objRecoveryProcess.Kill($true)
+            $objRecoveryProcess.WaitForExit()
+        }
+        $intRecoveryExit = $objRecoveryProcess.ExitCode
+        # Drain both streams without exposing fixture payloads in a failed run.
+        $null = $objRecoveryOutput.GetAwaiter().GetResult()
+        $null = $objRecoveryError.GetAwaiter().GetResult()
+    } finally {
+        $objRecoveryProcess.Dispose()
+    }
+    if ($boolRecoveryTimedOut -or $intRecoveryExit -ne 0) {
+        throw 'state-recovery: published-example tests did not complete'
+    }
 }
+Assert-ChildIntegrity
+
 $arrResult = @(& $strPowerShellPath `
     -NoLogo `
     -NoProfile `
     -NonInteractive `
     -File './.github/workflows/Generate-StyleGuideArtifacts.ps1')
 $intGeneratorExit = $LASTEXITCODE
+Assert-ChildIntegrity -AllowArtifactChanges
 if ($arrResult.Count -ne 1) {
     throw 'The generator returned an unexpected output shape.'
 }
-# BEGIN P1 GENERATOR RESULT
+# BEGIN GENERATOR RESULT
 try {
     $objResult = $arrResult[0] | ConvertFrom-Json -NoEnumerate -ErrorAction Stop
 } catch {
@@ -533,7 +671,7 @@ $listFailedChecks = [System.Collections.Generic.List[string]]::new()
 if ($intGeneratorExit -isnot [int] -or $intGeneratorExit -ne 0) {
     [void]($listFailedChecks.Add('NativeExit'))
 }
-if ($objResult.Schema -isnot [string] -or $objResult.Schema -cne 'TerraformStyleGuide.GeneratorResult.v2') {
+if ($objResult.Schema -isnot [string] -or $objResult.Schema -cne 'StyleGuide.GeneratorResult.v2') {
     [void]($listFailedChecks.Add('Schema'))
 }
 if ($objResult.Overall -isnot [string] -or $objResult.Overall -notin @('Success', 'NoChange')) {
@@ -554,10 +692,10 @@ if (($objResult.ExitCode -isnot [int] -and $objResult.ExitCode -isnot [long]) -o
 if ($listFailedChecks.Count -ne 0) {
     throw ('Artifact generation failed result checks: {0}.' -f ($listFailedChecks -join ', '))
 }
-# END P1 GENERATOR RESULT
+# END GENERATOR RESULT
 $arrExpectedArtifactRecords = @(
     @('copilot', 'copilot-instructions.md'),
-    @('terraform-instructions', 'terraform.instructions.md'),
+    @($script:hashtableArtifactLanguage.ScopedId, $script:hashtableArtifactLanguage.ScopedPath),
     @('chat', 'STYLE_GUIDE_CHAT.md'),
     @('full', 'STYLE_GUIDE_FULL.md')
 )
@@ -590,7 +728,9 @@ if ((Get-GitControlSurfaceDigest) -cne $strControlSurfaceBefore) {
 }
 
 foreach ($strChannel in $arrChannelPaths) {
-    if ([string]::IsNullOrEmpty($strChannel)) { throw 'runner-state: a step communication file path is unset' }
+    if ([string]::IsNullOrEmpty($strChannel)) {
+        throw 'runner-state: a step communication file path is unset'
+    }
     if ([System.IO.FileInfo]::new($strChannel).Length -ne 0) {
         throw 'runner-state: the generator or verifier wrote to a runner step communication file'
     }
@@ -607,28 +747,34 @@ foreach ($strPath in $objWorktreeBefore.Keys) {
     }
 }
 foreach ($strPath in $objWorktreeAfter.Keys) {
-    if (-not $objWorktreeBefore.ContainsKey($strPath)) { $listChanged.Add($strPath) }
+    if (-not $objWorktreeBefore.ContainsKey($strPath)) {
+        $listChanged.Add($strPath)
+    }
 }
 if ($listChanged.Count -ne 0) {
-    $arrOutside = @($listChanged | Where-Object { $arrArtifacts -cnotcontains $_ } | Sort-Object -CaseSensitive)
+    $arrOutside = @(
+        $listChanged | Where-Object {
+            $arrArtifacts -cnotcontains $_
+        } | Sort-Object -CaseSensitive
+    )
     if ($arrOutside.Count -ne 0) {
         throw "git-state: the generator or verifier changed $($arrOutside.Count) path(s) outside the four generated artifacts"
     }
     throw 'generated-artifacts: committed artifacts do not match generator output. Run ./.github/workflows/Generate-StyleGuideArtifacts.ps1 and commit the four regenerated files.'
 }
 
-if ($boolRecoveryTimedOut -or $intRecoveryExit -ne 0) {
-    throw 'state-recovery: published-example tests did not complete successfully'
-}
-Write-Information 'state-recovery: published-example tests passed' -InformationAction Continue
-
 # Check the saved verifier result after the specific integrity diagnostics.
-if ($arrPathSetResult.Count -ne 1) { throw 'Exact-path verification returned an invalid shape.' }
-try { $objPathSetResult = $arrPathSetResult[0] | ConvertFrom-Json -NoEnumerate -ErrorAction Stop }
-catch { throw 'Exact-path verification returned invalid JSON.' }
+if ($arrPathSetResult.Count -ne 1) {
+    throw 'Exact-path verification returned an invalid shape.'
+}
+try {
+    $objPathSetResult = $arrPathSetResult[0] | ConvertFrom-Json -NoEnumerate -ErrorAction Stop
+} catch {
+    throw 'Exact-path verification returned invalid JSON.'
+}
 if ($null -eq $objPathSetResult -or $objPathSetResult.GetType() -ne [System.Management.Automation.PSCustomObject] -or
     $intPathSetExit -isnot [int] -or $intPathSetExit -ne 0 -or
-    $objPathSetResult.Schema -isnot [string] -or $objPathSetResult.Schema -cne 'TerraformStyleGuide.ExactGitPathSetResult.v2' -or
+    $objPathSetResult.Schema -isnot [string] -or $objPathSetResult.Schema -cne 'StyleGuide.ExactGitPathSetResult.v2' -or
     $objPathSetResult.Success -isnot [bool] -or -not $objPathSetResult.Success) {
     throw 'Exact-path verification did not confirm a clean worktree and index.'
 }
@@ -637,12 +783,16 @@ $objWorking = Invoke-GitRaw @('diff', '--no-ext-diff', '--no-textconv', '--no-re
 $objStaged = Invoke-GitRaw @('diff', '--cached', '--no-ext-diff', '--no-textconv', '--no-renames', '--name-only', '-z', '--')
 $objUntracked = Invoke-GitRaw @('ls-files', '--others', '--exclude-standard', '-z', '--')
 foreach ($objGitResult in @($objWorking, $objStaged, $objUntracked)) {
-    if ($objGitResult.ExitCode -ne 0) { throw "native-tool: Git path query failed with exit $($objGitResult.ExitCode)" }
+    if ($objGitResult.ExitCode -ne 0) {
+        throw "native-tool: Git path query failed with exit $($objGitResult.ExitCode)"
+    }
 }
-$null = Assert-AllowedPathSet (ConvertFrom-NulPathRecordStream $objWorking.Bytes) $arrArtifacts 'working'
-$arrStagedPaths = @(Assert-AllowedPathSet (ConvertFrom-NulPathRecordStream $objStaged.Bytes) @() 'staged')
-$arrUntrackedPaths = @(Assert-AllowedPathSet (ConvertFrom-NulPathRecordStream $objUntracked.Bytes) @() 'untracked')
-if ($arrStagedPaths.Count -ne 0 -or $arrUntrackedPaths.Count -ne 0) { throw 'git-paths: checkout is not clean' }
+$null = Assert-AllowedPathSet -PathRecords (ConvertFrom-NulPathRecordStream -PathRecordBytes $objWorking.Bytes) -AllowedPaths $arrArtifacts -SurfaceName 'working'
+$arrStagedPaths = @(Assert-AllowedPathSet -PathRecords (ConvertFrom-NulPathRecordStream -PathRecordBytes $objStaged.Bytes) -AllowedPaths @() -SurfaceName 'staged')
+$arrUntrackedPaths = @(Assert-AllowedPathSet -PathRecords (ConvertFrom-NulPathRecordStream -PathRecordBytes $objUntracked.Bytes) -AllowedPaths @() -SurfaceName 'untracked')
+if ($arrStagedPaths.Count -ne 0 -or $arrUntrackedPaths.Count -ne 0) {
+    throw 'git-paths: checkout is not clean'
+}
 
 $objDiff = Invoke-GitRaw (@('diff', '--no-ext-diff', '--no-textconv', '--quiet', '--') + $arrArtifacts)
 if ($objDiff.ExitCode -ne 0 -and $objDiff.ExitCode -ne 1) {

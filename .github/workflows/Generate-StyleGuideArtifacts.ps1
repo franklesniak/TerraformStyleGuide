@@ -10,14 +10,30 @@ fixed destination. Serialization is UTF-8 without a BOM and normalizes CRLF
 and lone CR to LF at the final payload boundary.
 
 .NOTES
-Version: 1.0.20260920.0
+Version: 2.0.20261005.0
 #>
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$script:strGeneratorVersion = '1.0.20260920.0'
-$script:strGeneratorResultSchema = 'TerraformStyleGuide.GeneratorResult.v2'
+$script:strGeneratorVersion = '2.0.20261005.0'
+$script:strGeneratorResultSchema = 'StyleGuide.GeneratorResult.v2'
+# BEGIN LANGUAGE DESCRIPTOR
+$script:hashtableLanguage = @{
+    ScopedId = 'terraform-instructions'
+    ScopedPath = 'terraform.instructions.md'
+    Selector = '**/*.tf,**/*.tfvars,**/*.tftest.hcl,**/*.tf.json,**/*.tftpl,**/*.tfbackend'
+    Description = 'Terraform coding standards: secure, modular, and well-documented infrastructure as code.'
+    ChatTitle = '# Terraform Writing Style Guide - Formatted for Copy-Paste Into LLM Chat'
+    GuideAnchor = 'terraform-writing-style'
+    SummaryHeading = 'Executive Summary: Terraform Philosophy'
+    SummaryAnchor = 'executive-summary-terraform-philosophy'
+    SummaryBefore = 'Terraform Version Requirements'
+    Composition = 'ExplicitBody'
+    AppendStandalone = $true
+}
+# END LANGUAGE DESCRIPTOR
+
 $script:objUtf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
 $script:objUtf8NoBom = New-Object System.Text.UTF8Encoding($false)
 # Derive the host platform once from the runtime rather than from $env:OS, a
@@ -66,7 +82,7 @@ function ConvertTo-LowerHex {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -115,7 +131,7 @@ function Get-Sha256Hex {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -170,7 +186,7 @@ function Get-FileSha256Hex {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -231,7 +247,7 @@ function Test-PathTextIsSafe {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260918.0
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -303,7 +319,7 @@ function Assert-OrdinaryPathComponent {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -397,7 +413,7 @@ function Get-OrdinaryDestinationState {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -482,7 +498,7 @@ function Test-FileSystemEntry {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -541,7 +557,7 @@ function Assert-OrdinaryAbsolutePath {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -621,7 +637,7 @@ function Test-PathContainedByRoot {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -649,7 +665,7 @@ function Initialize-WindowsFileIdentityType {
     # Loads the Windows ordinary-file identity helper type when required.
     #
     # .DESCRIPTION
-    # On Windows, compiles the TerraformStyleGuide.NativeFileIdentity type once. The
+    # On Windows, compiles the StyleGuide.NativeFileIdentity type once. The
     # type reads volume and file-index identity from an open handle and rejects
     # files whose hard-link count is not exactly one. Other platforms are no-ops.
     #
@@ -676,12 +692,12 @@ function Initialize-WindowsFileIdentityType {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function declares no parameters.
     param ()
 
-    if ((-not $script:boolHostIsWindows) -or ('TerraformStyleGuide.NativeFileIdentity' -as [type])) {
+    if ((-not $script:boolHostIsWindows) -or ('StyleGuide.NativeFileIdentity' -as [type])) {
         return
     }
 
@@ -691,7 +707,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
 
-namespace TerraformStyleGuide {
+namespace StyleGuide {
     public static class NativeFileIdentity {
         [StructLayout(LayoutKind.Sequential)]
         private struct ByHandleFileInformation {
@@ -769,7 +785,7 @@ function Get-OrdinaryFileIdentity {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -782,7 +798,7 @@ function Get-OrdinaryFileIdentity {
 
     if ($script:boolHostIsWindows) {
         Initialize-WindowsFileIdentityType
-        return [TerraformStyleGuide.NativeFileIdentity]::Read($LiteralPath)
+        return [StyleGuide.NativeFileIdentity]::Read($LiteralPath)
     }
 
     $boolHostIsLinux = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
@@ -850,7 +866,7 @@ function Assert-TrackedFile {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -908,7 +924,7 @@ function ConvertFrom-StrictUtf8 {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -959,7 +975,7 @@ function ConvertTo-NormalizedUtf8 {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1008,7 +1024,7 @@ function New-CopilotPayload {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1027,24 +1043,24 @@ function New-CopilotPayload {
     return $GuideContent
 }
 
-function New-TerraformInstructionsPayload {
+function New-ScopedInstructionsPayload {
     # .SYNOPSIS
-    # Builds the scoped Terraform-instructions payload.
+    # Builds the scoped instructions payload.
     #
     # .DESCRIPTION
     # Prefixes the complete normative guide content with the fixed YAML
-    # frontmatter that scopes the generated instructions to Terraform configuration files.
+    # frontmatter from the fixed language descriptor.
     #
     # .PARAMETER GuideContent
     # Complete decoded normative style-guide text.
     #
     # .EXAMPLE
-    # $strPayload = New-TerraformInstructionsPayload -GuideContent $strGuideContent
+    # $strPayload = New-ScopedInstructionsPayload -GuideContent $strGuideContent
     #
     # # Returns the fixed frontmatter followed by the complete guide content.
     #
     # .EXAMPLE
-    # $strPayload = New-TerraformInstructionsPayload -GuideContent 'guide'
+    # $strPayload = New-ScopedInstructionsPayload -GuideContent 'guide'
     #
     # # The payload ends with the supplied text 'guide'.
     #
@@ -1060,7 +1076,7 @@ function New-TerraformInstructionsPayload {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1078,8 +1094,8 @@ function New-TerraformInstructionsPayload {
 
     $arrFrontmatterLines = @(
         '---',
-        'applyTo: "**/*.tf,**/*.tfvars,**/*.tftest.hcl,**/*.tf.json,**/*.tftpl,**/*.tfbackend"',
-        'description: "Terraform coding standards: secure, modular, and well-documented infrastructure as code."',
+        ('applyTo: "{0}"' -f $script:hashtableLanguage.Selector),
+        ('description: "{0}"' -f $script:hashtableLanguage.Description),
         '---',
         '',
         ''
@@ -1122,7 +1138,7 @@ function New-ChatPayload {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1148,8 +1164,57 @@ function New-ChatPayload {
     }
     $intOuterFenceLength = [System.Math]::Max(4, $intMaximumBackticks + 1)
     $strOuterFence = '`' * $intOuterFenceLength
-    return "# Terraform Writing Style Guide - Formatted for Copy-Paste Into LLM Chat`n`n$strOuterFence" +
+    return $script:hashtableLanguage.ChatTitle + "`n`n$strOuterFence" +
         "markdown`n$strContent`n$strOuterFence`n"
+}
+
+function ConvertTo-RationaleBody {
+    # .SYNOPSIS
+    # Cleans one rationale body for inclusion in the full guide.
+    #
+    # .DESCRIPTION
+    # Removes source backlinks, rewrites guide links and trims boundary spacing.
+    # Internal spacing and ordinary blockquotes remain unchanged.
+    #
+    # .PARAMETER Lines
+    # The parsed body, including any nested headings.
+    #
+    # .EXAMPLE
+    # $arrBody = @(ConvertTo-RationaleBody -Lines @('', 'text', '---'))
+    #
+    # # Returns one line, text.
+    #
+    # .INPUTS
+    # None. Pipeline input is not supported.
+    #
+    # .OUTPUTS
+    # System.String. Streams cleaned body lines; an empty body emits no lines.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - Not public API. Parameters, return shape and
+    # positional contract may change without notice. All parameters are named.
+    #
+    # Version: 2.0.20261005.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param ([AllowEmptyCollection()][string[]]$Lines)
+
+    $arrConverted = @($Lines | Where-Object { $_ -notmatch '^> For .+\(STYLE_GUIDE\.md#' } |
+        ForEach-Object {
+            $_ -replace 'STYLE_GUIDE\.md#', '#' -replace '\[([^\]]+)\]\(STYLE_GUIDE\.md\)',
+                ('[$1](#' + $script:hashtableLanguage.GuideAnchor + ')')
+        })
+    $intStart = 0
+    $intEnd = $arrConverted.Count - 1
+    while ($intStart -le $intEnd -and $arrConverted[$intStart].Trim() -eq '') {
+        $intStart++
+    }
+    while ($intEnd -ge $intStart -and $arrConverted[$intEnd].Trim() -in @('', '---')) {
+        $intEnd--
+    }
+    for ($intIndex = $intStart; $intIndex -le $intEnd; $intIndex++) {
+        $arrConverted[$intIndex]
+    }
 }
 
 function New-FullPayload {
@@ -1173,7 +1238,7 @@ function New-FullPayload {
     # # Returns the combined newline-terminated full style guide.
     #
     # .EXAMPLE
-    # New-FullPayload -GuideContent '<!-- RATIONALE: absent -->' -RationaleContent '## Other'
+    # New-FullPayload -GuideContent '<!-- rationale-anchor: absent -->' -RationaleContent '## Other'
     #
     # # Throws 'missing-rationale-anchor' for an explicit marker without a matching section.
     #
@@ -1191,7 +1256,7 @@ function New-FullPayload {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1211,313 +1276,159 @@ function New-FullPayload {
         [string]$RationaleContent
     )
 
-    $strGuideContent = $GuideContent
-    $strRationaleContent = $RationaleContent
-
-    # Parse rationale file into sections keyed by markdown anchor.
-    # Only ### headings are collected (these are the leaf sections that map to
-    # headings in STYLE_GUIDE.md). ## headings in the rationale file are grouping
-    # headers (e.g., "## Naming Rationale") that do not exist in the main guide.
-    $arrRationaleLines = $strRationaleContent -split '\r?\n'
+    # One parse supplies both leaf insertion and top-level standalone emission.
     $hashtableSections = @{}
-    $strCurrentAnchor = $null
-    $intCurrentLevel = 0
-    $listCurrentBody = [System.Collections.Generic.List[string]]::new()
-
-    foreach ($strLine in $arrRationaleLines) {
-        if ($strLine -match '^(#{2,4}) (.+)$') {
+    $listTopSections = New-Object 'System.Collections.Generic.List[hashtable]'
+    $hashtableLeaf = $null
+    $hashtableTop = $null
+    foreach ($strLine in ($RationaleContent -split '\r?\n')) {
+        if ($strLine -match '^(#{2,3}) (.+)$') {
             $intLevel = $Matches[1].Length
-            $strHeadingText = $Matches[2]
-
-            # Save previous section if it was a ### heading
-            if ($null -ne $strCurrentAnchor -and $intCurrentLevel -eq 3) {
-                $hashtableSections[$strCurrentAnchor] = $listCurrentBody.ToArray()
-            }
-
-            # Compute anchor for this heading
-            $strAnchor = $strHeadingText.ToLowerInvariant() -replace '[^a-z0-9 -]', '' -replace ' ', '-'
+            $strHeading = $Matches[2]
+            $strAnchor = $strHeading.ToLowerInvariant() -replace '[^a-z0-9 -]', '' -replace ' ', '-'
             $strAnchor = $strAnchor -replace '-+', '-' -replace '^-|-$', ''
-
-            if ($intLevel -eq 3) {
-                # This is a leaf section -- collect its body
-                $strCurrentAnchor = $strAnchor
-                $intCurrentLevel = 3
-                $listCurrentBody = [System.Collections.Generic.List[string]]::new()
-            } elseif ($intLevel -eq 2) {
-                # Grouping header -- reset tracking but do not collect
-                $strCurrentAnchor = $null
-                $intCurrentLevel = 2
+            $hashtableLeaf = $null
+            $hashtableSection = @{
+                Heading = ('#' * $intLevel) + ' ' + $strHeading
+                Title = $strHeading
+                Body = New-Object 'System.Collections.Generic.List[string]'
+            }
+            if ($intLevel -eq 2) {
+                $hashtableTop = $hashtableSection
+                $listTopSections.Add($hashtableTop)
+                if ($strHeading -eq $script:hashtableLanguage.SummaryHeading) {
+                    $hashtableSections[$script:hashtableLanguage.SummaryAnchor] = $hashtableTop
+                }
             } else {
-                # #### sub-heading inside a ### section -- include as body content
-                if ($null -ne $strCurrentAnchor -and $intCurrentLevel -eq 3) {
-                    $listCurrentBody.Add($strLine)
+                $hashtableLeaf = $hashtableSection
+                $hashtableSections[$strAnchor] = $hashtableLeaf
+                if ($null -ne $hashtableTop) {
+                    $hashtableTop.Body.Add($strLine)
                 }
             }
-        } elseif ($null -ne $strCurrentAnchor -and $intCurrentLevel -eq 3) {
-            $listCurrentBody.Add($strLine)
+        } else {
+            if ($null -ne $hashtableLeaf) {
+                $hashtableLeaf.Body.Add($strLine)
+            }
+            if ($null -ne $hashtableTop) {
+                $hashtableTop.Body.Add($strLine)
+            }
         }
     }
-    # Save final section if it was a ### heading
-    if ($null -ne $strCurrentAnchor -and $intCurrentLevel -eq 3) {
-        $hashtableSections[$strCurrentAnchor] = $listCurrentBody.ToArray()
+    foreach ($hashtableSection in @($hashtableSections.Values) + $listTopSections.ToArray()) {
+        $hashtableSection.CleanBody = @(ConvertTo-RationaleBody -Lines $hashtableSection.Body.ToArray())
     }
-
-    # Also handle the ## Executive Summary: Author Profile which is a ## heading
-    # but maps to a ## heading in the main guide. Parse it separately.
-    $strCurrentAnchor = $null
-    $intCurrentLevel = 0
-    $listCurrentBody = [System.Collections.Generic.List[string]]::new()
-    $boolInExecutiveSummary = $false
-
-    foreach ($strLine in $arrRationaleLines) {
-        if ($strLine -match '^## Executive Summary: Terraform Philosophy') {
-            $boolInExecutiveSummary = $true
-            $listCurrentBody = [System.Collections.Generic.List[string]]::new()
-        } elseif ($boolInExecutiveSummary -and $strLine -match '^## ') {
-            # Hit the next ## heading, stop collecting
-            $hashtableSections['executive-summary-terraform-philosophy'] = $listCurrentBody.ToArray()
-            $boolInExecutiveSummary = $false
-        } elseif ($boolInExecutiveSummary) {
-            $listCurrentBody.Add($strLine)
-        }
-    }
-    if ($boolInExecutiveSummary) {
-        $hashtableSections['executive-summary-terraform-philosophy'] = $listCurrentBody.ToArray()
-    }
-
-    # Clean each section body:
-    # - Remove blockquote lines that link back to STYLE_GUIDE.md (cross-refs)
-    # - Convert STYLE_GUIDE.md#anchor links to #anchor (internal)
-    # - Trim leading and trailing blank lines
-    $hashtableCleanSections = @{}
-    foreach ($strKey in $hashtableSections.Keys) {
-        $arrLines = $hashtableSections[$strKey]
-
-        # Filter out cross-reference blockquotes pointing back to main guide.
-        # Only remove "For ... see ... (STYLE_GUIDE.md#..." lines; preserve other
-        # blockquotes (e.g., "> **Note:** ...") that happen to link to the main guide.
-        $arrFiltered = @($arrLines | Where-Object {
-            -not ($_ -match '^> For .+\(STYLE_GUIDE\.md#')
-        })
-
-        # Convert relative links to main guide into internal anchors
-        $arrConverted = @($arrFiltered | ForEach-Object {
-            $_ -replace 'STYLE_GUIDE\.md#', '#' -replace '\[([^\]]+)\]\(STYLE_GUIDE\.md\)', '[$1](#terraform-writing-style)'
-        })
-
-        # Trim leading and trailing blank lines and trailing horizontal rules
-        $intStart = 0
-        while ($intStart -lt $arrConverted.Count -and $arrConverted[$intStart].Trim() -eq '') {
-            $intStart++
-        }
-        $intEnd = $arrConverted.Count - 1
-        while ($intEnd -ge 0 -and ($arrConverted[$intEnd].Trim() -eq '' -or $arrConverted[$intEnd].Trim() -eq '---')) {
-            $intEnd--
-        }
-        if ($intStart -le $intEnd) {
-            $hashtableCleanSections[$strKey] = $arrConverted[$intStart..$intEnd]
-        }
-    }
-
-    # Process the guide line by line, replacing RATIONALE markers with content
-    # from the rationale document. Markers use the format:
-    #   <!-- RATIONALE: anchor-key -->
-    # where anchor-key matches the computed anchor of a ### heading in the
-    # rationale file. Also remove placeholder lines that mark intentionally
-    # blank sections, since the full version will have the actual rationale
-    # content re-inserted by the merge.
-    $strPlaceholder = '*This section intentionally left blank.*'
-    $strMarkerPattern = '^\s*<!-- RATIONALE: (.+?) -->\s*$'
-    $arrGuideLines = $strGuideContent -split '\r?\n'
-    $listOutputLines = [System.Collections.Generic.List[string]]::new()
-
-    for ($intIndex = 0; $intIndex -lt $arrGuideLines.Count; $intIndex++) {
-        $strLine = $arrGuideLines[$intIndex]
-
-        # Skip placeholder lines -- the rationale content replaces them
-        if ($strLine.Trim() -eq $strPlaceholder) {
+    $listOutputLines = New-Object 'System.Collections.Generic.List[string]'
+    $intSummaryScanIndex = 0
+    $boolSummaryTextSeen = $false
+    $boolSummaryHeadingSeen = $false
+    foreach ($strLine in ($GuideContent -split '\r?\n')) {
+        if ($strLine.Trim() -eq '*This section intentionally left blank.*') {
             continue
         }
-
-        # Replace RATIONALE markers with corresponding rationale content
-        if ($strLine -match $strMarkerPattern) {
-            $strMarkerKey = $Matches[1]
-            if ($hashtableCleanSections.ContainsKey($strMarkerKey)) {
-                $arrRationaleBody = $hashtableCleanSections[$strMarkerKey]
-                foreach ($strRatLine in $arrRationaleBody) {
-                    $listOutputLines.Add($strRatLine)
-                }
-            } else {
+        if ($strLine -match '^\s*<!--\s*rationale-toc:\s*(.+?)\s*-->\s*$') {
+            $listOutputLines.Add($Matches[1].Trim())
+            continue
+        }
+        if ($strLine -match '^\s*<!--\s*(rationale-anchor|RATIONALE):\s*(.+?)\s*-->\s*$') {
+            $boolIncludeHeading = $Matches[1] -eq 'rationale-anchor'
+            $strAnchor = $Matches[2].Trim()
+            if (-not $hashtableSections.ContainsKey($strAnchor) -or
+                $hashtableSections[$strAnchor].CleanBody.Count -eq 0) {
                 throw 'missing-rationale-anchor'
             }
+            if ($boolIncludeHeading) {
+                $listOutputLines.Add('')
+                $listOutputLines.Add($hashtableSections[$strAnchor].Heading)
+                $listOutputLines.Add('')
+            }
+            foreach ($strBodyLine in $hashtableSections[$strAnchor].CleanBody) {
+                $listOutputLines.Add($strBodyLine)
+            }
             continue
         }
-
-        # Insert the executive summary TOC entry before the Terraform Version
-        # Requirements TOC entry when the slim guide no longer contains it.
-        if ($strLine -match '^\- \[Terraform Version Requirements\]' -and
-                $hashtableCleanSections.ContainsKey('executive-summary-terraform-philosophy')) {
-            $boolTocAlreadyPresent = $false
-            foreach ($strPrevLine in $listOutputLines) {
-                if ($strPrevLine -match 'Executive Summary: Terraform Philosophy') {
-                    $boolTocAlreadyPresent = $true
-                    break
+        if ($script:hashtableLanguage.SummaryBefore -ne '' -and
+            $hashtableSections.ContainsKey($script:hashtableLanguage.SummaryAnchor)) {
+            $strSummaryHeading = $script:hashtableLanguage.SummaryHeading
+            $strSummaryAnchor = $script:hashtableLanguage.SummaryAnchor
+            $boolSummaryTocBoundary = $strLine -match ('^- \[' + [regex]::Escape($script:hashtableLanguage.SummaryBefore) + '\]')
+            $boolSummarySectionBoundary = $strLine -match ('^## ' + [regex]::Escape($script:hashtableLanguage.SummaryBefore))
+            if ($boolSummaryTocBoundary -or $boolSummarySectionBoundary) {
+                # Include guide, marker and rationale output already emitted.
+                # Each line is inspected once, even with repeated boundaries.
+                while ($intSummaryScanIndex -lt $listOutputLines.Count) {
+                    $strObservedLine = $listOutputLines[$intSummaryScanIndex]
+                    if ($strObservedLine -match [regex]::Escape($strSummaryHeading)) {
+                        $boolSummaryTextSeen = $true
+                    }
+                    if ($strObservedLine -match ('^## ' + [regex]::Escape($strSummaryHeading))) {
+                        $boolSummaryHeadingSeen = $true
+                    }
+                    $intSummaryScanIndex++
                 }
             }
-            if (-not $boolTocAlreadyPresent) {
-                $listOutputLines.Add('- [Executive Summary: Terraform Philosophy](#executive-summary-terraform-philosophy)')
+            if ($boolSummaryTocBoundary -and -not $boolSummaryTextSeen) {
+                $listOutputLines.Add(('- [{0}](#{1})' -f $strSummaryHeading, $strSummaryAnchor))
+                $boolSummaryTextSeen = $true
             }
-        }
-
-        # Insert the executive summary section before Terraform Version
-        # Requirements when the slim guide no longer contains the placeholder.
-        # The heading and rationale body are injected so that STYLE_GUIDE_FULL.md
-        # still includes the executive summary for human readers.
-        if ($strLine -match '^## Terraform Version Requirements' -and
-                $hashtableCleanSections.ContainsKey('executive-summary-terraform-philosophy')) {
-            # Only insert if the executive summary was not already emitted via a
-            # RATIONALE marker (i.e., the slim guide no longer has the placeholder).
-            $boolAlreadyEmitted = $false
-            foreach ($strPrevLine in $listOutputLines) {
-                if ($strPrevLine -match '^## Executive Summary: Terraform Philosophy') {
-                    $boolAlreadyEmitted = $true
-                    break
-                }
-            }
-            if (-not $boolAlreadyEmitted) {
-                # Remove any trailing horizontal rule and surrounding blank
-                # lines that the slim guide placed before this heading. The
-                # executive summary will supply its own trailing rule, so
-                # keeping the pre-existing one would create a duplicate.
+            if ($boolSummarySectionBoundary -and -not $boolSummaryHeadingSeen) {
                 while ($listOutputLines.Count -gt 0 -and
-                        ($listOutputLines[$listOutputLines.Count - 1].Trim() -eq '' -or
-                         $listOutputLines[$listOutputLines.Count - 1].Trim() -eq '---')) {
+                    $listOutputLines[$listOutputLines.Count - 1].Trim() -in @('', '---')) {
                     $listOutputLines.RemoveAt($listOutputLines.Count - 1)
                 }
+                $intSummaryScanIndex = [Math]::Min($intSummaryScanIndex, $listOutputLines.Count)
                 $listOutputLines.Add('')
-                $listOutputLines.Add('## Executive Summary: Terraform Philosophy')
+                $listOutputLines.Add('## ' + $strSummaryHeading)
+                $boolSummaryTextSeen = $true
+                $boolSummaryHeadingSeen = $true
                 $listOutputLines.Add('')
-                $arrRationaleBody = $hashtableCleanSections['executive-summary-terraform-philosophy']
-                foreach ($strRatLine in $arrRationaleBody) {
-                    $listOutputLines.Add($strRatLine)
+                foreach ($strBodyLine in $hashtableSections[$strSummaryAnchor].CleanBody) {
+                    $listOutputLines.Add($strBodyLine)
                 }
                 $listOutputLines.Add('')
                 $listOutputLines.Add('---')
                 $listOutputLines.Add('')
             }
         }
-
         $listOutputLines.Add($strLine)
-    }
-
-    # Append standalone ## sections from STYLE_GUIDE_RATIONALE.md that were
-    # relocated from STYLE_GUIDE.md for token efficiency. These sections are
-    # not injected via <!-- RATIONALE: ... --> markers because they are
-    # top-level content (not rationale/justification for existing rules).
-    # Skip: Table of Contents, Executive Summary (already injected above),
-    # and "...Rationale" grouping headers (whose ### children are injected
-    # via markers).
-    $listStandaloneSections = [System.Collections.Generic.List[object]]::new()
-    $strCurrentHeading = $null
-    $listSectionLines = [System.Collections.Generic.List[string]]::new()
-
-    foreach ($strLine in $arrRationaleLines) {
-        if ($strLine -match '^## (.+)$') {
-            # Save previous section if it was standalone
-            if ($null -ne $strCurrentHeading) {
-                $listStandaloneSections.Add(@{
-                    Heading = $strCurrentHeading
-                    Lines   = $listSectionLines.ToArray()
-                })
+        if ($script:hashtableLanguage.Composition -eq 'HeadingLinked' -and $strLine -match '^(#{2,3}) (.+)$') {
+            $strHeading = $Matches[2]
+            $strAnchor = $strHeading.ToLowerInvariant() -replace '[^a-z0-9 -]', '' -replace ' ', '-'
+            $strAnchor = $strAnchor -replace '-+', '-' -replace '^-|-$', ''
+            if ($hashtableSections.ContainsKey($strAnchor) -and $hashtableSections[$strAnchor].CleanBody.Count -gt 0) {
+                $listOutputLines.Add('')
+                foreach ($strBodyLine in $hashtableSections[$strAnchor].CleanBody) {
+                    $listOutputLines.Add($strBodyLine)
+                }
             }
-            $strCurrentHeading = $Matches[1]
-            $listSectionLines = [System.Collections.Generic.List[string]]::new()
-        } elseif ($null -ne $strCurrentHeading) {
-            $listSectionLines.Add($strLine)
         }
     }
-    if ($null -ne $strCurrentHeading) {
-        $listStandaloneSections.Add(@{
-            Heading = $strCurrentHeading
-            Lines   = $listSectionLines.ToArray()
-        })
-    }
-
-    # Determine which ## headings already exist in the output
-    $arrExistingHeadings = @($listOutputLines | Where-Object {
-        $_ -match '^## '
-    } | ForEach-Object {
-        ($_ -replace '^## ', '').Trim()
-    })
-
-    foreach ($objSection in $listStandaloneSections) {
-        $strHeading = $objSection.Heading
-
-        # Skip Table of Contents (rationale-specific navigation)
-        if ($strHeading -eq 'Table of Contents') { continue }
-
-        # Skip Executive Summary (already injected above)
-        if ($strHeading -match '^Executive Summary') { continue }
-
-        # Skip rationale grouping headers (their ### children are
-        # injected via <!-- RATIONALE: ... --> markers)
-        if ($strHeading -match 'Rationale$') { continue }
-
-        # Skip if a ## heading with the same text already exists
-        if ($arrExistingHeadings -contains $strHeading) { continue }
-
-        # Append this standalone section
-        $listOutputLines.Add('')
-        $listOutputLines.Add("## $strHeading")
-
-        # Apply the same filter/convert logic used for injected ### sections
-        # so that STYLE_GUIDE_FULL.md remains self-contained with no cross-file links.
-        $arrBody = $objSection.Lines
-
-        # Filter out cross-reference blockquotes pointing back to main guide
-        $arrBody = @($arrBody | Where-Object {
-            -not ($_ -match '^> For .+\(STYLE_GUIDE\.md#')
-        })
-
-        # Convert relative links to main guide into internal anchors
-        $arrBody = @($arrBody | ForEach-Object {
-            $_ -replace 'STYLE_GUIDE\.md#', '#' -replace '\[([^\]]+)\]\(STYLE_GUIDE\.md\)', '[$1](#terraform-writing-style)'
-        })
-
-        # Trim leading blank lines from section body
-        $intBodyStart = 0
-        while ($intBodyStart -lt $arrBody.Count -and $arrBody[$intBodyStart].Trim() -eq '') {
-            $intBodyStart++
-        }
-        # Trim trailing blank lines and horizontal rules
-        $intBodyEnd = $arrBody.Count - 1
-        while ($intBodyEnd -ge 0 -and ($arrBody[$intBodyEnd].Trim() -eq '' -or $arrBody[$intBodyEnd].Trim() -eq '---')) {
-            $intBodyEnd--
-        }
-        if ($intBodyStart -le $intBodyEnd) {
+    if ($script:hashtableLanguage.AppendStandalone) {
+        $arrExistingHeadings = @($listOutputLines | Where-Object { $_ -match '^## ' } |
+            ForEach-Object { ($_ -replace '^## ', '').Trim() })
+        foreach ($hashtableSection in $listTopSections) {
+            if ($hashtableSection.Title -eq 'Table of Contents' -or
+                $hashtableSection.Title -match '^Executive Summary|Rationale$' -or
+                $arrExistingHeadings -contains $hashtableSection.Title) {
+                continue
+            }
             $listOutputLines.Add('')
-            for ($intBodyLineIndex = $intBodyStart; $intBodyLineIndex -le $intBodyEnd; $intBodyLineIndex++) {
-                $listOutputLines.Add($arrBody[$intBodyLineIndex])
+            $listOutputLines.Add($hashtableSection.Heading)
+            if ($hashtableSection.CleanBody.Count -gt 0) {
+                $listOutputLines.Add('')
+                foreach ($strBodyLine in $hashtableSection.CleanBody) {
+                    $listOutputLines.Add($strBodyLine)
+                }
             }
         }
     }
-
-    $strOutput = ($listOutputLines -join "`n")
-
-        # Collapse runs of two or more consecutive blank lines to exactly one blank line.
-        # In the joined string, one blank line = \n\n (end of previous line + empty line +
-    # start of next line is actually three \n). Two blank lines = \n\n\n.
-    # We want to collapse \n\n\n (2+ blank lines) down to \n\n (1 blank line).
-    while ($strOutput -match '\n\n\n') {
-        $strOutput = $strOutput -replace '\n\n\n', "`n`n"
+    $strOutput = $listOutputLines.ToArray() -join "`n"
+    while ($strOutput -match "`n`n`n") {
+        $strOutput = $strOutput -replace "`n`n`n", "`n`n"
     }
-
-    # Ensure single trailing newline
-    $strOutput = $strOutput.TrimEnd("`n") + "`n"
-
-    $strNormalizedContent = $strOutput -replace "`r`n?", "`n"
-    return $strNormalizedContent
+    return $strOutput.TrimEnd("`n") + "`n"
 }
+
 
 function New-StyleGuidePayloadMap {
     # .SYNOPSIS
@@ -1525,7 +1436,7 @@ function New-StyleGuidePayloadMap {
     #
     # .DESCRIPTION
     # Strictly decodes the two source byte sequences, constructs the Copilot,
-    # Terraform-instructions, chat, and full text payloads, normalizes each to
+    # scoped instructions, chat, and full text payloads, normalizes each to
     # BOM-free LF-only UTF-8 bytes, and verifies the serialization invariants.
     #
     # .PARAMETER GuideBytes
@@ -1549,7 +1460,7 @@ function New-StyleGuidePayloadMap {
     #
     # .OUTPUTS
     # System.Collections.Specialized.OrderedDictionary. Keys are copilot,
-    # terraform-instructions, chat, and full. Every value is System.Byte[],
+    # the scoped instructions ID, chat, and full. Every value is System.Byte[],
     # including zero- or one-byte payloads. Throws 'utf8-bom', 'payload-bom',
     # 'payload-cr', or a payload-builder failure. Parameter-binding and strict
     # UTF-8 decoding failures propagate.
@@ -1559,7 +1470,7 @@ function New-StyleGuidePayloadMap {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1583,7 +1494,7 @@ function New-StyleGuidePayloadMap {
     $strRationaleContent = ConvertFrom-StrictUtf8 -Bytes $RationaleBytes
     $hashtablePayloadStrings = [ordered]@{
         copilot = New-CopilotPayload -GuideContent $strGuideContent
-        'terraform-instructions' = New-TerraformInstructionsPayload -GuideContent $strGuideContent
+        ($script:hashtableLanguage.ScopedId) = New-ScopedInstructionsPayload -GuideContent $strGuideContent
         chat = New-ChatPayload -GuideContent $strGuideContent
         full = New-FullPayload -GuideContent $strGuideContent -RationaleContent $strRationaleContent
     }
@@ -1642,7 +1553,7 @@ function New-ArtifactRecord {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1689,7 +1600,7 @@ function Initialize-AtomicFileReplacementType {
     # Loads the atomic file-replacement helper type when required.
     #
     # .DESCRIPTION
-    # Compiles TerraformStyleGuide.AtomicFileReplacement once. Its Replace method calls
+    # Compiles StyleGuide.AtomicFileReplacement once. Its Replace method calls
     # System.IO.File.Replace without a backup path so the candidate replaces the
     # existing destination atomically on the same filesystem.
     #
@@ -1716,19 +1627,19 @@ function Initialize-AtomicFileReplacementType {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function declares no parameters.
     param ()
 
-    if ('TerraformStyleGuide.AtomicFileReplacement' -as [type]) {
+    if ('StyleGuide.AtomicFileReplacement' -as [type]) {
         return
     }
 
     Add-Type -TypeDefinition @'
 using System.IO;
 
-namespace TerraformStyleGuide {
+namespace StyleGuide {
     public static class AtomicFileReplacement {
         public static void Replace(string candidatePath, string destinationPath) {
             File.Replace(candidatePath, destinationPath, null);
@@ -1751,7 +1662,7 @@ function Write-StyleGuideArtifact {
     # publication call returns.
     #
     # .PARAMETER ArtifactId
-    # Authorized artifact identifier: copilot, terraform-instructions, chat, or full.
+    # Authorized artifact identifier from the fixed destination map.
     #
     # .PARAMETER RawDestinationPath
     # Absolute literal destination path supplied for the selected artifact.
@@ -1791,7 +1702,7 @@ function Write-StyleGuideArtifact {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260918.0
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -1803,7 +1714,7 @@ function Write-StyleGuideArtifact {
     #   Position 4: DestinationMap
     param (
         [Parameter(Mandatory = $true)]
-        [ValidateSet('copilot', 'terraform-instructions', 'chat', 'full')]
+        [ValidateNotNullOrEmpty()]
         [string]$ArtifactId,
 
         [Parameter(Mandatory = $true)]
@@ -1819,6 +1730,9 @@ function Write-StyleGuideArtifact {
         [System.Collections.IDictionary]$DestinationMap
     )
 
+    if (-not $DestinationMap.Contains($ArtifactId)) {
+        throw 'unknown-artifact'
+    }
     $strExpectedRepositoryPath = $DestinationMap[$ArtifactId]
     $hashtableRecord = New-ArtifactRecord -ArtifactId $ArtifactId -RepositoryPath $strExpectedRepositoryPath
     $hashtableRecord.Status = 'Pending'
@@ -1890,7 +1804,7 @@ function Write-StyleGuideArtifact {
 
         $strPhase = 'create-candidate'
         for ($intAttempt = 1; $intAttempt -le 16; $intAttempt++) {
-            $strCandidateLeaf = '.terraformstyleguide-' + [guid]::NewGuid().ToString('N') + '.tmp'
+            $strCandidateLeaf = '.psstyleguide-' + [guid]::NewGuid().ToString('N') + '.tmp'
             $strTemporaryPath = Join-Path $strParentPath $strCandidateLeaf
             try {
                 $objCandidateStream = New-Object System.IO.FileStream(
@@ -2009,7 +1923,7 @@ function Write-StyleGuideArtifact {
         $strPhase = 'publish-destination'
         if ($hashtableRecord.OriginalState -eq 'Existing') {
             $hashtableRecord.PublicationMethod = 'File.Replace'
-            [TerraformStyleGuide.AtomicFileReplacement]::Replace($strTemporaryPath, $strDestinationPath)
+            [StyleGuide.AtomicFileReplacement]::Replace($strTemporaryPath, $strDestinationPath)
             $hashtableRecord.TemporaryDisposition = 'ConsumedByReplace'
         } else {
             $hashtableRecord.PublicationMethod = 'File.Move'
@@ -2187,7 +2101,7 @@ function Write-GeneratorResult {
     # surface. Parameters, return shape, and positional contract may change
     # without notice.
     #
-    # Version: 1.0.20260818.2
+    # Version: 2.0.20261005.0
     #
     # This function supports positional parameters
     # (internal-caller contract only; subject to change):
@@ -2207,7 +2121,7 @@ $hashtableSourceMap = [ordered]@{
 }
 $hashtableDestinationMap = [ordered]@{
     copilot = 'copilot-instructions.md'
-    'terraform-instructions' = 'terraform.instructions.md'
+    ($script:hashtableLanguage.ScopedId) = $script:hashtableLanguage.ScopedPath
     chat = 'STYLE_GUIDE_CHAT.md'
     full = 'STYLE_GUIDE_FULL.md'
 }
