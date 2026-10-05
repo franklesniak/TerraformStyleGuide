@@ -6,7 +6,7 @@
 - **Status:** Superseded
 - **Owner:** TerraformStyleGuide Repository Maintainers
 - **Date:** 2026-08-01
-- **Last Updated:** 2026-10-04
+- **Last Updated:** 2026-10-05
 - **Scope:** Records the accepted generated-artifact lint lag, its limits, and the later change that removed the affected writer job.
 - **Related:** [T1 supply-freeze record](../T1-SUPPLY-FREEZE-v1.md); [Style Guide](../../STYLE_GUIDE.md); [Style Guide Rationale](../../STYLE_GUIDE_RATIONALE.md)
 

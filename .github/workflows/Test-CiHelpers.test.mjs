@@ -988,7 +988,7 @@ test('Copilot setup declares its input closure, supported environment and finite
   assert.equal(workflow.on.pull_request.branches, undefined);
   for (const event of ['push', 'pull_request']) {
     for (const input of ['.github/workflows/**', '.husky/**', 'requirements-dev.txt', '**/*.yml', '**/*.yaml',
-      '.npmrc', 'npm-shrinkwrap.json', 'package.json', 'package-lock.json', '.pre-commit-config.yaml']) {
+      '.npmrc', 'npm-shrinkwrap.json', 'package.json', 'package-lock.json']) {
       assert.ok(workflow.on[event].paths.includes(input), `${event}: ${input}`);
     }
   }

@@ -221,6 +221,16 @@ function hostedContext(environment, event) {
     source: reference === 'refs/heads/main' ? 'remote-main' : 'event-main' };
 }
 
+/**
+ * Select the hosted authority reference without fetching or resolving it.
+ * Main push, schedule and dispatch events return GITHUB_SHA; main-target PRs
+ * return their event base SHA. Other admitted pushes, tags and PRs return the
+ * literal refs/heads/main. The hosted audit caller validates the context and
+ * acquires/resolves that reference before using accepted authority.
+ * @param {object} environment - Hosted event environment.
+ * @param {object} [event] - Pull-request event payload, when applicable.
+ * @returns {string} Full event-main commit SHA or the literal refs/heads/main.
+ */
 export function hostedAuthorityReference(environment, event) {
   return hostedContext(environment, event).reference;
 }

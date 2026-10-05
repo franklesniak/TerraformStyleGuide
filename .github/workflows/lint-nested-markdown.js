@@ -378,10 +378,10 @@ function lintNestedMarkdownContents(
  * Repeated filePath labels must contain identical content.
  * @param {string} repoRoot - Repository root.
  * @param {Array<{filePath: string, content: string}>} markdownInputs - Safe inputs.
+ * @param {object} [config] - Caller configuration; defaults to a fresh repository load.
  * @returns {Promise<number>} Zero for success or one for lint findings; throws on tooling failure.
  */
-async function lintOuterMarkdownContents(repoRoot, markdownInputs) {
-    const config = loadMarkdownlintConfig(repoRoot);
+async function lintOuterMarkdownContents(repoRoot, markdownInputs, config = loadMarkdownlintConfig(repoRoot)) {
     const strings = Object.create(null);
     for (const input of markdownInputs) {
         if (!input || typeof input.filePath !== 'string' || typeof input.content !== 'string') {

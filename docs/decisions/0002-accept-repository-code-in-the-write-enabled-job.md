@@ -6,7 +6,7 @@
 - **Status:** Superseded
 - **Owner:** TerraformStyleGuide Repository Maintainers
 - **Date:** 2026-08-01
-- **Last Updated:** 2026-10-04
+- **Last Updated:** 2026-10-05
 - **Scope:** Records the accepted risk of repository-controlled code in the former write-enabled job and the later removal of that job.
 - **Related:** [T1 supply-freeze record](../T1-SUPPLY-FREEZE-v1.md); [Style Guide](../../STYLE_GUIDE.md); [Style Guide Rationale](../../STYLE_GUIDE_RATIONALE.md)
 

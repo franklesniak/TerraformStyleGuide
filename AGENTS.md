@@ -1,13 +1,13 @@
 <!-- markdownlint-disable MD013 -->
 # Agent Instructions for OpenAI Codex CLI
 
-**Version:** 1.7.20261004.0
+**Version:** 1.7.20261005.0
 
 ## Metadata
 
 - **Status:** Active
 - **Owner:** Repository maintainer (@franklesniak)
-- **Last Updated:** 2026-10-04
+- **Last Updated:** 2026-10-05
 - **Scope:** Codex and compatible agents in TerraformStyleGuide. Brief shared rules and full Codex protocols; `.github/copilot-instructions.md` governs documentation authoring.
 <!-- template-sync: begin markdown-reference-only -->
 - **Related:** [Repository Copilot Instructions](.github/copilot-instructions.md), [Documentation Writing Style](.github/instructions/docs.instructions.md)

@@ -375,3 +375,60 @@ test('JSONC diagnostics reach outer staged and nested CLI failure paths', () => 
     }
   } finally { remove(root); }
 });
+
+test('staged invocation scans configuration once and enforces configured outer and nested rules', () => {
+  const root = fixture();
+  try {
+    git(root, 'init', '--quiet');
+    write(root, '.github/workflows/.markdownlint.jsonc', '{"default":false,"MD013":{"line_length":20,"code_blocks":false}}');
+    const counts = path.join(root, 'config-scans.txt');
+    const preload = write(root, '.github/workflows/observe-glob.cjs', `
+const fs = require('node:fs'), Module = require('node:module');
+const original = Module._load;
+Module._load = function(name, ...args) {
+  const loaded = original.call(this, name, ...args);
+  if (name !== 'glob') return loaded;
+  return { ...loaded, globSync(...parameters) {
+    if (parameters[0] === '**/.markdownlint*') fs.appendFileSync(process.env.LINT_TEST_SCANS, 'scan\\n');
+    return loaded.globSync(...parameters);
+  } };
+};
+`);
+    const invoke = () => {
+      fs.writeFileSync(counts, '');
+      const result = runBounded(process.execPath, ['--require', preload, path.join(root, '.github/workflows/lint-staged-markdown.mjs')],
+        { cwd: root, env: { ...process.env, LINT_TEST_SCANS: counts } });
+      assert.equal(fs.readFileSync(counts, 'utf8'), 'scan\n', 'One real configuration discovery per staged invocation.');
+      return result;
+    };
+    for (const [content, status, diagnostic] of [
+      ['Plain text.\n\n```markdown\nPlain snippet.\n```\n', 0, /Total nested Markdown blocks found: 1/u],
+      ['# Valid\n\n' + 'long text '.repeat(4).trim() + '\n', 1, /MD013/u],
+      ['# Valid\n\n```markdown\n' + 'long text '.repeat(4).trim() + '\n```\n', 1, /MD013[\s\S]*Nested Markdown lint failed/u],
+    ]) {
+      write(root, 'example.md', content); git(root, 'add', '--', 'example.md');
+      expect(invoke(), status, diagnostic);
+    }
+    write(root, 'deep/selector/.markdownlint.json', '{"default":false}');
+    expect(invoke(), 2, /Unsupported Markdown lint configuration/u);
+  } finally { remove(root); }
+});
+
+test('independent default API calls reload rules and reject newly introduced selectors', async t => {
+  const root = fixture();
+  t.mock.method(console, 'error', () => {});
+  try {
+    const api = require(path.join(root, '.github/workflows/lint-nested-markdown.js'));
+    const outer = [{ filePath: 'example.md', content: invalid }];
+    const nested = [{ filePath: 'example.md', content: nestedInvalid }];
+    write(root, '.github/workflows/.markdownlint.jsonc', '{"default":false,"MD022":true}');
+    assert.equal(await api.lintOuterMarkdownContents(root, outer), 1);
+    assert.equal(api.lintNestedMarkdownContents(nested).allResults.length, 1);
+    write(root, '.github/workflows/.markdownlint.jsonc', '{"default":false}');
+    assert.equal(await api.lintOuterMarkdownContents(root, outer), 0);
+    assert.equal(api.lintNestedMarkdownContents(nested).allResults.length, 0);
+    write(root, 'deep/selector/.markdownlint.json', '{"default":false}');
+    await assert.rejects(api.lintOuterMarkdownContents(root, outer), /Unsupported Markdown lint configuration/u);
+    assert.throws(() => api.lintNestedMarkdownContents(nested), /Unsupported Markdown lint configuration/u);
+  } finally { remove(root); }
+});

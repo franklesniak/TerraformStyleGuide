@@ -32,8 +32,10 @@ for (const [status, expected] of [[0, 0], [1, 1], [2, 2], [17, 2], ['undefined',
     fs.writeFileSync(path.join(f.root, 'example.md'), '# Staged content\n');
     f.git('add', 'example.md');
     fs.writeFileSync(path.join(f.root, 'example.md'), 'Unstaged content must not replace index bytes.\n');
-    fs.writeFileSync(path.join(f.workflows, 'lint-nested-markdown.js'), `exports.lintOuterMarkdownContents = async (root, inputs) => {
+    fs.writeFileSync(path.join(f.workflows, 'lint-nested-markdown.js'), `exports.loadMarkdownlintConfig = () => ({});
+    exports.lintOuterMarkdownContents = async (root, inputs) => {
       if (inputs.length !== 1 || inputs[0].filePath !== 'example.md' || inputs[0].content !== '# Staged content\\n') throw new Error('Wrong staged bytes');
+      console.log('fixture: outer status reached');
       return ${status};
     }; exports.lintNestedMarkdownContents = inputs => {
       if (inputs[0].content !== '# Staged content\\n') throw new Error('Wrong nested staged bytes');
@@ -41,6 +43,7 @@ for (const [status, expected] of [[0, 0], [1, 1], [2, 2], [17, 2], ['undefined',
     }; exports.displayResults = () => false;`);
     const result = spawnSync(process.execPath, [path.join(f.workflows, 'lint-staged-markdown.mjs')], { encoding: 'utf8', windowsHide: true });
     assert.equal(result.status, expected, result.stderr);
+    assert.match(result.stdout, /fixture: outer status reached/u);
     assert.equal(fs.readFileSync(path.join(f.root, 'example.md'), 'utf8'), 'Unstaged content must not replace index bytes.\n');
   });
 }
