@@ -33,7 +33,7 @@
 # None. The script throws when a self-test fails.
 #
 # .NOTES
-# Version: 1.8.20261004.0
+# Version: 1.8.20261005.0
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([void])]
@@ -2294,7 +2294,7 @@ function Assert-PublishedBaselineCapacitySelfTest {
     # .NOTES
     # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
     # Positional parameters are disabled; callers use named arguments.
-    # Version: 1.0.20261004.0
+    # Version: 1.0.20261005.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([void])]
     param([Parameter(Mandatory)][string] $MaximumMetadataUtcDate)
@@ -2497,7 +2497,7 @@ function Assert-AgentSetupSelfTest {
     # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
     # Parameters, return shape, and positional contract can change without notice.
     # Positional parameters are disabled; internal callers use named arguments.
-    # Version: 1.0.20261004.0
+    # Version: 1.0.20261005.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([void])]
     param([Parameter(Mandatory)][string] $RepositoryRootPath)
@@ -3218,7 +3218,7 @@ function ConvertTo-CreatedPushCommitEvidenceObject {
     # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
     # Parameters, return shape, and positional contract can change without notice.
     # Positional parameters are disabled; internal callers use named arguments.
-    # Version: 1.0.20260914.0.
+    # Version: 1.0.20261005.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
