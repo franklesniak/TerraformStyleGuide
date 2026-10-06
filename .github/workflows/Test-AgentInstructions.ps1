@@ -23,7 +23,7 @@
 #
 # .NOTES
 # Positional parameters are not supported.
-# Version: 1.18.20261005.0
+# Version: 1.19.20261006.0
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([string])]
@@ -92,6 +92,7 @@ $script:arrPushGovernedExactPaths = @(
     '.github/workflows/markdownlint.yml',
     '.github/workflows/agent-instructions.yml',
     '.github/workflows/copilot-setup-steps.yml',
+    '.github/workflows/copilot-code-review.yml',
     '.gitignore',
     '.npmrc',
     'docs/ISSUE_EVALUATION_PROMPT.md',
@@ -340,13 +341,13 @@ function Get-AgentSetupInputSpec {
     # None. No pipeline input.
     #
     # .OUTPUTS
-    # [pscustomobject] A repository-relative path and its byte limit.
+    # [pscustomobject] A path, byte limit and explicit optional-presence flag.
     #
     # .NOTES
     # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
     # Parameters, return shape, and positional contract can change without notice.
     # Positional parameters are disabled; there are no parameters.
-    # Version: 1.0.20261003.0
+    # Version: 1.1.20261006.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param()
@@ -356,6 +357,7 @@ function Get-AgentSetupInputSpec {
             ,@('.github/workflows/package.json', 16384)
             ,@('.github/workflows/package-lock.json', 131072)
             ,@('.github/workflows/copilot-setup-steps.yml', 65536)
+            ,@('.github/workflows/copilot-code-review.yml', 65536, $true)
             ,@('.github/workflows/lint-staged-markdown.mjs', 32768)
             ,@('.github/workflows/Invoke-LockedPythonHook.ps1', 32768)
             ,@('.github/workflows/install-husky.mjs', 16384)
@@ -364,7 +366,11 @@ function Get-AgentSetupInputSpec {
             ,@('.github/workflows/scripts-README.md', 32768)
             ,@('requirements-dev.txt', 16384)
         )) {
-        [pscustomobject]@{ Path = [string]$arrSpec[0]; MaximumBytes = [int]$arrSpec[1] }
+        [pscustomobject]@{
+            Path = [string]$arrSpec[0]
+            MaximumBytes = [int]$arrSpec[1]
+            Optional = $arrSpec.Count -eq 3 -and $arrSpec[2] -eq $true
+        }
     }
 }
 
@@ -374,7 +380,10 @@ function Read-AgentSetupInputContent {
     #
     # .DESCRIPTION
     # Selects local or immutable revision inputs and checks each staged local read.
-    # Missing inputs are failures, not optional setup profiles.
+    # Required inputs cannot be omitted. Only the dedicated review workflow can
+    # be absent from both the selected Git input and local filesystem. Removing
+    # it from a committed tree restores the required shared setup fallback.
+    # Read, metadata and access failures are never treated as optional absence.
     #
     # .PARAMETER RepositoryRootPath
     # The actual repository root.
@@ -400,7 +409,7 @@ function Read-AgentSetupInputContent {
     # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
     # Parameters, return shape, and positional contract can change without notice.
     # Positional parameters are disabled; internal callers use named arguments.
-    # Version: 1.0.20261003.0
+    # Version: 1.1.20261006.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([hashtable])]
     param(
@@ -411,6 +420,24 @@ function Read-AgentSetupInputContent {
     )
     $hashtableContent = @{}
     foreach ($objSpec in @(Get-AgentSetupInputSpec)) {
+        if ($objSpec.Optional) {
+            $strOptionalBlob = Get-GitRegularFileBlobId -RepositoryRootPath $RepositoryRootPath `
+                -RepositoryRelativePath $objSpec.Path -Revision $Revision -AllowMissing
+            if ([string]::IsNullOrEmpty($strOptionalBlob)) {
+                if (-not [string]::IsNullOrEmpty($Revision)) { continue }
+                if ($StagedInputPaths.Contains($objSpec.Path)) {
+                    throw 'Staged optional setup input is absent from the Git index.'
+                }
+                try {
+                    $null = Get-Item -Force -LiteralPath (Join-Path $RepositoryRootPath $objSpec.Path) `
+                        -ErrorAction Stop
+                } catch [System.Management.Automation.ItemNotFoundException] {
+                    # Only an exact missing item and an empty successful index
+                    # lookup permit omission. Present untracked items are read.
+                    continue
+                }
+            }
+        }
         $hashtableContent[$objSpec.Path] = if ([string]::IsNullOrEmpty($Revision)) {
             ConvertFrom-StrictUtf8Data -Bytes (Read-RepositoryInputData `
                     -Path (Join-Path $RepositoryRootPath $objSpec.Path) `
@@ -584,7 +611,7 @@ function Get-AgentSetupContractFailure {
     # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
     # Parameters, return shape, and positional contract can change without notice.
     # Positional parameters are disabled; internal callers use named arguments.
-    # Version: 1.0.20261003.1
+    # Version: 1.1.20261006.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param([Parameter(Mandatory)][hashtable] $Content)
@@ -678,20 +705,24 @@ function Get-AgentSetupContractFailure {
             Write-Output "Hook must retain its reviewed activation and selector: $($arrRequiredLine[0])"
         }
     }
-    $strSetup = $Content['.github/workflows/copilot-setup-steps.yml']
-    if ($strSetup -match '(?m)^[ \t]+(?:-[ \t]*)?uses[ \t]*:') {
-        Write-Output 'Copilot setup must not execute an action.'
-    }
-    foreach ($strPattern in @(
-            '(?m)^[ \t]+(?:GITHUB_TOKEN|GH_TOKEN|ACTIONS_RUNTIME_TOKEN)[ \t]*:'
-            '\bgithub\s*\.\s*token\b'
-            '\bgithub\s*\['
-            '\bsecrets\b'
-            '\btojson\s*\(\s*github\s*\)'
-        )) {
-        if ($strSetup -match $strPattern) {
-            Write-Output 'Copilot setup must not project credentials.'
-            break
+    foreach ($strSetupPath in @('.github/workflows/copilot-setup-steps.yml',
+            '.github/workflows/copilot-code-review.yml')) {
+        if (-not $Content.ContainsKey($strSetupPath)) { continue }
+        $strSetup = $Content[$strSetupPath]
+        if ($strSetup -match '(?m)^[ \t]+(?:-[ \t]*)?uses[ \t]*:') {
+            Write-Output 'Copilot setup must not execute an action.'
+        }
+        foreach ($strPattern in @(
+                '(?m)^[ \t]+(?:GITHUB_TOKEN|GH_TOKEN|ACTIONS_RUNTIME_TOKEN)[ \t]*:'
+                '\bgithub\s*\.\s*token\b'
+                '\bgithub\s*\['
+                '\bsecrets\b'
+                '\btojson\s*\(\s*github\s*\)'
+            )) {
+            if ($strSetup -match $strPattern) {
+                Write-Output 'Copilot setup must not project credentials.'
+                break
+            }
         }
     }
     $strRequirements = $Content['requirements-dev.txt'].Replace("`r`n", "`n").Replace("`r", "`n")
@@ -1822,6 +1853,8 @@ function Get-GitRegularFileBlobId {
     # Uses bounded literal NUL Git metadata. Requires one100644 blob in a
     # revision, or one100644 stage0 index entry for a local candidate.
     # Does not inspect worktree file-system types or open generated bodies.
+    # Missing entries fail unless the caller explicitly selects AllowMissing.
+    # Native, malformed and nonregular entry failures always throw.
     #
     # .PARAMETER RepositoryRootPath
     # The absolute path of the trusted Git repository.
@@ -1832,6 +1865,10 @@ function Get-GitRegularFileBlobId {
     # .PARAMETER Revision
     # The exact Git revision. Empty selects the current index.
     #
+    # .PARAMETER AllowMissing
+    # Returns no object only for successful empty Git metadata output. The
+    # default still requires one regular entry; errors never indicate absence.
+    #
     # .EXAMPLE
     # Get-GitRegularFileBlobId @hashtableArguments
     #
@@ -1841,19 +1878,21 @@ function Get-GitRegularFileBlobId {
     # None. No pipeline input.
     #
     # .OUTPUTS
-    # [string] The regular entry's immutable blob identity.
+    # [string] The regular entry's immutable blob identity; no object for an
+    # absent entry only when AllowMissing is selected. All other failures throw.
     #
     # .NOTES
     # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
     # Parameters, return shape, and positional contract can change without notice.
     # Positional parameters are disabled; internal callers use named arguments.
-    # Version: 1.0.20261005.0
+    # Version: 1.1.20261006.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([string])]
     param(
         [Parameter(Mandatory)][string] $RepositoryRootPath,
         [Parameter(Mandatory)][string] $RepositoryRelativePath,
-        [Parameter()][AllowEmptyString()][string] $Revision = ''
+        [Parameter()][AllowEmptyString()][string] $Revision = '',
+        [Parameter()][switch] $AllowMissing
     )
 
     $longTreeMaximumBytes = [long][Text.Encoding]::UTF8.GetByteCount($RepositoryRelativePath) + 78
@@ -1882,6 +1921,7 @@ function Get-GitRegularFileBlobId {
     if ($objTreeResult.ExitCode -ne 0) {
         throw "Could not inspect $Revision`:$RepositoryRelativePath in Git."
     }
+    if ($AllowMissing -and $objTreeResult.Bytes.Length -eq 0) { return }
     $strTreeRecord = if ($objTreeResult.Bytes.Length -eq 0) { '' } else {
         ConvertFrom-StrictUtf8Data -Bytes $objTreeResult.Bytes -DisplayName 'Git revision entry'
     }

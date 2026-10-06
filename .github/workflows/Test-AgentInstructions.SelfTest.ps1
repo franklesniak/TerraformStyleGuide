@@ -33,7 +33,7 @@
 # None. The script throws when a self-test fails.
 #
 # .NOTES
-# Version: 1.9.20261006.0
+# Version: 1.10.20261006.0
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([void])]
@@ -2708,7 +2708,7 @@ function Assert-AgentSetupSelfTest {
     # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
     # Parameters, return shape, and positional contract can change without notice.
     # Positional parameters are disabled; internal callers use named arguments.
-    # Version: 1.0.20261005.0
+    # Version: 1.1.20261006.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([void])]
     param([Parameter(Mandatory)][string] $RepositoryRootPath)
@@ -2780,21 +2780,29 @@ function Assert-AgentSetupSelfTest {
         ($hashtableContent['.pre-commit-config.yaml'] + "`n        additional_dependencies: []`n") 'separate dependency environment'
     & $scriptblockReject 'extra hook group' '.pre-commit-config.yaml' `
         ($hashtableContent['.pre-commit-config.yaml'] + "`n  - repo: local`n    hooks: []`n") 'two local groups'
-    $strSetup = $hashtableContent['.github/workflows/copilot-setup-steps.yml']
-    foreach ($strProjection in @(
-            'GITHUB_TOKEN: value', 'GH_TOKEN: value', 'ACTIONS_RUNTIME_TOKEN: value'
-            'ALIAS: ${{ github.token }}', "ALIAS: `${{ github['token'] }}"
-            'ALIAS: ${{ secrets.TOKEN }}', 'ALIAS: ${{ toJSON(github) }}'
-        )) {
-        & $scriptblockReject 'credential projection' '.github/workflows/copilot-setup-steps.yml' `
-            ($strSetup + "`n        env:`n          $strProjection`n") 'must not project credentials'
+    $strReviewSetupPath = '.github/workflows/copilot-code-review.yml'
+    if (-not $hashtableContent.ContainsKey($strReviewSetupPath)) {
+        # Historical absence is valid, but both present-file security contracts
+        # must still be tested in the private fixture on historical source trees.
+        $hashtableContent[$strReviewSetupPath] = $hashtableContent['.github/workflows/copilot-setup-steps.yml']
     }
-    & $scriptblockReject 'action step' '.github/workflows/copilot-setup-steps.yml' `
-        ($strSetup + "`n      - uses: actions/checkout@v4`n") 'must not execute an action'
-    $hashtableHarmless = $hashtableContent.Clone()
-    $hashtableHarmless['.github/workflows/copilot-setup-steps.yml'] += "`n        env:`n          REVISION: `${{ github.sha }}`n"
-    if (@(Get-AgentSetupContractFailure -Content $hashtableHarmless).Count) {
-        throw 'Harmless setup revision expression was rejected.'
+    foreach ($strSetupPath in @('.github/workflows/copilot-setup-steps.yml', $strReviewSetupPath)) {
+        $strSetup = $hashtableContent[$strSetupPath]
+        foreach ($strProjection in @(
+                'GITHUB_TOKEN: value', 'GH_TOKEN: value', 'ACTIONS_RUNTIME_TOKEN: value'
+                'ALIAS: ${{ github.token }}', "ALIAS: `${{ github['token'] }}"
+                'ALIAS: ${{ secrets.TOKEN }}', 'ALIAS: ${{ toJSON(github) }}'
+            )) {
+            & $scriptblockReject 'credential projection' $strSetupPath `
+                ($strSetup + "`n        env:`n          $strProjection`n") 'must not project credentials'
+        }
+        & $scriptblockReject 'action step' $strSetupPath `
+            ($strSetup + "`n      - uses: actions/checkout@v4`n") 'must not execute an action'
+        $hashtableHarmless = $hashtableContent.Clone()
+        $hashtableHarmless[$strSetupPath] += "`n        env:`n          REVISION: `${{ github.sha }}`n"
+        if (@(Get-AgentSetupContractFailure -Content $hashtableHarmless).Count) {
+            throw 'Harmless setup revision expression was rejected.'
+        }
     }
     $strIndex = $hashtableContent['.github/workflows/scripts-README.md']
     foreach ($arrNearMiss in @(
@@ -2878,21 +2886,92 @@ function Assert-AgentSetupSelfTest {
             if (-not $boolRejected) { throw "Required installed setup input was silently omitted: $strMissing" }
             [IO.File]::WriteAllText($strTarget, $hashtableContent[$strMissing], $objEncoding)
         }
-        $strBoundPath = '.github/workflows/copilot-setup-steps.yml'
-        $objBoundSpec = @(Get-AgentSetupInputSpec | Where-Object { $_.Path -ceq $strBoundPath })
-        if ($objBoundSpec.Count -ne 1 -or $objBoundSpec[0].MaximumBytes -ne 65536) { throw 'Setup workflow read bound changed.' }
-        foreach ($intExtra in @(0, 1)) {
-            [IO.File]::WriteAllText((Join-Path $strFixtureRoot $strBoundPath), ('a' * (65536 + $intExtra)), $objEncoding)
+        foreach ($strBoundPath in @('.github/workflows/copilot-setup-steps.yml', $strReviewSetupPath)) {
+            $objBoundSpec = @(Get-AgentSetupInputSpec | Where-Object { $_.Path -ceq $strBoundPath })
+            if ($objBoundSpec.Count -ne 1 -or $objBoundSpec[0].MaximumBytes -ne 65536) { throw 'Setup workflow read bound changed.' }
+            foreach ($intExtra in @(0, 1)) {
+                [IO.File]::WriteAllText((Join-Path $strFixtureRoot $strBoundPath), ('a' * (65536 + $intExtra)), $objEncoding)
+                $boolRejected = $false
+                try {
+                    $hashtableBound = Read-AgentSetupInputContent -RepositoryRootPath $strFixtureRoot -Revision '' -StagedInputPaths $setEmpty
+                    if ($hashtableBound[$strBoundPath].Length -ne 65536) { throw 'Setup bound did not preserve bytes.' }
+                } catch {
+                    if ($intExtra -eq 0 -or $_.Exception.Message -notmatch 'must not exceed') { throw }
+                    $boolRejected = $true
+                }
+                if ($intExtra -eq 1 -and -not $boolRejected) { throw 'One-byte oversized setup input was accepted.' }
+            }
+            [IO.File]::WriteAllText((Join-Path $strFixtureRoot $strBoundPath),
+                $hashtableContent[$strBoundPath], $objEncoding)
+        }
+        $strReviewTarget = Join-Path $strFixtureRoot $strReviewSetupPath
+        $scriptblockRejectRead = {
+            param([string] $Name, [string] $Revision, [Collections.Generic.HashSet[string]] $Staged,
+                [string] $Expected)
             $boolRejected = $false
             try {
-                $hashtableBound = Read-AgentSetupInputContent -RepositoryRootPath $strFixtureRoot -Revision '' -StagedInputPaths $setEmpty
-                if ($hashtableBound[$strBoundPath].Length -ne 65536) { throw 'Setup bound did not preserve bytes.' }
+                $null = Read-AgentSetupInputContent -RepositoryRootPath $strFixtureRoot `
+                    -Revision $Revision -StagedInputPaths $Staged
             } catch {
-                if ($intExtra -eq 0 -or $_.Exception.Message -notmatch 'must not exceed') { throw }
+                if ($_.Exception.Message -notmatch $Expected) { throw }
                 $boolRejected = $true
             }
-            if ($intExtra -eq 1 -and -not $boolRejected) { throw 'One-byte oversized setup input was accepted.' }
+            if (-not $boolRejected) { throw "Optional setup negative control was accepted: $Name" }
         }
+        [IO.File]::Delete($strReviewTarget)
+        & $scriptblockRejectRead 'indexed missing worktree' '' $setEmpty 'does not exist|Cannot find path'
+        & git -C $strFixtureRoot rm --quiet --cached -- $strReviewSetupPath
+        if ($LASTEXITCODE -ne 0) { throw 'Optional setup fixture index removal failed.' }
+        $hashtableAbsent = Read-AgentSetupInputContent -RepositoryRootPath $strFixtureRoot `
+            -Revision '' -StagedInputPaths $setEmpty
+        if ($hashtableAbsent.ContainsKey($strReviewSetupPath)) { throw 'Absent review setup produced content.' }
+        $boolStrictRejected = $false
+        try {
+            $null = Get-GitRegularFileBlobId -RepositoryRootPath $strFixtureRoot `
+                -RepositoryRelativePath $strReviewSetupPath
+        } catch {
+            if ($_.Exception.Message -notmatch 'not one regular 100644 blob') { throw }
+            $boolStrictRejected = $true
+        }
+        if (-not $boolStrictRejected) { throw 'Default Git entry admission silently allowed absence.' }
+        $setMissingStaged = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        [void]$setMissingStaged.Add($strReviewSetupPath)
+        & $scriptblockRejectRead 'staged-set entry missing from index' '' $setMissingStaged 'absent from the Git index'
+        & git -C $strFixtureRoot -c user.name=Fixture -c user.email=fixture@example.invalid `
+            -c core.hooksPath=/dev/null -c commit.gpgsign=false commit --quiet -m historical-absence
+        if ($LASTEXITCODE -ne 0) { throw 'Historical setup fixture commit failed.' }
+        $strAbsentRevision = ([string](& git -C $strFixtureRoot rev-parse HEAD)).Trim()
+        if ($LASTEXITCODE -ne 0) { throw 'Historical setup fixture revision failed.' }
+        $hashtableAbsentRevision = Read-AgentSetupInputContent -RepositoryRootPath $strFixtureRoot `
+            -Revision $strAbsentRevision -StagedInputPaths $setEmpty
+        if ($hashtableAbsentRevision.ContainsKey($strReviewSetupPath)) { throw 'Historical absent review setup produced content.' }
+        $hashtableOriginalRevision = Read-AgentSetupInputContent -RepositoryRootPath $strFixtureRoot `
+            -Revision $strBaseline -StagedInputPaths $setEmpty
+        if ($hashtableOriginalRevision[$strReviewSetupPath] -cne $hashtableContent[$strReviewSetupPath]) {
+            throw 'Historical absence changed the immutable present-file input.'
+        }
+        [IO.File]::WriteAllText($strReviewTarget, $hashtableContent[$strReviewSetupPath], $objEncoding)
+        & $scriptblockRejectRead 'untracked or residual deleted file' '' $setEmpty 'Repository input is unsafe'
+        [IO.File]::Delete($strReviewTarget)
+        [void][IO.Directory]::CreateDirectory($strReviewTarget)
+        & $scriptblockRejectRead 'directory instead of absent optional file' '' $setEmpty 'Repository input is unsafe'
+        [IO.Directory]::Delete($strReviewTarget)
+        [IO.File]::WriteAllText($strReviewTarget, $hashtableContent[$strReviewSetupPath], $objEncoding)
+        & git -C $strFixtureRoot -c core.autocrlf=false add -- $strReviewSetupPath
+        if ($LASTEXITCODE -ne 0) { throw 'Optional setup fixture restoration failed.' }
+        [IO.File]::WriteAllBytes($strReviewTarget, [byte[]]@(255))
+        & $scriptblockRejectRead 'invalid UTF-8' '' $setEmpty 'UTF-8'
+        [IO.File]::WriteAllText($strReviewTarget, $hashtableContent[$strReviewSetupPath], $objEncoding)
+        $strReviewBlob = Get-GitRegularFileBlobId -RepositoryRootPath $strFixtureRoot `
+            -RepositoryRelativePath $strReviewSetupPath
+        & git -C $strFixtureRoot update-index --cacheinfo "120000,$strReviewBlob,$strReviewSetupPath"
+        if ($LASTEXITCODE -ne 0) { throw 'Optional setup nonregular fixture index failed.' }
+        & $scriptblockRejectRead 'nonregular index entry' '' $setEmpty 'not one regular 100644 blob'
+        $strNonregularTree = ([string](& git -C $strFixtureRoot write-tree)).Trim()
+        if ($LASTEXITCODE -ne 0) { throw 'Optional setup nonregular fixture tree failed.' }
+        & $scriptblockRejectRead 'nonregular immutable entry' $strNonregularTree $setEmpty 'not one regular 100644 blob'
+        & git -C $strFixtureRoot update-index --cacheinfo "100644,$strReviewBlob,$strReviewSetupPath"
+        if ($LASTEXITCODE -ne 0) { throw 'Optional setup regular fixture index restoration failed.' }
     } finally {
         if ([IO.Path]::GetDirectoryName($strFixtureRoot).TrimEnd([IO.Path]::DirectorySeparatorChar) -cne
             $strTemporaryRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) -or
