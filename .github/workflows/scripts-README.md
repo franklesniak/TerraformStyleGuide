@@ -5,7 +5,7 @@
 
 - **Status:** Active
 - **Owner:** Repository Maintainers
-- **Last Updated:** 2026-10-05
+- **Last Updated:** 2026-10-06
 - **Scope:** Describes repository-owned workflow scripts, supported local entry points, setup, and Markdown lint behavior. It does not define repository-wide documentation policy.
 - **Related:** [Nested Markdown Linting Implementation Summary](MARKDOWN-LINTING-IMPLEMENTATION.md), [Documentation Writing Style](../instructions/docs.instructions.md)
 
@@ -32,6 +32,7 @@ This table lists the workflow tools and helpers in this directory. It excludes `
 | `Test-AgentInstructions.ps1` | Validates governed instruction capacity, operative policy, final-state metadata, staged-input matching, and behavioral mutation controls. | `npm run test:agent-instructions` |
 | `Test-CheckoutCredentials.ps1` | Verifies the anonymous checkout's origin and credential policy. | Called by CI and shared helpers after anonymous acquisition; requires the expected origin and credential-free Linux runner context. |
 | `Test-StyleGuideArtifacts.ps1` | Runs the recovery-example child, generation and committed-artifact checks. | Called by the build workflow; requires its Linux runner environment. |
+| `Test-StyleGuideGenerator.ps1` | Exercises actual generation, golden bytes, publication, and focused composition and identity controls in disposable repositories. | Run directly in Windows PowerShell 5.1 or PowerShell 7. Hosted cells pass `-ExpectedHost WindowsPowerShell51`, `WindowsPowerShell7`, or `LinuxPowerShell7`; Linux requires native ext4 for source and scratch storage. |
 | `Test-StateRecoveryExamples.mjs` | Checks the published Terraform state-recovery examples. | `node .github/workflows/Test-StateRecoveryExamples.mjs` |
 | `Test-ExactGitPathSet.ps1` | Verifies an exact raw Git path set and optional worktree/index equality. | `Test-StyleGuideArtifacts.ps1` supplies the repository root, expected paths and mode; no argument-free invocation is supported. |
 | `Validate-WorkflowPolicy.mjs` | Validates workflow structure, helper interfaces, and locked parser integrity; run `node --test .github/workflows/Validate-WorkflowPolicy.test.mjs` for negative fixtures. | `node .github/workflows/Validate-WorkflowPolicy.mjs .github/workflows/build.yml .github/workflows/markdownlint.yml` |

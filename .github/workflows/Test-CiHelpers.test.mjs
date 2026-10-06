@@ -20,6 +20,271 @@ const read = name => fs.readFileSync(path.join(directory, name), 'utf8');
 const artifactVerifier = readContract().roles.artifactVerifier;
 const quote = value => `'${value.replaceAll("'", "''")}'`;
 
+// Private fixture discovery follows the contributor's required PowerShell7 PATH.
+// Production acquisition keeps its fixed Git application paths unchanged.
+function discoverFixtureGit({ env = process.env, run = spawnSync } = {}) {
+  const result = run('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+    "$ErrorActionPreference = 'Stop'; if ($PSVersionTable.PSVersion.Major -lt 7) { throw 'PowerShell7 is required.' }; " +
+    "(Get-Command git -CommandType Application -All -TotalCount 1 -ErrorAction Stop).Source | ConvertTo-Json -Compress"],
+  { env, encoding: 'utf8', timeout: 30000, windowsHide: true });
+  assert.equal(result.error, undefined, 'The fixture requires PowerShell7 on PATH.');
+  assert.equal(result.status, 0, `Required Git application discovery failed: ${result.stderr}`);
+  let application;
+  try { application = JSON.parse(result.stdout); }
+  catch (error) { assert.fail(`Git discovery did not return one JSON application path: ${error.message}`); }
+  assert.equal(typeof application, 'string', 'Git discovery must return one application path.');
+  assert.ok(path.isAbsolute(application), 'The fixture Git application path must be absolute.');
+  assert.ok(fs.statSync(application).isFile(), 'The fixture Git application must be a file.');
+  return application;
+}
+
+test('fixture Git discovery requires native success and one absolute application', () => {
+  const application = discoverFixtureGit();
+  for (const result of [{ error: new Error('missing pwsh') }, { status: 1, stdout: '', stderr: 'missing git' },
+    { status: 0, stdout: '{' }, { status: 0, stdout: 'null' }, { status: 0, stdout: JSON.stringify([application]) },
+    { status: 0, stdout: JSON.stringify('git') }, { status: 0, stdout: JSON.stringify(directory) }]) {
+    assert.throws(() => discoverFixtureGit({ run: () => result }));
+  }
+  assert.equal(discoverFixtureGit({ run: () => ({ status: 0, stdout: JSON.stringify(application) }) }), application);
+});
+
+test('generator proof preserves each child exit before revision publication', t => {
+  // Actual proof bodies launch a fixture harness in a real current-host process.
+  // Only foreign fixed Git paths are adapted; this does not simulate hosted
+  // Windows5.1 or native-ext4 generator execution.
+  const jobs = parse(read('build.yml')).jobs;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'generator-proof-exit-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const work = path.join(root, 'work'), scripts = path.join(work, '.github/workflows');
+  fs.mkdirSync(scripts, { recursive: true });
+  const git = discoverFixtureGit();
+  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    GIT_TERMINAL_PROMPT: '0', GIT_NO_REPLACE_OBJECTS: '1' };
+  for (const name of Object.keys(env)) if (/^GIT_(?:CONFIG_(?:COUNT|KEY_|VALUE_|PARAMETERS)|DIR$|WORK_TREE$|INDEX_FILE$|OBJECT_DIRECTORY$|ALTERNATE_OBJECT_DIRECTORIES$)/u.test(name)) delete env[name];
+  fs.writeFileSync(path.join(scripts, 'Test-StyleGuideGenerator.ps1'), `
+param([string]$ExpectedHost)
+$intPass = if ([IO.File]::Exists($env:GENERATOR_PROOF_LOG)) { [IO.File]::ReadAllLines($env:GENERATOR_PROOF_LOG).Count + 1 } else { 1 }
+[IO.File]::AppendAllText($env:GENERATOR_PROOF_LOG, ($ExpectedHost + "\n"))
+if ($env:GENERATOR_PROOF_MODE -eq ('pass' + $intPass)) { exit 7 }
+if ($env:GENERATOR_PROOF_MODE -eq 'exception') { throw 'Fixture terminating exception.' }
+exit 0
+`);
+  for (const args of [['init', '--quiet'], ['add', '--all'],
+    ['-c', 'core.hooksPath=', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'Fixture']]) {
+    const result = spawnSync(git, args, { cwd: work, env, encoding: 'utf8', timeout: 30000, windowsHide: true });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  const revision = spawnSync(git, ['rev-parse', 'HEAD'], { cwd: work, env, encoding: 'utf8', timeout: 30000, windowsHide: true });
+  assert.equal(revision.status, 0, revision.stderr);
+  const sha = revision.stdout.trim();
+  for (const [id, host] of [['generator_windows_51', 'WindowsPowerShell51'], ['generator_windows_7', 'WindowsPowerShell7'],
+    ['generator_linux_7', 'LinuxPowerShell7']]) {
+    const source = jobs[id].steps.find(step => step.id === 'proof').run
+      .replace("'C:\\Program Files\\Git\\bin\\git.exe'", quote(git)).replace("'/usr/bin/git'", quote(git));
+    const script = path.join(root, `${id}.ps1`);
+    fs.writeFileSync(script, "$ErrorActionPreference = 'Stop'\n" + source +
+      "\nif (Test-Path -LiteralPath variable:\\LASTEXITCODE) { exit $LASTEXITCODE }\n");
+    for (const mode of ['success', 'pass1', 'pass2', 'exception']) {
+      const output = path.join(root, `${id}-${mode}.output`), log = path.join(root, `${id}-${mode}.calls`);
+      const result = spawnSync('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', script], {
+        cwd: work, env: { ...env, GITHUB_SHA: sha, GITHUB_OUTPUT: output, GENERATOR_PROOF_MODE: mode, GENERATOR_PROOF_LOG: log },
+        encoding: 'utf8', timeout: 30000, windowsHide: true,
+      });
+      assert.equal(result.error, undefined, `${id}:${mode}`);
+      assert.equal(result.status === 0, mode === 'success', `${id}:${mode}: ${result.stderr}`);
+      const calls = fs.readFileSync(log, 'utf8').trim().split('\n');
+      assert.deepEqual(calls, Array(mode === 'success' || mode === 'pass2' ? 2 : 1).fill(host));
+      if (mode === 'success') assert.equal(fs.readFileSync(output, 'utf8'), `revision=${sha}\n`);
+      else {
+        assert.equal(fs.existsSync(output), false, `${id}:${mode} must not publish revision`);
+        assert.match(result.stderr, /Generator pass [12] failed\./u);
+      }
+    }
+  }
+});
+
+test('generator platform admission rejects every incomplete or wrong-revision result', t => {
+  const workflow = parse(read('build.yml'));
+  const job = workflow.jobs[artifactVerifier];
+  const ids = ['generator_windows_51', 'generator_windows_7', 'generator_linux_7'];
+  assert.deepEqual(job.needs, ids);
+  assert.equal(workflow.jobs.publish_committed_artifacts.needs, artifactVerifier);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'generator-admission-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const script = path.join(root, 'admit.ps1');
+  const admission = job.steps.find(step => step.id === 'admit-generator-platforms');
+  assert.deepEqual(admission.env, { GENERATOR_RESULTS: '${{ toJSON(needs) }}' });
+  fs.writeFileSync(script, admission.run);
+  const valid = Object.fromEntries(ids.map(id => [id, { result: 'success', outputs: { revision: head } }]));
+  const cases = [{ name: 'all cells same revision', results: valid, pass: true }];
+  for (const id of ids) {
+    for (const result of ['failure', 'skipped', 'cancelled', '', 'Success']) {
+      const results = structuredClone(valid);
+      results[id].result = result;
+      cases.push({ name: `${id}:${result}`, results });
+    }
+    const missing = structuredClone(valid); delete missing[id];
+    const wrong = structuredClone(valid); wrong[id].outputs.revision = base;
+    const noOutput = structuredClone(valid); noOutput[id].outputs = {};
+    cases.push({ name: `${id}:absent`, results: missing }, { name: `${id}:wrong head`, results: wrong },
+      { name: `${id}:absent revision`, results: noOutput });
+  }
+  cases.push({ name: 'extra role', results: { ...valid, unexpected: valid[ids[0]] } },
+    { name: 'malformed JSON', raw: '{' }, { name: 'invalid current revision', results: valid, sha: '' });
+  for (const item of cases) {
+    const result = spawnSync('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', script], {
+      cwd: root, env: { ...process.env, GENERATOR_RESULTS: item.raw ?? JSON.stringify(item.results), GITHUB_SHA: item.sha ?? head },
+      encoding: 'utf8', timeout: 30000, windowsHide: true,
+    });
+    assert.equal(result.error, undefined, item.name);
+    assert.equal(result.status === 0, item.pass === true, `${item.name}: ${result.stderr}`);
+  }
+});
+
+test('Windows generator acquisition preserves post-checkout credential and native-status checks', t => {
+  // This executes the actual inline body with only its fixed external Git path
+  // replaced. It is a dispatch/control probe; hosted jobs prove the real Git path.
+  const jobs = parse(read('build.yml')).jobs;
+  const source = jobs.generator_windows_51.steps[0].run;
+  assert.equal(source, jobs.generator_windows_7.steps[0].run);
+  assert.ok(source.includes("$strGitPath = 'C:\\Program Files\\Git\\bin\\git.exe'"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'generator-windows-acquire-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const git = path.join(root, 'git.ps1'), script = path.join(root, 'acquire.ps1');
+  fs.writeFileSync(git, `
+[IO.File]::AppendAllText($env:GENERATOR_GIT_LOG, ((@($args) | ConvertTo-Json -Compress) + "\n"))
+$global:LASTEXITCODE = 0
+$strMode = $env:GENERATOR_GIT_MODE
+if ($args -contains 'fetch' -and $strMode -eq 'fetch-failure') { $global:LASTEXITCODE = 9 }
+if ($args -contains 'checkout') {
+    if ($strMode -eq 'post-token') { $env:GH_TOKEN = 'fixture-secret' }
+    if ($strMode -eq 'post-command-config') { $env:GIT_CONFIG_COUNT = '1' }
+    if ($strMode -eq 'checkout-failure') { $global:LASTEXITCODE = 7 }
+}
+if ($args -contains 'rev-parse') {
+    if ($strMode -eq 'identity-failure') { $global:LASTEXITCODE = 6 }
+    if ($strMode -ne 'identity-empty') {
+        if ($strMode -eq 'wrong-identity') { 'b' * 40 } else { $env:GITHUB_SHA }
+    }
+    if ($strMode -eq 'identity-multiple') { $env:GITHUB_SHA }
+}
+if ($args -contains 'get-url') {
+    if ($strMode -eq 'origin-failure') { $global:LASTEXITCODE = 6 }
+    if ($strMode -ne 'origin-empty') {
+        if ($strMode -eq 'origin-credentials') { 'https://fixture-secret@github.com/franklesniak/TerraformStyleGuide' }
+        elseif ($strMode -eq 'origin-wrong') { 'https://github.com/other/repository' }
+        else { 'https://github.com/franklesniak/TerraformStyleGuide' }
+    }
+    if ($strMode -eq 'origin-multiple') { 'https://github.com/franklesniak/TerraformStyleGuide' }
+}
+if ($args -contains '--get-regexp') {
+    $global:LASTEXITCODE = 1
+    if ($strMode -eq 'config-failure') { $global:LASTEXITCODE = 7 }
+    if ($strMode -eq 'config-zero-empty') { $global:LASTEXITCODE = 0 }
+    if (($strMode -eq 'helper' -and $args[-1].Contains('credential')) -or
+        ($strMode -eq 'authorization' -and $args[-1].Contains('extraheader')) -or
+        ($strMode -eq 'include' -and $args[-1].Contains('include'))) {
+        $global:LASTEXITCODE = 0
+        'fixture.forbidden'
+    }
+    if ($strMode -eq 'config-one-output') { 'fixture.forbidden' }
+}
+if ($args -contains '--list') {
+    if ($strMode -eq 'effective-failure') { $global:LASTEXITCODE = 9 }
+    if ($strMode -ne 'effective-empty') {
+        if ($strMode -eq 'global-source') { "global\tfile:hostile.config\tcredential.helper" }
+        elseif ($strMode -eq 'included-source') { "local\tfile:included.config\thttp.extraheader" }
+        elseif ($strMode -eq 'system-source') { "system\tfile:hostile.config\tcredential.helper" }
+        else { "local\tfile:.git/config\tcore.repositoryformatversion" }
+    }
+}
+`);
+  const modes = ['', 'fetch-failure', 'checkout-failure', 'identity-failure', 'identity-empty', 'wrong-identity',
+    'identity-multiple', 'post-token', 'post-command-config', 'origin-failure', 'origin-empty', 'origin-credentials',
+    'origin-wrong', 'origin-multiple', 'config-failure', 'config-zero-empty', 'config-one-output', 'helper',
+    'authorization', 'include', 'effective-failure', 'effective-empty', 'global-source', 'included-source', 'system-source',
+    'fixed-missing', 'pre-token'];
+  for (const [index, mode] of modes.entries()) {
+    const workspace = path.join(root, `workspace-${index}`); fs.mkdirSync(workspace);
+    const log = path.join(root, `calls-${index}.jsonl`);
+    const env = { ...process.env, GENERATOR_GIT_MODE: mode, GENERATOR_GIT_LOG: log, RUNNER_TEMP: root,
+      GITHUB_SERVER_URL: 'https://github.com', GITHUB_REPOSITORY: 'franklesniak/TerraformStyleGuide', GITHUB_SHA: head };
+    for (const name of Object.keys(env)) if (/^(?:GH_TOKEN|GITHUB_TOKEN|ACTIONS_RUNTIME_TOKEN|GIT_CONFIG_|GIT_DIR$|GIT_WORK_TREE$|GIT_INDEX_FILE$|GIT_OBJECT_DIRECTORY$|GIT_ALTERNATE_OBJECT_DIRECTORIES$)/u.test(name)) delete env[name];
+    if (mode === 'pre-token') env.GH_TOKEN = 'fixture-secret';
+    fs.writeFileSync(script, source.replace("'C:\\Program Files\\Git\\bin\\git.exe'",
+      quote(mode === 'fixed-missing' ? path.join(root, 'missing-git') : git))
+      .replace('Start-Sleep -Seconds 2', "Write-Output 'fixture retry'"));
+    const result = spawnSync('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', script], {
+      cwd: workspace, env, encoding: 'utf8', timeout: 30000, windowsHide: true,
+    });
+    assert.equal(result.error, undefined, mode);
+    assert.equal(result.status === 0, mode === '', `${mode}: ${result.stderr}`);
+    assert.ok(!`${result.stdout}${result.stderr}`.includes('fixture-secret'), mode);
+    if (['fixed-missing', 'pre-token'].includes(mode)) {
+      assert.equal(fs.existsSync(log), false, 'No name-resolution fallback or native work before refusal.');
+      continue;
+    }
+    const calls = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+    if (mode === 'fetch-failure') assert.equal(calls.filter(args => args.includes('fetch')).length, 3);
+    if (mode === '') {
+      assert.equal(calls.filter(args => args.includes('--get-regexp')).length, 3);
+      assert.ok(calls.at(-1).includes('--show-origin'));
+      assert.ok(calls.at(-1).includes('--show-scope'));
+      assert.ok(calls.at(-1).includes('--includes'));
+    }
+  }
+});
+
+test('Linux build acquisition rejects Git selectors before dispatch and checks byte configuration', t => {
+  // Execute both actual Linux bodies with only fixed Git dispatch replaced.
+  // This is portable control evidence, not hosted Linux acquisition proof.
+  const jobs = parse(read('build.yml')).jobs;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'generator-linux-acquire-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const git = path.join(root, 'git.ps1'), script = path.join(root, 'acquire.ps1');
+  fs.writeFileSync(git, `
+[IO.File]::AppendAllText($env:GENERATOR_GIT_LOG, ((@($args) | ConvertTo-Json -Compress) + "\n"))
+$global:LASTEXITCODE = 0
+if ($args -contains 'config' -and $env:GENERATOR_GIT_MODE -eq 'config-failure') { $global:LASTEXITCODE = 7 }
+if ($args -contains 'rev-parse') { $env:GITHUB_SHA }
+`);
+  const selectors = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
+    'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS'];
+  for (const id of ['generator_linux_7', artifactVerifier]) {
+    const source = jobs[id].steps.find(step => step.id === 'acquire').run;
+    fs.writeFileSync(script, source.replaceAll('/usr/bin/git', quote(git)));
+    for (const [index, mode] of ['', ...selectors, 'config-failure'].entries()) {
+      const workspace = path.join(root, `${id}-${index}`); fs.mkdirSync(workspace);
+      const log = path.join(root, `${id}-${index}.jsonl`);
+      const env = { ...process.env, GENERATOR_GIT_MODE: mode, GENERATOR_GIT_LOG: log,
+        GITHUB_SERVER_URL: 'https://github.com', GITHUB_REPOSITORY: 'franklesniak/TerraformStyleGuide', GITHUB_SHA: head };
+      for (const name of ['GITHUB_TOKEN', 'GH_TOKEN', 'ACTIONS_RUNTIME_TOKEN', ...selectors]) delete env[name];
+      if (selectors.includes(mode)) env[mode] = 'fixture-external-selector';
+      const result = spawnSync('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File', script], {
+        cwd: workspace, env, encoding: 'utf8', timeout: 30000, windowsHide: true,
+      });
+      assert.equal(result.error, undefined, `${id}:${mode}`);
+      assert.equal(result.status === 0, mode === '', `${id}:${mode}: ${result.stderr}`);
+      if (selectors.includes(mode)) {
+        assert.equal(fs.existsSync(log), false, 'Reject external selectors before the first Git call.');
+        assert.match(result.stderr, /Unexpected credentials or external Git configuration\./u);
+        continue;
+      }
+      const calls = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+      const configuration = calls.findIndex(args => args.includes('config'));
+      assert.deepEqual(calls[configuration], ['config', '--local', 'core.autocrlf', 'false']);
+      assert.ok(configuration > calls.findIndex(args => args.includes('init')));
+      if (mode === 'config-failure') {
+        assert.equal(calls.some(args => args.includes('fetch') || args.includes('checkout') || args.includes('remote')), false);
+        assert.match(result.stderr, /Git byte-preserving checkout configuration failed\./u);
+      } else {
+        assert.ok(configuration < calls.findIndex(args => args.includes('fetch')));
+        assert.ok(configuration < calls.findIndex(args => args.includes('checkout')));
+      }
+    }
+  }
+});
+
 test('actual workflows cover every live push and PR base with an isolated target-event policy', () => {
   const liveGuard = "github.event_name != 'push' || github.event.deleted != true";
   for (const file of ['build.yml', 'markdownlint.yml', 'agent-instructions.yml']) {
@@ -36,7 +301,7 @@ test('actual workflows cover every live push and PR base with an isolated target
       assert.deepEqual(workflow.jobs['candidate-tests'].permissions, {});
     } else {
       for (const id of file === 'build.yml' ? [artifactVerifier] : ['policy', 'markdownlint']) {
-        assert.equal(workflow.jobs[id].if, liveGuard);
+        assert.equal(workflow.jobs[id].if, file === 'build.yml' ? 'always() && (' + liveGuard + ')' : liveGuard);
       }
     }
   }
@@ -470,11 +735,130 @@ exit 98
   });
 }
 
+function artifactRoleSource(role) {
+  const descriptors = {
+    PowerShellExamples: `# BEGIN LANGUAGE DESCRIPTOR
+$script:hashtableArtifactLanguage = @{
+    ScopedId = 'powershell-instructions'
+    ScopedPath = 'powershell.instructions.md'
+    SemanticRole = 'PowerShellExamples'
+}
+# END LANGUAGE DESCRIPTOR`,
+    TerraformRecovery: `# BEGIN LANGUAGE DESCRIPTOR
+$script:hashtableArtifactLanguage = @{
+    ScopedId = 'terraform-instructions'
+    ScopedPath = 'terraform.instructions.md'
+    SemanticRole = 'TerraformRecovery'
+}
+# END LANGUAGE DESCRIPTOR`,
+  };
+  assert.ok(Object.hasOwn(descriptors, role), 'The fixture requires a fixed semantic role.');
+  const source = read('Test-StyleGuideArtifacts.ps1');
+  const pattern = /# BEGIN LANGUAGE DESCRIPTOR[\s\S]*?# END LANGUAGE DESCRIPTOR/gu;
+  const blocks = [...source.matchAll(pattern)];
+  assert.equal(blocks.length, 1);
+  return source.replace(pattern, descriptors[role]);
+}
+
+for (const mode of ['clean', 'stale', 'semantic-failure', 'semantic-side-effect',
+  'verifier-channel', 'verifier-config', 'verifier-worktree', 'verifier-failure',
+  'generator-native', 'generator-result', 'generator-schema', 'generator-hostile',
+  'generator-json', 'generator-nonobject', 'generator-count', 'generator-order', 'generator-path',
+  'verifier-json', 'verifier-nonobject', 'verifier-native', 'verifier-schema', 'semantic-artifact']) {
+  test(`artifact gate includes verifier child effects: ${mode}`, { skip: !linux }, t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'styleguide-artifact-child-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const work = path.join(root, 'work'), scripts = path.join(work, '.github/workflows');
+    fs.mkdirSync(scripts, { recursive: true });
+    const records = [['copilot', 'copilot-instructions.md'], ['powershell-instructions', 'powershell.instructions.md'],
+      ['chat', 'STYLE_GUIDE_CHAT.md'], ['full', 'STYLE_GUIDE_FULL.md']];
+    for (const [, name] of records) fs.writeFileSync(path.join(work, name), 'committed fixture\n');
+    fs.writeFileSync(path.join(scripts, 'Test-StyleGuideArtifacts.ps1'), artifactRoleSource('PowerShellExamples'));
+    fs.writeFileSync(path.join(work, 'STYLE_GUIDE.md'), [
+      '# PowerShell Writing Style', '',
+      '### Examples', '',
+      '**Compliant example:**', '',
+      '```powershell', '{', '    Invoke-First', '', '    Invoke-Second', '}', '```', '',
+      '**Non-Compliant example:**', '',
+      'The `␠` glyph is an illustration marker and is not PowerShell syntax. Do not copy it.', '',
+      '```powershell', '{', '    Invoke-First', '␠', '    Invoke-Second', '}', '```', '',
+    ].join('\n'));
+    // Isolate the wrapper interface; the real PS gate still checks guide semantics.
+    fs.writeFileSync(path.join(scripts, 'Test-BlankLineExamples.ps1'),
+      "Write-Output 'Blank-line example semantics passed, including focused mutation checks.'\n" +
+      `exit ${mode === 'semantic-failure' ? 7 : 0}\n`);
+    const generation = { Schema: 'StyleGuide.GeneratorResult.v2', Overall: 'NoChange', Phase: 'complete',
+      Category: 'none', NativeOutcome: 'Success', ExitCode: 0,
+      Artifacts: records.map(([ArtifactId, Path]) => ({ ArtifactId, Path, Status: 'NoChange' })) };
+    if (mode === 'generator-result') generation.ExitCode = 4;
+    if (mode === 'generator-schema') generation.Schema = 'wrong';
+    if (mode === 'generator-count') generation.Artifacts.pop();
+    if (mode === 'generator-order') generation.Artifacts.reverse();
+    if (mode === 'generator-path') generation.Artifacts[0].Path = '../escape';
+    if (mode === 'generator-hostile') for (const field of ['Schema', 'Overall', 'Phase', 'Category', 'NativeOutcome', 'ExitCode']) {
+      generation[field] = 'UNTRUSTED-' + 'x'.repeat(2000);
+    }
+    const generatorJson = mode === 'generator-json' ? '{' : mode === 'generator-nonobject' ? '[]' : JSON.stringify(generation);
+    fs.writeFileSync(path.join(scripts, 'Generate-StyleGuideArtifacts.ps1'),
+      (mode === 'stale' ? "[IO.File]::WriteAllText('STYLE_GUIDE_CHAT.md', 'regenerated fixture')\n" : '') +
+      quote(generatorJson) + `\nexit ${mode === 'generator-native' ? 7 : 0}\n`);
+    const mutation = {
+      'verifier-channel': "[IO.File]::AppendAllText($env:GITHUB_OUTPUT, 'fixture=changed')",
+      'verifier-config': "[IO.File]::AppendAllText((Join-Path $env:GITHUB_WORKSPACE '.git/config'), \"`n# changed by verifier`n\")",
+      'verifier-worktree': "[IO.File]::WriteAllText('unexpected.txt', 'changed by verifier')",
+    }[mode] ?? '';
+    if (['semantic-side-effect', 'semantic-artifact'].includes(mode)) {
+      fs.writeFileSync(path.join(scripts, 'Test-BlankLineExamples.ps1'),
+        `[IO.File]::WriteAllText('${mode === "semantic-artifact" ? "STYLE_GUIDE_CHAT.md" : "unexpected.txt"}', 'changed by semantic verifier')\n` +
+        "Write-Output 'Blank-line example semantics passed, including focused mutation checks.'\nexit 0\n");
+    }
+    const verifierFails = ['stale', 'verifier-failure'].includes(mode);
+    fs.writeFileSync(path.join(scripts, 'Test-ExactGitPathSet.ps1'), mutation + '\n' +
+      quote(mode === 'verifier-json' ? '{' : mode === 'verifier-nonobject' ? '[]' : JSON.stringify({ Schema: mode === 'verifier-schema' ? 'wrong' : 'StyleGuide.ExactGitPathSetResult.v2', Success: !verifierFails })) +
+      `\nexit ${verifierFails || mode === 'verifier-native' ? 1 : 0}\n`);
+    const env = { ...process.env, GITHUB_WORKSPACE: work, GIT_CONFIG_NOSYSTEM: '1',
+      GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0' };
+    for (const key of ['GITHUB_TOKEN', 'GH_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS']) delete env[key];
+    for (const key of ['GITHUB_ENV', 'GITHUB_PATH', 'GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY']) {
+      env[key] = path.join(root, key); fs.writeFileSync(env[key], '');
+    }
+    for (const args of [['init', '-q'], ['add', '-A'],
+      ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'Artifact fixture']]) {
+      const result = spawnSync('/usr/bin/git', args, { cwd: work, env, encoding: 'utf8', timeout: 30000 });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+    }
+    const result = spawnSync('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-File',
+      path.join(scripts, 'Test-StyleGuideArtifacts.ps1')], { cwd: work, env, encoding: 'utf8', timeout: 30000 });
+    assert.equal(result.status, mode === 'clean' ? 0 : 1, result.stdout + result.stderr);
+    const expected = { clean: /committed bytes match generator output/, stale: /Generate-StyleGuideArtifacts\.ps1/,
+      'semantic-failure': /blank-line semantic check failed/i,
+      'semantic-side-effect': /git-state: a child changed a path outside the four permitted generated artifacts/,
+      'verifier-channel': /runner-state/, 'verifier-config': /configuration or hooks/,
+      'verifier-worktree': /outside the four/, 'verifier-failure': /Exact-path verification did not confirm/,
+      'generator-native': /NativeExit/, 'generator-result': /ResultExitCode/, 'generator-schema': /Schema/,
+      'generator-hostile': /Artifact generation failed result checks: Schema, Overall, Phase, Category, NativeOutcome, ResultExitCode\./,
+      'generator-json': /invalid JSON/, 'generator-nonobject': /non-object/, 'generator-count': /record count/,
+      'generator-order': /invalid artifact record/, 'generator-path': /invalid artifact record/,
+      'verifier-json': /invalid JSON/, 'verifier-nonobject': /did not confirm/,
+      'verifier-native': /did not confirm/, 'verifier-schema': /did not confirm/,
+      'semantic-artifact': /outside the four/ }[mode];
+    const diagnostic = result.stdout + result.stderr;
+    assert.equal(diagnostic.includes('UNTRUSTED-'), false, 'hostile result values must not enter diagnostics');
+    // PowerShell may decorate and wrap the same diagnostic across renderer lines.
+    // Normalize only presentation; retain the full message and ordered labels.
+    const renderedDiagnostic = ['semantic-side-effect', 'generator-hostile'].includes(mode)
+      ? diagnostic.replace(/\x1B\[[0-?]*[ -/]*[@-~]/gu, '')
+        .replace(/^[ \t]*\|[ \t]?/gmu, '').replace(/\s+/gu, ' ')
+      : diagnostic;
+    assert.match(renderedDiagnostic, expected);
+  });
+}
+
 for (const mode of ['clean', 'stale', 'verifier-channel', 'verifier-config', 'verifier-worktree', 'verifier-failure',
   'recovery-missing', 'recovery-failure', 'recovery-signal', 'recovery-timeout',
   'recovery-channel', 'recovery-config', 'recovery-source', 'recovery-self',
   'multiple-node-paths', 'first-node-failure']) {
-  test(`artifact gate includes verifier child effects: ${mode}`, { skip: !linux }, t => {
+  test(`artifact gate recovery role includes verifier child effects: ${mode}`, { skip: !linux }, t => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'styleguide-artifact-child-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const work = path.join(root, 'work'), scripts = path.join(work, '.github/workflows');
@@ -483,7 +867,7 @@ for (const mode of ['clean', 'stale', 'verifier-channel', 'verifier-config', 've
       ['chat', 'STYLE_GUIDE_CHAT.md'], ['full', 'STYLE_GUIDE_FULL.md']];
     for (const [, name] of records) fs.writeFileSync(path.join(work, name), 'committed fixture\n');
     fs.writeFileSync(path.join(scripts, 'Test-StyleGuideArtifacts.ps1'), mode === 'recovery-timeout' ?
-      read('Test-StyleGuideArtifacts.ps1').replace('WaitForExit(300000)', 'WaitForExit(100)') : read('Test-StyleGuideArtifacts.ps1'));
+      artifactRoleSource('TerraformRecovery').replace('WaitForExit(300000)', 'WaitForExit(100)') : artifactRoleSource('TerraformRecovery'));
     fs.writeFileSync(path.join(work, 'STYLE_GUIDE.md'), 'source fixture\n');
     const recoveryCode = {
       'recovery-failure': 'process.exit(19);',
@@ -496,7 +880,7 @@ for (const mode of ['clean', 'stale', 'verifier-channel', 'verifier-config', 've
     }[mode] ?? '';
     if (mode !== 'recovery-missing') fs.writeFileSync(path.join(scripts, 'Test-StateRecoveryExamples.mjs'),
       "import fs from 'node:fs';\n" + recoveryCode + '\n');
-    const generation = { Schema: 'TerraformStyleGuide.GeneratorResult.v2', Overall: 'NoChange', Phase: 'complete',
+    const generation = { Schema: 'StyleGuide.GeneratorResult.v2', Overall: 'NoChange', Phase: 'complete',
       Category: 'none', NativeOutcome: 'Success', ExitCode: 0,
       Artifacts: records.map(([ArtifactId, Path]) => ({ ArtifactId, Path, Status: 'NoChange' })) };
     fs.writeFileSync(path.join(scripts, 'Generate-StyleGuideArtifacts.ps1'),
@@ -509,7 +893,7 @@ for (const mode of ['clean', 'stale', 'verifier-channel', 'verifier-config', 've
     }[mode] ?? '';
     const verifierFails = ['stale', 'verifier-failure'].includes(mode);
     fs.writeFileSync(path.join(scripts, 'Test-ExactGitPathSet.ps1'), mutation + '\n' +
-      quote(JSON.stringify({ Schema: 'TerraformStyleGuide.ExactGitPathSetResult.v2', Success: !verifierFails })) +
+      quote(JSON.stringify({ Schema: 'StyleGuide.ExactGitPathSetResult.v2', Success: !verifierFails })) +
       `\nexit ${verifierFails ? 1 : 0}\n`);
     const env = { ...process.env, GITHUB_WORKSPACE: work, GIT_CONFIG_NOSYSTEM: '1',
       GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0' };
@@ -556,151 +940,154 @@ for (const mode of ['clean', 'stale', 'verifier-channel', 'verifier-config', 've
   });
 }
 
-for (const mode of ['fetch-failure', 'retry-success', 'checkout-failure']) {
-  test(`Copilot acquisition retry: ${mode}`, { skip: !linux }, t => {
-    const source = parse(read('copilot-setup-steps.yml')).jobs['copilot-setup-steps'].steps.find(step => step.id === 'acquire').run;
-    const f = fixture(t), result = f.run(source, { TEST_MODE: mode });
-    assert.equal(result.status === 0, mode === 'retry-success', result.stderr);
-    const fetches = f.calls().filter(row => row.includes('fetch'));
-    assert.equal(fetches.length, mode === 'checkout-failure' ? 1 : 3);
-    assert.ok(fetches.every(row => row.at(-1) === head && row.includes('--no-tags') && row.includes('--no-recurse-submodules')));
-    assert.equal(f.calls().filter(row => row.includes('checkout')).length, mode === 'fetch-failure' ? 0 : 1);
-    if (mode === 'fetch-failure') assert.match(result.stderr, /git fetch exited 7 after three attempts/);
-    if (mode === 'checkout-failure') assert.match(result.stderr, /git checkout exited 23/);
-  });
-}
-
-for (const mode of ['', 'identity-native-failure', 'identity-multiline', 'empty-output', 'wrong-head']) {
-  test(`Copilot Git identity failure: ${mode || 'success'}`, { skip: !linux }, t => {
-    const source = parse(read('copilot-setup-steps.yml')).jobs['copilot-setup-steps'].steps.find(step => step.id === 'acquire').run;
-    const f = fixture(t), result = f.run(source, { TEST_MODE: mode });
-    assert.equal(result.status === 0, mode === '', result.stderr);
-    assert.equal(f.calls().filter(row => row.includes('checkout')).length, 1);
-    if (mode === 'identity-native-failure') assert.match(result.stderr, /git rev-parse exited 31/);
-    if (['identity-multiline', 'empty-output'].includes(mode)) assert.match(result.stderr, /exactly one line/);
-    if (mode === 'wrong-head') assert.match(result.stderr, /not the triggering revision/);
-  });
-}
-
-for (const mode of ['', 'download-failure', 'version-failure', 'version-empty', 'version-multiline', 'version-wrong']) {
-  test(`Copilot runtime failure: ${mode || 'success'}`, { skip: !linux }, t => {
-    const f = fixture(t), workflows = path.join(f.work, '.github/workflows');
-    fs.mkdirSync(workflows, { recursive: true });
-    const manifest = JSON.parse(fs.readFileSync(path.resolve(directory, '../../package.json')));
-    fs.writeFileSync(path.join(f.work, 'package.json'), JSON.stringify(manifest));
-    const archiveRoot = path.join(f.root, 'archive'), bin = path.join(archiveRoot, 'runtime/bin');
-    fs.mkdirSync(bin, { recursive: true });
-    fs.writeFileSync(path.join(bin, 'node'), `#!${process.execPath}
-const mode = process.env.TEST_MODE;
-if (mode === 'version-failure') process.exit(29);
-if (mode === 'version-empty') process.exit(0);
-if (mode === 'version-multiline') console.log('v${manifest.engines.node}');
-console.log(mode === 'version-wrong' ? 'v0.0.0' : 'v${manifest.engines.node}');
-`, { mode: 0o700 });
-    fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
-    const archive = path.join(f.root, 'runtime.tar.xz');
-    const packed = spawnSync('/usr/bin/tar', ['-cJf', archive, '-C', archiveRoot, 'runtime'], { encoding: 'utf8' });
-    assert.equal(packed.status, 0, packed.stderr);
-    fs.writeFileSync(path.join(workflows, 'ci-toolchain.json'), JSON.stringify({
-      linuxX64Sha256: createHash('sha256').update(fs.readFileSync(archive)).digest('hex') }));
-    const curl = path.join(f.root, 'curl');
-    fs.writeFileSync(curl, `#!${process.execPath}
-const fs = require('node:fs'), args = process.argv.slice(2);
-fs.appendFileSync(process.env.TEST_LOG, JSON.stringify(['curl', ...args])+'\\n');
-if (process.env.TEST_MODE === 'download-failure') process.exit(28);
-fs.copyFileSync(${JSON.stringify(archive)}, args[args.indexOf('--output') + 1]);
-`, { mode: 0o700 });
-    const source = parse(read('copilot-setup-steps.yml')).jobs['copilot-setup-steps'].steps
-      .find(step => step.name === 'Set up verified official Node.js runtime').run
-      .replaceAll("'/usr/bin/curl'", quote(curl)).replaceAll("'/bin/curl'", quote(curl));
-    const result = f.run(source, { TOOLCHAIN_LAYOUT: 'modern', TEST_MODE: mode });
-    assert.equal(result.status === 0, mode === '', result.stderr);
-    const request = f.calls().find(row => row[0] === 'curl');
-    assert.equal(request[1], '--disable');
-    assert.ok(request.includes('--retry-all-errors'));
-    assert.ok(request.includes('--tlsv1.2'));
-    assert.equal(request.at(-1), `https://nodejs.org/dist/v${manifest.engines.node}/node-v${manifest.engines.node}-linux-x64.tar.xz`);
-    for (const [flag, value] of [['--proto', '=https'], ['--proto-redir', '=https'], ['--retry', '3'], ['--connect-timeout', '20'], ['--max-time', '120'], ['--retry-max-time', '300']]) {
-      assert.ok(request.includes(flag), `Missing curl option: ${flag}`);
-      assert.equal(request[request.indexOf(flag) + 1], value);
-    }
-    if (mode === 'download-failure') assert.match(result.stderr, /download exited 28/);
-    if (mode === 'version-failure') assert.match(result.stderr, /version command exited 29/);
-    if (['version-empty', 'version-multiline'].includes(mode)) assert.match(result.stderr, /exactly one line/);
-    if (mode === 'version-wrong') assert.match(result.stderr, /identity is wrong/);
-    if (mode) assert.equal(fs.existsSync(path.join(f.root, 'path')), false);
-    else assert.equal(fs.readFileSync(path.join(f.root, 'path'), 'utf8'), `${path.join(f.root, 'agent-validation-node/bin')}\n`);
-  });
-}
-
-for (const [stepName, commands] of [
-  ['Verify selected Node.js runtime', 1],
-  ['Install locked Node.js validation tools', 3],
-  ['Verify locked dependency trees and immutable manifests', 3],
-]) {
-  test(`Copilot npm configuration in each process: ${stepName}`, { skip: !linux }, t => {
-    const f = fixture(t), bin = path.join(f.root, 'bin'); fs.mkdirSync(bin);
-    const log = path.join(f.root, 'npm-calls');
-    for (const executable of ['node', 'npm', 'git']) {
-      fs.writeFileSync(path.join(bin, executable), `#!${process.execPath}
-const fs = require('node:fs'), args = process.argv.slice(2);
-if ('${executable}' === 'npm') {
-  if (Object.keys(process.env).some(key => /^npm_config_/i.test(key) &&
-      !['npm_config_userconfig', 'npm_config_globalconfig'].includes(key)) ||
-      process.env.npm_config_userconfig !== '/dev/null' ||
-      process.env.npm_config_globalconfig !== '/etc/npmrc-absent-by-policy' ||
-      process.env.UNRELATED_FIXTURE !== 'keep this value') process.exit(97);
-  fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args)+'\\n');
-  if (args.includes('--version')) console.log('11.16.0');
-} else if ('${executable}' === 'node') console.log(args.includes('--version') ? 'v24.18.1' : args.join(' ').includes('engines.npm') ? '11.16.0' : '24.18.1');
-`, { mode: 0o700 });
-    }
-    const steps = parse(read('copilot-setup-steps.yml')).jobs['copilot-setup-steps'].steps;
-    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TOOLCHAIN_LAYOUT: 'modern',
-      GITHUB_ENV: path.join(f.root, 'step-env'), NPM_CONFIG_SCRIPT_SHELL: 'hostile',
-      npm_Config_Registry: 'https://invalid.example', npm_config_ignore_scripts: 'false',
-      npm_config_userconfig: '/hostile', UNRELATED_FIXTURE: 'keep this value',
-      'npm_config_@audit:registry': 'https://example.invalid',
-      'npm_config_//registry.npmjs.org/:_authToken': 'dummy-fixture-token',
-      'NPM_CONFIG_unsafe-name': 'line one\nline two' };
-    for (const name of ['GITHUB_TOKEN', 'GH_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS']) delete env[name];
-    const run = (name, stepEnv) => spawnSync('bash', ['--noprofile', '--norc', '-c', steps.find(step => step.name === name).run],
-      { cwd: f.work, env: stepEnv, encoding: 'utf8' });
-    const first = run('Verify selected Node.js runtime', env);
-    assert.equal(first.status, 0, first.stderr);
-    const published = Object.fromEntries(fs.readFileSync(env.GITHUB_ENV, 'utf8').trim().split('\n').map(line => {
-      const separator = line.indexOf('='); return [line.slice(0, separator), line.slice(separator + 1)];
-    }));
-    assert.deepEqual(published, { npm_config_userconfig: '/dev/null', npm_config_globalconfig: '/etc/npmrc-absent-by-policy' });
-    if (stepName !== 'Verify selected Node.js runtime') {
-      const next = run(stepName, { ...env, ...published });
-      assert.equal(next.status, 0, `${stepName}: ${next.stderr}`);
-    }
-    assert.equal(fs.readFileSync(log, 'utf8').trim().split('\n').length, commands);
-  });
-}
-
-test('Copilot npm rejects failed or partial environment enumeration before npm', { skip: !linux }, t => {
-  const steps = parse(read('copilot-setup-steps.yml')).jobs['copilot-setup-steps'].steps;
-  for (const name of ['Verify selected Node.js runtime', 'Install locked Node.js validation tools', 'Verify locked dependency trees and immutable manifests']) {
-    for (const partial of [false, true]) {
-      const f = fixture(t), bin = path.join(f.root, 'bin'); fs.mkdirSync(bin);
-      fs.writeFileSync(path.join(bin, 'npm'), `#!/bin/sh
-printf '%s\\n' 'unexpected npm invocation' >> "$TEST_LOG"
-exit 98
-`, { mode: 0o700 });
-      const source = steps.find(step => step.name === name).run.replace('/usr/bin/env -0',
-        (partial ? "printf 'npm_config_registry=fixture\\0'; " : '') + 'exit 71');
-      const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TEST_LOG: f.log,
-        TOOLCHAIN_LAYOUT: 'modern', GITHUB_ENV: path.join(f.root, 'step-env') };
-      for (const key of ['GITHUB_TOKEN', 'GH_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS']) delete env[key];
-      const result = spawnSync('bash', ['--noprofile', '--norc', '-c', source], { cwd: f.work, env, encoding: 'utf8' });
-      assert.notEqual(result.status, 0);
-      assert.match(result.stdout + result.stderr, /Unable to read the package-manager environment/);
-      assert.equal(fs.existsSync(f.log), false);
-    }
+for (const setupWorkflowName of ['copilot-setup-steps.yml', 'copilot-code-review.yml']) {
+  for (const mode of ['fetch-failure', 'retry-success', 'checkout-failure']) {
+    test(`${setupWorkflowName}: Copilot acquisition retry: ${mode}`, { skip: !linux }, t => {
+      const source = parse(read(setupWorkflowName)).jobs['copilot-setup-steps'].steps.find(step => step.id === 'acquire').run;
+      const f = fixture(t), result = f.run(source, { TEST_MODE: mode });
+      assert.equal(result.status === 0, mode === 'retry-success', result.stderr);
+      const fetches = f.calls().filter(row => row.includes('fetch'));
+      assert.equal(fetches.length, mode === 'checkout-failure' ? 1 : 3);
+      assert.ok(fetches.every(row => row.at(-1) === head && row.includes('--no-tags') && row.includes('--no-recurse-submodules')));
+      assert.equal(f.calls().filter(row => row.includes('checkout')).length, mode === 'fetch-failure' ? 0 : 1);
+      if (mode === 'fetch-failure') assert.match(result.stderr, /git fetch exited 7 after three attempts/);
+      if (mode === 'checkout-failure') assert.match(result.stderr, /git checkout exited 23/);
+    });
   }
-});
+
+  for (const mode of ['', 'identity-native-failure', 'identity-multiline', 'empty-output', 'wrong-head']) {
+    test(`${setupWorkflowName}: Copilot Git identity failure: ${mode || 'success'}`, { skip: !linux }, t => {
+      const source = parse(read(setupWorkflowName)).jobs['copilot-setup-steps'].steps.find(step => step.id === 'acquire').run;
+      const f = fixture(t), result = f.run(source, { TEST_MODE: mode });
+      assert.equal(result.status === 0, mode === '', result.stderr);
+      assert.equal(f.calls().filter(row => row.includes('checkout')).length, 1);
+      if (mode === 'identity-native-failure') assert.match(result.stderr, /git rev-parse exited 31/);
+      if (['identity-multiline', 'empty-output'].includes(mode)) assert.match(result.stderr, /exactly one line/);
+      if (mode === 'wrong-head') assert.match(result.stderr, /not the triggering revision/);
+    });
+  }
+
+  for (const mode of ['', 'download-failure', 'version-failure', 'version-empty', 'version-multiline', 'version-wrong']) {
+    test(`${setupWorkflowName}: Copilot runtime failure: ${mode || 'success'}`, { skip: !linux }, t => {
+      const f = fixture(t), workflows = path.join(f.work, '.github/workflows');
+      fs.mkdirSync(workflows, { recursive: true });
+      const manifest = JSON.parse(fs.readFileSync(path.resolve(directory, '../../package.json')));
+      fs.writeFileSync(path.join(f.work, 'package.json'), JSON.stringify(manifest));
+      const archiveRoot = path.join(f.root, 'archive'), bin = path.join(archiveRoot, 'runtime/bin');
+      fs.mkdirSync(bin, { recursive: true });
+      fs.writeFileSync(path.join(bin, 'node'), `#!${process.execPath}
+  const mode = process.env.TEST_MODE;
+  if (mode === 'version-failure') process.exit(29);
+  if (mode === 'version-empty') process.exit(0);
+  if (mode === 'version-multiline') console.log('v${manifest.engines.node}');
+  console.log(mode === 'version-wrong' ? 'v0.0.0' : 'v${manifest.engines.node}');
+  `, { mode: 0o700 });
+      fs.writeFileSync(path.join(bin, 'npm'), '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+      const archive = path.join(f.root, 'runtime.tar.xz');
+      const packed = spawnSync('/usr/bin/tar', ['-cJf', archive, '-C', archiveRoot, 'runtime'], { encoding: 'utf8' });
+      assert.equal(packed.status, 0, packed.stderr);
+      fs.writeFileSync(path.join(workflows, 'ci-toolchain.json'), JSON.stringify({
+        linuxX64Sha256: createHash('sha256').update(fs.readFileSync(archive)).digest('hex') }));
+      const curl = path.join(f.root, 'curl');
+      fs.writeFileSync(curl, `#!${process.execPath}
+  const fs = require('node:fs'), args = process.argv.slice(2);
+  fs.appendFileSync(process.env.TEST_LOG, JSON.stringify(['curl', ...args])+'\\n');
+  if (process.env.TEST_MODE === 'download-failure') process.exit(28);
+  fs.copyFileSync(${JSON.stringify(archive)}, args[args.indexOf('--output') + 1]);
+  `, { mode: 0o700 });
+      const source = parse(read(setupWorkflowName)).jobs['copilot-setup-steps'].steps
+        .find(step => step.name === 'Set up verified official Node.js runtime').run
+        .replaceAll("'/usr/bin/curl'", quote(curl)).replaceAll("'/bin/curl'", quote(curl));
+      const result = f.run(source, { TOOLCHAIN_LAYOUT: 'modern', TEST_MODE: mode });
+      assert.equal(result.status === 0, mode === '', result.stderr);
+      const request = f.calls().find(row => row[0] === 'curl');
+      assert.equal(request[1], '--disable');
+      assert.ok(request.includes('--retry-all-errors'));
+      assert.ok(request.includes('--tlsv1.2'));
+      assert.equal(request.at(-1), `https://nodejs.org/dist/v${manifest.engines.node}/node-v${manifest.engines.node}-linux-x64.tar.xz`);
+      for (const [flag, value] of [['--proto', '=https'], ['--proto-redir', '=https'], ['--retry', '3'], ['--connect-timeout', '20'], ['--max-time', '120'], ['--retry-max-time', '300']]) {
+        assert.ok(request.includes(flag), `Missing curl option: ${flag}`);
+        assert.equal(request[request.indexOf(flag) + 1], value);
+      }
+      if (mode === 'download-failure') assert.match(result.stderr, /download exited 28/);
+      if (mode === 'version-failure') assert.match(result.stderr, /version command exited 29/);
+      if (['version-empty', 'version-multiline'].includes(mode)) assert.match(result.stderr, /exactly one line/);
+      if (mode === 'version-wrong') assert.match(result.stderr, /identity is wrong/);
+      if (mode) assert.equal(fs.existsSync(path.join(f.root, 'path')), false);
+      else assert.equal(fs.readFileSync(path.join(f.root, 'path'), 'utf8'), `${path.join(f.root, 'agent-validation-node/bin')}\n`);
+    });
+  }
+
+  for (const [stepName, commands] of [
+    ['Verify selected Node.js runtime', 1],
+    ['Install locked Node.js validation tools', 3],
+    ['Verify locked dependency trees and immutable manifests', 3],
+  ]) {
+    test(`${setupWorkflowName}: Copilot npm configuration in each process: ${stepName}`, { skip: !linux }, t => {
+      const f = fixture(t), bin = path.join(f.root, 'bin'); fs.mkdirSync(bin);
+      const log = path.join(f.root, 'npm-calls');
+      for (const executable of ['node', 'npm', 'git']) {
+        fs.writeFileSync(path.join(bin, executable), `#!${process.execPath}
+  const fs = require('node:fs'), args = process.argv.slice(2);
+  if ('${executable}' === 'npm') {
+    if (Object.keys(process.env).some(key => /^npm_config_/i.test(key) &&
+        !['npm_config_userconfig', 'npm_config_globalconfig'].includes(key)) ||
+        process.env.npm_config_userconfig !== '/dev/null' ||
+        process.env.npm_config_globalconfig !== '/etc/npmrc-absent-by-policy' ||
+        process.env.UNRELATED_FIXTURE !== 'keep this value') process.exit(97);
+    fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args)+'\\n');
+    if (args.includes('--version')) console.log('11.16.0');
+  } else if ('${executable}' === 'node') console.log(args.includes('--version') ? 'v24.18.1' : args.join(' ').includes('engines.npm') ? '11.16.0' : '24.18.1');
+  `, { mode: 0o700 });
+      }
+      const steps = parse(read(setupWorkflowName)).jobs['copilot-setup-steps'].steps;
+      const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TOOLCHAIN_LAYOUT: 'modern',
+        GITHUB_ENV: path.join(f.root, 'step-env'), NPM_CONFIG_SCRIPT_SHELL: 'hostile',
+        npm_Config_Registry: 'https://invalid.example', npm_config_ignore_scripts: 'false',
+        npm_config_userconfig: '/hostile', UNRELATED_FIXTURE: 'keep this value',
+        'npm_config_@audit:registry': 'https://example.invalid',
+        'npm_config_//registry.npmjs.org/:_authToken': 'dummy-fixture-token',
+        'NPM_CONFIG_unsafe-name': 'line one\nline two' };
+      for (const name of ['GITHUB_TOKEN', 'GH_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS']) delete env[name];
+      const run = (name, stepEnv) => spawnSync('bash', ['--noprofile', '--norc', '-c', steps.find(step => step.name === name).run],
+        { cwd: f.work, env: stepEnv, encoding: 'utf8' });
+      const first = run('Verify selected Node.js runtime', env);
+      assert.equal(first.status, 0, first.stderr);
+      const published = Object.fromEntries(fs.readFileSync(env.GITHUB_ENV, 'utf8').trim().split('\n').map(line => {
+        const separator = line.indexOf('='); return [line.slice(0, separator), line.slice(separator + 1)];
+      }));
+      assert.deepEqual(published, { npm_config_userconfig: '/dev/null', npm_config_globalconfig: '/etc/npmrc-absent-by-policy' });
+      if (stepName !== 'Verify selected Node.js runtime') {
+        const next = run(stepName, { ...env, ...published });
+        assert.equal(next.status, 0, `${stepName}: ${next.stderr}`);
+      }
+      assert.equal(fs.readFileSync(log, 'utf8').trim().split('\n').length, commands);
+    });
+  }
+
+  test(`${setupWorkflowName}: Copilot npm rejects failed or partial environment enumeration before npm`, { skip: !linux }, t => {
+    const steps = parse(read(setupWorkflowName)).jobs['copilot-setup-steps'].steps;
+    for (const name of ['Verify selected Node.js runtime', 'Install locked Node.js validation tools', 'Verify locked dependency trees and immutable manifests']) {
+      for (const partial of [false, true]) {
+        const f = fixture(t), bin = path.join(f.root, 'bin'); fs.mkdirSync(bin);
+        fs.writeFileSync(path.join(bin, 'npm'), `#!/bin/sh
+  printf '%s\\n' 'unexpected npm invocation' >> "$TEST_LOG"
+  exit 98
+  `, { mode: 0o700 });
+        const source = steps.find(step => step.name === name).run.replace('/usr/bin/env -0',
+          (partial ? "printf 'npm_config_registry=fixture\\0'; " : '') + 'exit 71');
+        const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, TEST_LOG: f.log,
+          TOOLCHAIN_LAYOUT: 'modern', GITHUB_ENV: path.join(f.root, 'step-env') };
+        for (const key of ['GITHUB_TOKEN', 'GH_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS']) delete env[key];
+        const result = spawnSync('bash', ['--noprofile', '--norc', '-c', source], { cwd: f.work, env, encoding: 'utf8' });
+        assert.notEqual(result.status, 0);
+        assert.match(result.stdout + result.stderr, /Unable to read the package-manager environment/);
+        assert.equal(fs.existsSync(f.log), false);
+      }
+    }
+  });
+
+}
 
 function devcontainerWorkflow() {
   const workflow = parse(read('devcontainer-ci.yml'));
@@ -1009,7 +1396,7 @@ test('Copilot setup declares its input closure, supported environment and finite
   assert.match(copilotStep('Run complete repository validation').run, /-m pre_commit run --all-files/);
 });
 
-function copilotBodyFixture(t, workName = 'work') {
+function copilotBodyFixture(t, workName = 'work', job = copilotJob) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'copilot-convergence-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const work = path.join(root, workName); fs.mkdirSync(work);
@@ -1019,7 +1406,9 @@ function copilotBodyFixture(t, workName = 'work') {
     'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_TERMINAL_PROMPT']) delete env[key];
   const put = (name, text = 'fixture\n') => { const p = path.join(work, name); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
   function run(name, extra = {}, transform = value => value) {
-    const step = copilotStep(name), file = path.join(root, step.shell === 'pwsh' ? 'body.ps1' : 'body.sh');
+    const step = job.steps.find(item => item.name === name);
+    assert.ok(step, `The selected setup workflow has no step: ${name}`);
+    const file = path.join(root, step.shell === 'pwsh' ? 'body.ps1' : 'body.sh');
     // Observe successful-body isolation in the same process, with no job.env seed.
     const isolationProbe = step.shell === 'pwsh'
       ? '\nif ($env:GIT_CONFIG_NOSYSTEM -cne "1" -or $env:GIT_CONFIG_GLOBAL -cne "/dev/null" -or $env:GIT_TERMINAL_PROMPT -cne "0") { throw "Fixture: body depends on job.env isolation" }\n'
@@ -1187,37 +1576,41 @@ else if(a.includes('check')&&${JSON.stringify(mode)}==='check-failure')process.e
   });
 }
 
-for (const mode of ['clean', 'npm-failure', 'hook-wrong', 'suite-failure']) {
-  test(`Copilot explicit hook and full-validation caller: ${mode}`, { skip: !linux }, t => {
-    const f = copilotBodyFixture(t), bin = path.join(f.root, 'bin'), log = path.join(f.root, 'calls'); fs.mkdirSync(bin);
-    f.git('init', '-q'); f.put('fixture'); f.commit();
-    f.git('update-ref', 'refs/remotes/origin/main', 'HEAD');
-    const fixturePython = copilotFixturePython();
-    for (const name of ['npm', 'python']) fs.writeFileSync(path.join(bin, name), `#!${process.execPath}
-const fs=require('node:fs'),{spawnSync}=require('node:child_process'),a=process.argv.slice(2);
-if(${JSON.stringify(name)}==='python'&&a[2]==='-'){const r=spawnSync(${JSON.stringify(fixturePython)},a,{stdio:'inherit'});process.exit(r.status??99);}
-if(Object.keys(process.env).some(k=>/^npm_config_/i.test(k)&&!['npm_config_userconfig','npm_config_globalconfig'].includes(k)))process.exit(97);
-fs.appendFileSync(${JSON.stringify(log)},JSON.stringify([${JSON.stringify(name)},...a])+'\\n');
-if(${JSON.stringify(name)}==='npm') {
- if(${JSON.stringify(mode)}==='npm-failure')process.exit(31);
- spawnSync('/usr/bin/git',['config','core.hooksPath',${JSON.stringify(mode)}==='hook-wrong'?'.bad':'.husky/_']);
- fs.mkdirSync('.husky/_',{recursive:true});fs.writeFileSync('.husky/_/pre-commit','#!/bin/sh\\nexit 0\\n',{mode:0o700});
-} else if(${JSON.stringify(mode)}==='suite-failure')process.exit(37);
-`, { mode: 0o700 });
-    const env = { PATH: `${bin}:${process.env.PATH}`, VALIDATION_PYTHON: path.join(bin, 'python'),
-      GITHUB_SHA: f.git('rev-parse', 'HEAD'), GITHUB_WORKSPACE: f.work,
-      NPM_CONFIG_SCRIPT_SHELL: 'hostile', 'npm_config_unsafe-name': 'dummy' };
-    const hook = f.run('Activate repository hooks', env);
-    assert.equal(hook.status === 0, !['npm-failure', 'hook-wrong'].includes(mode), hook.stderr);
-    if (hook.status === 0) {
-      const suite = f.run('Run complete repository validation', env);
-      assert.equal(suite.status, mode === 'suite-failure' ? 37 : 0, suite.stderr);
-    }
-    const calls = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
-    assert.deepEqual(calls[0], ['npm', '--prefix', '.github/workflows', 'run', 'prepare']);
-    if (hook.status === 0) assert.deepEqual(calls[1], ['python', '-E', '-P', '-m', 'pre_commit', 'run', '--all-files']);
-    else assert.equal(calls.length, 1);
-  });
+for (const reviewOnly of [false, true]) {
+  const selectedJob = reviewOnly ? parse(read('copilot-code-review.yml')).jobs['copilot-setup-steps'] : copilotJob;
+  for (const mode of (reviewOnly ? ['clean', 'npm-failure', 'hook-wrong'] : ['clean', 'npm-failure', 'hook-wrong', 'suite-failure'])) {
+    test(`${reviewOnly ? 'Review' : 'Coding'} Copilot explicit hook and full-validation caller: ${mode}`, { skip: !linux }, t => {
+      const f = copilotBodyFixture(t, 'work', selectedJob), bin = path.join(f.root, 'bin'), log = path.join(f.root, 'calls'); fs.mkdirSync(bin);
+      f.git('init', '-q'); f.put('fixture'); f.commit();
+      f.git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+      const fixturePython = copilotFixturePython();
+      for (const name of ['npm', 'python']) fs.writeFileSync(path.join(bin, name), `#!${process.execPath}
+  const fs=require('node:fs'),{spawnSync}=require('node:child_process'),a=process.argv.slice(2);
+  if(${JSON.stringify(name)}==='python'&&a[2]==='-'){const r=spawnSync(${JSON.stringify(fixturePython)},a,{stdio:'inherit'});process.exit(r.status??99);}
+  if(Object.keys(process.env).some(k=>/^npm_config_/i.test(k)&&!['npm_config_userconfig','npm_config_globalconfig'].includes(k)))process.exit(97);
+  fs.appendFileSync(${JSON.stringify(log)},JSON.stringify([${JSON.stringify(name)},...a])+'\\n');
+  if(${JSON.stringify(name)}==='npm') {
+   if(${JSON.stringify(mode)}==='npm-failure')process.exit(31);
+   spawnSync('/usr/bin/git',['config','core.hooksPath',${JSON.stringify(mode)}==='hook-wrong'?'.bad':'.husky/_']);
+   fs.mkdirSync('.husky/_',{recursive:true});fs.writeFileSync('.husky/_/pre-commit','#!/bin/sh\\nexit 0\\n',{mode:0o700});
+  } else if(${JSON.stringify(mode)}==='suite-failure')process.exit(37);
+  `, { mode: 0o700 });
+      const env = { PATH: `${bin}:${process.env.PATH}`, VALIDATION_PYTHON: path.join(bin, 'python'),
+        GITHUB_SHA: f.git('rev-parse', 'HEAD'), GITHUB_WORKSPACE: f.work,
+        NPM_CONFIG_SCRIPT_SHELL: 'hostile', 'npm_config_unsafe-name': 'dummy' };
+      const hook = f.run('Activate repository hooks', env);
+      assert.equal(hook.status === 0, !['npm-failure', 'hook-wrong'].includes(mode), hook.stderr);
+      if (hook.status === 0 && !reviewOnly) {
+        const suite = f.run('Run complete repository validation', env);
+        assert.equal(suite.status, mode === 'suite-failure' ? 37 : 0, suite.stderr);
+      }
+      const calls = fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse);
+      assert.deepEqual(calls[0], ['npm', '--prefix', '.github/workflows', 'run', 'prepare']);
+      if (hook.status === 0 && !reviewOnly) assert.deepEqual(calls[1], ['python', '-E', '-P', '-m', 'pre_commit', 'run', '--all-files']);
+      else assert.equal(calls.length, 1);
+    });
+  }
+
 }
 
 for (const mode of ['clean', 'worktree', 'index', 'index-masked', 'untracked', 'ignored-untracked']) {
@@ -1277,8 +1670,8 @@ for (const historical of [false, true]) {
 // Run the extracted install body with the real built-in-only policy helper and
 // current source inputs. Only npm is replaced; it records installs without
 // downloading packages. Fixtures intentionally have no installed YAML module.
-function copilotPreinstallFixture(t) {
-  const f = copilotBodyFixture(t);
+function copilotPreinstallFixture(t, job = copilotJob) {
+  const f = copilotBodyFixture(t, 'work', job);
   const inputs = ['package.json', 'package-lock.json', '.github/workflows/package.json',
     '.github/workflows/package-lock.json', '.github/workflows/ci-toolchain.json',
     '.github/workflows/workflow-policy-contract.json', '.github/workflows/Validate-WorkflowPolicy.mjs'];
@@ -1508,3 +1901,59 @@ test('Copilot isolated validation stops on native directory-change failure', { s
   assert.ok(!fs.existsSync(`${f.log}.dispatch`), 'A failed directory change must not dispatch validation.');
   assert.deepEqual(f.snapshot(), f.before);
 });
+
+// The dedicated service workflow prepares the same tools; ordinary CI and
+// coding setup retain the complete suite. Compare every retained actual step.
+const reviewSetup = parse(read('copilot-code-review.yml'));
+const reviewJob = reviewSetup.jobs['copilot-setup-steps'];
+test('dedicated review setup preserves every preparation guard and omits only the aggregate', () => {
+  const coding = parse(read('copilot-setup-steps.yml'));
+  assert.deepEqual(Object.keys(reviewSetup.jobs), ['copilot-setup-steps']);
+  assert.deepEqual(reviewSetup.on, coding.on);
+  assert.deepEqual(reviewSetup.permissions, {});
+  assert.deepEqual(reviewJob.permissions, {});
+  assert.equal(reviewJob.env, undefined);
+  assert.equal(reviewJob['runs-on'], copilotJob['runs-on']);
+  assert.equal(reviewJob['timeout-minutes'], copilotJob['timeout-minutes']);
+  const complete = copilotStep('Run complete repository validation');
+  assert.ok(complete);
+  assert.match(complete.run, /-m pre_commit run --all-files/u);
+  assert.deepEqual(reviewJob.steps, copilotJob.steps.filter(step => step !== complete));
+  assert.equal(reviewJob.steps.some(step => step.run.includes('-m pre_commit run --all-files')), false);
+});
+for (const mode of ['declared', 'historical', 'missing-current-input']) {
+  test(`dedicated review actual capability selection: ${mode}`, { skip: !linux }, t => {
+    const f = copilotBodyFixture(t, 'work', reviewJob);
+    copilotInputs(f, mode === 'historical' ? 'historical' : 'declared');
+    if (mode === 'missing-current-input') fs.rmSync(path.join(f.work, 'requirements-dev.txt'));
+    const result = f.run('Detect locked validation-tool layout');
+    assert.equal(result.status === 0, mode !== 'missing-current-input', result.stdout + result.stderr);
+    if (result.status === 0) assert.match(fs.readFileSync(f.env.GITHUB_OUTPUT, 'utf8'),
+      new RegExp(`validation=${mode === 'historical' ? 'node-only' : 'full'}`));
+  });
+}
+for (const mode of ['clean', 'bad-lock', 'native-failure']) {
+  test(`dedicated review actual locked install admission: ${mode}`, { skip: !linux }, t => {
+    const f = copilotPreinstallFixture(t, reviewJob);
+    if (mode === 'bad-lock') {
+      const lock = JSON.parse(fs.readFileSync(path.join(f.work, 'package-lock.json'), 'utf8'));
+      Object.values(lock.packages).find(entry => entry.resolved).resolved = 'https://example.invalid/package.tgz';
+      f.put('package-lock.json', JSON.stringify(lock));
+    }
+    if (mode === 'native-failure') f.put('.github/workflows/Validate-WorkflowPolicy.mjs', 'process.exit(37);\n');
+    const result = f.run('modern');
+    assert.equal(result.status, mode === 'clean' ? 0 : mode === 'native-failure' ? 37 : 1, result.stdout + result.stderr);
+    assert.deepEqual(f.calls(), mode === 'clean' ? [copilotCiArgs, [...copilotCiArgs, '--prefix', '.github/workflows']] : []);
+  });
+}
+for (const mode of ['clean', 'worktree', 'index-masked', 'untracked']) {
+  test(`dedicated review actual final immutable guard: ${mode}`, { skip: !linux }, t => {
+    const f = copilotBodyFixture(t, 'work', reviewJob); f.git('init', '-q'); copilotInputs(f, 'historical'); f.commit();
+    assert.equal(f.run('Verify acquired immutable setup inputs').status, 0);
+    if (mode === 'worktree' || mode === 'index-masked') f.put('package.json', 'changed\n');
+    if (mode === 'index-masked') { f.git('add', 'package.json'); f.put('package.json', f.git('show', 'HEAD:package.json')); }
+    if (mode === 'untracked') f.put('requirements-dev.txt');
+    const result = f.run('Verify final immutable setup inputs');
+    assert.equal(result.status === 0, mode === 'clean', result.stdout + result.stderr);
+  });
+}
