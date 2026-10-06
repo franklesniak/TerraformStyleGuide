@@ -33,7 +33,7 @@
 # None. The script throws when a self-test fails.
 #
 # .NOTES
-# Version: 1.10.20261006.0
+# Version: 1.11.20261006.0
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([void])]
@@ -50,6 +50,341 @@ param(
 )
 
 $hashtableRuntimeContext = $RuntimeContext
+
+function Assert-MarkdownParseReuseSelfTest {
+    # .SYNOPSIS
+    # Tests isolated structural reuse without skipping the real parser.
+    #
+    # .DESCRIPTION
+    # Counts actual parser and decoder calls, changes fresh output and definitions,
+    # mutates returned graphs, and exercises bounded retention and owner cleanup.
+    # Scoped wrappers delegate to the installed functions and cannot outlive this test.
+    #
+    # .EXAMPLE
+    # Assert-MarkdownParseReuseSelfTest
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # None. Throws on an incorrect result.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - Not a public interface.
+    # Version: 1.0.20261006.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([void])]
+    param()
+
+    $scriptBlockActualParser = ${function:Invoke-MarkdownParserProcess}
+    $scriptBlockActualDecoder = ${function:ConvertFrom-ParserJsonContext}
+    $scriptBlockActualNode = ${function:Get-NodeApplicationContext}
+    $scriptBlockActualCopy = ${function:Copy-MarkdownParseReuseContext}
+    $scriptBlockActualContext = ${function:Get-MarkdownParseContext}
+    $hashtableProbe = @{ Processes = 0; Decodes = 0; RuntimeDecodes = 0; NodeChecks = 0; Mode = ''; OverrideCalls = 0 }
+    function Invoke-MarkdownParserProcess {
+        param($StartInfo, $Content)
+        $hashtableProbe.Processes++
+        if ($hashtableProbe.Mode -ceq 'native-failure') { throw 'Fresh parser failure control.' }
+        $objResult = & $scriptBlockActualParser -StartInfo $StartInfo -Content $Content
+        if ($hashtableProbe.Mode -ceq 'bad-json') { $objResult.Output = '{"a":1,"a":2}' }
+        if ($hashtableProbe.Mode -ceq 'bad-range') {
+            $hashtableRaw = $objResult.Output | ConvertFrom-Json -AsHashtable
+            $hashtableRaw.codeBlockRanges = ,@(-1, 1)
+            $objResult.Output = $hashtableRaw | ConvertTo-Json -Depth 20 -Compress
+        }
+        return $objResult
+    }
+    function ConvertFrom-ParserJsonContext {
+        param($Content, $MaximumBytes)
+        if ($MaximumBytes -eq 16777216) {
+            $hashtableProbe.Decodes++
+        } else {
+            $hashtableProbe.RuntimeDecodes++
+        }
+        return & $scriptBlockActualDecoder -Content $Content -MaximumBytes $MaximumBytes
+    }
+    function Get-NodeApplicationContext {
+        $hashtableProbe.NodeChecks++
+        if ($hashtableProbe.Mode -ceq 'missing-node') { return $null }
+        return & $scriptBlockActualNode
+    }
+    $scriptBlockCountedDecoder = ${function:ConvertFrom-ParserJsonContext}
+    $strMarkdown = @(
+        '# Title', '', '## Metadata', '', '- **Status:** Active',
+        '- **Owner:** Test', '- **Last Updated:** 2026-10-01', '- **Scope:** Test', '',
+        'Text `code` [link](https://example.invalid).', '',
+        '| Field | Value |', '| --- | --- |', '| Cell | `code` [link](https://example.invalid) |', '',
+        '```text', 'code', '```'
+    ) -join "`n"
+    $intLineCount = @([regex]::Split($strMarkdown, '\r\n|\r|\n')).Count
+    $objBudget = [pscustomobject]@{ Retained = 0 }
+    $listSlots = [Collections.Generic.List[object]]::new()
+    $objSlot = Get-MarkdownParseReuseSlot -Budget $objBudget
+    $listSlots.Add($objSlot)
+    try {
+        $objFirst = Get-MarkdownParseContext -Content $strMarkdown -LineCount $intLineCount -ReuseSlot $objSlot
+        $strExpected = $objFirst | ConvertTo-Json -Depth 12 -Compress
+        $objSecond = Get-MarkdownParseContext -Content $strMarkdown -LineCount $intLineCount -ReuseSlot $objSlot
+        if ($hashtableProbe.Processes -ne 2 -or $hashtableProbe.NodeChecks -ne 2 -or
+            $hashtableProbe.Decodes -ne 1 -or
+            ($objSecond | ConvertTo-Json -Depth 12 -Compress) -cne $strExpected) {
+            throw 'Structural reuse must retain two real parser calls and one interpretation.'
+        }
+        foreach ($objResult in @($objFirst, $objSecond)) {
+            foreach ($strArrayName in @('CodeBlockRanges', 'ProseBlocks', 'TableRows',
+                    'TopLevelBlocks', 'TopLevelListItems', 'Headings', 'LevelTwoHeadings')) {
+                if ($objResult.$strArrayName -isnot [pscustomobject[]]) {
+                    throw 'Structural reuse changed an exact array type.'
+                }
+                foreach ($objRecord in $objResult.$strArrayName) {
+                    $objRecord.Start = -900
+                    if ($null -ne $objRecord.PSObject.Properties['Text']) { $objRecord.Text = 'mutated' }
+                    foreach ($strStrings in @('Code', 'Links')) {
+                        if ($null -ne $objRecord.PSObject.Properties[$strStrings]) {
+                            if ($objRecord.$strStrings -isnot [string[]]) { throw 'String-array type changed.' }
+                            if ($objRecord.$strStrings.Count -gt 0) { $objRecord.$strStrings[0] = 'mutated' }
+                        }
+                    }
+                    if ($null -ne $objRecord.PSObject.Properties['Cells']) {
+                        if ($objRecord.Cells -isnot [pscustomobject[]]) { throw 'Cell-array type changed.' }
+                        foreach ($objCell in $objRecord.Cells) {
+                            $objCell.Start = -901
+                            $objCell.End = -902
+                            $objCell.Text = 'mutated'
+                            if ($objCell.Code.Count -gt 0) { $objCell.Code[0] = 'mutated' }
+                            if ($objCell.Links.Count -gt 0) { $objCell.Links[0] = 'mutated' }
+                        }
+                    }
+                }
+            }
+        }
+        $objAfterMutation = Get-MarkdownParseContext -Content $strMarkdown -LineCount $intLineCount -ReuseSlot $objSlot
+        if (($objAfterMutation | ConvertTo-Json -Depth 12 -Compress) -cne $strExpected -or
+            $hashtableProbe.Decodes -ne 1 -or $hashtableProbe.Processes -ne 3) {
+            throw 'Returned-object mutation reached the owned interpretation.'
+        }
+        $null = Get-MarkdownParseContext -Content $strMarkdown -LineCount ($intLineCount + 1) -ReuseSlot $objSlot
+        $null = Get-MarkdownParseContext -Content ($strMarkdown + ' ') -LineCount $intLineCount -ReuseSlot $objSlot
+        $null = Get-MarkdownParseContext -Content ($strMarkdown + ' ') -LineCount $intLineCount
+        if ($hashtableProbe.Processes -ne 6 -or $hashtableProbe.Decodes -ne 4) {
+            throw 'Changed parser input, LineCount or fresh direct call reused stale interpretation.'
+        }
+        foreach ($strMode in @('native-failure', 'bad-json', 'bad-range', 'missing-node')) {
+            $hashtableProbe.Mode = ''
+            $null = Get-MarkdownParseContext -Content $strMarkdown -LineCount $intLineCount -ReuseSlot $objSlot
+            $hashtableProbe.Mode = $strMode
+            $objFailure = $null
+            try { $null = Get-MarkdownParseContext -Content $strMarkdown -LineCount $intLineCount -ReuseSlot $objSlot } catch {
+                $objFailure = $_
+            }
+            $strFailure = switch ($strMode) {
+                'native-failure' { 'Fresh parser failure control' }
+                'bad-json' { 'invalid context data' }
+                'bad-range' { 'invalid or overlapping range' }
+                'missing-node' { 'trusted Node.js runtime is required' }
+            }
+            if ($null -eq $objFailure -or $objFailure.Exception.Message -notmatch $strFailure -or
+                $null -ne $objSlot.Snapshot -or $objBudget.Retained -ne 0) {
+                throw "Fresh failure or snapshot release failed: $strMode."
+            }
+        }
+        $hashtableProbe.Mode = ''
+        $null = Get-MarkdownParseContext -Content $strMarkdown -LineCount $intLineCount -ReuseSlot $objSlot
+        Set-Item -LiteralPath Function:ConvertFrom-ParserJsonContext -Value {
+            param($Content, $MaximumBytes)
+            $hashtableProbe.OverrideCalls++
+            if ($Content.Length -le $MaximumBytes) { throw 'Decoder replacement control.' }
+            throw 'Unexpected decoder replacement input.'
+        }
+        $objFailure = $null
+        try { $null = Get-MarkdownParseContext -Content $strMarkdown -LineCount $intLineCount -ReuseSlot $objSlot } catch {
+            $objFailure = $_
+        } finally {
+            Set-Item -LiteralPath Function:ConvertFrom-ParserJsonContext -Value $scriptBlockCountedDecoder
+        }
+        if ($null -eq $objFailure -or $objFailure.Exception.Message -notmatch 'invalid context data' -or
+            $hashtableProbe.OverrideCalls -ne 1 -or $null -ne $objSlot.Snapshot) {
+            throw 'A decoder replacement was hidden by reuse.'
+        }
+        foreach ($strDefinition in @('Copy-MarkdownParseReuseContext', 'Get-MarkdownParseContext')) {
+            $null = Get-MarkdownParseContext -Content $strMarkdown -LineCount $intLineCount -ReuseSlot $objSlot
+            $intPriorDecodes = $hashtableProbe.Decodes
+            $intPriorProcesses = $hashtableProbe.Processes
+            try {
+                if ($strDefinition -ceq 'Copy-MarkdownParseReuseContext') {
+                    Set-Item -LiteralPath Function:Copy-MarkdownParseReuseContext -Value {
+                        param($Context, $ParserText, $ParserOutput)
+                        return & $scriptBlockActualCopy -Context $Context -ParserText $ParserText -ParserOutput $ParserOutput
+                    }
+                } else {
+                    Set-Item -LiteralPath Function:Get-MarkdownParseContext -Value {
+                        param($Content, $LineCount, $ReuseSlot)
+                        return & $scriptBlockActualContext -Content $Content -LineCount $LineCount -ReuseSlot $ReuseSlot
+                    }
+                }
+                $objReplaced = Get-MarkdownParseContext -Content $strMarkdown -LineCount $intLineCount -ReuseSlot $objSlot
+                if ($hashtableProbe.Decodes -ne ($intPriorDecodes + 1) -or
+                    $hashtableProbe.Processes -ne ($intPriorProcesses + 1) -or
+                    ($objReplaced | ConvertTo-Json -Depth 12 -Compress) -cne $strExpected) {
+                    throw "A structural helper replacement reused its former interpretation: $strDefinition."
+                }
+            } finally {
+                Set-Item -LiteralPath Function:Copy-MarkdownParseReuseContext -Value $scriptBlockActualCopy
+                Set-Item -LiteralPath Function:Get-MarkdownParseContext -Value $scriptBlockActualContext
+            }
+        }
+        foreach ($objExisting in $listSlots) { Clear-MarkdownParseReuseSlot -Slot $objExisting }
+        for ($intSlot = 0; $intSlot -lt 9; $intSlot++) {
+            $objNext = Get-MarkdownParseReuseSlot -Budget $objBudget
+            $listSlots.Add($objNext)
+            $null = Get-MarkdownParseContext -Content '' -LineCount 1 -ReuseSlot $objNext
+        }
+        if ($objBudget.Retained -ne 8 -or $null -ne $objNext.Snapshot) {
+            throw 'Snapshot retention exceeded eight or rejected its fresh fallback.'
+        }
+        Clear-MarkdownParseReuseSlot -Slot $listSlots[1]
+        $null = Get-MarkdownParseContext -Content '' -LineCount 1 -ReuseSlot $objNext
+        if ($objBudget.Retained -ne 8 -or $null -eq $objNext.Snapshot) {
+            throw 'Released capacity was not available to the next eligible owner.'
+        }
+        $objEmpty = Get-MarkdownParseContext -Content '' -LineCount 1
+        if ($null -eq (Copy-MarkdownParseReuseContext -Context $objEmpty -ParserText (' ' * 524288) -ParserOutput '') -or
+            $null -ne (Copy-MarkdownParseReuseContext -Context $objEmpty -ParserText (' ' * 524289) -ParserOutput '')) {
+            throw 'UTF-16 retention boundary changed.'
+        }
+        $objEmpty.CodeBlockRanges = [pscustomobject[]]@(
+            for ($intRange = 0; $intRange -lt 2048; $intRange++) {
+                [pscustomobject]@{ Start = $intRange * 2; End = $intRange * 2 + 1 }
+            })
+        if ($null -eq (Copy-MarkdownParseReuseContext -Context $objEmpty -ParserText '' -ParserOutput '')) {
+            throw 'Exact structural-record retention limit was rejected.'
+        }
+        $objEmpty.CodeBlockRanges += [pscustomobject]@{ Start = 4096; End = 4097 }
+        if ($null -ne (Copy-MarkdownParseReuseContext -Context $objEmpty -ParserText '' -ParserOutput '')) {
+            throw 'Structural-record retention limit was ignored.'
+        }
+        $objEmpty.CodeBlockRanges = [pscustomobject[]]@()
+        $objEmpty.ProseBlocks = [pscustomobject[]]@([pscustomobject]@{
+                Start = 0; End = 1; Text = ''; Code = [string[]]@('' * 0); Links = [string[]]@()
+            })
+        $objEmpty.ProseBlocks[0].Code = [string[]]@(for ($intElement = 0; $intElement -lt 8191; $intElement++) { '' })
+        if ($null -eq (Copy-MarkdownParseReuseContext -Context $objEmpty -ParserText '' -ParserOutput '')) {
+            throw 'Exact array-element retention limit was rejected.'
+        }
+        $objEmpty.ProseBlocks[0].Code += ''
+        if ($null -ne (Copy-MarkdownParseReuseContext -Context $objEmpty -ParserText '' -ParserOutput '')) {
+            throw 'Array-element retention limit was ignored.'
+        }
+    } finally {
+        foreach ($objExisting in $listSlots) { Clear-MarkdownParseReuseSlot -Slot $objExisting }
+    }
+    if ($objBudget.Retained -ne 0) { throw 'Document-owned reuse leaked after cleanup.' }
+
+    $scriptBlockActualSlot = ${function:Get-MarkdownParseReuseSlot}
+    $scriptBlockActualClear = ${function:Clear-MarkdownParseReuseSlot}
+    $hashtableOwnerProbe = @{ Allocations = 0; FailSecond = $false; FailCleanup = $false }
+    $listOwnedSlots = [Collections.Generic.List[object]]::new()
+    function Get-MarkdownParseReuseSlot {
+        param($Budget)
+        $hashtableOwnerProbe.Allocations++
+        if ($hashtableOwnerProbe.FailSecond -and $hashtableOwnerProbe.Allocations -eq 2) {
+            throw 'Second-slot allocation control.'
+        }
+        $objOwnedSlot = & $scriptBlockActualSlot -Budget $Budget
+        $listOwnedSlots.Add($objOwnedSlot)
+        return $objOwnedSlot
+    }
+    function Clear-MarkdownParseReuseSlot {
+        param($Slot)
+        & $scriptBlockActualClear -Slot $Slot
+        if ($hashtableOwnerProbe.FailCleanup) { throw 'Cleanup failure control.' }
+    }
+    $strVersioned = "# Fixture`n`n**Version:** 1.0.20261001.0`n`n## Metadata`n`n" +
+        "- **Status:** Active`n- **Owner:** Test`n- **Last Updated:** 2026-10-01`n" +
+        "- **Scope:** Test`n`n## Procedure`n`nFollow the procedure.`n"
+    $objNormalizedSlot = & $scriptBlockActualSlot
+    try {
+        $hashtableProbe.Processes = 0
+        $hashtableProbe.Decodes = 0
+        foreach ($strNewline in @("`n", "`r`n", "`r")) {
+            $objMetadata = Get-DocumentMetadataContext `
+                -Content ($strVersioned.Replace("`n", $strNewline)) -ReuseSlot $objNormalizedSlot
+            if ($null -ne $objMetadata.Failure) { throw 'A normalized newline metadata fixture failed.' }
+        }
+        if ($hashtableProbe.Processes -ne 3 -or $hashtableProbe.Decodes -ne 1) {
+            throw 'Metadata consumers did not bind reuse to actual normalized text and line count.'
+        }
+    } finally {
+        & $scriptBlockActualClear -Slot $objNormalizedSlot
+    }
+    $hashtableProbe.Processes = 0
+    $hashtableProbe.Decodes = 0
+    $arrFailure = @(Get-PublishedEndpointMetadataFailure -Name 'fixture.md' `
+            -CurrentContent $strVersioned -ParentContent $strVersioned `
+            -IsNewDocumentTransition $false -RequireExpectedUtcDateForRenderedChange $false)
+    if ($arrFailure.Count -ne 0 -or $hashtableOwnerProbe.Allocations -ne 0 -or
+        $hashtableProbe.Processes -ne 2 -or $hashtableProbe.Decodes -ne 2) {
+        throw 'A direct required-Version call allocated retention or stopped parsing fresh.'
+    }
+    $hashtableProbe.Processes = 0
+    $hashtableProbe.Decodes = 0
+    $arrFailure = @(Get-PublishedEndpointLastUpdatedFailure -Name 'fixture.md' `
+            -CurrentContent $strVersioned -BaseContent $strVersioned -TrustedEventUtcDate '')
+    if ($arrFailure.Count -ne 0 -or $hashtableOwnerProbe.Allocations -ne 2 -or
+        $hashtableProbe.Processes -ne 4 -or $hashtableProbe.Decodes -ne 2 -or
+        @($listOwnedSlots | Where-Object { $null -ne $_.Snapshot -or $_.Budget.Retained -ne 0 }).Count -ne 0) {
+        throw 'The optional-Version owner did not reuse and release its two interpretations.'
+    }
+    $objBorrowedCurrent = Get-MarkdownParseReuseSlot
+    $objBorrowedParent = Get-MarkdownParseReuseSlot -Budget $objBorrowedCurrent.Budget
+    try {
+        $hashtableOwnerProbe.Allocations = 0
+        $hashtableProbe.Processes = 0
+        $hashtableProbe.Decodes = 0
+        $arrFailure = @(Get-PublishedEndpointLastUpdatedFailure -Name 'fixture.md' `
+                -CurrentContent $strVersioned -BaseContent $strVersioned -TrustedEventUtcDate '' `
+                -CurrentParseReuse $objBorrowedCurrent -ParentParseReuse $objBorrowedParent)
+        if ($arrFailure.Count -ne 0 -or $hashtableOwnerProbe.Allocations -ne 0 -or
+            $hashtableProbe.Processes -ne 4 -or $hashtableProbe.Decodes -ne 2 -or
+            $objBorrowedCurrent.Budget.Retained -ne 2) {
+            throw 'Nested borrowed slots changed owner count or lost their interpretations.'
+        }
+        Clear-MarkdownParseReuseSlot -Slot $objBorrowedCurrent
+        Clear-MarkdownParseReuseSlot -Slot $objBorrowedParent
+        $hashtableProbe.Processes = 0
+        $hashtableProbe.Decodes = 0
+        $arrFailure = @(Get-PublishedEndpointLastUpdatedFailure -Name 'fixture.md' `
+                -CurrentContent $strVersioned -BaseContent $strVersioned -TrustedEventUtcDate '' `
+                -CurrentParseReuse $objBorrowedCurrent)
+        if ($arrFailure.Count -ne 0 -or $hashtableOwnerProbe.Allocations -ne 0 -or
+            $hashtableProbe.Processes -ne 4 -or $hashtableProbe.Decodes -ne 3 -or
+            $objBorrowedCurrent.Budget.Retained -ne 1) {
+            throw 'A partial borrowed pair allocated an owner or reused its absent slot.'
+        }
+    } finally {
+        Clear-MarkdownParseReuseSlot -Slot $objBorrowedCurrent
+        Clear-MarkdownParseReuseSlot -Slot $objBorrowedParent
+    }
+    $hashtableOwnerProbe.Allocations = 0
+    $hashtableOwnerProbe.FailSecond = $true
+    $hashtableOwnerProbe.FailCleanup = $true
+    $objFailure = $null
+    try {
+        $null = Get-PublishedEndpointLastUpdatedFailure -Name 'fixture.md' `
+            -CurrentContent $strVersioned -BaseContent $strVersioned -TrustedEventUtcDate ''
+    } catch {
+        $objFailure = $_
+    } finally {
+        $hashtableOwnerProbe.FailSecond = $false
+        $hashtableOwnerProbe.FailCleanup = $false
+    }
+    if ($null -eq $objFailure -or $objFailure.Exception.Message -notmatch 'Second-slot allocation control' -or
+        @($listOwnedSlots | Where-Object { $null -ne $_.Snapshot -or $_.Budget.Retained -ne 0 }).Count -ne 0) {
+        throw 'Partial allocation cleanup replaced the primary failure or retained data.'
+    }
+}
+
 
 function Assert-DocumentMetadataClassificationSelfTest {
     # .SYNOPSIS
@@ -1026,6 +1361,183 @@ $global:STATE.LocalReadbacks++
     if ($null -ne $objPrimaryFailure) { throw $objPrimaryFailure }
 }
 
+function Get-AgentFinalizationDateMutant {
+    # .SYNOPSIS
+    # Changes the two actual document finalization arguments for private tests.
+    #
+    # .DESCRIPTION
+    # Parses the checker and requires one script-level named argument for each
+    # endpoint. Verifies the original member expressions, replaces only their
+    # distinct source extents, and rejects unchanged or malformed output.
+    # Function-local callers are not the main document dispatch under test.
+    #
+    # .PARAMETER Content
+    # Exact checker source to mutate without changing any file.
+    #
+    # .PARAMETER Replacement
+    # The deliberate private fault expression to insert at both argument spans.
+    #
+    # .EXAMPLE
+    # Get-AgentFinalizationDateMutant -Content $strChecker -Replacement '$false'
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # System.String. The checked private mutant source.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - Not a public interface.
+    # Version: 1.0.20261006.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string] $Content,
+        [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string] $Replacement
+    )
+
+    $arrTokens = $null
+    $arrErrors = $null
+    $objAst = [Management.Automation.Language.Parser]::ParseInput($Content, [ref]$arrTokens, [ref]$arrErrors)
+    if ($arrErrors.Count -ne 0) { throw 'Finalization mutant source must parse without errors.' }
+    $listArguments = [Collections.Generic.List[object]]::new()
+    foreach ($objTarget in @(
+            @{ Command = 'Get-PublishedEndpointMetadataFailure'; Parameter = 'RequireExpectedUtcDateForRenderedChange' },
+            @{ Command = 'Get-PublishedEndpointLastUpdatedFailure'; Parameter = 'RequireCurrentMaximumDateForRenderedChange' })) {
+        $listTargetArguments = [Collections.Generic.List[object]]::new()
+        foreach ($objCommand in $objAst.FindAll({
+                    param($objNode)
+                    $objNode -is [Management.Automation.Language.CommandAst]
+                }, $true)) {
+            if ($objCommand.GetCommandName() -cne $objTarget.Command) { continue }
+            $objAncestor = $objCommand.Parent
+            while ($null -ne $objAncestor -and
+                $objAncestor -isnot [Management.Automation.Language.FunctionDefinitionAst]) {
+                $objAncestor = $objAncestor.Parent
+            }
+            if ($null -ne $objAncestor) { continue }
+            for ($intIndex = 1; $intIndex -lt $objCommand.CommandElements.Count; $intIndex++) {
+                $objParameter = $objCommand.CommandElements[$intIndex]
+                if ($objParameter -isnot [Management.Automation.Language.CommandParameterAst] -or
+                    $objParameter.ParameterName -cne $objTarget.Parameter) { continue }
+                $objArgument = $objParameter.Argument
+                if ($null -eq $objArgument) {
+                    if ($intIndex + 1 -ge $objCommand.CommandElements.Count -or
+                        $objCommand.CommandElements[$intIndex + 1] -is [Management.Automation.Language.CommandParameterAst]) {
+                        throw "Finalization mutant argument is absent: $($objTarget.Parameter)."
+                    }
+                    $objArgument = $objCommand.CommandElements[$intIndex + 1]
+                }
+                $objExpression = $objArgument
+                while ($objExpression -is [Management.Automation.Language.ParenExpressionAst] -and
+                    $objExpression.Pipeline -is [Management.Automation.Language.PipelineAst] -and
+                    $objExpression.Pipeline.PipelineElements.Count -eq 1 -and
+                    $objExpression.Pipeline.PipelineElements[0] -is [Management.Automation.Language.CommandExpressionAst]) {
+                    $objExpression = $objExpression.Pipeline.PipelineElements[0].Expression
+                }
+                if ($objExpression -isnot [Management.Automation.Language.MemberExpressionAst] -or
+                    $objExpression -is [Management.Automation.Language.InvokeMemberExpressionAst] -or
+                    $objExpression.Static -or
+                    $objExpression.Expression -isnot [Management.Automation.Language.VariableExpressionAst] -or
+                    $objExpression.Expression.VariablePath.UserPath -cne 'objDocumentContext' -or
+                    $objExpression.Member -isnot [Management.Automation.Language.StringConstantExpressionAst] -or
+                    $objExpression.Member.Value -cne 'RequireFinalizationDate') {
+                    throw "Finalization mutant argument has an unexpected expression: $($objTarget.Parameter)."
+                }
+                $listTargetArguments.Add($objArgument)
+            }
+        }
+        if ($listTargetArguments.Count -ne 1) {
+            throw "Finalization mutant requires exactly one script-level argument: $($objTarget.Command)/$($objTarget.Parameter)."
+        }
+        $listArguments.Add($listTargetArguments[0])
+    }
+    $arrArguments = @($listArguments | Sort-Object { $_.Extent.StartOffset })
+    if ($arrArguments.Count -ne 2 -or
+        $arrArguments[0].Extent.EndOffset -gt $arrArguments[1].Extent.StartOffset -or
+        $arrArguments[0].Extent.StartOffset -eq $arrArguments[1].Extent.StartOffset) {
+        throw 'Finalization mutant requires two distinct non-overlapping argument spans.'
+    }
+    $strMutant = $Content
+    foreach ($objArgument in @($arrArguments | Sort-Object { $_.Extent.StartOffset } -Descending)) {
+        $strMutant = $strMutant.Remove($objArgument.Extent.StartOffset,
+            $objArgument.Extent.EndOffset - $objArgument.Extent.StartOffset).
+            Insert($objArgument.Extent.StartOffset, $Replacement)
+    }
+    if ($strMutant -ceq $Content) { throw 'Finalization mutant construction must change the checker.' }
+    $arrTokens = $null
+    $arrErrors = $null
+    $null = [Management.Automation.Language.Parser]::ParseInput($strMutant, [ref]$arrTokens, [ref]$arrErrors)
+    if ($arrErrors.Count -ne 0) { throw 'Finalization mutant output must parse without errors.' }
+    return $strMutant
+}
+
+function Assert-AgentFinalizationDateMutationSelfTest {
+    # .SYNOPSIS
+    # Checks exact mutation construction and rejects ineffective target changes.
+    #
+    # .DESCRIPTION
+    # Uses small parsed source fixtures with the actual command and parameter
+    # identities. Checks formatting, extra arguments, comments and private
+    # function decoys without executing a checker or changing a file.
+    #
+    # .EXAMPLE
+    # Assert-AgentFinalizationDateMutationSelfTest
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # None. Throws when construction or refusal changes.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - Not a public interface.
+    # Version: 1.0.20261006.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([void])]
+    param()
+
+    $strMember = '$objDocumentContext.RequireFinalizationDate'
+    $strVersioned = 'Get-PublishedEndpointMetadataFailure -RequireExpectedUtcDateForRenderedChange ' + $strMember
+    $strOptional = 'Get-PublishedEndpointLastUpdatedFailure -RequireCurrentMaximumDateForRenderedChange ' + $strMember
+    $strSource = $strVersioned + "`n" + $strOptional
+    $strMutant = Get-AgentFinalizationDateMutant -Content $strSource -Replacement '$false'
+    if ($strMutant -cne $strSource.Replace($strMember, '$false')) {
+        throw 'The date mutation did not change exactly its two source arguments.'
+    }
+    $strExtra = '-CurrentParseReuse $objSlot -ParentParseReuse $objPrior'
+    $strComment = '# ' + $strMember
+    $strDecoy = 'function Test-PrivateDecoy { ' + $strVersioned + ' }'
+    $strFormatted = $strComment + "`n" + $strDecoy + "`n" +
+        $strVersioned.Replace(' ' + $strMember, ':(' + $strMember + ')') + " `n" +
+        $strOptional.Replace(' -Require', " $strExtra -Require") + ' ' + $strExtra
+    $strExpected = $strFormatted.Replace(':(' + $strMember + ')', ':$false').
+        Replace('-RequireCurrentMaximumDateForRenderedChange ' + $strMember,
+            '-RequireCurrentMaximumDateForRenderedChange $false')
+    if ((Get-AgentFinalizationDateMutant -Content $strFormatted -Replacement '$false') -cne $strExpected) {
+        throw 'Formatting or extra arguments changed mutation scope or a private decoy.'
+    }
+    foreach ($objCase in @(
+            @{ Content = $strVersioned; Replacement = '$false'; Expected = 'exactly one'; Name = 'missing target' },
+            @{ Content = $strSource + "`n" + $strVersioned; Replacement = '$false'; Expected = 'exactly one'; Name = 'duplicate command' },
+            @{ Content = $strSource.Replace($strVersioned, $strVersioned + ' -RequireExpectedUtcDateForRenderedChange ' + $strMember); Replacement = '$false'; Expected = 'exactly one'; Name = 'duplicate parameter' },
+            @{ Content = $strSource.Replace(' -RequireExpectedUtcDateForRenderedChange ' + $strMember, ' -RequireExpectedUtcDateForRenderedChange'); Replacement = '$false'; Expected = 'argument is absent'; Name = 'absent argument' },
+            @{ Content = $strSource.Replace($strMember, '$objOther.RequireFinalizationDate'); Replacement = '$false'; Expected = 'unexpected expression'; Name = 'incorrect owner' },
+            @{ Content = $strSource.Replace($strMember, $strMember + '()'); Replacement = '$false'; Expected = 'unexpected expression'; Name = 'method invocation' },
+            @{ Content = $strSource.Replace(' ' + $strMember, ' $false'); Replacement = '$false'; Expected = 'unexpected expression'; Name = 'already changed' },
+            @{ Content = $strSource; Replacement = $strMember; Expected = 'must change'; Name = 'no-op' },
+            @{ Content = $strSource + '('; Replacement = '$false'; Expected = 'source must parse'; Name = 'invalid source' },
+            @{ Content = $strSource; Replacement = '('; Expected = 'output must parse'; Name = 'invalid replacement' })) {
+        $objFailure = $null
+        try { $null = Get-AgentFinalizationDateMutant -Content $objCase.Content -Replacement $objCase.Replacement } catch {
+            $objFailure = $_
+        }
+        if ($null -eq $objFailure -or $objFailure.Exception.Message -notmatch $objCase.Expected) {
+            throw "Finalization mutation refusal failed: $($objCase.Name)."
+        }
+    }
+}
+
 function Assert-AuthorFinalizationGitFixture {
     # .SYNOPSIS
     # Tests the deliberate finalization caller and unchanged delayed verification.
@@ -1058,6 +1570,12 @@ function Assert-AuthorFinalizationGitFixture {
     [OutputType([void])]
     param([Parameter(Mandatory)][string] $RepositoryRootPath)
 
+    $strValidatorContent = [IO.File]::ReadAllText([IO.Path]::Combine(
+            $RepositoryRootPath, '.github', 'workflows', 'Test-AgentInstructions.ps1'))
+    Assert-AgentFinalizationDateMutationSelfTest
+    $strRequireDateMutant = Get-AgentFinalizationDateMutant -Content $strValidatorContent -Replacement '$false'
+    $strInitialCoverageMutant = Get-AgentFinalizationDateMutant -Content $strValidatorContent -Replacement '($objDocumentContext.RequireFinalizationDate -or $objDocumentContext.IsInitialMetadataCoverage)'
+
     $strTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
     $strFixtureRoot = [IO.Path]::Combine($strTempRoot,
         'agent-author-finalization-' + [Guid]::NewGuid().ToString('N'))
@@ -1075,8 +1593,6 @@ function Assert-AuthorFinalizationGitFixture {
     $strFutureDate = $objFixtureUtcNow.AddDays(1).ToString('yyyy-MM-dd')
     $strValidatorPath = [IO.Path]::Combine($strFixtureRoot, '.github', 'workflows', 'Test-AgentInstructions.ps1')
     $strRunbookPath = [IO.Path]::Combine($strFixtureRoot, 'docs', 'finalization-fixture.md')
-    $strValidatorContent = [IO.File]::ReadAllText([IO.Path]::Combine(
-            $RepositoryRootPath, '.github', 'workflows', 'Test-AgentInstructions.ps1'))
     $strMetadataDocument = "# Finalization fixture`n`n## Metadata`n`n- **Status:** Active`n- **Owner:** Fixture Maintainers`n- **Last Updated:** DATE`n- **Scope:** Author finalization tests.`n`n## Procedure`n`nFollow the current procedure.`n"
     # Private installed-policy setup uses only current tracked regular files.
     # Bound index output, each file and aggregate bytes; keep dependencies separate.
@@ -1869,14 +2385,11 @@ Read-FixtureClock -intDiffExitCode $Difference
             }
         }
         # Mutations execute the same accepted-B caller against the meaningful negative.
-        $strRequireDateMutant = $strValidatorContent.Replace(
-            '$objDocumentContext.RequireFinalizationDate))', '$false))')
         [IO.File]::WriteAllText($strValidatorPath, $strRequireDateMutant, [Text.UTF8Encoding]::new($false))
         & $scriptblockCheck $strVersionedEarlierCandidate $true $false $true 'Author finalization UTC date checked'
         [IO.File]::WriteAllText($strValidatorPath, $strValidatorContent, [Text.UTF8Encoding]::new($false))
         foreach ($strClockMutation in @(
-                $strValidatorContent.Replace('$objDocumentContext.RequireFinalizationDate))',
-                    '($objDocumentContext.RequireFinalizationDate -or $objDocumentContext.IsInitialMetadataCoverage)))'),
+                $strInitialCoverageMutant,
                 $strValidatorContent.Replace('if ($FinalizeMetadataNow) {',
                     'if ($FinalizeMetadataNow -or $boolPublishedEndpointsRequested) {').Replace(
                     'RequireFinalizationDate = ($objParentContext.IsWorktreeTransition -or $FinalizeMetadataNow)',
@@ -3310,6 +3823,7 @@ if (-not [object]::ReferenceEquals($objExpectedPython, (Get-Python312CommandCont
 }
 
 
+Assert-MarkdownParseReuseSelfTest
 Assert-AgentSetupSelfTest -RepositoryRootPath $RepositoryRootPath
 
 Assert-StagedInputSelfTest
