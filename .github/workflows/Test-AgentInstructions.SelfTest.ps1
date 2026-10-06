@@ -941,6 +941,7 @@ function Invoke-AgentInstructionFixtureClock {
     )
 
     $strSource = [IO.File]::ReadAllText($CheckerPath)
+    $strBreakpointPath = [Management.Automation.WildcardPattern]::Escape($CheckerPath)
     $strInitialization = @'
 $script:objValidationUtcNow = [DateTimeOffset]::UtcNow
 $script:strMaximumMetadataUtcDate = $script:objValidationUtcNow.ToString('yyyy-MM-dd')
@@ -994,9 +995,9 @@ $global:STATE.LocalReadbacks++
     Set-Variable -Name $strStateName -Scope Global -Value $hashtableClockState
     try {
         if (-not $LocalOnly) {
-            $objInitializationBreakpoint = Set-PSBreakpoint -Script $CheckerPath -Line $arrLines[0] -Action $scriptblockInitialize
+            $objInitializationBreakpoint = Set-PSBreakpoint -Script $strBreakpointPath -Line $arrLines[0] -Action $scriptblockInitialize
         }
-        $objLocalBreakpoint = Set-PSBreakpoint -Script $CheckerPath -Line $arrLines[1] -Action $scriptblockLocal
+        $objLocalBreakpoint = Set-PSBreakpoint -Script $strBreakpointPath -Line $arrLines[1] -Action $scriptblockLocal
         & $Action
     } catch {
         $objPrimaryFailure = $_
@@ -1318,7 +1319,8 @@ function Assert-AuthorFinalizationGitFixture {
         # A fixed synthetic clock makes omission and scope regressions visible
         # on every day. Only this private probe file contains synthetic code;
         # the real installed checker remains byte-for-byte source-qualified.
-        $strClockProbePath = [IO.Path]::Combine($strEmptyHooks, 'clock-probe.ps1')
+        $strClockProbePath = [IO.Path]::Combine($strEmptyHooks, 'clock-probe[fixture].ps1')
+        $strClockDecoyPath = [IO.Path]::Combine($strEmptyHooks, 'clock-probef.ps1')
         $strClockProbeContent = @'
 param([int] $Difference = 1)
 $script:objValidationUtcNow = [DateTimeOffset]::UtcNow
@@ -1338,9 +1340,15 @@ Read-FixtureClock -intDiffExitCode $Difference
         $arrInitialBreakpoints = @(Get-PSBreakpoint | Select-Object -ExpandProperty Id)
         $arrInitialClockState = @(Get-Variable -Name 'hashtableFixtureClock*' -Scope Global | Select-Object -ExpandProperty Name)
         [IO.File]::WriteAllText($strClockProbePath, $strClockProbeContent, [Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText($strClockDecoyPath, $strClockProbeContent, [Text.UTF8Encoding]::new($false))
         foreach ($intDifference in @(0, 1)) {
             $objClockProbe = Invoke-AgentInstructionFixtureClock -CheckerPath $strClockProbePath `
                 -UtcNow ([DateTimeOffset]::Parse('2000-01-02T23:59:59Z')) -RequireLocal -Action {
+                $arrClockBreakpoints = @(Get-PSBreakpoint | Where-Object { $_.Id -notin $arrInitialBreakpoints })
+                if ($arrClockBreakpoints.Count -ne 2 -or
+                    @($arrClockBreakpoints | Where-Object { $_.Script -cne $strClockProbePath }).Count -ne 0) {
+                    throw 'The fixture clock registered breakpoints outside the exact probe path.'
+                }
                 & $strClockProbePath -Difference $intDifference
             }
             $strExpectedLocal = if ($intDifference -eq 1) { '2000-01-02' } else { '' }
