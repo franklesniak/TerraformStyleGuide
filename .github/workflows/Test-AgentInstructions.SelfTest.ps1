@@ -33,7 +33,7 @@
 # None. The script throws when a self-test fails.
 #
 # .NOTES
-# Version: 1.8.20261005.0
+# Version: 1.9.20261006.0
 
 [CmdletBinding(PositionalBinding = $false)]
 [OutputType([void])]
@@ -891,6 +891,140 @@ function Assert-ClassificationAdmissionGitFixture {
     }
 }
 
+function Invoke-AgentInstructionFixtureClock {
+    # .SYNOPSIS
+    # Runs a private fixture action with checked debugger clock controls.
+    #
+    # .DESCRIPTION
+    # Pins the exact validator's two UTC date consumers without changing its
+    # bytes or production interface. Breakpoints exist only for this action.
+    #
+    # .PARAMETER CheckerPath
+    # The absolute path of the actual validator supplying both clock anchors.
+    #
+    # .PARAMETER UtcNow
+    # The private fixture timestamp shared by related synthetic documents.
+    #
+    # .PARAMETER Action
+    # The actual validator invocation or in-process local-context call.
+    #
+    # .PARAMETER LocalOnly
+    # Controls only an already-loaded local-context function.
+    #
+    # .PARAMETER RequireLocal
+    # Requires the local-context breakpoint to fire during the action.
+    #
+    # .EXAMPLE
+    # Invoke-AgentInstructionFixtureClock -CheckerPath $strChecker -UtcNow $objNow -Action { & $strChecker }
+    #
+    # # Runs the exact checker with the private fixture date.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # System.Object. The unchanged output of the fixture action.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
+    # Parameters, return shape, and positional contract can change without notice.
+    # Positional parameters are disabled; internal callers use named arguments.
+    # Version: 1.0.20261006.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([object])]
+    param(
+        [Parameter(Mandatory)][string] $CheckerPath,
+        [Parameter(Mandatory)][DateTimeOffset] $UtcNow,
+        [Parameter(Mandatory)][scriptblock] $Action,
+        [Parameter()][switch] $LocalOnly,
+        [Parameter()][switch] $RequireLocal
+    )
+
+    $strSource = [IO.File]::ReadAllText($CheckerPath)
+    $strInitialization = @'
+$script:objValidationUtcNow = [DateTimeOffset]::UtcNow
+$script:strMaximumMetadataUtcDate = $script:objValidationUtcNow.ToString('yyyy-MM-dd')
+$script:objMaximumCommitUtcTimestamp = $script:objValidationUtcNow.AddMinutes(5)
+'@
+    $strLocal = @'
+    $strExpectedUtcDate = if ($intDiffExitCode -eq 1) {
+        [DateTimeOffset]::UtcNow.ToString('yyyy-MM-dd')
+    } else {
+        ''
+    }
+'@
+    $arrLines = foreach ($strAnchor in @($strInitialization, $strLocal)) {
+        $strPattern = [regex]::Escape($strAnchor.Replace("`r`n", "`n")).Replace('\n', '\r?\n')
+        $arrMatches = @([regex]::Matches($strSource, '(?m)^' + $strPattern + '\r?$'))
+        if ($arrMatches.Count -ne 1) {
+            throw 'Fixture clock requires one exact initialization and local-date anchor.'
+        }
+        # Break on the first executable statement after the complete assignment.
+        1 + [regex]::Matches($strSource.Substring(0, $arrMatches[0].Index + $arrMatches[0].Length), "`n").Count + 1
+    }
+    $strTimestamp = $UtcNow.ToUniversalTime().ToString('o')
+    $strDate = $UtcNow.ToUniversalTime().ToString('yyyy-MM-dd')
+    $strStateName = 'hashtableFixtureClock' + [Guid]::NewGuid().ToString('N')
+    $hashtableClockState = @{ InitializationReadbacks = 0; LocalReadbacks = 0 }
+    $scriptblockInitialize = [scriptblock]::Create(@'
+$script:objValidationUtcNow = [DateTimeOffset]::Parse('TIMESTAMP')
+$script:strMaximumMetadataUtcDate = 'DATE'
+$script:objMaximumCommitUtcTimestamp = [DateTimeOffset]::Parse('TIMESTAMP').AddMinutes(5)
+if ($script:strMaximumMetadataUtcDate -cne 'DATE' -or
+    $script:objValidationUtcNow -ne [DateTimeOffset]::Parse('TIMESTAMP') -or
+    $script:objMaximumCommitUtcTimestamp -ne [DateTimeOffset]::Parse('TIMESTAMP').AddMinutes(5)) {
+    throw 'Fixture initialization clock readback failed.'
+}
+$global:STATE.InitializationReadbacks++
+'@.Replace('TIMESTAMP', $strTimestamp).Replace('DATE', $strDate).Replace('STATE', $strStateName))
+    $scriptblockLocal = [scriptblock]::Create(@'
+$strFixtureExpectedDate = if ((Get-Variable -Name intDiffExitCode -Scope 1 -ValueOnly) -eq 1) { 'DATE' } else { '' }
+Set-Variable -Name strExpectedUtcDate -Scope 1 -Value $strFixtureExpectedDate
+if ((Get-Variable -Name strExpectedUtcDate -Scope 1 -ValueOnly) -cne $strFixtureExpectedDate) {
+    throw 'Fixture local clock readback failed.'
+}
+$global:STATE.LocalReadbacks++
+'@.Replace('DATE', $strDate).Replace('STATE', $strStateName))
+    $objInitializationBreakpoint = $null
+    $objLocalBreakpoint = $null
+    $objPrimaryFailure = $null
+    $listClockFailures = [Collections.Generic.List[string]]::new()
+    # Debugger action exceptions do not reliably escape the debugger. A unique
+    # runspace-local receipt records completed readbacks, checked outside it.
+    Set-Variable -Name $strStateName -Scope Global -Value $hashtableClockState
+    try {
+        if (-not $LocalOnly) {
+            $objInitializationBreakpoint = Set-PSBreakpoint -Script $CheckerPath -Line $arrLines[0] -Action $scriptblockInitialize
+        }
+        $objLocalBreakpoint = Set-PSBreakpoint -Script $CheckerPath -Line $arrLines[1] -Action $scriptblockLocal
+        & $Action
+    } catch {
+        $objPrimaryFailure = $_
+    } finally {
+        foreach ($objBreakpoint in @($objInitializationBreakpoint, $objLocalBreakpoint)) {
+            if ($null -ne $objBreakpoint) {
+                try { Remove-PSBreakpoint -Breakpoint $objBreakpoint -ErrorAction Stop } catch { $listClockFailures.Add($_.Exception.Message) }
+            }
+        }
+        try { Remove-Variable -Name $strStateName -Scope Global -ErrorAction Stop } catch { $listClockFailures.Add($_.Exception.Message) }
+        if (-not $LocalOnly -and ($null -eq $objInitializationBreakpoint -or
+                ($objInitializationBreakpoint.HitCount -eq 0 -and $null -eq $objPrimaryFailure) -or
+                $hashtableClockState.InitializationReadbacks -ne $objInitializationBreakpoint.HitCount)) {
+            $listClockFailures.Add('Initialization clock did not fire with a successful readback.')
+        }
+        if (($RequireLocal -and ($null -eq $objLocalBreakpoint -or $objLocalBreakpoint.HitCount -eq 0)) -or
+            ($null -ne $objLocalBreakpoint -and $hashtableClockState.LocalReadbacks -ne $objLocalBreakpoint.HitCount)) {
+            $listClockFailures.Add('Local clock did not fire with a successful readback.')
+        }
+    }
+    if ($listClockFailures.Count -gt 0) {
+        $strFailure = 'Fixture clock control failed: ' + ($listClockFailures -join ' ')
+        if ($null -ne $objPrimaryFailure) { $strFailure = $objPrimaryFailure.Exception.Message + "`n" + $strFailure }
+        throw $strFailure
+    }
+    if ($null -ne $objPrimaryFailure) { throw $objPrimaryFailure }
+}
+
 function Assert-AuthorFinalizationGitFixture {
     # .SYNOPSIS
     # Tests the deliberate finalization caller and unchanged delayed verification.
@@ -918,7 +1052,7 @@ function Assert-AuthorFinalizationGitFixture {
     # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
     # Parameters, return shape, and positional contract can change without notice.
     # Positional parameters are disabled; internal callers use named arguments.
-    # Version: 1.0.20261003.0
+    # Version: 1.1.20261006.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([void])]
     param([Parameter(Mandatory)][string] $RepositoryRootPath)
@@ -1142,43 +1276,105 @@ function Assert-AuthorFinalizationGitFixture {
         & $scriptblockAssertModes $strCommittedHead
         return $strCommittedHead
     }
-    $scriptblockCheck = {
-        param([string] $Candidate, [bool] $Now, [bool] $Later, [bool] $Accept, [string] $Expected)
-        & git -C $strFixtureRoot -c "core.hooksPath=$strEmptyHooks" checkout --quiet --detach $strBaseline
-        if ($LASTEXITCODE -ne 0) { throw 'Finalization policy checkout failed.' }
-        $strClockShim = if ($Later) {
-            '$clockLine = ([IO.File]::ReadAllLines($checker) | Select-String -SimpleMatch ''$script:objMaximumCommitUtcTimestamp ='' | Select-Object -First 1).LineNumber; ' +
-            '$null = Set-PSBreakpoint -Script $checker -Line ($clockLine + 1) -Action { ' +
-            '$script:objValidationUtcNow = [DateTimeOffset]::Parse(''' + $objFixtureUtcNow.AddDays(1).ToString('o') + '''); ' +
-            '$script:strMaximumMetadataUtcDate = $script:objValidationUtcNow.ToString(''yyyy-MM-dd''); ' +
-            '$script:objMaximumCommitUtcTimestamp = $script:objValidationUtcNow.AddMinutes(5) }; '
-        } else { '' }
-        $strCommand = '$ErrorActionPreference = ''Stop''; $checker = ''' + $strValidatorPath.Replace("'", "''") + '''; ' +
-            $strClockShim + 'try { & $checker -InputRevision ' + $Candidate + ' -PublishedBaselineRevision ' + $strBaseline +
-            $(if ($Now) { ' -FinalizeMetadataNow' } else { '' }) +
-            ' } catch { [Console]::Out.WriteLine($_.Exception.Message); exit 1 }'
-        $strOutput = (& $strHostPath -NoLogo -NoProfile -NonInteractive -Command $strCommand 2>&1 | Out-String)
-        $intExit = $LASTEXITCODE
-        if (($intExit -eq 0) -ne $Accept -or $strOutput -notmatch $Expected) {
-            throw "Author finalization caller failed (Now=$Now Later=$Later Accept=$Accept exit=$intExit): $strOutput"
-        }
-    }
-    $scriptblockInvokeProposedCheck = {
-        param([string[]] $Argument)
-        # Preserve the exception message rather than host-specific ConciseView wrapping.
+    $scriptblockInvokeCheck = {
+        param([string[]] $Argument, [DateTimeOffset] $Clock, [string] $Checker, [bool] $RequireLocal)
+        # The wrapper preserves actual checker bytes, arguments, native exit and
+        # exception text. It is not a literal -File launch of the documented command.
         $arrParameterTokens = @('-ProposedPolicy', '-InputRevision', '-PublishedBaselineRevision',
             '-SelfTest', '-MetadataClassificationOnly', '-FinalizeMetadataNow')
         $strCommandArguments = (@($Argument | ForEach-Object {
                     if ($arrParameterTokens -ccontains $_) { $_ } else { "'" + $_.Replace("'", "''") + "'" }
                 }) -join ' ')
-        $strCommand = '$ErrorActionPreference = ''Stop''; $checker = ''' + $strValidatorPath.Replace("'", "''") +
-            '''; try { & $checker ' + $strCommandArguments +
-            ' } catch { [Console]::Out.WriteLine($_.Exception.Message); exit 1 }'
+        $strCommand = '$ErrorActionPreference = ''Stop''; function Invoke-AgentInstructionFixtureClock {' +
+            ${function:Invoke-AgentInstructionFixtureClock}.ToString() + '}; $checker = ''' + $Checker.Replace("'", "''") +
+            '''; try { Invoke-AgentInstructionFixtureClock -CheckerPath $checker -UtcNow ''' + $Clock.ToString('o') +
+            ''' ' + $(if ($RequireLocal) { '-RequireLocal ' } else { '' }) +
+            '-Action { & $checker ' + $strCommandArguments +
+            ' } } catch { [Console]::Out.WriteLine($_.Exception.Message); exit 1 }'
         $strOutput = (& $strHostPath -NoLogo -NoProfile -NonInteractive -Command $strCommand 2>&1 | Out-String)
         $intExit = $LASTEXITCODE
+        if ($strOutput -match 'Fixture clock control failed:|Fixture clock requires one exact') {
+            throw "The private caller clock failed: $strOutput"
+        }
         [pscustomobject]@{ Output = $strOutput; ExitCode = $intExit }
     }
+    $scriptblockCheck = {
+        param([string] $Candidate, [bool] $Now, [bool] $Later, [bool] $Accept, [string] $Expected)
+        & git -C $strFixtureRoot -c "core.hooksPath=$strEmptyHooks" checkout --quiet --detach $strBaseline
+        if ($LASTEXITCODE -ne 0) { throw 'Finalization policy checkout failed.' }
+        $arrArguments = @('-InputRevision', $Candidate, '-PublishedBaselineRevision', $strBaseline)
+        if ($Now) { $arrArguments += '-FinalizeMetadataNow' }
+        $objClock = if ($Later) { $objFixtureUtcNow.AddDays(1) } else { $objFixtureUtcNow }
+        $objResult = & $scriptblockInvokeCheck $arrArguments $objClock $strValidatorPath $false
+        if (($objResult.ExitCode -eq 0) -ne $Accept -or $objResult.Output -notmatch $Expected) {
+            throw "Author finalization caller failed (Now=$Now Later=$Later Accept=$Accept exit=$($objResult.ExitCode)): $($objResult.Output)"
+        }
+    }
+    $scriptblockInvokeProposedCheck = {
+        param([string[]] $Argument)
+        & $scriptblockInvokeCheck $Argument $objFixtureUtcNow $strValidatorPath $false
+    }
     try {
+        # A fixed synthetic clock makes omission and scope regressions visible
+        # on every day. Only this private probe file contains synthetic code;
+        # the real installed checker remains byte-for-byte source-qualified.
+        $strClockProbePath = [IO.Path]::Combine($strEmptyHooks, 'clock-probe.ps1')
+        $strClockProbeContent = @'
+param([int] $Difference = 1)
+$script:objValidationUtcNow = [DateTimeOffset]::UtcNow
+$script:strMaximumMetadataUtcDate = $script:objValidationUtcNow.ToString('yyyy-MM-dd')
+$script:objMaximumCommitUtcTimestamp = $script:objValidationUtcNow.AddMinutes(5)
+function Read-FixtureClock {
+    param([int] $intDiffExitCode)
+    $strExpectedUtcDate = if ($intDiffExitCode -eq 1) {
+        [DateTimeOffset]::UtcNow.ToString('yyyy-MM-dd')
+    } else {
+        ''
+    }
+    [pscustomobject]@{ Captured = $script:strMaximumMetadataUtcDate; Local = $strExpectedUtcDate }
+}
+Read-FixtureClock -intDiffExitCode $Difference
+'@
+        $arrInitialBreakpoints = @(Get-PSBreakpoint | Select-Object -ExpandProperty Id)
+        $arrInitialClockState = @(Get-Variable -Name 'hashtableFixtureClock*' -Scope Global | Select-Object -ExpandProperty Name)
+        [IO.File]::WriteAllText($strClockProbePath, $strClockProbeContent, [Text.UTF8Encoding]::new($false))
+        foreach ($intDifference in @(0, 1)) {
+            $objClockProbe = Invoke-AgentInstructionFixtureClock -CheckerPath $strClockProbePath `
+                -UtcNow ([DateTimeOffset]::Parse('2000-01-02T23:59:59Z')) -RequireLocal -Action {
+                & $strClockProbePath -Difference $intDifference
+            }
+            $strExpectedLocal = if ($intDifference -eq 1) { '2000-01-02' } else { '' }
+            if ($objClockProbe.Captured -cne '2000-01-02' -or $objClockProbe.Local -cne $strExpectedLocal) {
+                throw 'The fixture clock lost its initialization, local scope or unchanged-path branch.'
+            }
+        }
+        foreach ($objClockCase in @(
+                @{ Content = $strClockProbeContent.Replace('$script:objValidationUtcNow =', '$script:objOtherNow ='); Action = { & $strClockProbePath }; Expected = 'requires one exact' },
+                @{ Content = $strClockProbeContent + "`n" + $strClockProbeContent; Action = { & $strClockProbePath }; Expected = 'requires one exact' },
+                @{ Content = $strClockProbeContent; Action = { }; Expected = 'Initialization clock did not fire' },
+                @{ Content = $strClockProbeContent; Action = { throw 'Expected primary fixture error.' }; Expected = '^Expected primary fixture error\.$' }
+            )) {
+            [IO.File]::WriteAllText($strClockProbePath, $objClockCase.Content, [Text.UTF8Encoding]::new($false))
+            $objExpectedClockFailure = $null
+            try {
+                Invoke-AgentInstructionFixtureClock -CheckerPath $strClockProbePath `
+                    -UtcNow ([DateTimeOffset]::Parse('2000-01-02T23:59:59Z')) -Action $objClockCase.Action
+            } catch { $objExpectedClockFailure = $_ }
+            if ($null -eq $objExpectedClockFailure -or $objExpectedClockFailure.Exception.Message -notmatch $objClockCase.Expected) {
+                throw 'A missing/duplicate/inactive clock anchor or primary-error regression escaped its control.'
+            }
+        }
+        [IO.File]::WriteAllText($strClockProbePath, $strClockProbeContent, [Text.UTF8Encoding]::new($false))
+        $objUninstrumentedProbe = & $strClockProbePath
+        if ($objUninstrumentedProbe.Captured -ceq '2000-01-02' -or
+            $objUninstrumentedProbe.Local -ceq '2000-01-02' -or
+            @(Compare-Object -ReferenceObject (@('sentinel') + $arrInitialBreakpoints) `
+                -DifferenceObject (@('sentinel') + @(Get-PSBreakpoint | Select-Object -ExpandProperty Id))).Count -ne 0 -or
+            @(Compare-Object -ReferenceObject (@('sentinel') + $arrInitialClockState) `
+                -DifferenceObject (@('sentinel') + @(Get-Variable -Name 'hashtableFixtureClock*' -Scope Global | Select-Object -ExpandProperty Name))).Count -ne 0) {
+            throw 'The fixture clock leaked into an ordinary invocation or failed scoped cleanup.'
+        }
+
         # Exercise the actual bounded inquiry before the longer installed-policy
         # scenarios. Controlled programs replace only the native response producer.
         $strInquiryControlPath = [IO.Path]::Combine($strEmptyHooks, 'inquiry-control.dat')
@@ -1330,11 +1526,11 @@ function Assert-AuthorFinalizationGitFixture {
         }
         Push-Location $strPolicyPath
         try {
-            $strDocumentedOutput = (& $strHostPath -NoLogo -NoProfile -NonInteractive -File `
-                    .github/workflows/Test-AgentInstructions.ps1 -InputRevision $strCurrentCandidate `
-                    -PublishedBaselineRevision $strBaseline -FinalizeMetadataNow 2>&1 | Out-String)
-            if ($LASTEXITCODE -ne 0 -or $strDocumentedOutput -notmatch "B=$strBaseline H=$strCurrentCandidate") {
-                throw "Documented accepted-worktree finalization caller failed: $strDocumentedOutput"
+            $strPolicyChecker = [IO.Path]::Combine($strPolicyPath, '.github', 'workflows', 'Test-AgentInstructions.ps1')
+            $objDocumentedResult = & $scriptblockInvokeCheck @('-InputRevision', $strCurrentCandidate,
+                '-PublishedBaselineRevision', $strBaseline, '-FinalizeMetadataNow') $objFixtureUtcNow $strPolicyChecker $false
+            if ($objDocumentedResult.ExitCode -ne 0 -or $objDocumentedResult.Output -notmatch "B=$strBaseline H=$strCurrentCandidate") {
+                throw "Documented accepted-worktree finalization caller failed: $($objDocumentedResult.Output)"
             }
         } finally { Pop-Location }
         # Ignore the fixture-only nested policy checkout in subsequent commits.
@@ -1648,9 +1844,10 @@ function Assert-AuthorFinalizationGitFixture {
             & git -C $strFixtureRoot -c core.autocrlf=false add -- docs/finalization-fixture.md
             if ($LASTEXITCODE -ne 0) { throw 'Local finalization fixture staging failed.' }
             & $scriptblockAssertModes
-            $strLocalOutput = (& $strHostPath -NoProfile -File $strValidatorPath 2>&1 | Out-String)
-            if (($LASTEXITCODE -eq 0) -ne ($strLocalDate -ceq $strCurrentDate)) {
-                throw "Local staged creation date regression: $strLocalOutput"
+            $objLocalResult = & $scriptblockInvokeCheck @() $objFixtureUtcNow $strValidatorPath $true
+            if (($objLocalResult.ExitCode -eq 0) -ne ($strLocalDate -ceq $strCurrentDate) -or
+                ($strLocalDate -ceq $strPriorDate -and $objLocalResult.Output -notmatch 'Last Updated must')) {
+                throw "Local staged creation date regression: $($objLocalResult.Output)"
             }
         }
         & git -C $strFixtureRoot restore --staged -- docs/finalization-fixture.md
@@ -1658,8 +1855,10 @@ function Assert-AuthorFinalizationGitFixture {
         Remove-Item -LiteralPath $strRunbookPath -Force
         foreach ($arrMode in @(@('-FinalizeMetadataNow'), @('-FinalizeMetadataNow', '-SelfTest'),
                 @('-FinalizeMetadataNow', '-MetadataClassificationOnly', '-InputRevision', $strCurrentCandidate, '-PublishedBaselineRevision', $strBaseline))) {
-            $null = & $strHostPath -NoProfile -File $strValidatorPath @arrMode 2>&1
-            if ($LASTEXITCODE -eq 0) { throw 'An invalid finalization mode combination was accepted.' }
+            $objModeResult = & $scriptblockInvokeCheck $arrMode $objFixtureUtcNow $strValidatorPath $false
+            if ($objModeResult.ExitCode -eq 0 -or $objModeResult.Output -notmatch 'FinalizeMetadataNow') {
+                throw "An invalid finalization mode combination lost its refusal: $($objModeResult.Output)"
+            }
         }
         # Mutations execute the same accepted-B caller against the meaningful negative.
         $strRequireDateMutant = $strValidatorContent.Replace(
@@ -2294,7 +2493,7 @@ function Assert-PublishedBaselineCapacitySelfTest {
     # .NOTES
     # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
     # Positional parameters are disabled; callers use named arguments.
-    # Version: 1.0.20261005.0
+    # Version: 1.1.20261006.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([void])]
     param([Parameter(Mandatory)][string] $MaximumMetadataUtcDate)
@@ -2340,8 +2539,12 @@ function Assert-PublishedBaselineCapacitySelfTest {
         [IO.File]::WriteAllText([IO.Path]::Combine($strFixtureRoot, 'AGENTS.md'), $strCurrent, [Text.UTF8Encoding]::new($false))
         $strExplicitParent = Read-PublishedBaselineDocumentText -RepositoryRootPath $strFixtureRoot `
             -Revision $strRevision -RepositoryRelativePath 'AGENTS.md' -CurrentMaximumBytes 32768
-        $objLocalParent = Get-PublishedBaselineDocumentContext -RepositoryRootPath $strFixtureRoot `
-            -RepositoryRelativePath 'AGENTS.md' -MaximumBytes 32768
+        $strCheckerPath = (Get-Command -Name Get-PublishedBaselineDocumentContext -CommandType Function).ScriptBlock.File
+        $objLocalParent = Invoke-AgentInstructionFixtureClock -CheckerPath $strCheckerPath `
+            -UtcNow ([DateTimeOffset]::Parse($MaximumMetadataUtcDate + 'T00:00:00Z')) -LocalOnly -RequireLocal -Action {
+            Get-PublishedBaselineDocumentContext -RepositoryRootPath $strFixtureRoot `
+                -RepositoryRelativePath 'AGENTS.md' -MaximumBytes 32768
+        }
         if ($strExplicitParent -cne $strParent -or $objLocalParent.ParentContent -cne $strParent -or
             -not $objLocalParent.IsWorktreeTransition -or $objLocalParent.ExpectedUtcDate -cne $MaximumMetadataUtcDate) {
             throw 'Complete historical metadata did not survive both parent callers.'
