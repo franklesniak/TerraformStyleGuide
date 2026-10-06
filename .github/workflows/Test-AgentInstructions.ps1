@@ -243,6 +243,10 @@ function ConvertFrom-ParserJsonContext {
     # .PARAMETER MaximumBytes
     # The maximum permitted UTF-8 output size.
     #
+    # .PARAMETER UseNativeStructuralConversion
+    # Uses the installed-runtime walker for Markdown context only. Name-sensitive
+    # objects retain the original PowerShell cast and all its failure behavior.
+    #
     # .EXAMPLE
     # ConvertFrom-ParserJsonContext -Content '{"value":"2026-10-02T00:00:00Z"}' -MaximumBytes 4096
     #
@@ -258,12 +262,13 @@ function ConvertFrom-ParserJsonContext {
     # PRIVATE/INTERNAL HELPER - This function is not part of the public API.
     # Parameters, return shape, and positional contract can change without notice.
     # Positional parameters are disabled; internal callers use named arguments.
-    # Version: 1.0.20261002.0
+    # Version: 1.1.20261006.0
     [CmdletBinding(PositionalBinding = $false)]
     [OutputType([pscustomobject])]
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string] $Content,
-        [Parameter(Mandatory)][ValidateRange(1, 16777216)][int] $MaximumBytes
+        [Parameter(Mandatory)][ValidateRange(1, 16777216)][int] $MaximumBytes,
+        [Parameter()][switch] $UseNativeStructuralConversion
     )
 
     if ([Text.Encoding]::UTF8.GetByteCount($Content) -gt $MaximumBytes) {
@@ -318,6 +323,137 @@ function ConvertFrom-ParserJsonContext {
         $objDocument = [System.Text.Json.JsonDocument]::Parse($Content, $objOptions)
         if ($objDocument.RootElement.ValueKind -ne [System.Text.Json.JsonValueKind]::Object) {
             throw 'The parser JSON context root must be an object.'
+        }
+        if ($UseNativeStructuralConversion) {
+            # Only code is retained by the process. Every graph belongs to this call.
+            # The payload digest identifies the exact implementation, including on
+            # repeated script loads; a same-name type is not accepted on name alone.
+            $strNativeTemplate = @'
+using System;
+using System.Collections.Generic;
+using System.Management.Automation;
+using System.Text.Json;
+
+namespace StyleGuide.AgentJson {
+    public static class StructuralDecoder_IDENTITY_ {
+        public const string SourceIdentity = "_IDENTITY_";
+
+        public sealed class Result {
+            public readonly int Kind;
+            public readonly object Value;
+            public Result(int kind, object value) { Kind = kind; Value = value; }
+        }
+
+        public static Result DecodeRoot(JsonElement root) {
+            int kind = 0;
+            object value = Decode(root, ref kind);
+            return new Result(kind, kind == 0 ? value : null);
+        }
+
+        private static object Decode(JsonElement element, ref int kind) {
+            switch (element.ValueKind) {
+                case JsonValueKind.Object:
+                    var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var result = new PSObject();
+                    foreach (JsonProperty property in element.EnumerateObject()) {
+                        string name = property.Name;
+                        if (String.IsNullOrEmpty(name) || !names.Add(name)) {
+                            kind = 2;
+                            return null;
+                        }
+                        // Preserve the complete PowerShell cast for these names.
+                        // Do not approximate PSTypeName or reserved member behavior.
+                        if (String.Equals(name, "PSTypeName", StringComparison.OrdinalIgnoreCase) ||
+                            String.Equals(name, "PSObject", StringComparison.OrdinalIgnoreCase) ||
+                            String.Equals(name, "PSBase", StringComparison.OrdinalIgnoreCase) ||
+                            String.Equals(name, "PSAdapted", StringComparison.OrdinalIgnoreCase) ||
+                            String.Equals(name, "PSExtended", StringComparison.OrdinalIgnoreCase) ||
+                            String.Equals(name, "PSTypeNames", StringComparison.OrdinalIgnoreCase)) {
+                            kind = 1;
+                            return null;
+                        }
+                        object value = Decode(property.Value, ref kind);
+                        if (kind != 0) { return null; }
+                        result.Properties.Add(new PSNoteProperty(name, value));
+                    }
+                    return result;
+                case JsonValueKind.Array:
+                    var values = new object[element.GetArrayLength()];
+                    int index = 0;
+                    foreach (JsonElement child in element.EnumerateArray()) {
+                        values[index++] = Decode(child, ref kind);
+                        if (kind != 0) { return null; }
+                    }
+                    return values;
+                case JsonValueKind.String:
+                    return element.GetString();
+                case JsonValueKind.Number:
+                    long integer;
+                    if (element.TryGetInt64(out integer)) { return integer; }
+                    double number = element.GetDouble();
+                    if (Double.IsNaN(number) || Double.IsInfinity(number)) {
+                        kind = 3;
+                        return null;
+                    }
+                    return number;
+                case JsonValueKind.True:
+                    return true;
+                case JsonValueKind.False:
+                    return false;
+                case JsonValueKind.Null:
+                    return null;
+                default:
+                    kind = 4;
+                    return null;
+            }
+        }
+    }
+}
+'@
+            $objSourceHash = [Security.Cryptography.SHA256]::Create()
+            try {
+                $strSourceIdentity = [BitConverter]::ToString(
+                    $objSourceHash.ComputeHash([Text.Encoding]::UTF8.GetBytes($strNativeTemplate))
+                ).Replace('-', '').ToLowerInvariant()
+            } finally {
+                $objSourceHash.Dispose()
+            }
+            $strNativeTypeName = 'StyleGuide.AgentJson.StructuralDecoder' + $strSourceIdentity
+            $objNativeType = $strNativeTypeName -as [type]
+            if ($null -eq $objNativeType) {
+                $strNativeSource = $strNativeTemplate.Replace('_IDENTITY_', $strSourceIdentity)
+                $arrCompiledTypes = @(Add-Type -TypeDefinition $strNativeSource -PassThru -ErrorAction Stop)
+                $objNativeType = $strNativeTypeName -as [type]
+                if ($null -eq $objNativeType -or
+                    @($arrCompiledTypes | Where-Object {
+                            [object]::ReferenceEquals($_, $objNativeType)
+                        }).Count -ne 1) {
+                    throw 'The structural JSON converter type could not be verified.'
+                }
+            }
+            $objIdentityField = $objNativeType.GetField('SourceIdentity')
+            $objResultType = $objNativeType.GetNestedType('Result')
+            $objDecodeMethod = $objNativeType.GetMethod('DecodeRoot', [type[]]@([System.Text.Json.JsonElement]))
+            if (-not $objNativeType.IsPublic -or -not $objNativeType.IsAbstract -or
+                -not $objNativeType.IsSealed -or $null -eq $objIdentityField -or
+                -not $objIdentityField.IsLiteral -or $objIdentityField.FieldType -ne [string] -or
+                $objIdentityField.GetRawConstantValue() -cne $strSourceIdentity -or
+                $null -eq $objResultType -or $null -eq $objDecodeMethod -or
+                -not $objDecodeMethod.IsStatic -or
+                -not [object]::ReferenceEquals($objDecodeMethod.DeclaringType, $objNativeType) -or
+                -not [object]::ReferenceEquals($objDecodeMethod.ReturnType, $objResultType) -or
+                $objNativeType.GetFields([Reflection.BindingFlags]'Static,Public,NonPublic').Count -ne 1) {
+                throw 'The structural JSON converter type could not be verified.'
+            }
+            $objNativeResult = $objDecodeMethod.Invoke($null, [object[]]@($objDocument.RootElement))
+            switch ($objNativeResult.Kind) {
+                0 { return $objNativeResult.Value }
+                1 { break }
+                2 { throw 'The parser returned ambiguous JSON properties.' }
+                3 { throw 'The parser returned an unsupported JSON number.' }
+                4 { throw 'The parser returned an unsupported JSON type.' }
+                default { throw 'The structural JSON converter returned an invalid result.' }
+            }
         }
         return & $scriptBlockDecode -Element $objDocument.RootElement
     } finally {
@@ -3643,7 +3779,7 @@ function Get-MarkdownParseContext {
 
         try {
             $objRawContext = ConvertFrom-ParserJsonContext `
-                -Content $strParserOutput -MaximumBytes 16777216
+                -Content $strParserOutput -MaximumBytes 16777216 -UseNativeStructuralConversion
         } catch {
             throw [System.IO.InvalidDataException]::new(
                 'The locked Markdown parser returned invalid context data.',

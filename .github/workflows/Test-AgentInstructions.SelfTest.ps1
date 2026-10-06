@@ -51,6 +51,159 @@ param(
 
 $hashtableRuntimeContext = $RuntimeContext
 
+function Assert-ParserJsonConversionSelfTest {
+    # .SYNOPSIS
+    # Checks native Markdown conversion against the original strict decoder.
+    #
+    # .DESCRIPTION
+    # Compares exact types, ordered properties, type names and array elements.
+    # Refusal cases require no partial output from either conversion path.
+    #
+    # .EXAMPLE
+    # Assert-ParserJsonConversionSelfTest
+    #
+    # # Throws if the structural opt-in changes the JSON contract.
+    #
+    # .INPUTS
+    # None. No pipeline input.
+    #
+    # .OUTPUTS
+    # None. A failed contract throws.
+    #
+    # .NOTES
+    # PRIVATE/INTERNAL HELPER - Not a public interface.
+    # Positional parameters are disabled for internal callers.
+    # Version: 1.0.20261006.0
+    [CmdletBinding(PositionalBinding = $false)]
+    [OutputType([void])]
+    param()
+
+    $scriptBlockCompare = {
+        param($Expected, $Actual)
+        if ($null -eq $Expected) {
+            if ($null -ne $Actual) { throw 'JSON conversion changed a null value.' }
+            return
+        }
+        if ($null -eq $Actual -or $Expected.GetType() -ne $Actual.GetType()) {
+            throw 'JSON conversion changed a value type.'
+        }
+        if ($Expected -is [array]) {
+            if ($Expected.Count -ne $Actual.Count) { throw 'JSON conversion changed array cardinality.' }
+            for ($intIndex = 0; $intIndex -lt $Expected.Count; $intIndex++) {
+                & $scriptBlockCompare -Expected $Expected[$intIndex] -Actual $Actual[$intIndex]
+            }
+        } elseif ($Expected -is [pscustomobject]) {
+            $arrExpectedProperties = @($Expected.PSObject.Properties)
+            $arrActualProperties = @($Actual.PSObject.Properties)
+            if ($arrExpectedProperties.Count -ne $arrActualProperties.Count -or
+                ($Expected.PSObject.TypeNames -join "`0") -cne ($Actual.PSObject.TypeNames -join "`0")) {
+                throw 'JSON conversion changed object properties or type names.'
+            }
+            for ($intIndex = 0; $intIndex -lt $arrExpectedProperties.Count; $intIndex++) {
+                if ($arrExpectedProperties[$intIndex].Name -cne $arrActualProperties[$intIndex].Name) {
+                    throw 'JSON conversion changed property order or spelling.'
+                }
+                & $scriptBlockCompare -Expected $arrExpectedProperties[$intIndex].Value `
+                    -Actual $arrActualProperties[$intIndex].Value
+            }
+        } elseif ($Expected -is [double]) {
+            if ([BitConverter]::DoubleToInt64Bits($Expected) -ne [BitConverter]::DoubleToInt64Bits($Actual)) {
+                throw 'JSON conversion changed a floating-point value.'
+            }
+        } elseif ($Expected -cne $Actual) {
+            throw 'JSON conversion changed a scalar value.'
+        }
+    }
+    $arrValidJson = @(
+        '{}',
+        '{"z":[],"a":[null],"nested":[[1],[],[null]],"object":{"b":true,"a":false}}',
+        '{"a":null,"b":1,"c":1.0,"d":-0.0,"e":-9223372036854775808,"f":9223372036854775807,"g":9223372036854775808,"h":1e-300}',
+        '{"value":"2026-10-29T23:59:59.123456789+05:45","newline":"a\nb","unicode":"\u00e9\ud83d\ude03"}',
+        '{"PSTypeName":"StyleGuide.JsonFixture","value":1}',
+        '{"nested":[{"pstypename":"StyleGuide.NestedFixture","value":null}]}',
+        '{"PSTypeName":null}', '{"PSTypeName":17}', '{"PSTypeName":[1,2]}',
+        '{"Count":1,"Length":2,"value":3}',
+        ('{"a":' + ('[' * 63) + '1' + (']' * 63) + '}')
+    )
+    foreach ($strContent in $arrValidJson) {
+        $objExpected = ConvertFrom-ParserJsonContext -Content $strContent -MaximumBytes 16384
+        $objActual = ConvertFrom-ParserJsonContext -Content $strContent -MaximumBytes 16384 `
+            -UseNativeStructuralConversion
+        & $scriptBlockCompare -Expected $objExpected -Actual $objActual
+    }
+    $strBoundaryContent = '{"text":"' + [char]0x00e9 + '"}'
+    $intExactBytes = [Text.Encoding]::UTF8.GetByteCount($strBoundaryContent)
+    foreach ($boolNative in @($false, $true)) {
+        $objBoundary = ConvertFrom-ParserJsonContext -Content $strBoundaryContent `
+            -MaximumBytes $intExactBytes -UseNativeStructuralConversion:$boolNative
+        if ($objBoundary.text -cne [string][char]0x00e9) {
+            throw 'JSON conversion changed exact-boundary Unicode text.'
+        }
+        $objBoundaryFailure = $null
+        try {
+            $null = ConvertFrom-ParserJsonContext -Content $strBoundaryContent `
+                -MaximumBytes ($intExactBytes - 1) -UseNativeStructuralConversion:$boolNative
+        } catch { $objBoundaryFailure = $_ }
+        if ($null -eq $objBoundaryFailure -or
+            $objBoundaryFailure.Exception.Message -cne 'The parser returned oversized JSON context.') {
+            throw 'JSON conversion lost its exact UTF-8 byte bound.'
+        }
+    }
+    # Some reserved names are rejected by PowerShell itself. Preserve that result,
+    # as well as successful special-name casts, without inventing an admission rule.
+    foreach ($strName in @('PSObject', 'PSBase', 'PSAdapted', 'PSExtended', 'PSTypeNames')) {
+        $strContent = '{"first":1,"nested":{"' + $strName + '":"value"},"last":2}'
+        $objExpected = $null
+        $objExpectedFailure = $null
+        $objActual = $null
+        $objActualFailure = $null
+        try { $objExpected = ConvertFrom-ParserJsonContext -Content $strContent -MaximumBytes 4096 } catch {
+            $objExpectedFailure = $_
+        }
+        try {
+            $objActual = ConvertFrom-ParserJsonContext -Content $strContent -MaximumBytes 4096 `
+                -UseNativeStructuralConversion
+        } catch { $objActualFailure = $_ }
+        if (($null -eq $objExpectedFailure) -ne ($null -eq $objActualFailure)) {
+            throw 'JSON conversion changed reserved-name acceptance.'
+        }
+        if ($null -ne $objExpectedFailure) {
+            if ($objExpectedFailure.Exception.Message -cne $objActualFailure.Exception.Message) {
+                throw 'JSON conversion changed reserved-name failure.'
+            }
+        } else { & $scriptBlockCompare -Expected $objExpected -Actual $objActual }
+    }
+    foreach ($strContent in @(
+            '', '[]', 'null', 'true', '1', '"text"',
+            '{"":1}', '{"a":1,"a":2}', '{"a":1,"A":2}', '{"a":1,"\u0061":2}',
+            '{"items":[{"a":1,"A":2}]}', '{"items":[{"":1}]}',
+            '{"first":1,"nested":{"PSTypeName":"Fixture","a":1,"A":2}}',
+            '{"first":1,"last":1e400}', '{"first":1,"last":-1e400}',
+            '{"a":NaN}', '{"a":Infinity}', '{"a":1,}', '{"a":/*comment*/1}',
+            ('{"a":' + ('[' * 64) + '1' + (']' * 64) + '}'),
+            ('{"a":"' + ('x' * 4096) + '"}')
+        )) {
+        $strExpectedFailure = $null
+        foreach ($boolNative in @($false, $true)) {
+            $listOutput = [Collections.Generic.List[object]]::new()
+            $objFailure = $null
+            try {
+                ConvertFrom-ParserJsonContext -Content $strContent -MaximumBytes 4096 `
+                    -UseNativeStructuralConversion:$boolNative | ForEach-Object { $listOutput.Add($_) }
+            } catch { $objFailure = $_ }
+            if ($null -eq $objFailure -or $listOutput.Count -ne 0) {
+                throw 'JSON conversion accepted invalid input or emitted partial output.'
+            }
+            if (-not $boolNative) {
+                $strExpectedFailure = $objFailure.Exception.Message
+            } elseif ($objFailure.Exception.Message -cne $strExpectedFailure) {
+                throw 'JSON conversion changed a strict decoder failure.'
+            }
+        }
+    }
+}
+
+
 function Assert-MarkdownParseReuseSelfTest {
     # .SYNOPSIS
     # Tests isolated structural reuse without skipping the real parser.
@@ -81,7 +234,7 @@ function Assert-MarkdownParseReuseSelfTest {
     $scriptBlockActualNode = ${function:Get-NodeApplicationContext}
     $scriptBlockActualCopy = ${function:Copy-MarkdownParseReuseContext}
     $scriptBlockActualContext = ${function:Get-MarkdownParseContext}
-    $hashtableProbe = @{ Processes = 0; Decodes = 0; RuntimeDecodes = 0; NodeChecks = 0; Mode = ''; OverrideCalls = 0 }
+    $hashtableProbe = @{ Processes = 0; Decodes = 0; NativeDecodes = 0; RuntimeDecodes = 0; NodeChecks = 0; Mode = ''; OverrideCalls = 0 }
     function Invoke-MarkdownParserProcess {
         param($StartInfo, $Content)
         $hashtableProbe.Processes++
@@ -96,13 +249,15 @@ function Assert-MarkdownParseReuseSelfTest {
         return $objResult
     }
     function ConvertFrom-ParserJsonContext {
-        param($Content, $MaximumBytes)
+        param($Content, $MaximumBytes, [switch] $UseNativeStructuralConversion)
         if ($MaximumBytes -eq 16777216) {
             $hashtableProbe.Decodes++
+            if ($UseNativeStructuralConversion) { $hashtableProbe.NativeDecodes++ }
         } else {
             $hashtableProbe.RuntimeDecodes++
         }
-        return & $scriptBlockActualDecoder -Content $Content -MaximumBytes $MaximumBytes
+        return & $scriptBlockActualDecoder -Content $Content -MaximumBytes $MaximumBytes `
+            -UseNativeStructuralConversion:$UseNativeStructuralConversion
     }
     function Get-NodeApplicationContext {
         $hashtableProbe.NodeChecks++
@@ -127,7 +282,7 @@ function Assert-MarkdownParseReuseSelfTest {
         $strExpected = $objFirst | ConvertTo-Json -Depth 12 -Compress
         $objSecond = Get-MarkdownParseContext -Content $strMarkdown -LineCount $intLineCount -ReuseSlot $objSlot
         if ($hashtableProbe.Processes -ne 2 -or $hashtableProbe.NodeChecks -ne 2 -or
-            $hashtableProbe.Decodes -ne 1 -or
+            $hashtableProbe.Decodes -ne 1 -or $hashtableProbe.NativeDecodes -ne 1 -or
             ($objSecond | ConvertTo-Json -Depth 12 -Compress) -cne $strExpected) {
             throw 'Structural reuse must retain two real parser calls and one interpretation.'
         }
@@ -3823,6 +3978,7 @@ if (-not [object]::ReferenceEquals($objExpectedPython, (Get-Python312CommandCont
 }
 
 
+Assert-ParserJsonConversionSelfTest
 Assert-MarkdownParseReuseSelfTest
 Assert-AgentSetupSelfTest -RepositoryRootPath $RepositoryRootPath
 
