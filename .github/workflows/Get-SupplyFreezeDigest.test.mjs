@@ -2361,6 +2361,279 @@ function fingerprint(root) {
     links: rows.filter((row) => row[4] === 'L').length };
 }
 
+// Independent historical identities: the npm fold/count come from the pinned Node archive.
+const AUDIT_WIRING_PINS = Object.freeze({
+  REVIEWED_PACKAGE_SHA256: 'c6db6befda88e58aa5568f52f44ca934af5751e545dba0644297b9fb15577e0d',
+  REVIEWED_LOCK_SHA256: '84cbe61e33e4c66b653efd2bfbe3f80b0061368a64ad80ef0de4898da28d887d',
+  REVIEWED_PACKAGE_BLOB: '103075d0d14f61b49d29cf2ed8dc8a7804fe092e',
+  REVIEWED_LOCK_BLOB: '92a2f83a2d2d6904521800108ad0e1b1436909e2',
+  REVIEWED_NPM_TREE_SHA256: 'f58556342f8abc9245e168904a6579b9b09e7dc10606df7a52fcd454ccec8231',
+  REVIEWED_NPM_TREE_FILES: 1916,
+});
+
+function auditWiringDeclaration(text, name) {
+  assert.equal(Object.hasOwn(AUDIT_WIRING_PINS, name), true);
+  const matches = Array.from(text.matchAll(new RegExp('const ' + name + ' = ([^;\\r\\n]+);', 'gu')));
+  assert.equal(matches.length, 1, 'audit wiring requires one declaration: ' + name);
+  return matches[0];
+}
+
+function auditWiringLiteral(name, value) {
+  const expected = AUDIT_WIRING_PINS[name];
+  assert.notEqual(expected, undefined);
+  if (typeof expected === 'number') {
+    assert.equal(Number.isSafeInteger(value) && value > 0, true);
+    return String(value);
+  }
+  assert.equal(typeof value, 'string');
+  assert.match(value, new RegExp('^[0-9a-f]{' + expected.length + '}$', 'u'));
+  return "'" + value + "'";
+}
+
+function replaceAuditWiringPin(text, name, value) {
+  const match = auditWiringDeclaration(text, name);
+  return text.slice(0, match.index) + 'const ' + name + ' = ' + auditWiringLiteral(name, value)
+    + ';' + text.slice(match.index + match[0].length);
+}
+
+function assertAuditWiringPins(text) {
+  for (const [name, value] of Object.entries(AUDIT_WIRING_PINS)) {
+    assert.equal(auditWiringDeclaration(text, name)[1], auditWiringLiteral(name, value),
+      'audit wiring original identity: ' + name);
+  }
+}
+
+test('AUDIT-WHOLE-PROCESS-PINS: independent six-pin oracle and unique inverse bindings', () => {
+  assertAuditWiringPins(source);
+  for (const [name, value] of Object.entries(AUDIT_WIRING_PINS)) {
+    const declaration = auditWiringDeclaration(source, name)[0];
+    const changed = typeof value === 'number' ? value + 1 : '0'.repeat(value.length);
+    const rebound = replaceAuditWiringPin(source, name, changed);
+    assert.throws(() => assertAuditWiringPins(rebound), /audit wiring original identity/u);
+    assert.equal(replaceAuditWiringPin(rebound, name, value), source);
+    for (const malformed of [source.replace(declaration, ''), source + '\n' + declaration]) {
+      assert.throws(() => assertAuditWiringPins(malformed), /audit wiring requires one declaration/u);
+      assert.throws(() => replaceAuditWiringPin(malformed, name, changed),
+        /audit wiring requires one declaration/u);
+    }
+  }
+  for (const invalid of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '1916', NaN]) {
+    assert.throws(() => replaceAuditWiringPin(source, 'REVIEWED_NPM_TREE_FILES', invalid));
+  }
+  assert.throws(() => assertAuditWiringPins(source.replace(
+    'const REVIEWED_NPM_TREE_FILES = 1916;', 'const REVIEWED_NPM_TREE_FILES = 1916.5;')),
+  /audit wiring original identity/u);
+  assert.throws(() => replaceAuditWiringPin(source, 'REVIEWED_NPM_TREE_SHA256', 'invalid'));
+});
+
+test('AUDIT-WHOLE-PROCESS: strict synthetic audit reaches the published observation',
+  { skip: process.platform !== 'linux' || process.arch !== 'x64' }, () => {
+    // Complete module/process coverage; neither live advisories nor historical installed-byte proof.
+    assertAuditWiringPins(source);
+    assert.equal(process.version, 'v24.18.1');
+    assert.equal(process.umask(), 0o022);
+    const temporary = mkdtempSync(join(tmpdir(), 'tf75-audit-wiring-'));
+    const checkout = join(temporary, 'checkout');
+    const fixture = join(checkout, '.github', 'workflows');
+    const distribution = join(temporary, 'node-distribution');
+    const bin = join(distribution, 'bin');
+    const npmRoot = join(distribution, 'lib', 'node_modules', 'npm');
+    const node = join(bin, 'node');
+    const recorder = join(fixture, 'Get-SupplyFreezeDigest.mjs');
+    const counts = { info: 0, low: 0, moderate: 0, high: 1, critical: 0, total: 1 };
+    const response = {
+      auditReportVersion: 2, metadata: { vulnerabilities: counts },
+      vulnerabilities: { TASK_A09_AUDIT_PRIVATE_PACKAGE: {
+        severity: 'high', isDirect: false, range: '<1.0.0', via: ['TASK_A09_AUDIT_PRIVATE_VIA'],
+      } },
+    };
+    const summary = {
+      directAdvisory: { info: 0, low: 0, moderate: 0, high: 0, critical: 0, unclassified: 0 },
+      inheritedOnly: { info: 0, low: 0, moderate: 0, high: 1, critical: 0, unclassified: 0 },
+    };
+    // Hand-authored canonical bytes; do not generate the oracle with production normalization.
+    const expectedCanonical = '{"auditReportVersion":2,"counts":{"critical":0,"high":1,"info":0,"low":0,"moderate":0,"total":1},"packages":{"TASK_A09_AUDIT_PRIVATE_PACKAGE":{"advisories":[],"isDirect":false,"range":"<1.0.0","severity":"high","viaPackages":["TASK_A09_AUDIT_PRIVATE_VIA"]}}}';
+    const expectedDigest = 'b786c695530d98036158ca0656c2075713455214015c3ce2f8dcdf6316a2673c';
+    assert.equal(sha(expectedCanonical), expectedDigest);
+    try {
+      mkdirSync(fixture, { recursive: true });
+      mkdirSync(bin, { recursive: true });
+      mkdirSync(dirname(npmRoot), { recursive: true });
+      const home = join(temporary, 'home');
+      mkdirSync(home, { mode: 0o700 });
+      for (const name of ['package.json', 'package-lock.json', 'historical-supply-profile.json']) {
+        cpSync(join(workflow, name), join(fixture, name));
+        chmodSync(join(fixture, name), 0o644);
+      }
+      cpSync(join(workflow, 'node_modules'), join(fixture, 'node_modules'),
+        { recursive: true, verbatimSymlinks: true });
+      cpSync(process.execPath, node);
+      chmodSync(node, 0o755);
+      const actualCli = realpathSync(join(dirname(process.execPath), 'npm'));
+      cpSync(dirname(dirname(actualCli)), npmRoot, { recursive: true, verbatimSymlinks: true });
+      symlinkSync('../lib/node_modules/npm/bin/npm-cli.js', join(bin, 'npm'));
+      const cli = join(npmRoot, 'bin', 'npm-cli.js');
+      const originalCli = readFileSync(cli);
+      const shebangEnd = originalCli.indexOf(0x0A) + 1;
+      assert.ok(shebangEnd > 2);
+      assert.equal(originalCli.subarray(0, shebangEnd).toString('utf8'), '#!/usr/bin/env node\n');
+      // Exact command allowlist. No malformed audit can reach real npm's network operation.
+      const prefix = `
+{
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const args = process.argv.slice(2);
+  const refuse = () => { process.stderr.write('controlled npm arguments refused\\n'); process.exit(97); };
+  const caches = args.filter((arg) => arg.startsWith('--cache='));
+  if (caches.length !== 1) refuse();
+  const cache = caches[0].slice('--cache='.length);
+  const external = path.dirname(cache);
+  if (path.dirname(external) !== ${JSON.stringify(temporary)}
+      || !path.basename(external).startsWith('cache-')
+      || cache !== path.join(external, 'cache')) refuse();
+  if (process.execPath !== ${JSON.stringify(node)}
+      || process.cwd() !== ${JSON.stringify(fixture)}) refuse();
+  const tail = ['--workspaces=false', '--cache=' + cache,
+    '--logs-dir=' + path.join(external, 'logs'), '--timing=false', '--update-notifier=false'];
+  if (JSON.stringify(args.slice(-tail.length)) !== JSON.stringify(tail)) refuse();
+  const command = args.slice(0, -tail.length);
+  const audit = ['audit', '--json', '--include=dev', '--include=optional', '--include=peer',
+    '--prefer-offline=false', '--offline=false', '--prefer-online=true',
+    '--noproxy=', '--strict-ssl=true', '--userconfig=/dev/null',
+    '--globalconfig=/dev/null/supply-freeze-globalconfig'];
+  const ordinary = [
+    ['--version'], ['config', 'list', '--json'], ['config', 'get', 'registry'],
+    ['ls', '--all', '--json', '--long', '--package-lock-only=false', '--depth=4294967295',
+      '--include=dev', '--include=optional', '--include=peer', '--global=false', '--link=false'],
+  ];
+  const isAudit = JSON.stringify(command) === JSON.stringify(audit);
+  if (!isAudit && !ordinary.some((allowed) => JSON.stringify(command) === JSON.stringify(allowed))) refuse();
+  fs.writeFileSync(path.join(external, 'controlled-npm-started'), 'started');
+  if (isAudit) {
+    const keys = Object.keys(process.env).filter((key) => /^npm_config_registry$/i.test(key));
+    if (keys.length !== 1 || keys[0] !== 'NPM_CONFIG_REGISTRY'
+        || process.env.NPM_CONFIG_REGISTRY !== 'https://registry.npmjs.org/') refuse();
+    process.stdout.write(${JSON.stringify(JSON.stringify(response))});
+    process.exitCode = 1;
+    return;
+  }
+}
+`;
+      const modifiedCli = Buffer.concat([originalCli.subarray(0, shebangEnd),
+        Buffer.from(prefix), originalCli.subarray(shebangEnd)]);
+      assert.deepEqual(Buffer.concat([modifiedCli.subarray(0, shebangEnd),
+        modifiedCli.subarray(shebangEnd + Buffer.byteLength(prefix))]), originalCli);
+      writeFileSync(cli, modifiedCli);
+      const env = {
+        PATH: bin + delimiter + '/usr/bin' + delimiter + '/bin',
+        HOME: home, TMPDIR: temporary, LANG: 'C.UTF-8', NODE_DISABLE_COMPILE_CACHE: '1',
+        NPM_CONFIG_USERCONFIG: '/dev/null',
+        NPM_CONFIG_GLOBALCONFIG: '/dev/null/supply-freeze-globalconfig',
+        NPM_CONFIG_REGISTRY: 'https://registry.npmjs.org/',
+      };
+      const invoke = (script) => {
+        const cache = mkdtempSync(join(temporary, 'cache-'));
+        const result = spawnSync(node, [script, '--json', '--cache-directory=' + cache], {
+          cwd: fixture, env, encoding: 'utf8', timeout: 60000, maxBuffer: 16 * 1024 * 1024,
+        });
+        assert.equal(result.error, undefined);
+        assert.equal(result.signal, null);
+        return { result, cache };
+      };
+      const contract = JSON.parse(readFileSync(join(fixture, 'historical-supply-profile.json')));
+      const packageBytes = readFileSync(join(fixture, 'package.json'));
+      const lockBytes = readFileSync(join(fixture, 'package-lock.json'));
+      const blob = (bytes) => createHash('sha1')
+        .update('blob ' + bytes.length + '\0').update(bytes).digest('hex');
+      const pins = {
+        REVIEWED_PACKAGE_SHA256: sha(packageBytes), REVIEWED_LOCK_SHA256: sha(lockBytes),
+        REVIEWED_PACKAGE_BLOB: blob(packageBytes), REVIEWED_LOCK_BLOB: blob(lockBytes),
+      };
+      let manifestBound = source;
+      for (const [name, value] of Object.entries(pins)) {
+        manifestBound = replaceAuditWiringPin(manifestBound, name, value);
+      }
+      writeFileSync(recorder, manifestBound, { mode: 0o644 });
+      const beforeRefusal = { checkout: fingerprint(checkout), distribution: fingerprint(distribution) };
+      const refusal = invoke(recorder);
+      assert.equal(refusal.result.status, 2, refusal.result.stderr);
+      assert.equal(refusal.result.stdout, '');
+      assert.match(refusal.result.stderr, /npm installation that is not the reviewed one/u);
+      assert.deepEqual(readdirSync(refusal.cache), []); // No npm child reached its external marker.
+      assert.deepEqual(fingerprint(checkout), beforeRefusal.checkout);
+      assert.deepEqual(fingerprint(distribution), beforeRefusal.distribution);
+      const folds = Array.from(refusal.result.stderr.matchAll(
+        /observed\s+([0-9a-f]{64}) \(([0-9]+) files, 0 symlinks\)/gu));
+      assert.equal(folds.length, 1);
+      assert.notEqual(folds[0][1], AUDIT_WIRING_PINS.REVIEWED_NPM_TREE_SHA256);
+      assert.equal(Number(folds[0][2]), AUDIT_WIRING_PINS.REVIEWED_NPM_TREE_FILES);
+      pins.REVIEWED_NPM_TREE_SHA256 = folds[0][1];
+      pins.REVIEWED_NPM_TREE_FILES = Number(folds[0][2]);
+      let controlledSource = source;
+      for (const [name, value] of Object.entries(pins)) {
+        controlledSource = replaceAuditWiringPin(controlledSource, name, value);
+      }
+      assert.equal(Object.keys(pins).length, 6);
+      let inverse = controlledSource;
+      for (const [name, value] of Object.entries(AUDIT_WIRING_PINS)) {
+        inverse = replaceAuditWiringPin(inverse, name, value);
+      }
+      assert.deepEqual(Buffer.from(inverse), Buffer.from(source));
+      writeFileSync(recorder, controlledSource);
+      const assertObservation = (result) => {
+        const observed = JSON.parse(result.stdout);
+        const current = observed.currentObservation;
+        assert.equal(current.auditSha256, expectedDigest, 'audit wiring digest');
+        assert.deepEqual(current.auditCounts, counts, 'audit wiring counts');
+        assert.deepEqual(current.auditPackages, summary, 'audit wiring summary');
+        assert.equal(current.complete, true);
+        assert.deepEqual(current.incompleteBecause, []);
+        assert.equal(current.registry, 'https://registry.npmjs.org/');
+        assert.deepEqual(current.auditEnvironmentScrubbed, []);
+        assert.deepEqual(observed.supplyFreeze, contract.supplyFreeze);
+        assert.deepEqual(observed.provenance.verifiedCurrentBytes, ['supplyFreeze.reviewedWorkingBytes']);
+        assert.equal(current.toolchain.npmTree, pins.REVIEWED_NPM_TREE_SHA256);
+        assert.equal(current.toolchain.node, 'v24.18.1');
+        assert.equal(current.toolchain.npm, '11.16.0');
+        assert.deepEqual(current.npmProcesses.filter((item) => item.operation === 'audit'),
+          [{ operation: 'audit', nativeExit: 1, signal: null, stderrLength: 0 }]);
+        assert.equal(current.npmProcesses.filter((item) => item.operation === 'ls').length, 1);
+        assert.ok(current.npmProcesses.filter((item) => item.operation !== 'audit')
+          .every((item) => item.nativeExit === 0 && item.signal === null));
+        assert.doesNotMatch(result.stdout + result.stderr,
+          /TASK_A09_AUDIT_PRIVATE_PACKAGE|TASK_A09_AUDIT_PRIVATE_VIA/u);
+      };
+      const observe = (path, bytes) => {
+        const before = { checkout: fingerprint(checkout), distribution: fingerprint(distribution) };
+        const { result, cache } = invoke(path);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(JSON.parse(result.stdout).currentObservation.script.sha256, sha(bytes));
+        assert.equal(readFileSync(join(cache, 'controlled-npm-started'), 'utf8'), 'started');
+        assert.deepEqual(fingerprint(checkout), before.checkout);
+        assert.deepEqual(fingerprint(distribution), before.distribution);
+        return result;
+      };
+      assertObservation(observe(recorder, controlledSource));
+      const mutants = [
+        ['skip-audit', 'if (boolSkipAudit) {', 'if (true) {'],
+        ['drop-publication', '...objCurrentObservation, npmProcesses: objNpmProcessResults',
+          '...objCurrentObservation, auditSha256: null, auditCounts: null, auditPackages: null, npmProcesses: objNpmProcessResults'],
+      ];
+      for (const [name, before, after] of mutants) {
+        assert.equal(controlledSource.split(before).length - 1, 1);
+        const mutant = controlledSource.replace(before, after);
+        assert.equal(mutant.replace(after, before), controlledSource);
+        const path = join(fixture, 'Get-SupplyFreezeDigest.' + name + '.mjs');
+        writeFileSync(path, mutant, { mode: 0o644 });
+        const result = observe(path, mutant);
+        assert.throws(() => assertObservation(result), /audit wiring digest/u);
+      }
+      assert.equal(readFileSync(recorder, 'utf8'), controlledSource);
+    } finally {
+      rmSync(temporary, { recursive: true, force: true });
+    }
+  });
+
 test('LINUX: current historical-pin refusal, synthetic manifest control, and refusal properties',
   { skip: process.platform !== 'linux' || process.arch !== 'x64' }, () => {
     const temporary = mkdtempSync(join(tmpdir(), 'p1-recorder-tests-'));
