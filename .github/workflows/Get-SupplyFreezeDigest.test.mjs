@@ -721,7 +721,7 @@ test('JSON-ROOT-GUARDS: production contract and strict config guards reject non-
       /TASK131_F31|PRIVATE_(?:ARRAY|STRING)|TypeError|Get-SupplyFreezeDigest|file:\/\/|\n\s+at\s/u);
   };
   for (const value of objPrivateRoots) {
-    invoke(contractGuard, value, 17, /TF profile contract root.*unexpected response schema/);
+    invoke(contractGuard, value, 17, /historical profile contract root.*unexpected response schema/);
     invoke(installGuard, value, 6, /npm configuration.*unexpected response schema/, true);
     invoke(transportGuard, value, 6, /npm configuration.*unexpected response schema/, true);
   }
@@ -804,14 +804,14 @@ return objSupplyFreeze;`);
     unrelated: 'allowed' }, isPlainObject,
   objTupleFunctions.supplyFreezeTupleDigestOrRefuse, sha,
   objTupleFunctions.canonicalize, objProcess), { refusal: 17 });
-  assert.match(strDiagnostic, /reviewed profile assertions could not be compared safely/);
+  assert.match(strDiagnostic, /historical profile assertions could not be compared safely/);
   assert.match(strDiagnostic, /nothing is recorded/);
   assert.doesNotMatch(strDiagnostic,
     /TASK131_F2|PRIVATE_RECURSIVE_VALUE|RangeError|Maximum call stack|Get-SupplyFreezeDigest|file:\/\/|\n\s+at\s/u);
   strDiagnostic = '';
   assert.throws(() => objTupleFunctions.supplyFreezeTupleDigestOrRefuse(
     nestedObject(10000, 'TASK131_F2_PRIVATE_OBJECT_VALUE')), { refusal: 17 });
-  assert.match(strDiagnostic, /reviewed profile assertions could not be compared safely/);
+  assert.match(strDiagnostic, /historical profile assertions could not be compared safely/);
   assert.doesNotMatch(strDiagnostic,
     /TASK131_F2|PRIVATE_OBJECT_VALUE|RangeError|Maximum call stack|Get-SupplyFreezeDigest|file:\/\/|\n\s+at\s/u);
 
@@ -908,10 +908,10 @@ test('JSON-RESPONSE-PRIVACY: parser, schema, and normalization refusals withhold
     5, 'repeated object key', 'TASK130_F13_DUPLICATE_SECRET');
   assertPrivateRefusal(
     () => objFunctions.parseNpmJsonOrRefuse(
-      '{"TASK130_F13_CONTRACT_SECRET":1,"TASK130_F13_CONTRACT_SECRET":2}', 'TF profile contract', 17),
+      '{"TASK130_F13_CONTRACT_SECRET":1,"TASK130_F13_CONTRACT_SECRET":2}', 'historical profile contract', 17),
     17, 'repeated object key', 'TASK130_F13_CONTRACT_SECRET');
   assertPrivateRefusal(
-    () => objFunctions.parseNpmJsonOrRefuse('<TASK130_F13_CONTRACT_INVALID_SECRET', 'TF profile contract', 17),
+    () => objFunctions.parseNpmJsonOrRefuse('<TASK130_F13_CONTRACT_INVALID_SECRET', 'historical profile contract', 17),
     17, 'invalid JSON', 'TASK130_F13_CONTRACT_INVALID_SECRET');
   const strSchema = '{"message":"TASK130_F13_SCHEMA_SECRET","error":{}}';
   assertPrivateRefusal(
@@ -1654,7 +1654,7 @@ test('HISTORICAL-ACQUISITION: exact authored shell gates verification on native 
       '5c376ce2364e06c3ac4bc3ab8e3570e86b35f6ca',
       '05778c0eda0273a9217f7dc953795c2240473a14'];
     const strProject = join(workflow, '..', '..');
-    const temporary = mkdtempSync(join(tmpdir(), 't1-historical-acquisition-'));
+    const temporary = mkdtempSync(join(tmpdir(), 'historical-acquisition-'));
     const objEnvironment = { ...process.env, NODE_DISABLE_COMPILE_CACHE: '1',
       GIT_NO_LAZY_FETCH: '1', GIT_NO_REPLACE_OBJECTS: '1', GIT_OPTIONAL_LOCKS: '0',
       GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' };
@@ -1698,10 +1698,10 @@ test('HISTORICAL-ACQUISITION: exact authored shell gates verification on native 
       mkdirSync(strRewriteProbe);
       requireSuccess(git(strRewriteProbe, ['init', '-q']));
       requireSuccess(git(strRewriteProbe,
-        ['config', 'url.file:///task137-counterpart-synthetic-source/.insteadOf', strCanonicalRemote]));
+        ['config', 'url.file:///task-a09-synthetic-source/.insteadOf', strCanonicalRemote]));
       assert.equal(requireSuccess(git(strRewriteProbe,
         ['ls-remote', '--get-url', strCanonicalRemote])).toString().trim(),
-      'file:///task137-counterpart-synthetic-source/');
+      'file:///task-a09-synthetic-source/');
       const strPack = join(temporary, 'complete.pack');
       writeFileSync(strPack, bufComplete);
       const objContract = JSON.parse(readFileSync(join(workflow, 'historical-supply-profile.json')));
@@ -1785,7 +1785,7 @@ process.exit(result.status ?? 74);
         assert.equal(objRun.calls.length, 2, 'failed fetch must not start verification');
       }
       const objRewrite = run('rewritten-url', 'complete', 0, acquisition.shell, false,
-        'file:///task137-counterpart-synthetic-source/');
+        'file:///task-a09-synthetic-source/');
       assert.notEqual(objRewrite.result.status, 0);
       assert.equal(objRewrite.result.stdout, '');
       assert.deepEqual(objRewrite.calls.map((args) => args[0]), ['ls-remote']);
@@ -1822,7 +1822,7 @@ process.exit(result.status ?? 74);
       const strPreflightMutant = acquisition.shell.replace(strPreflightLine, ': && \\\n');
       assert.notEqual(strPreflightMutant, acquisition.shell);
       const objPreflightMutant = run('rewritten-url-mutant', 'complete', 0,
-        strPreflightMutant, false, 'file:///task137-counterpart-synthetic-source/');
+        strPreflightMutant, false, 'file:///task-a09-synthetic-source/');
       assert.equal(objPreflightMutant.result.status, 0, objPreflightMutant.result.stderr);
       assert.equal(objPreflightMutant.result.stdout, strSuccess);
       assert.ok(objPreflightMutant.calls.some((args) => args[0] === 'fetch'),
@@ -2432,7 +2432,7 @@ test('AUDIT-WHOLE-PROCESS: strict synthetic audit reaches the published observat
     assertAuditWiringPins(source);
     assert.equal(process.version, 'v24.18.1');
     assert.equal(process.umask(), 0o022);
-    const temporary = mkdtempSync(join(tmpdir(), 'tf75-audit-wiring-'));
+    const temporary = mkdtempSync(join(tmpdir(), 'a09-audit-wiring-'));
     const checkout = join(temporary, 'checkout');
     const fixture = join(checkout, '.github', 'workflows');
     const distribution = join(temporary, 'node-distribution');
@@ -3014,7 +3014,7 @@ const realpathSync = (strPath, ...arrArguments) => {
         refuse(objNullContract, 17);
         assert.equal(objNullContract.signal, null);
         assert.match(objNullContract.stderr,
-          /TF profile contract root has an unexpected response schema/);
+          /historical profile contract root has an unexpected response schema/);
         assert.doesNotMatch(objNullContract.stderr,
           /TASK131_F31_PRIVATE_PATH|TypeError|Get-SupplyFreezeDigest|file:\/\/|\n\s+at\s/u);
       }
@@ -3031,7 +3031,7 @@ const realpathSync = (strPath, ...arrArguments) => {
         refuse(objRecursiveContract, 17);
         assert.equal(objRecursiveContract.signal, null);
         assert.match(objRecursiveContract.stderr,
-          /TF reviewed profile assertions could not be compared safely/);
+          /historical profile assertions could not be compared safely/);
         assert.match(objRecursiveContract.stderr, /nothing is recorded/);
         assert.doesNotMatch(objRecursiveContract.stderr,
           /TASK131_F2|PRIVATE_CONTRACT|RangeError|Maximum call stack|Get-SupplyFreezeDigest|file:\/\/|\n\s+at\s/u);
