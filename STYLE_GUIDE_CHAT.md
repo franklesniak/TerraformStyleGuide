@@ -5,13 +5,13 @@
 
 # Terraform Writing Style
 
-**Version:** 2.7.20261001.0
+**Version:** 2.8.20261121.0
 
 ## Metadata
 
 - **Status:** Active
 - **Owner:** Repository Maintainers
-- **Last Updated:** 2026-10-01
+- **Last Updated:** 2026-11-21
 - **Scope:** Terraform coding standards for all `.tf`, `.tfvars`, `.tftest.hcl`, `.tf.json`, `.tftpl`, and `.tfbackend` files in this repository — style, formatting, naming, file organization, variable and output design, resource configuration, module design, state management, cross-stack data sharing, provider management, security, testing, and documentation.
 
 ## Keywords
@@ -1979,15 +1979,9 @@ Direct state manipulation commands (`terraform state mv`, `terraform state rm`, 
 **When state commands are necessary, they MUST be:**
 
 - Documented in commit messages with clear rationale
-- Performed only after creating state backups
+- Performed only after verifying a fresh backup as described in [Manual State Backup](#manual-state-backup)
 - Reviewed by a second team member when possible
 - Followed by verification that state is consistent
-
-**Backup command before state manipulation:**
-
-```bash
-terraform state pull > terraform.tfstate.backup
-```
 
 ---
 
@@ -2196,15 +2190,9 @@ terraform init -migrate-state
 
 Terraform will prompt you to confirm migration of the existing local state to the remote backend.
 
-**Step 4: Clean up local state file:**
+**Step 4: Verify the migration and retain the recovery copy.**
 
-After successful migration, the local state file is no longer needed:
-
-```bash
-rm terraform.tfstate terraform.tfstate.backup
-```
-
-> **Warning:** Only delete local state files after confirming the remote state is properly configured and accessible. Run `terraform plan` to verify that Terraform can read from the remote backend before deleting local files.
+Check the remote backend, workspace, lineage and serial against the migration record. Review a plan privately for unexpected changes. Preserve the last verified backup. Dispose of other local copies only after verification and according to the custodian's retention policy. Stop if the migration result is uncertain.
 
 #### Alternative: Partial Backend Configuration
 
@@ -2716,36 +2704,58 @@ For example, a recovery that returns a different version fails before `recovered
 
 #### Manual State Backup
 
-Before performing risky operations, create a manual state backup:
+Before a major upgrade, refactor or exceptional state operation, capture the current snapshot in fresh private storage. Keep the last verified backup. Never print state or send it to logs.
 
+1. Use the Linux Bash runtime, private storage and setup functions in [Read a retained state version safely](#read-a-retained-state-version-safely). This capture also requires Python 3, `cmp` from GNU Diffutils, and the target Terraform CLI with its provider schemas installed. Use an initialized directory with Terraform and provider debug logging disabled.
+2. Match the effective backend account, storage object and workspace to the custodian's trusted record. Check any mapping between the CLI and remote workspace names. Stop on a mismatch. From that record, set `BACKUP_WORKSPACE` to the expected CLI workspace name and set `BACKUP_LINEAGE` and `BACKUP_SERIAL` for the current snapshot. Set `SR_DEST` to a new private destination. If an independent SHA-256 digest exists for the expected **pulled bytes**, set `BACKUP_SHA256` to its lowercase hex value. Otherwise leave it unset.
+3. Run the block once as a standalone command in the disposable Bash shell. Check its exit status. A nonzero status requires inspection. Do not use an incomplete capture or reuse its directory.
+
+<!-- MANUAL-STATE-BACKUP -->
 ```bash
-# Create timestamped backup (Unix/Linux/macOS)
-terraform state pull > terraform.tfstate.backup.$(date +%Y%m%d_%H%M%S)
+(
+    set +x; set +v; set +a; set +o history; set -Eeuo pipefail
+    export LC_ALL=C
+    declare -F sr_run >/dev/null || { printf '%s\n' 'Copy the recovery setup first.' >&2; exit 64; }
+    sr_text "${BACKUP_WORKSPACE-}" 255 && sr_text "${BACKUP_LINEAGE-}" 255 || sr_bad_input
+    [[ ${BACKUP_SERIAL-} =~ ^(0|[1-9][0-9]*)$ ]] || sr_bad_input
+    [[ ! -v BACKUP_SHA256 || $BACKUP_SHA256 =~ ^[0-9a-f]{64}$ ]] || sr_bad_input
+    sr_capture() {
+        terraform workspace show >"$sr_work/response" || return "$?"
+        printf '%s\n' "$BACKUP_WORKSPACE" | cmp -s - "$sr_work/response" || return 65
+        terraform state pull >"$sr_work/data" || return "$?"
+        python3 -I - "$sr_work/data" "$BACKUP_LINEAGE" "$BACKUP_SERIAL" <<'PY' || return 65
+import json
+import sys
 
-# Windows PowerShell equivalent
-# terraform state pull > "terraform.tfstate.backup.$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+with open(sys.argv[1], encoding="utf-8") as source:
+    state = json.load(source)
+valid = (isinstance(state, dict) and state.get("version") == 4
+         and isinstance(state.get("resources"), list)
+         and state.get("lineage") == sys.argv[2]
+         and type(state.get("serial")) is int and str(state["serial"]) == sys.argv[3])
+sys.exit(0 if valid else 1)
+PY
+        terraform show -json "$sr_work/data" >/dev/null || return "$?"
+        if [[ -v BACKUP_SHA256 ]]; then
+            local digest
+            digest=$(sha256sum <"$sr_work/data") || return "$?"
+            [[ ${digest%% *} == "$BACKUP_SHA256" ]] || return 65
+        fi
+    }
+    sr_run sr_capture backup.tfstate
+)
 ```
 
-**When manual backups are recommended:**
+Record the verified backend and workspace, lineage, serial, capture time and digest of the private `backup.tfstate` in the protected recovery record. After any transfer, compare the destination digest with the trusted source digest before use. Terraform can convert state to the installed CLI's state format during a pull. Compare digests only for the same byte representation.
 
-- Before running `terraform state rm` to remove resources from state
-- Before running `terraform state mv` to move or rename resources
-- Before major refactoring with `moved` blocks
-- Before upgrading Terraform to a new major version
-- Before running `terraform force-unlock`
-- Before any operation that modifies state outside normal `apply` workflows
+#### Restore a verified recovery point
 
-**To restore from a manual backup:**
-
-```bash
-# Review the backup contents first (local state file)
-terraform show -json terraform.tfstate.backup.20260202_120000 | head -50
-
-# Push the backup to the remote backend (use with caution)
-terraform state push terraform.tfstate.backup.20260202_120000
-```
-
-> **Warning:** `terraform state push` overwrites the remote state. Ensure no other operations are in progress and that you have verified the backup contents before pushing.
+1. Prefer a reviewed `moved`, `removed` or `import` block when configuration can express the intended change. If the state itself needs recovery, select the backend custodian's approved provider-native restore procedure. Stop if no authorized procedure exists.
+2. Use [Read a retained state version safely](#read-a-retained-state-version-safely) to identify the exact version. The S3, Azure Blob Storage and GCS examples retrieve a local candidate. The HCP Terraform example provides discovery only. A manual backup can serve as a candidate only if the approved procedure supports it.
+3. Compare the target backend and workspace, candidate lineage and serial, and the intended recovery point with independent incident records. Check the retained version ID and time where applicable. Compare any independently recorded digest for that snapshot. Account for changes since the selected version. Stop if the target is wrong, the required version is unavailable or the recovery point cannot be verified.
+4. Exclude competing writers, including CI jobs, queued runs and other operators. Keep locking and ordinary safety checks in place throughout the restore. Use the custodian's exclusion procedure for clients that can write directly to backend storage. Once writers are excluded, recheck the target and compare its current version with the version reviewed. Stop if you cannot establish exclusive access or account for an intervening write.
+5. Review the exact target, intended change, recovery point and expected result with the operator. Follow the environment's peer-review policy and seek a peer when available. An authorized solo operator may proceed when policy permits. Obtain explicit operator confirmation immediately before the restore. If the target, change or recovery point changes, stop, verify again and renew confirmation.
+6. Follow only the selected procedure. While writers are still excluded, read back the resulting version, verify the expected lineage and state contents privately, and compare the resulting serial with the procedure's expected serial. Review a plan privately for unexpected changes before resuming writers. If the outcome is uncertain, stop and inspect the actual backend state with the custodian before any retry.
 
 ### Workspace Usage
 
