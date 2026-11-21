@@ -2184,6 +2184,8 @@ This creates the state storage infrastructure using local state (stored in `terr
 
 **Step 3: Configure backend and migrate state:**
 
+While the local backend is still active, record the source state file, workspace, lineage and serial, and the intended remote backend and workspace in a protected migration record. Use [Manual State Backup](#manual-state-backup) to create and verify a private backup. For this local source, verify the state file and workspace in place of the remote account and storage object. Stop if you cannot verify the backup.
+
 Uncomment or add the backend block in your configuration, then run:
 
 ```bash
