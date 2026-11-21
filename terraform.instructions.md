@@ -2182,17 +2182,17 @@ terraform apply
 
 This creates the state storage infrastructure using local state (stored in `terraform.tfstate`).
 
-**Step 3: Configure backend and migrate state:**
+**Step 3: Verify the source and destination, then migrate state:**
 
-While the local backend is still active, record the source state file, workspace, lineage and serial, and the intended remote backend and workspace in a protected migration record. Use [Manual State Backup](#manual-state-backup) to create and verify a private backup. For this local source, verify the state file and workspace in place of the remote account and storage object. Stop if you cannot verify the backup.
+Use this procedure only for one source workspace and an empty destination. While the local backend is still active, confirm there is only one workspace. Record its state file, workspace, lineage and serial, and the intended remote backend and workspace in a protected migration record. Exclude other writers to the source and destination through the verification in Step 4. Use [Manual State Backup](#manual-state-backup) to create and verify a private backup. For this local source, verify the state file and workspace in place of the remote account and storage object. Stop if you cannot verify the backup.
 
-Uncomment or add the backend block in your configuration, then run:
+Uncomment or add the backend block in your configuration. Before running the migration, verify the account, state object and workspace that the effective backend configuration and credentials will use. Use read-only checks to confirm the destination matches the migration record and contains no state. Stop if any check fails or is inconclusive. Then run:
 
 ```bash
 terraform init -migrate-state
 ```
 
-Terraform will prompt you to confirm migration of the existing local state to the remote backend.
+At Terraform's prompt, confirm only the copy of the backed-up workspace to the verified empty destination. Cancel if the prompt proposes an overwrite, another destination or additional workspaces. If the result is uncertain, stop and verify the selected backend before running a plan or another state command.
 
 **Step 4: Verify the migration and retain the recovery copy.**
 
