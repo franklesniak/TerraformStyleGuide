@@ -2,13 +2,13 @@
 
 # Terraform Writing Style
 
-**Version:** 2.8.20261121.0
+**Version:** 2.8.20261122.0
 
 ## Metadata
 
 - **Status:** Active
 - **Owner:** Repository Maintainers
-- **Last Updated:** 2026-11-21
+- **Last Updated:** 2026-11-22
 - **Scope:** Terraform coding standards for all `.tf`, `.tfvars`, `.tftest.hcl`, `.tf.json`, `.tftpl`, and `.tfbackend` files in this repository — style, formatting, naming, file organization, variable and output design, resource configuration, module design, state management, cross-stack data sharing, provider management, security, testing, and documentation.
 
 ## Keywords
@@ -2191,7 +2191,9 @@ At Terraform's prompt, confirm only the copy of the backed-up workspace to the v
 
 **Step 4: Verify the migration and retain the recovery copy.**
 
-Check the remote backend, workspace, lineage and serial against the migration record. Review a plan privately for unexpected changes. Preserve the last verified backup. Dispose of other local copies only after verification and according to the custodian's retention policy. Stop if the migration result is uncertain.
+Keep other writers excluded. Verify the destination account, state object and workspace against the protected migration record. Read back the state from that destination. Privately compare all stored state content with the verified backup, including resource instances, attributes, provider bindings, remote object identifiers, dependencies, provider-private data and root outputs. Verify that the destination lineage and serial match the expected result for this Terraform version, backend and migration path. Record the verified destination values alongside the source values. Stop if the contents differ, either metadata value is unexpected, or any check is inconclusive.
+
+Review a plan privately. Resume writers only after all checks pass and the plan shows no unexpected changes. Preserve the last verified backup. Dispose of other local copies only after successful verification and according to the custodian's retention policy.
 
 #### Alternative: Partial Backend Configuration
 

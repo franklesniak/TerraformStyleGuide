@@ -3,7 +3,7 @@
 
 - **Status:** Active
 - **Owner:** TerraformStyleGuide Repository Maintainers
-- **Last Updated:** 2026-11-21
+- **Last Updated:** 2026-11-22
 - **Scope:** Explains the rationale, design philosophy, trade-offs, and historical context behind the normative Terraform rules in `STYLE_GUIDE.md`.
 - **Related:** [Terraform style guide](STYLE_GUIDE.md)
 
@@ -1779,7 +1779,7 @@ This section tracks significant changes to the Terraform instruction file.
 
 | Version | Date | Changes |
 | --- | --- | --- |
-| 2.8.20261121.0 | 2026-11-21 | Replaced manual backup and restore commands with private capture, recovery-point verification and operator-confirmed provider-native recovery. |
+| 2.8.20261122.0 | 2026-11-22 | Replaced manual backup and restore commands with private capture, recovery-point verification and operator-confirmed provider-native recovery. |
 | 2.6.20260726.0 | 2026-07-26 | Clarified that the guide is self-contained in every adoption context, limited guide-level deviations to requirements defined by this guide, required confirmation that repository-wide requirements remain intact, and documented the repository-wide-requirements check |
 | 2.5.20260623.0 | 2026-06-23 | Made Terraform CI guidance host-neutral: relabeled the Terraform test CI example as a GitHub Actions example with other-host command/script equivalents noted, changed the local workflow push step to the configured Git remote, and reworded the CI Workflow Integration section so GitHub Actions is one illustrative host rather than the assumed CI surface |
 | 2.4.20260511.0 | 2026-05-11 | Added cross-platform Terraform pre-commit guidance for native Windows/PowerShell contributors, including shell-execution assumptions, repo-local wrapper recommendations, missing-tool error expectations, and rationale for PATH-dependent Bash failures |
