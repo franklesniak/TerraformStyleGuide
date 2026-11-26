@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -49,7 +50,22 @@ async function stub() {
   }
   log(call);
   let output, destination;
-  if (command === 'aws' && args[0] === 's3api' && args[1] === 'list-object-versions') {
+  if (command === 'terraform' && args.join(' ') === 'workspace show') {
+    process.stdout.write('fixture-workspace\n');
+    if (mode === 'failed-workspace') process.exit(17);
+    return;
+  } else if (command === 'terraform' && args.join(' ') === 'state pull') {
+    output = state;
+    if (mode === 'failed-pull') { process.stdout.write(output); process.exit(29); }
+    if (mode === 'large-serial') output = state.replace('"serial":7', '"serial":9007199254740993');
+    if (mode === 'string-serial') output = state.replace('"serial":7', '"serial":"7"');
+  } else if (command === 'terraform' && args[0] === 'show' && args[1] === '-json' && args.length === 3) {
+    assert.ok(args[2].startsWith(`${env.SR_DEST}/.work.`) && args[2].endsWith('/data'));
+    assert.ok(fs.readFileSync(args[2], 'utf8').includes('STATE_SECRET_FIXTURE'));
+    process.stdout.write('STATE_SECRET_FIXTURE');
+    if (mode === 'incompatible') { process.stderr.write('DIAGNOSTIC_SECRET_FIXTURE'); process.exit(19); }
+    return;
+  } else if (command === 'aws' && args[0] === 's3api' && args[1] === 'list-object-versions') {
     output = JSON.stringify({ Versions: [{ Key: env.AWS_KEY, VersionId: env.AWS_VERSION_ID },
       { Key: `${env.AWS_KEY}.sibling`, VersionId: 'sibling' }], DeleteMarkers: [{ Key: env.AWS_KEY, VersionId: 'deleted' }] });
   } else if (command === 'aws' && args[0] === 's3api' && args[1] === 'get-object') {
@@ -124,6 +140,8 @@ if (process.argv[2] === '--stub') {
     return match[1].replaceAll('\r\n', '\n');
   }
   const setup = extract('SR-SETUP'), snippets = new Map(identifiers.map(id => [id, extract(id)]));
+  const backup = 'MANUAL-STATE-BACKUP';
+  snippets.set(backup, extract(backup));
   const originalGuide = fs.readFileSync(guidePath), originalSelf = fs.readFileSync(self);
   const home = os.homedir();
   const fixtureRoot = fs.mkdtempSync(path.join(home, '.state-recovery-test-'));
@@ -132,7 +150,7 @@ if (process.argv[2] === '--stub') {
   const jq = process.env.STATE_RECOVERY_TEST_JQ ?? spawnSync('which', ['jq'], { encoding: 'utf8' }).stdout.trim();
   assert.ok(path.isAbsolute(jq) && fs.existsSync(jq), 'jq is required; missing jq cannot skip the tests.');
   fs.symlinkSync(jq, path.join(binary, 'jq'));
-  for (const command of ['aws', 'az', 'gcloud', 'curl', 'ln', 'rm', 'mktemp']) {
+  for (const command of ['aws', 'az', 'gcloud', 'curl', 'ln', 'rm', 'mktemp', 'terraform']) {
     fs.writeFileSync(path.join(binary, command), `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(self)} --stub "$0" "$@"\n`, { mode: 0o700 });
   }
   let count = 0;
@@ -143,15 +161,17 @@ if (process.argv[2] === '--stub') {
     GCS_BUCKET: 'state_bucket', GCS_OBJECT: 'env/prod state+$quote.tfstate', GCS_GENERATION: '9007199254740993',
     HCP_HOST: 'app.terraform.io', HCP_ORGANIZATION: 'Example Organization', HCP_WORKSPACE: 'Production Workspace',
     HCP_WORKSPACE_ID: 'ws-Fixture123', HCP_PAGE: '2', HCP_PAGE_SIZE: '20',
+    BACKUP_WORKSPACE: 'fixture-workspace', BACKUP_LINEAGE: 'fixture-lineage', BACKUP_SERIAL: '7',
   };
-  function run(id, mode = '', inputs = {}, change = value => value, includeSetup = true) {
+  function run(id, mode = '', inputs = {}, change = value => value, includeSetup = true, previousDestination) {
     const directory = path.join(fixtureRoot, `case-${++count}`); fs.mkdirSync(directory, { mode: 0o700 });
-    const destination = path.join(directory, 'result'), log = path.join(directory, 'calls'), victim = path.join(directory, 'victim');
+    const destination = previousDestination ?? path.join(directory, 'result'), log = path.join(directory, 'calls'), victim = path.join(directory, 'victim');
     write(victim, state);
     const env = { ...process.env, ...defaultInputs, ...inputs, PATH: `${binary}:/usr/bin:/bin`,
       SR_DEST: destination, SR_TEST_MODE: mode, SR_TEST_LOG: log, SR_TEST_VICTIM: victim,
       AWS_EC2_METADATA_DISABLED: 'true', BASH_ENV: '/dev/null', ENV: '/dev/null' };
     delete env.NODE_OPTIONS; delete env.SHELLOPTS; delete env.BASHOPTS;
+    if (!Object.hasOwn(inputs, 'BACKUP_SHA256')) delete env.BACKUP_SHA256;
     if (mode === 'existing-directory') fs.mkdirSync(destination, { mode: 0o700 });
     if (mode === 'existing-file') write(destination, 'EXISTING');
     if (mode === 'existing-link') fs.symlinkSync(victim, destination);
@@ -164,11 +184,12 @@ if (process.argv[2] === '--stub') {
     });
     assert.equal(result.error, undefined, `${id}/${mode}: process error ${result.error}`);
     assert.equal(result.signal, null, `${id}/${mode}: unexpected shell termination ${result.signal}`);
-    for (const secret of ['TOKEN_SECRET_FIXTURE', 'STATE_SECRET_FIXTURE', 'SIGNED_URL_SECRET_FIXTURE', 'DIAGNOSTIC_SECRET_FIXTURE']) {
+    for (const secret of ['TOKEN_SECRET_FIXTURE', 'STATE_SECRET_FIXTURE', 'SIGNED_URL_SECRET_FIXTURE', 'DIAGNOSTIC_SECRET_FIXTURE', 'PARTIAL_RESPONSE_SECRET_FIXTURE']) {
       assert.ok(!`${result.stdout}${result.stderr}`.includes(secret), `${id}/${mode}: secret in console output`);
     }
     const calls = exists(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
-    const output = path.join(destination, id.endsWith('RECOVERY') ? 'recovered.tfstate' : 'versions.json');
+    const filename = id === backup ? 'backup.tfstate' : id.endsWith('RECOVERY') ? 'recovered.tfstate' : 'versions.json';
+    const output = path.join(destination, filename);
     return { ...result, directory, destination, output, calls, victim, env };
   }
   function success(result) {
@@ -305,9 +326,41 @@ if (process.argv[2] === '--stub') {
     const overwritten = run(first, 'final-file', {}, value => value.replace('ln -T --', 'ln -fT --'));
     assert.equal(overwritten.status, 0, 'publication failure changes outcome when force replaces exclusive creation');
     assert.notEqual(fs.readFileSync(overwritten.output, 'utf8'), 'EXISTING', 'no-clobber assertion detects the overwritten existing file');
+
+    const digest = createHash('sha256').update(state).digest('hex');
+    const good = run(backup, '', { BACKUP_SHA256: digest });
+    success(good);
+    assert.deepEqual(good.calls.map(call => call.args.slice(0, 2)), [['workspace', 'show'], ['state', 'pull'], ['show', '-json']]);
+    assert.equal(fs.readFileSync(good.output, 'utf8'), state);
+    const collision = run(backup, '', {}, value => value, true, good.destination);
+    assert.equal(collision.status, 64);
+    assert.equal(collision.calls.length, 0, 'reject an existing backup before Terraform runs');
+    for (const [mode, inputs, status] of [
+      ['failed-workspace', {}, 17], ['', { BACKUP_WORKSPACE: 'wrong' }, 65],
+      ['partial', {}, 29], ['failed-pull', {}, 29], ['empty', {}, 65], ['malformed', {}, 65],
+      ['response-multiple', {}, 65], ['incompatible', {}, 19], ['string-serial', {}, 65],
+      ['', { BACKUP_LINEAGE: 'wrong' }, 65], ['', { BACKUP_SERIAL: '8' }, 65],
+      ['large-serial', { BACKUP_SERIAL: '9007199254740992' }, 65],
+      ['', { BACKUP_SHA256: '0'.repeat(64) }, 65], ['', { BACKUP_SHA256: '' }, 64],
+    ]) {
+      const result = run(backup, mode, inputs);
+      failure(result, status);
+      if (mode === 'failed-workspace' || inputs.BACKUP_WORKSPACE) assert.equal(result.calls.length, 1);
+      if (exists(result.destination)) assert.deepEqual(fs.readdirSync(result.destination), [], 'failed capture removes private temporary files');
+      assert.equal(fs.readFileSync(good.output, 'utf8'), state, 'prior verified backup survives each failure');
+    }
+    success(run(backup, 'large-serial', { BACKUP_SERIAL: '9007199254740993' }));
+    const ignoredPullError = run(backup, 'failed-pull', {}, source =>
+      source.replace('terraform state pull >"$sr_work/data" || return "$?"', 'terraform state pull >"$sr_work/data" || true'));
+    success(ignoredPullError);
+    const ignoredLineage = run(backup, '', { BACKUP_LINEAGE: 'wrong' }, source =>
+      source.replace('state.get("lineage") == sys.argv[2]', 'True'));
+    success(ignoredLineage);
+    assert.throws(() => run(backup, '', {}, source => source + '\ncat "$SR_DEST/backup.tfstate"\n'),
+      /secret in console output/u, 'synthetic disclosure must trip the console assertion');
     assert.deepEqual(fs.readFileSync(guidePath), originalGuide, 'source remains unchanged');
     assert.deepEqual(fs.readFileSync(self), originalSelf, 'harness remains unchanged');
-    console.log(`state-recovery: ${count} network-free cases passed; all seven published actions executed`);
+    console.log(`state-recovery: ${count} network-free cases passed; all seven provider actions and manual backup executed`);
   } finally {
     // The harness owns this exclusive fixture tree; product cleanup never uses recursive removal.
     fs.rmSync(fixtureRoot, { recursive: true, force: true });

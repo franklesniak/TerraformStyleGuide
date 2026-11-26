@@ -3,7 +3,7 @@
 
 - **Status:** Active
 - **Owner:** TerraformStyleGuide Repository Maintainers
-- **Last Updated:** 2026-10-01
+- **Last Updated:** 2026-11-22
 - **Scope:** Explains the rationale, design philosophy, trade-offs, and historical context behind the normative Terraform rules in `STYLE_GUIDE.md`.
 - **Related:** [Terraform style guide](STYLE_GUIDE.md)
 
@@ -225,20 +225,7 @@ Before upgrading Terraform, complete the following checklist:
 
 ### Pre-Upgrade Preparation
 
-Before upgrading, document your current state and create recovery points:
-
-```bash
-# 1. Backup current state
-terraform state pull > terraform.tfstate.backup
-
-# 2. Document current version
-terraform version
-
-# 3. Review current plan (baseline)
-terraform plan -out=pre-upgrade.tfplan
-```
-
-> **Note:** Store the backup and plan output in a secure location outside the working directory. These files **MUST NOT** be committed to version control as they may contain sensitive information.
+Use the Manual State Backup procedure before upgrading. Record the current Terraform version and review a pre-upgrade plan privately. A plan can contain secrets. Store any retained plan in approved private storage outside version control.
 
 ### Upgrade Process
 
@@ -311,14 +298,7 @@ If issues occur after upgrading Terraform, follow this rollback procedure:
    - Use your version manager to switch back (e.g., `tfenv use 1.6.0`)
    - Or download and install the previous version manually
 
-2. **Restore state if modified:**
-   - If the new Terraform version modified state, restore from your backup:
-
-     ```bash
-     terraform state push terraform.tfstate.backup
-     ```
-
-     > **Warning:** `terraform state push` overwrites the remote state. Ensure no other operations are in progress and that you have verified the backup contents before pushing.
+2. **Check whether state recovery is necessary.** A binary rollback alone does not establish that an older snapshot is safe. If state recovery is necessary, follow **Restore a verified recovery point** with the backend custodian before continuing the rollback.
 
 3. **Regenerate lock file:**
    - Run `terraform providers lock` with the previous Terraform version
@@ -754,7 +734,11 @@ The normative setup and seven marked Bash actions form one copied workflow. The 
 
 The operator must choose appropriate private local storage and prevent competing writers. Owner, mode, inode and Git-marker checks detect ordinary mistakes and observed replacement; they do not prove protection from every ACL, synchronization mechanism or malicious same-user process. Foreground commands finish before Bash runs a deferred signal trap. Cleanup removes only known owned temporary paths; ownership uncertainty or cleanup failure is reported, and published state remains available for inspection. This preserves the primary failure and does not pretend a typed assertion establishes filesystem ownership.
 
-The network-free regression harness extracts the actual `SR-SETUP` and seven action blocks from the normative source; it does not maintain separate runnable copies. Stub execution tests local behavior and targeting under the documented Linux assumptions. It cannot prove live cloud authorization, provider availability or the operator's storage policy. Adjacent manual backup, remote state mutation and corruption-recovery examples have a separate destructive-recovery scope.
+The manual capture uses the same private publisher. Redirecting a pull into an existing filename can truncate the last backup before Terraform starts. A failed pull can also return partial bytes. Staging each capture in a new directory lets the operator keep the last verified copy through both failures. Matching lineage and serial checks the snapshot against a trusted record. A digest verifies the bytes across a transfer. Terraform can upgrade the state format on pull, so a digest of the original backend object may differ from one of the pulled representation. [Terraform state pull](https://developer.hashicorp.com/terraform/cli/commands/state/pull)
+
+An older recovery point can omit resources created after the incident or restore bindings that no longer match infrastructure. Native storage tools may bypass Terraform's lock. The custodian's restore procedure coordinates storage access with Terraform runs and specifies the expected post-restore version. Checking the result before a retry avoids overwriting a successful restore after a lost acknowledgment. [Terraform backend safeguards](https://developer.hashicorp.com/terraform/language/state/backends), [Terraform state locking](https://developer.hashicorp.com/terraform/language/state/locking)
+
+The network-free regression harness runs the published setup, seven provider blocks and manual capture against synthetic data. It checks private output, target selection and failure behavior on Linux. Live authorization and recovery approval belong to the environment's operator and custodian.
 
 ### Cross-Stack Data Sharing Examples
 
@@ -1250,11 +1234,7 @@ Lock Info:
 **Solution:**
 
 1. **Verify no other operations are running.** Check with your team and CI/CD system to confirm no other Terraform operations are in progress.
-2. **If confirmed safe, force-unlock the state:**
-
-   ```bash
-   terraform force-unlock a1b2c3d4-e5f6-7890-abcd-ef1234567890
-   ```
+2. Ask the lock owner to finish the operation. For your own confirmed stale lock, follow the custodian's lock-recovery procedure. Stop if ownership or writer activity is uncertain.
 
 3. **If in CI/CD,** check for stuck or parallel jobs that may be holding the lock.
 
@@ -1289,13 +1269,7 @@ provider["registry.terraform.io/hashicorp/aws"] is required, but it has been rem
    }
    ```
 
-2. **Remove the orphaned resource from state** if it was intentionally deleted:
-
-   ```bash
-   terraform state rm aws_instance.example
-   ```
-
-3. **Use a `removed` block** (Terraform 1.7+) to cleanly remove from state without destroying:
+2. **Use a reviewed `removed` block** (Terraform 1.7+) if the resource should leave management without being destroyed:
 
    ```hcl
    removed {
@@ -1596,11 +1570,7 @@ Lock Info:
 
 1. **First, verify no operations are in progress.** Check with your team and CI system.
 
-2. **If confirmed safe, force-unlock the state:**
-
-   ```bash
-   terraform force-unlock a1b2c3d4-e5f6-7890-abcd-ef1234567890
-   ```
+2. Check the lock owner and exact operation. For your own confirmed stale lock, follow the custodian's lock-recovery procedure. Stop if ownership or writer activity is uncertain.
 
 3. **If the lock ID is unknown, check your backend directly:**
    - For DynamoDB (AWS): Check the lock table for the lock entry
@@ -1637,30 +1607,7 @@ Error: Failed to load state: invalid character '<' looking for beginning of valu
 
 **Solution:**
 
-1. **Restore from backend versioning:**
-
-   ```bash
-   # Example for S3 - list versions and recover previous
-   aws s3api list-object-versions \
-     --bucket your-state-bucket \
-     --prefix path/to/terraform.tfstate
-   ```
-
-2. **Restore from manual backup (if available):**
-
-   ```bash
-   terraform state push terraform.tfstate.backup.YYYYMMDD_HHMMSS
-   ```
-
-3. **If no backup exists, reconstruct from infrastructure:**
-
-   ```bash
-   # Remove corrupted state (create backup first)
-   mv terraform.tfstate terraform.tfstate.corrupted
-
-   # Re-import all resources using import blocks
-   # See "Importing Resources with Import Blocks" section
-   ```
+Keep the evidence private and preserve the last verified copy. Use **Read a retained state version safely** to identify a candidate, then follow **Restore a verified recovery point**. If no verified recovery point exists, stop and consult the custodian. Any reconstruction from infrastructure needs its own reviewed plan and resource inventory.
 
 **Prevention:**
 
@@ -1686,7 +1633,7 @@ Terraform shows a resource in state, but the actual cloud resource has been dele
 
 **Solution:**
 
-**Option 1: Remove from state using `removed` block (preferred):**
+**Remove from state with a reviewed `removed` block:**
 
 ```hcl
 removed {
@@ -1698,15 +1645,7 @@ removed {
 }
 ```
 
-**Option 2: Remove from state using CLI:**
-
-```bash
-# Create backup first
-terraform state pull > terraform.tfstate.backup.$(date +%Y%m%d_%H%M%S)
-
-# Remove the resource from state
-terraform state rm aws_instance.deleted_instance
-```
+If the configured account or region is wrong, correct the target and verify the resource before considering removal. Where a declarative change is unavailable, follow **State Manipulation Commands** and **Manual State Backup** before any approved exceptional operation.
 
 **Prevention:**
 
@@ -1840,6 +1779,7 @@ This section tracks significant changes to the Terraform instruction file.
 
 | Version | Date | Changes |
 | --- | --- | --- |
+| 2.8.20261122.0 | 2026-11-22 | Replaced manual backup and restore commands with private capture, recovery-point verification and operator-confirmed provider-native recovery. |
 | 2.6.20260726.0 | 2026-07-26 | Clarified that the guide is self-contained in every adoption context, limited guide-level deviations to requirements defined by this guide, required confirmation that repository-wide requirements remain intact, and documented the repository-wide-requirements check |
 | 2.5.20260623.0 | 2026-06-23 | Made Terraform CI guidance host-neutral: relabeled the Terraform test CI example as a GitHub Actions example with other-host command/script equivalents noted, changed the local workflow push step to the configured Git remote, and reworded the CI Workflow Integration section so GitHub Actions is one illustrative host rather than the assumed CI surface |
 | 2.4.20260511.0 | 2026-05-11 | Added cross-platform Terraform pre-commit guidance for native Windows/PowerShell contributors, including shell-execution assumptions, repo-local wrapper recommendations, missing-tool error expectations, and rationale for PATH-dependent Bash failures |
